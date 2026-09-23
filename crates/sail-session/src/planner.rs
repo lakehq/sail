@@ -90,8 +90,8 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session: &dyn Session,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`.
-        let rewriters: Vec<Box<dyn LogicalRewriter>> =
-            vec![Box::new(DeltaMetadataAggregateRewriter)];
+        let rewriters: Vec<Box<dyn LogicalRewriter + '_>> =
+            vec![Box::new(DeltaMetadataAggregateRewriter::new(session))];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data;

@@ -43,6 +43,7 @@ impl JobGraph {
     ) -> ExecutionResult<Self> {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
+        let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -60,6 +61,38 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+fn ensure_single_probe_partition_for_nested_loop_join(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let result = plan.transform_up(|plan| {
+        let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        if !matches!(
+            join.join_type(),
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
+                | JoinType::Full
+        ) || join.right().output_partitioning().partition_count() == 1
+        {
+            return Ok(Transformed::no(plan));
+        }
+
+        // Build-side output needs a match bitmap shared by all probe partitions.
+        // Workers cannot share that state, so one task must consume the whole probe side.
+        let children = vec![
+            Arc::clone(join.left()),
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(join.right()))),
+        ];
+        Ok(Transformed::yes(replace_children_if_necessary(
+            plan, children,
+        )?))
+    })?;
+    Ok(result.data)
 }
 
 fn ensure_single_input_partition_for_global_limit(
@@ -971,6 +1004,49 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn nested_loop_build_output_has_one_probe_partition() {
+        use datafusion::common::JoinType;
+        use datafusion::physical_plan::joins::NestedLoopJoinExec;
+
+        for (join_type, partitions) in [
+            (JoinType::Left, 1),
+            (JoinType::LeftAnti, 1),
+            (JoinType::LeftSemi, 1),
+            (JoinType::LeftMark, 1),
+            (JoinType::Full, 1),
+            (JoinType::Inner, 4),
+            (JoinType::Right, 4),
+            (JoinType::RightAnti, 4),
+            (JoinType::RightSemi, 4),
+            (JoinType::RightMark, 4),
+        ] {
+            let right = Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            );
+            let join = Arc::new(
+                NestedLoopJoinExec::try_new(empty_plan(), right, None, &join_type, None).unwrap(),
+            );
+            let graph = JobGraph::try_new(join, flight_shuffle_options()).unwrap();
+            let stage = graph.stages.last().unwrap();
+            let join = stage.plan.downcast_ref::<NestedLoopJoinExec>().unwrap();
+            assert_eq!(
+                join.right().output_partitioning().partition_count(),
+                partitions
+            );
+            let probe = join
+                .right()
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            let input = &stage.inputs[*probe.input()];
+            assert!(matches!(input.mode, InputMode::Shuffle));
+            assert!(matches!(
+                graph.stages[input.stage].distribution,
+                OutputDistribution::RoundRobinBatch { channels } if channels == partitions
+            ));
         }
     }
 

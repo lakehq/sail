@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -15,14 +16,17 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_data_source::options::ResolveOptions;
 
+use crate::datasource::pruning::{partition_filter_mask, select_files_for_limit};
 use crate::datasource::scan::{
     FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
     map_statistics_to_schema,
 };
 use crate::datasource::{
-    DeltaScanConfig, df_logical_schema, rewrite_predicate_for_column_mapping, simplify_expr,
+    DeltaMetadataAggregateConfig, DeltaScanConfig, df_logical_schema,
+    rewrite_predicate_for_column_mapping, simplify_expr,
 };
 use crate::delta_log::LogStoreRef;
+use crate::logical::table_source::DeltaMetadataAggregateSource;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
@@ -142,16 +146,18 @@ pub(crate) async fn plan_delta_scan(
     let predicates: Vec<&Expr> = filters.iter().collect();
     let pushdown_filters =
         crate::datasource::get_pushdown_filters(&predicates, partition_cols.as_slice());
+    let exact_filters = pushdown_filters
+        .iter()
+        .all(|pushdown| *pushdown == datafusion::logical_expr::TableProviderFilterPushDown::Exact);
 
-    let mut pruning_filters = Vec::new();
+    let mut partition_filters = Vec::new();
     let mut parquet_pushdown_filters = Vec::new();
     for (filter, pushdown) in filters.iter().zip(pushdown_filters) {
         match pushdown {
             datafusion::logical_expr::TableProviderFilterPushDown::Exact => {
-                pruning_filters.push(filter.clone());
+                partition_filters.push(filter.clone());
             }
             datafusion::logical_expr::TableProviderFilterPushDown::Inexact => {
-                pruning_filters.push(filter.clone());
                 parquet_pushdown_filters.push(filter.clone());
             }
             datafusion::logical_expr::TableProviderFilterPushDown::Unsupported => {}
@@ -160,22 +166,40 @@ pub(crate) async fn plan_delta_scan(
 
     let stats_source_schema = Arc::new(snapshot.schema().clone());
 
-    let pruning_expr = conjunction(pruning_filters);
-    let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
+    let pruning_expr = conjunction(
+        partition_filters
+            .iter()
+            .chain(&parquet_pushdown_filters)
+            .cloned(),
+    );
+    let partition_predicate = conjunction(partition_filters);
+    let pruning_predicate = if let Some(expr) = conjunction(parquet_pushdown_filters.clone()) {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(
-            simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
-                datafusion::common::DataFusionError::Plan(format!(
-                    "failed to simplify scan pruning filter: {e}"
-                ))
-            })?,
-        )
+        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "failed to simplify scan pruning filter: {e}"
+            ))
+        })?)
     } else {
         None
     };
 
     let file_source = match file_source {
         DeltaFileSource::Eager(files) => {
+            let files = if let Some(predicate) = partition_predicate {
+                let values =
+                    partition_filter_mask(session, snapshot, &logical_schema, &files, predicate)?;
+                Arc::new(
+                    files
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| values.is_valid(*index) && values.value(*index))
+                        .map(|(_, add)| add.clone())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                files
+            };
             if let Some(predicate) = pruning_predicate.as_ref() {
                 let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
                     files.as_ref(),
@@ -183,18 +207,31 @@ pub(crate) async fn plan_delta_scan(
                     Arc::clone(predicate),
                     kmode,
                 )?;
-                let pruned_files = files
-                    .iter()
-                    .zip(pruning_mask.iter().copied())
-                    .filter(|(_, keep)| *keep)
-                    .map(|(add, _)| add.clone())
-                    .collect::<Vec<_>>();
+                let pruned_files = match Arc::try_unwrap(files) {
+                    Ok(files) => files
+                        .into_iter()
+                        .zip(pruning_mask)
+                        .filter_map(|(add, keep)| keep.then_some(add))
+                        .collect(),
+                    Err(files) => files
+                        .iter()
+                        .zip(pruning_mask)
+                        .filter(|(_, keep)| *keep)
+                        .map(|(add, _)| add.clone())
+                        .collect(),
+                };
                 DeltaFileSource::Eager(Arc::new(pruned_files))
             } else {
                 DeltaFileSource::Eager(files)
             }
         }
         DeltaFileSource::Replay => DeltaFileSource::Replay,
+    };
+    let file_source = match (file_source, limit) {
+        (DeltaFileSource::Eager(files), Some(limit)) if exact_filters => {
+            DeltaFileSource::Eager(Arc::new(select_files_for_limit(&files, limit)))
+        }
+        (source, _) => source,
     };
 
     // Build physical file schema (non-partition columns)
@@ -234,14 +271,7 @@ pub(crate) async fn plan_delta_scan(
     // The parquet scan resolves predicate columns against the physical file schema,
     // so column-mapped tables need the predicate rewritten from logical to physical names.
     let pushdown_filter = pushdown_filter
-        .map(|expr| {
-            rewrite_predicate_for_column_mapping(
-                expr,
-                snapshot.schema(),
-                kmode,
-                &table_partition_cols,
-            )
-        })
+        .map(|expr| rewrite_predicate_for_column_mapping(expr, snapshot.schema(), kmode))
         .transpose()?;
 
     let row_index_projected = config
@@ -310,59 +340,21 @@ pub(crate) async fn plan_delta_scan(
             )
         }
         DeltaFileSource::Replay => {
-            // TODO: Decouple planning for reading and writing. It is strange to require
-            // construction of write options just to drive the log-replay strategy for a read.
-            let mut planner_options = DeltaWriteOptions::resolve(session, Vec::new())?;
-            planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
-
-            let planner_ctx = PlannerContext::new(
-                session,
-                DeltaPlannerConfig::new(
-                    table_url.clone(),
-                    planner_options,
-                    HashMap::new(),
-                    table_partition_cols.clone(),
-                    None,
-                    true,
-                ),
-            );
-            let log_replay_options = LogReplayOptions {
-                include_stats_json: pruning_expr
-                    .as_ref()
-                    .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
-                ..Default::default()
-            };
-
-            let meta_scan: Arc<dyn ExecutionPlan> =
-                crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
-                    &planner_ctx,
+            let include_stats = pruning_expr
+                .as_ref()
+                .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols));
+            (
+                build_replayed_adds_input(
+                    session,
                     snapshot,
-                    log_replay_options,
+                    log_store,
+                    &config,
+                    pruning_expr,
+                    include_stats,
                 )
-                .await
-                .map_err(|e| {
-                    datafusion::common::DataFusionError::Plan(format!(
-                        "failed to build log replay pipeline: {e}"
-                    ))
-                })?;
-            let meta_scan: Arc<dyn ExecutionPlan> = if let Some(predicate) = pruning_expr {
-                build_metadata_filter(session, meta_scan, snapshot, predicate)?
-            } else {
-                meta_scan
-            };
-            // Static statistics stay unknown because the active Add set is discovered at runtime.
-            let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
-                meta_scan,
-                table_url.clone(),
-                snapshot.version(),
-                table_partition_cols.clone(),
-                false,
-            )?);
-            let find_files: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-                find_files,
-                Partitioning::RoundRobinBatch(target_partitions),
-            )?);
-            (find_files, None)
+                .await?,
+                None,
+            )
         }
     };
 
@@ -399,6 +391,103 @@ pub(crate) async fn plan_delta_scan(
     }
 
     Ok(scan_exec)
+}
+
+pub(crate) async fn plan_delta_metadata_aggregate(
+    session: &dyn Session,
+    source: &DeltaMetadataAggregateSource,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let table = &source.table;
+    let snapshot = table.snapshot();
+    snapshot
+        .ensure_data_read_supported()
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let mut config = table.config().clone();
+    config.metadata_aggregate = Some(DeltaMetadataAggregateConfig {
+        group_columns: source.group_columns.clone(),
+    });
+    let find_files = build_replayed_adds_input(
+        session,
+        snapshot,
+        table.log_store(),
+        &config,
+        conjunction(source.filters.clone()),
+        true,
+    )
+    .await?;
+    Ok(Arc::new(DeltaScanByAddsExec::new(
+        find_files,
+        table.log_store().config().location.clone(),
+        snapshot.version(),
+        Arc::new(snapshot.schema().clone()),
+        Arc::clone(&source.schema),
+        config,
+        None,
+        None,
+        None,
+        None,
+        snapshot.load_config().catalog_managed_commits.clone(),
+    )))
+}
+
+async fn build_replayed_adds_input(
+    session: &dyn Session,
+    snapshot: &DeltaSnapshot,
+    log_store: &LogStoreRef,
+    config: &DeltaScanConfig,
+    pruning_expr: Option<Expr>,
+    include_stats_json: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let table_url = log_store.config().location.clone();
+    let partition_columns = snapshot.metadata().partition_columns();
+    let mut planner_options = DeltaWriteOptions::resolve(session, Vec::new())?;
+    planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
+    let planner_ctx = PlannerContext::new(
+        session,
+        DeltaPlannerConfig::new(
+            table_url.clone(),
+            planner_options,
+            HashMap::new(),
+            partition_columns.clone(),
+            None,
+            true,
+        ),
+    );
+    let options = LogReplayOptions {
+        include_stats_json,
+        ..Default::default()
+    };
+    let meta_scan = crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
+        &planner_ctx,
+        snapshot,
+        options,
+    )
+    .await?;
+    let meta_scan = if let Some(predicate) = pruning_expr {
+        build_metadata_filter(
+            session,
+            meta_scan,
+            snapshot,
+            config
+                .schema
+                .as_deref()
+                .unwrap_or_else(|| snapshot.schema()),
+            predicate,
+        )?
+    } else {
+        meta_scan
+    };
+    let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
+        meta_scan,
+        table_url,
+        snapshot.version(),
+        partition_columns.clone(),
+        false,
+    )?);
+    Ok(Arc::new(RepartitionExec::try_new(
+        find_files,
+        Partitioning::RoundRobinBatch(session.config().target_partitions().max(1)),
+    )?))
 }
 
 fn build_eager_adds_input(

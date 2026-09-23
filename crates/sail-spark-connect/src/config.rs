@@ -143,6 +143,8 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
+        // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
+        // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
         self.config.insert(key, value);
         Ok(())

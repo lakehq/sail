@@ -1448,6 +1448,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(metadata.metadata_file_count, 4);
+        assert_eq!(metadata.metadata_row_count, 17);
         assert_eq!(metadata.residual_file_indices, vec![2, 4]);
         assert_eq!(metadata.metadata_bytes, 40);
         assert_eq!(metadata.residual_bytes, 20);
@@ -1459,6 +1460,11 @@ mod tests {
         assert_eq!(metadata.rows[0].count, 13);
         assert_eq!(metadata.rows[1].group_values, vec![ScalarValue::Utf8(None)]);
         assert_eq!(metadata.rows[1].count, 4);
+
+        let count = snapshot.grouped_count_metadata(&[], 1).unwrap();
+        assert_eq!(count.rows[0].count, 27);
+        assert!(count.rows[0].group_values.is_empty());
+        assert!(count.residual_file_indices.is_empty());
     }
 
     #[test]

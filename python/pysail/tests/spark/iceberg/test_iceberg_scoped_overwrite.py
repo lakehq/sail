@@ -138,7 +138,7 @@ def test_iceberg_predicate_overwrite_rejects_non_partition_column(spark, tmp_pat
 
 
 @pytest.mark.parametrize("mode", ["predicate", "dynamic"])
-def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
+def test_iceberg_scoped_overwrite_assigns_v3_lineage(spark, tmp_path, mode):
     table_name = f"iceberg_scoped_overwrite_v3_{mode}"
     location = tmp_path / table_name
     _create_partitioned_table(spark, table_name, location)
@@ -154,8 +154,12 @@ def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
             else:
                 writer.overwritePartitions()
 
-        with pytest.raises(Exception, match=r"v3.*overwrite"):
-            overwrite()
+        overwrite()
+        from pysail.testing.spark.steps.iceberg import _current_row_lineage, _find_latest_metadata
+
+        lineage = _current_row_lineage(location)
+        assert set(lineage) == {2}
+        assert lineage[2][1] == _find_latest_metadata(location)["last-sequence-number"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -468,3 +472,21 @@ def test_iceberg_v1_append_preserves_non_main_snapshot_ref(spark, sql_catalog):
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_dynamic_overwrite_option_preserves_other_partitions(spark, tmp_path):
+    table_name = "iceberg_dynamic_overwrite_option"
+    location = tmp_path / table_name
+    _create_partitioned_table(spark, table_name, location)
+    try:
+        spark.createDataFrame([(1, "A", 10), (2, "B", 20)], "id BIGINT, category STRING, value BIGINT").writeTo(
+            table_name
+        ).append()
+        original_files = _live_data_file_paths(location)
+        spark.createDataFrame([(3, "A", 30)], "id BIGINT, category STRING, value BIGINT").writeTo(table_name).option(
+            "overwrite-mode", "dynamic"
+        ).overwrite(F.lit(True))
+        assert _rows(spark, table_name) == [(2, "B", 20), (3, "A", 30)]
+        assert original_files & _live_data_file_paths(location)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

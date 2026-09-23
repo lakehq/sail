@@ -220,9 +220,9 @@ pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
 
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
-) -> Result<(Vec<Action>, Option<ExecCommitMeta>)> {
+) -> Result<(Vec<Action>, Vec<ExecCommitMeta>)> {
     let mut out_actions: Vec<Action> = Vec::new();
-    let mut out_meta: Option<ExecCommitMeta> = None;
+    let mut out_meta = Vec::new();
 
     let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -234,7 +234,7 @@ pub fn decode_actions_and_meta_from_batch(
             PhysicalExecAction::Protocol(protocol) => out_actions.push(Action::Protocol(protocol)),
             PhysicalExecAction::Metadata(metadata) => out_actions.push(Action::Metadata(metadata)),
             PhysicalExecAction::CommitMeta(cm) => {
-                out_meta = Some(cm.into_exec_meta()?);
+                out_meta.push(cm.into_exec_meta()?);
             }
         }
     }
@@ -251,6 +251,45 @@ mod tests {
     use super::*;
     use crate::spec::{DeletionVectorDescriptor, StorageType, StructType};
     use crate::transaction::OperationMetrics;
+
+    #[test]
+    fn coalesced_batches_preserve_every_writer_commit_meta() -> Result<()> {
+        let metadata = [
+            ExecCommitMeta {
+                row_count: 10,
+                operation: Some(DeltaOperation::Delete { predicate: None }),
+                operation_metrics: OperationMetrics {
+                    num_removed_files: Some(1),
+                    ..Default::default()
+                },
+            },
+            ExecCommitMeta {
+                row_count: 20,
+                operation: Some(DeltaOperation::Delete { predicate: None }),
+                operation_metrics: OperationMetrics {
+                    num_removed_files: Some(2),
+                    ..Default::default()
+                },
+            },
+        ];
+        let batches = metadata
+            .iter()
+            .cloned()
+            .map(|meta| encode_actions(vec![], Some(meta)))
+            .collect::<Result<Vec<_>>>()?;
+        let batch = datafusion::arrow::compute::concat_batches(&delta_action_schema()?, &batches)?;
+        let (_, decoded) = decode_actions_and_meta_from_batch(&batch)?;
+        assert_eq!(decoded.len(), metadata.len());
+        for (actual, expected) in decoded.iter().zip(metadata) {
+            assert_eq!(actual.row_count, expected.row_count);
+            assert!(matches!(
+                actual.operation,
+                Some(DeltaOperation::Delete { predicate: None })
+            ));
+            assert_eq!(actual.operation_metrics, expected.operation_metrics);
+        }
+        Ok(())
+    }
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {
@@ -324,7 +363,8 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::Add(_)));
         assert!(matches!(actions[1], Action::Remove(_)));
-        let decoded_meta = decoded_meta.ok_or_else(|| {
+        assert_eq!(decoded_meta.len(), 1);
+        let decoded_meta = decoded_meta.first().ok_or_else(|| {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
         assert_eq!(decoded_meta.row_count, 10);
@@ -391,7 +431,7 @@ mod tests {
         )?;
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
 
-        assert!(decoded_meta.is_none());
+        assert!(decoded_meta.is_empty());
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], Action::Protocol(value) if value == &protocol));
         assert!(matches!(&actions[1], Action::Metadata(value) if value == &metadata));
@@ -441,7 +481,7 @@ mod tests {
         )?;
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
 
-        assert!(decoded_meta.is_none());
+        assert!(decoded_meta.is_empty());
         assert_eq!(actions, vec![Action::Add(add), Action::Remove(remove)]);
         Ok(())
     }

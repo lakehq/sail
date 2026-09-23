@@ -23,6 +23,8 @@ use crate::spec::partition::UnboundPartitionSpec;
 pub struct WriterConfig {
     pub table_schema: ArrowSchemaRef,
     pub writer_properties: WriterProperties,
+    pub target_file_size_bytes: u64,
+    pub sort_order_id: Option<i32>,
     pub iceberg_schema: Arc<IcebergSchema>,
     pub partition_spec: UnboundPartitionSpec,
     pub variant_shredding: VariantShreddingConfig,

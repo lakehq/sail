@@ -273,6 +273,9 @@ async fn shuffle_write(
     let result = async {
         while let Some(batch) = stream.next().await {
             let batch = batch?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
             let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
             partitioner.partition(batch, |p, batch| {
                 partitions[p] = Some(batch);

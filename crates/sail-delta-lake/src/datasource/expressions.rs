@@ -62,7 +62,7 @@ pub fn get_pushdown_filters(
         .cloned()
         .map(|expr| {
             let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
-            if !expr.column_refs().is_empty() && applicable {
+            if applicable {
                 TableProviderFilterPushDown::Exact
             } else {
                 TableProviderFilterPushDown::Inexact
@@ -119,18 +119,16 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
 /// Rewrite column references in a parquet pushdown predicate from logical names to the
 /// physical names used in the data files of column-mapped tables. Nested struct field
 /// accesses (`get_field`) are rewritten as well, using the column mapping metadata carried
-/// by the logical schema. Partition columns are exposed to the file scan as virtual columns
-/// under their logical names and are left untouched.
+/// by the logical schema. Virtual partition columns use physical names in the file scan too.
 pub fn rewrite_predicate_for_column_mapping(
     expr: Arc<dyn PhysicalExpr>,
     logical_schema: &ArrowSchema,
     mode: ColumnMappingMode,
-    partition_cols: &[String],
 ) -> Result<Arc<dyn PhysicalExpr>> {
     if mode == ColumnMappingMode::None {
         return Ok(expr);
     }
-    Ok(rewrite_expr_for_column_mapping(expr, logical_schema, mode, partition_cols)?.0)
+    Ok(rewrite_expr_for_column_mapping(expr, logical_schema, mode)?.0)
 }
 
 /// Recursively rewrite an expression, returning the rewritten expression along with the
@@ -140,12 +138,8 @@ fn rewrite_expr_for_column_mapping(
     expr: Arc<dyn PhysicalExpr>,
     logical_schema: &ArrowSchema,
     mode: ColumnMappingMode,
-    partition_cols: &[String],
 ) -> Result<(Arc<dyn PhysicalExpr>, Option<FieldRef>)> {
     if let Some(column) = expr.downcast_ref::<PhysicalColumn>() {
-        if partition_cols.iter().any(|col| col == column.name()) {
-            return Ok((expr, None));
-        }
         let Some((_, field)) = logical_schema.fields().find(column.name()) else {
             return Ok((expr, None));
         };
@@ -164,12 +158,8 @@ fn rewrite_expr_for_column_mapping(
         let Some((source_expr, path_exprs)) = children.split_first() else {
             return Ok((expr, None));
         };
-        let (new_source, source_field) = rewrite_expr_for_column_mapping(
-            Arc::clone(source_expr),
-            logical_schema,
-            mode,
-            partition_cols,
-        )?;
+        let (new_source, source_field) =
+            rewrite_expr_for_column_mapping(Arc::clone(source_expr), logical_schema, mode)?;
         let mut current_field = source_field;
         // Rewriters preserve the original Arc when unchanged, making pointer identity sufficient.
         let mut changed = !Arc::ptr_eq(&new_source, source_expr);
@@ -216,12 +206,8 @@ fn rewrite_expr_for_column_mapping(
     let mut new_children = Vec::with_capacity(children.len());
     let mut changed = false;
     for child in children {
-        let (new_child, _) = rewrite_expr_for_column_mapping(
-            Arc::clone(child),
-            logical_schema,
-            mode,
-            partition_cols,
-        )?;
+        let (new_child, _) =
+            rewrite_expr_for_column_mapping(Arc::clone(child), logical_schema, mode)?;
         changed |= !Arc::ptr_eq(&new_child, child);
         new_children.push(new_child);
     }
@@ -327,7 +313,7 @@ mod tests {
         )?) as Arc<dyn PhysicalExpr>;
 
         let rewritten =
-            rewrite_predicate_for_column_mapping(expr, &schema, ColumnMappingMode::Name, &[])?;
+            rewrite_predicate_for_column_mapping(expr, &schema, ColumnMappingMode::Name)?;
         let children = rewritten.children();
 
         let root = children[0]

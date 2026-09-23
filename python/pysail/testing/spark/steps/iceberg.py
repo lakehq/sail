@@ -13,9 +13,16 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+import pyarrow.parquet as pq
 from pyiceberg.avro.file import AvroFile
 from pyiceberg.io.pyarrow import PyArrowFile, PyArrowFileIO
-from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
+from pyiceberg.manifest import (
+    MANIFEST_ENTRY_SCHEMAS,
+    MANIFEST_LIST_FILE_SCHEMAS,
+    ManifestContent,
+    ManifestEntryStatus,
+    PartitionFieldSummary,
+)
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then
@@ -33,8 +40,6 @@ _PYTEST_TMP_PREFIX = re.compile(
     r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
     re.IGNORECASE,
 )
-
-_MANIFEST_LIST_FIRST_ROW_ID_POSITION = 15
 
 
 def _normalize_pytest_tmp_path(value: str) -> str:
@@ -160,16 +165,17 @@ def _current_manifest_list(metadata: dict) -> dict:
         read_types={508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
     ) as reader:
-        manifests = [_manifest_record_to_dict(record) for record in reader]
+        manifests = [_manifest_record_to_dict(record, format_version) for record in reader]
     return {"manifests": manifests}
 
 
-def _manifest_record_to_dict(record) -> dict:
-    data = record._data  # noqa: SLF001 - pyiceberg exposes manifest-list V3 fields only via Record data.
-    content = data[3]
+def _manifest_record_to_dict(record, format_version: int) -> dict:
+    fields = MANIFEST_LIST_FILE_SCHEMAS[format_version].fields
+    data = {field.name: record[index] for index, field in enumerate(fields)}
+    content = data.get("content", ManifestContent.DATA)
     if isinstance(content, ManifestContent):
         content = content.name.lower()
-    partitions = data[13]
+    partitions = data["partitions"]
     if partitions is not None:
         partitions = [
             {
@@ -181,24 +187,24 @@ def _manifest_record_to_dict(record) -> dict:
             for summary in partitions
         ]
     manifest = {
-        "manifest-path": data[0],
-        "manifest-length": data[1],
-        "partition-spec-id": data[2],
+        "manifest-path": data["manifest_path"],
+        "manifest-length": data["manifest_length"],
+        "partition-spec-id": data["partition_spec_id"],
         "content": content,
-        "sequence-number": data[4],
-        "min-sequence-number": data[5],
-        "added-snapshot-id": data[6],
-        "added-files-count": data[7],
-        "existing-files-count": data[8],
-        "deleted-files-count": data[9],
-        "added-rows-count": data[10],
-        "existing-rows-count": data[11],
-        "deleted-rows-count": data[12],
+        "sequence-number": data.get("sequence_number", 0),
+        "min-sequence-number": data.get("min_sequence_number", 0),
+        "added-snapshot-id": data["added_snapshot_id"],
+        "added-files-count": data["added_files_count"],
+        "existing-files-count": data["existing_files_count"],
+        "deleted-files-count": data["deleted_files_count"],
+        "added-rows-count": data["added_rows_count"],
+        "existing-rows-count": data["existing_rows_count"],
+        "deleted-rows-count": data["deleted_rows_count"],
         "partitions": partitions,
-        "key-metadata": data[14],
+        "key-metadata": data["key_metadata"],
     }
-    if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:
-        manifest["first-row-id"] = data[_MANIFEST_LIST_FIRST_ROW_ID_POSITION]
+    if "first_row_id" in data:
+        manifest["first-row-id"] = data["first_row_id"]
     return manifest
 
 
@@ -851,3 +857,99 @@ def check_iceberg_schema_history_matches_snapshot(variables, snapshot: SnapshotA
     }
 
     assert snapshot == schema_history_info
+
+
+def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
+    metadata = _find_latest_metadata(table_path)
+    assert metadata["format-version"] == 3  # noqa: PLR2004
+    io = PyArrowFileIO()
+    result = {}
+    schema = MANIFEST_ENTRY_SCHEMAS[3]
+    file_fields = schema.find_field("data_file").field_type.fields
+    for manifest in _current_manifest_list(metadata)["manifests"]:
+        if manifest["content"] != "data":
+            continue
+        next_row_id = manifest["first-row-id"]
+        with AvroFile(_pyarrow_input_file(io, manifest["manifest-path"]), schema) as entries:
+            for entry in entries:
+                data_file = {field.name: entry[4][index] for index, field in enumerate(file_fields)}
+                first_row_id = data_file["first_row_id"]
+                if first_row_id is None:
+                    first_row_id = next_row_id
+                    if next_row_id is not None:
+                        next_row_id += data_file["record_count"]
+                if entry[0] == ManifestEntryStatus.DELETED:
+                    continue
+                sequence = entry[2] if entry[2] is not None else manifest["sequence-number"]
+                parsed = urlparse(data_file["file_path"])
+                file_path = Path(url2pathname(parsed.path))
+                parquet = pq.ParquetFile(file_path)
+                rows = parquet.read().to_pylist()
+                for position, row in enumerate(rows):
+                    row_id = row.get("_row_id")
+                    if row_id is None:
+                        assert first_row_id is not None
+                        row_id = first_row_id + position
+                    updated = row.get("_last_updated_sequence_number")
+                    result[row["id"]] = (row_id, sequence if updated is None else updated)
+    ids = [row_id for row_id, _ in result.values()]
+    assert len(ids) == len(set(ids)), "Iceberg row IDs must be unique"
+    assert all(0 <= row_id < metadata["next-row-id"] for row_id in ids)
+    return result
+
+
+@given("remember current iceberg row lineage")
+def remember_current_iceberg_row_lineage(variables):
+    variables["remembered_iceberg_row_lineage"] = _current_row_lineage(Path(variables["location"].path))
+
+
+@given("iceberg current schema has fields")
+def iceberg_current_schema_has_fields(variables, docstring: str):
+    path = Path(variables["location"].path)
+    fields = json.loads(docstring)
+    metadata = _find_latest_metadata(path)
+    schema_id = max(schema["schema-id"] for schema in metadata["schemas"]) + 1
+    metadata["schemas"].append({"type": "struct", "schema-id": schema_id, "fields": fields})
+    metadata["current-schema-id"] = schema_id
+
+    def field_ids(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"id", "element-id", "key-id", "value-id"}:
+                    yield child
+                else:
+                    yield from field_ids(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from field_ids(child)
+
+    metadata["last-column-id"] = max(metadata["last-column-id"], *field_ids(fields))
+    version = _metadata_file_version(_latest_metadata_path(path)) + 1
+    _write_metadata_file(path / "metadata" / f"v{version}.metadata.json", metadata)
+
+
+@then("iceberg row lineage matches")
+def check_iceberg_row_lineage(variables, datatable):
+    actual = _current_row_lineage(Path(variables["location"].path))
+    remembered = variables["remembered_iceberg_row_lineage"]
+    header, *rows = datatable
+    assert header == ["id", "original_id", "sequence"]
+    assert set(actual) == {int(row[0]) for row in rows}
+    previous_ids = {row_id for row_id, _ in remembered.values()}
+    for key, original, sequence in rows:
+        row_id, updated = actual[int(key)]
+        assert updated == int(sequence), (key, updated)
+        if original == "NEW":
+            assert row_id not in previous_ids
+        else:
+            assert row_id == remembered[int(original)][0], (key, row_id)
+
+
+@then("iceberg row lineage preserves IDs and only changes these sequences")
+def check_iceberg_row_lineage_sequences(variables, datatable):
+    expected = variables["remembered_iceberg_row_lineage"].copy()
+    header, *rows = datatable
+    assert header == ["id", "sequence"]
+    for key, sequence in rows:
+        expected[int(key)] = (expected[int(key)][0], int(sequence))
+    assert _current_row_lineage(Path(variables["location"].path)) == expected

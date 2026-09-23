@@ -36,6 +36,17 @@ impl ResolveOptions for r#gen::IcebergWriteOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = r#gen::IcebergWritePartialOptions::initialize();
         for layer in options {
+            if let OptionLayer::OptionList { items } = &layer
+                && let Some((key, value)) = items.iter().find(|(key, _)| {
+                    key.eq_ignore_ascii_case("branch") || key.eq_ignore_ascii_case("wap-id")
+                })
+            {
+                return Err(crate::error::DataSourceError::InvalidOption {
+                    key: key.clone(),
+                    value: value.clone(),
+                    cause: Some("Iceberg branch and WAP writes are not supported".to_string()),
+                });
+            }
             partial.merge(layer.build_partial_options()?);
         }
         partial.finalize()

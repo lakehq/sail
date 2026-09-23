@@ -108,22 +108,24 @@ impl Table {
             let schema = self.metadata.current_schema().cloned().ok_or_else(|| {
                 DataFusionError::Plan("No current schema found in table metadata".to_string())
             })?;
-            let provider = IcebergTableProvider::new_empty(
+            let mut provider = IcebergTableProvider::new_empty(
                 self.table_url.to_string(),
                 schema,
                 self.metadata.partition_specs.clone(),
                 self.metadata.default_spec_id,
             )?;
+            provider.set_table_metadata(&self.metadata)?;
             return Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read));
         }
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
-        let provider = IcebergTableProvider::new(
+        let mut provider = IcebergTableProvider::new(
             self.table_url.to_string(),
             schema,
             snapshot,
             partition_specs,
             self.metadata.default_spec_id,
         )?;
+        provider.set_table_metadata(&self.metadata)?;
         Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read))
     }
 

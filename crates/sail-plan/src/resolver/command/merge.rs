@@ -644,6 +644,10 @@ impl PlanResolver<'_> {
         let empty_schema = Arc::new(DFSchema::empty());
         let mut defaults = Vec::new();
         for (field, target_name) in target_schema.fields().iter().zip(target_names) {
+            if let Some(default) = ColumnFeatures::from_field(field).current_default_value()? {
+                defaults.push((target_name.clone(), lit(default)));
+                continue;
+            }
             let Some(default) = ColumnFeatures::from_field(field).current_default() else {
                 continue;
             };

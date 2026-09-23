@@ -493,6 +493,225 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)]
               DataSourceExec: file_groups={2 groups: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet], [<tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet]]}, projection=[nullable_value@1 as #1, other_nullable@2 as #2], file_type=parquet
 ---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as p, #4@1 as q, #5@2 as v]
+      SortPreservingMergeExec: [#5@2 ASC]
+        ProjectionExec: expr=[p@0 as #3, q@1 as #4, v@2 as #5]
+          SortExec: expr=[v@2 ASC], preserve_partitioning=[true]
+            FilterExec: v@2 > 0
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+                DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet]]}, projection=[p, q, v], file_type=parquet, predicate=v@2 > 0 AND v@0 > 0, pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 > 0 AND v_null_count@4 != row_count@2 AND v_max@3 > 0, required_guarantees=[]
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as p, #4@1 as n]
+      SortPreservingMergeExec: [#3@0 ASC]
+        ProjectionExec: expr=[#0@0 as #3, __sail_delta_count_sum@1 as #4]
+          SortExec: expr=[#0@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+              RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+                  ProjectionExec: expr=[column1@0 as #0, column2@1 as __sail_delta_count_weight]
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      ProjectionExec: expr=[0 as #3]
+        PlaceholderRowExec
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false].3"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as v]
+      SortPreservingMergeExec: [#3@0 ASC]
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[v@0 as #3]
+            FilterExec: q@1 < p@0 OR v@2 = 200, projection=[v@2]
+              DataSourceExec: file_groups={5 groups: [[<tmp>/typed_partition_filters/p=1/q=1/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=2/q=10/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=__HIVE_DEFAULT_PARTITION__/q=2/part-<id>.snappy.parquet]]}, projection=[p, q, v], file_type=parquet, predicate=(q@1 < p@0 OR v@2 = 200) AND (q@2 < p@1 OR v@0 = 200)
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[true]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as p, #4@1 as q, #5@2 as v]
+      SortPreservingMergeExec: [#5@2 ASC]
+        ProjectionExec: expr=[p@0 as #3, q@1 as #4, v@2 as #5]
+          SortExec: expr=[v@2 ASC], preserve_partitioning=[true]
+            FilterExec: v@2 > 0
+              DeltaScanByAddsExec(table_path=file://<tmp>/typed_partition_filters/, version=1, projection=Some([0, 1, 2]), limit=None, pushdown=true)
+                DeltaDiscoveryExec(table_path=file://<tmp>/typed_partition_filters/)
+                  FilterExec: CAST(nullif(q@6, ) AS Int32) < CAST(nullif(p@5, ) AS Int32) AND (get_field(stats_parsed@9, maxValues, v) IS NULL OR get_field(stats_parsed@9, maxValues, v) > 0)
+                    DeltaMetadataStatsExec(output=stats_parsed, columns=[v])
+                      DeltaLogReplayExec(table_path=file://<tmp>/typed_partition_filters/, version=1, mode=sort)
+                        SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                          ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, p), 1) as p, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, q), 1) as q, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                            RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                              DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/_delta_log/00000000000000000000.json], [<tmp>/typed_partition_filters/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[true].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as p, #4@1 as n]
+      SortPreservingMergeExec: [#3@0 ASC]
+        ProjectionExec: expr=[#0@0 as #3, __sail_delta_count_sum@1 as #4]
+          SortExec: expr=[#0@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(typed_partition_filters.__sail_delta_count_weight) as __sail_delta_count_sum]
+              RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(typed_partition_filters.__sail_delta_count_weight) as __sail_delta_count_sum]
+                  DeltaScanByAddsExec(table_path=file://<tmp>/typed_partition_filters/, version=1, projection=None, limit=None, pushdown=false), metadata_groups=["p"]
+                    DeltaDiscoveryExec(table_path=file://<tmp>/typed_partition_filters/)
+                      FilterExec: CAST(nullif(q@6, ) AS Int32) < CAST(nullif(p@5, ) AS Int32)
+                        DeltaLogReplayExec(table_path=file://<tmp>/typed_partition_filters/, version=1, mode=sort)
+                          SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                            ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, p), 1) as p, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, q), 1) as q, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                              RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                                DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/_delta_log/00000000000000000000.json], [<tmp>/typed_partition_filters/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[true].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      ProjectionExec: expr=[CASE WHEN __sail_delta_count_sum@0 IS NULL THEN 0 ELSE __sail_delta_count_sum@0 END as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(typed_partition_filters.__sail_delta_count_weight) as __sail_delta_count_sum]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(typed_partition_filters.__sail_delta_count_weight) as __sail_delta_count_sum]
+              DeltaScanByAddsExec(table_path=file://<tmp>/typed_partition_filters/, version=1, projection=None, limit=None, pushdown=false), metadata_groups=[]
+                DeltaDiscoveryExec(table_path=file://<tmp>/typed_partition_filters/)
+                  FilterExec: CAST(nullif(p@5, ) AS Int32) != 1 AND NULL
+                    DeltaLogReplayExec(table_path=file://<tmp>/typed_partition_filters/, version=1, mode=sort)
+                      SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, p), 1) as p, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, q), 1) as q, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                          RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                            DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/_delta_log/00000000000000000000.json], [<tmp>/typed_partition_filters/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[true].3"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as v]
+      SortPreservingMergeExec: [#3@0 ASC]
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[v@0 as #3]
+            FilterExec: q@1 < p@0 OR v@2 = 200, projection=[v@2]
+              DeltaScanByAddsExec(table_path=file://<tmp>/typed_partition_filters/, version=1, projection=Some([0, 1, 2]), limit=None, pushdown=true)
+                DeltaDiscoveryExec(table_path=file://<tmp>/typed_partition_filters/)
+                  FilterExec: CAST(nullif(q@6, ) AS Int32) < CAST(nullif(p@5, ) AS Int32) OR get_field(stats_parsed@9, minValues, v) IS NULL OR get_field(stats_parsed@9, maxValues, v) IS NULL OR get_field(stats_parsed@9, minValues, v) <= 200 AND get_field(stats_parsed@9, maxValues, v) >= 200
+                    DeltaMetadataStatsExec(output=stats_parsed, columns=[v])
+                      DeltaLogReplayExec(table_path=file://<tmp>/typed_partition_filters/, version=1, mode=sort)
+                        SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                          ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, p), 1) as p, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, q), 1) as q, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                            RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                              DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/_delta_log/00000000000000000000.json], [<tmp>/typed_partition_filters/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_filtered_extrema_and_bounded_row_existence_use_metadata"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n, #3@1 as nonnull, #4@2 as lo, #5@3 as hi]
+      ProjectionExec: expr=[3 as #2, 2 as #3, 1 as #4, 2 as #5]
+        PlaceholderRowExec
+---
+name: "test_partition_filtered_extrema_and_bounded_row_existence_use_metadata.1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[1 as #2]
+        CooperativeExec
+          RangeExec
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[false]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as p, #2@1 as n]
+      ProjectionExec: expr=[#0@0 as #1, __sail_delta_count_sum@1 as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+          RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+              ProjectionExec: expr=[column1@0 as #0, column2@1 as __sail_delta_count_weight]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[false].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as p]
+      AggregateExec: mode=FinalPartitioned, gby=[#1@0 as #1], aggr=[]
+        RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[]
+            ProjectionExec: expr=[column1@0 as #1, column2@1 as __sail_delta_count_weight]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[false].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      ProjectionExec: expr=[5 as #1]
+        PlaceholderRowExec
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[true]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as p, #2@1 as n]
+      ProjectionExec: expr=[#0@0 as #1, __sail_delta_count_sum@1 as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(delta_metadata_grouping.__sail_delta_count_weight) as __sail_delta_count_sum]
+          RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
+            AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(delta_metadata_grouping.__sail_delta_count_weight) as __sail_delta_count_sum]
+              DeltaScanByAddsExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, projection=None, limit=None, pushdown=false), metadata_groups=["part"]
+                DeltaDiscoveryExec(table_path=file://<tmp>/delta_metadata_grouping/)
+                  DeltaLogReplayExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, mode=sort)
+                    SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, __sail_delta_log_version@10 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
+                      ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, part), 1) as part, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                        RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                          DataSourceExec: file_groups={2 groups: [[<tmp>/delta_metadata_grouping/_delta_log/00000000000000000000.json], [<tmp>/delta_metadata_grouping/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[true].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as p]
+      AggregateExec: mode=FinalPartitioned, gby=[#1@0 as #1], aggr=[]
+        RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+          AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[]
+            DeltaScanByAddsExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, projection=None, limit=None, pushdown=false), metadata_groups=["part"]
+              DeltaDiscoveryExec(table_path=file://<tmp>/delta_metadata_grouping/)
+                DeltaLogReplayExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, mode=sort)
+                  SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, __sail_delta_log_version@10 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
+                    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, part), 1) as part, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                      RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                        DataSourceExec: file_groups={2 groups: [[<tmp>/delta_metadata_grouping/_delta_log/00000000000000000000.json], [<tmp>/delta_metadata_grouping/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[true].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      ProjectionExec: expr=[CASE WHEN __sail_delta_count_sum@0 IS NULL THEN 0 ELSE __sail_delta_count_sum@0 END as #1]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(delta_metadata_grouping.__sail_delta_count_weight) as __sail_delta_count_sum]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(delta_metadata_grouping.__sail_delta_count_weight) as __sail_delta_count_sum]
+              DeltaScanByAddsExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, projection=None, limit=None, pushdown=false), metadata_groups=[]
+                DeltaDiscoveryExec(table_path=file://<tmp>/delta_metadata_grouping/)
+                  DeltaLogReplayExec(table_path=file://<tmp>/delta_metadata_grouping/, version=1, mode=sort)
+                    SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, __sail_delta_log_version@10 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
+                      ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, part), 1) as part, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                        RepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
+                          DataSourceExec: file_groups={2 groups: [[<tmp>/delta_metadata_grouping/_delta_log/00000000000000000000.json], [<tmp>/delta_metadata_grouping/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
 name: "test_sql_projected_exists_returns_row_existence_as_a_boolean"
 data:
   |-
@@ -536,7 +755,8 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as present]
-      DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_driver_partitioned/year=2024/part-<id>.snappy.parquet]]}, projection=[1 as #3], limit=1, file_type=parquet
+      ProjectionExec: expr=[1 as #3]
+        PlaceholderRowExec
 ---
 name: "test_sql_row_existence_returns_no_row_for_an_empty_delta_snapshot"
 data:

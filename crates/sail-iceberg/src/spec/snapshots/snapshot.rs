@@ -119,7 +119,11 @@ impl SnapshotReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", tag = "type")]
+#[serde(
+    rename_all = "kebab-case",
+    rename_all_fields = "kebab-case",
+    tag = "type"
+)]
 /// Snapshot retention policy
 pub enum SnapshotRetention {
     /// Branches are mutable named references that can be updated by committing a new snapshot
@@ -350,5 +354,23 @@ impl SnapshotBuilder {
 impl Default for SnapshotBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn reference_retention_uses_iceberg_json_field_names() -> Result<(), serde_json::Error> {
+        for value in [
+            serde_json::json!({"snapshot-id": 7, "type": "branch", "min-snapshots-to-keep": 5,
+                "max-snapshot-age-ms": 86400000, "max-ref-age-ms": 172800000}),
+            serde_json::json!({"snapshot-id": 7, "type": "tag", "max-ref-age-ms": 172800000}),
+        ] {
+            let reference: SnapshotReference = serde_json::from_value(value.clone())?;
+            assert_eq!(serde_json::to_value(reference)?, value);
+        }
+        Ok(())
     }
 }

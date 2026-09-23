@@ -108,11 +108,11 @@ def test_jdbc_shorthand(spark, jdbc_url):
 def test_query_option(spark, jdbc_opts):
     df = (
         spark.read.format("jdbc")
-        .option("query", "SELECT id, name FROM users WHERE active = TRUE")
+        .option("query", " SELECT id, name FROM users WHERE active = TRUE; \n")
         .options(**jdbc_opts)
         .load()
     )
-    rows = df.collect()
+    rows = df.filter("id > 0").collect()
     assert len(rows) > 0
     col_names = {f.name for f in df.schema.fields}
     assert col_names == {"id", "name"}

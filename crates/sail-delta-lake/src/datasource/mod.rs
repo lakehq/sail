@@ -47,7 +47,6 @@ pub use expressions::{
     PredicateProperties, collect_physical_columns, get_pushdown_filters,
     rewrite_predicate_for_column_mapping, simplify_expr,
 };
-pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 
@@ -247,6 +246,7 @@ impl DeltaScanConfigBuilder {
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
+            metadata_aggregate: None,
         })
     }
 }
@@ -273,4 +273,11 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Emit file-level group values and row-count weights for metadata aggregation.
+    pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaMetadataAggregateConfig {
+    pub group_columns: Vec<String>,
 }

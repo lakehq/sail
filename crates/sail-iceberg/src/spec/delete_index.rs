@@ -59,6 +59,7 @@ impl PartitionKey {
 
 fn encode_literal(lit: &Literal, out: &mut Vec<u8>) {
     match lit {
+        Literal::Null => out.push(0),
         Literal::Primitive(p) => encode_primitive(p, out),
         Literal::Struct(fields) => {
             out.extend_from_slice(&(fields.len() as u32).to_le_bytes());

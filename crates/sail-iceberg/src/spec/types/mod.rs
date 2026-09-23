@@ -801,7 +801,7 @@ impl fmt::Display for StructType {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
+#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -833,31 +833,73 @@ struct SerdeNestedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_field_default")]
     pub initial_default: Option<JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_field_default")]
     pub write_default: Option<JsonValue>,
 }
 
-impl From<SerdeNestedField> for NestedField {
-    fn from(value: SerdeNestedField) -> Self {
-        // TODO(V3): Preserve explicit JSON null defaults separately from absent defaults.
-        NestedField {
+fn deserialize_field_default<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<JsonValue>, D::Error> {
+    JsonValue::deserialize(deserializer).map(Some)
+}
+
+impl TryFrom<SerdeNestedField> for NestedField {
+    type Error = String;
+
+    fn try_from(value: SerdeNestedField) -> Result<Self, Self::Error> {
+        let parse_default = |json: JsonValue| -> Result<Literal, String> {
+            if json.is_null() {
+                if value.required {
+                    return Err(format!(
+                        "Required Iceberg field '{}' cannot default to null",
+                        value.name
+                    ));
+                }
+                return Ok(Literal::Null);
+            }
+            if matches!(
+                value.field_type.as_ref(),
+                Type::Primitive(
+                    PrimitiveType::Unknown
+                        | PrimitiveType::Variant
+                        | PrimitiveType::Geometry { .. }
+                        | PrimitiveType::Geography { .. }
+                )
+            ) {
+                return Err(format!(
+                    "Iceberg field '{}' requires a null default",
+                    value.name
+                ));
+            }
+            if matches!(value.field_type.as_ref(), Type::Struct(_))
+                && json.as_object().is_some_and(|fields| !fields.is_empty())
+            {
+                return Err(format!(
+                    "Struct default for '{}' must be empty; defaults belong to child fields",
+                    value.name
+                ));
+            }
+            Literal::try_from_json(json, &value.field_type)?
+                .ok_or_else(|| "Invalid null default".to_string())
+        };
+        let initial_default = value
+            .initial_default
+            .clone()
+            .map(parse_default)
+            .transpose()?;
+        let write_default = value.write_default.clone().map(parse_default).transpose()?;
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
-            initial_default: value.initial_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(|x| x)
-            }),
-            write_default: value.write_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(|x| x)
-            }),
+            initial_default,
+            write_default,
             field_type: value.field_type,
             doc: value.doc,
-        }
+        })
     }
 }
 

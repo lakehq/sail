@@ -13,3 +13,116 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[]
       DataSourceExec: file_groups={1 group: [[<tmp>/row_counts/part-0.parquet]]}, limit=1, file_type=parquet
+---
+name: "test_empty_projection_limit_uses_sufficient_known_rows[complete-counts]"
+data:
+  limit_0: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      EmptyExec
+  limit_1: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      PlaceholderRowExec
+  limit_2: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  limit_3: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  limit_past_end: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  offset: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  offset_past_end: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      EmptyExec
+---
+name: "test_empty_projection_limit_uses_sufficient_known_rows[partial-counts]"
+data:
+  limit_0: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      EmptyExec
+  limit_1: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      PlaceholderRowExec
+  limit_2: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  limit_3: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+  offset: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      ProjectionExec: expr=[]
+        CooperativeExec
+          RangeExec
+---
+name: "test_empty_projection_reads_unknown_files_when_counts_are_insufficient"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      DataSourceExec: file_groups={1 group: [[<tmp>/insufficient_row_counts/part-1.parquet]]}, limit=2, file_type=parquet
+---
+name: "test_limit_preserves_row_filters_and_ordering"
+data:
+  filtered: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ProjectionExec: expr=[id@0 as #0]
+        CoalescePartitionsExec: fetch=2
+          FilterExec: id@0 > 2, fetch=2
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 2 AND id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2 AND id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+  ordered: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ProjectionExec: expr=[id@0 as #0]
+        SortExec: TopK(fetch=2), expr=[id@0 DESC NULLS LAST], preserve_partitioning=[false]
+          DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC NULLS LAST], reverse_row_groups=true, dynamic_rg_pruning=eligible
+---
+name: "test_limit_reads_only_enough_known_files[1]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as #0], limit=1, file_type=parquet
+---
+name: "test_limit_reads_only_enough_known_files[2]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as #0], limit=2, file_type=parquet
+---
+name: "test_limit_reads_only_enough_known_files[3]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet, <tmp>/limited_files/part-3.parquet]]}, projection=[id@0 as #0], limit=3, file_type=parquet

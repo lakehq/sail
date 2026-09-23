@@ -25,7 +25,7 @@ use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 use sail_common_datafusion::variant::{
     is_marked_variant_storage_type, is_variant_arrow_field,
-    is_variant_storage_type as is_variant_arrow_storage_type,
+    is_variant_storage_type as is_variant_arrow_storage_type, variant_metadata_field,
 };
 use serde_json;
 
@@ -64,6 +64,56 @@ pub fn iceberg_schema_to_arrow(schema: &Schema) -> Result<ArrowSchema> {
         .map(|field| iceberg_field_to_arrow(field))
         .collect::<Result<Vec<_>>>()?;
     Ok(ArrowSchema::new(fields))
+}
+
+pub(crate) fn apply_name_mapping(
+    schema: &ArrowSchema,
+    mapping: &crate::spec::name_mapping::NameMapping,
+) -> Result<ArrowSchema> {
+    fn annotate(field: &ArrowField, aliases: &HashMap<i32, Vec<String>>) -> Result<ArrowField> {
+        let ty = match field.data_type() {
+            ArrowDataType::Struct(fields) => ArrowDataType::Struct(
+                fields
+                    .iter()
+                    .map(|field| annotate(field, aliases).map(Arc::new))
+                    .collect::<Result<Vec<_>>>()?
+                    .into(),
+            ),
+            ArrowDataType::List(element) => {
+                ArrowDataType::List(Arc::new(annotate(element, aliases)?))
+            }
+            ArrowDataType::LargeList(element) => {
+                ArrowDataType::LargeList(Arc::new(annotate(element, aliases)?))
+            }
+            ArrowDataType::Map(entries, sorted) => {
+                ArrowDataType::Map(Arc::new(annotate(entries, aliases)?), *sorted)
+            }
+            ty => ty.clone(),
+        };
+        let mut metadata = field.metadata().clone();
+        if let Some(id) = iceberg_field_id(field)?
+            && let Some(names) = aliases.get(&id)
+        {
+            metadata.insert(
+                sail_common_datafusion::schema_evolution::FIELD_ALIASES_METADATA_KEY.to_string(),
+                serde_json::to_string(names).map_err(|error| {
+                    plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
+                })?,
+            );
+        }
+        Ok(field.clone().with_data_type(ty).with_metadata(metadata))
+    }
+    let aliases = mapping
+        .field_names()
+        .map_err(|error| plan_datafusion_err!("{error}"))?;
+    Ok(ArrowSchema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| annotate(field, &aliases))
+            .collect::<Result<Vec<_>>>()?,
+        schema.metadata().clone(),
+    ))
 }
 
 /// Convert Arrow schema to Iceberg schema
@@ -115,6 +165,27 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
         metadata.insert(ICEBERG_FIELD_WRITE_DEFAULT.to_string(), json_str);
     }
 
+    if let Some(value) = crate::schema_defaults::field_default_scalar(
+        field,
+        crate::schema_defaults::DefaultKind::Initial,
+    )? {
+        metadata.insert(
+            sail_common_datafusion::schema_evolution::FIELD_DEFAULT_METADATA_KEY.to_string(),
+            sail_common_datafusion::schema_evolution::encode_field_default(&value)?,
+        );
+    }
+    if let Some(value) = crate::schema_defaults::field_default_scalar(
+        field,
+        crate::schema_defaults::DefaultKind::Write,
+    )? {
+        metadata.insert(
+            sail_common_datafusion::column_features::ColumnFeatureKey::CurrentDefaultValue
+                .as_str()
+                .to_string(),
+            sail_common_datafusion::schema_evolution::encode_field_default(&value)?,
+        );
+    }
+
     Ok(ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata))
 }
 
@@ -154,7 +225,7 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 nested_field = nested_field.with_initial_default(literal);
             }
             Ok(None) => {
-                return Err(plan_datafusion_err!("initial_default JSON parsed to None"));
+                nested_field = nested_field.with_initial_default(Literal::Null);
             }
             Err(e) => {
                 return Err(plan_datafusion_err!(
@@ -172,7 +243,7 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 nested_field = nested_field.with_write_default(literal);
             }
             Ok(None) => {
-                return Err(plan_datafusion_err!("write_default JSON parsed to None"));
+                nested_field = nested_field.with_write_default(Literal::Null);
             }
             Err(e) => {
                 return Err(plan_datafusion_err!(
@@ -305,7 +376,8 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         }
         PrimitiveType::Variant => ArrowDataType::Struct(
             vec![
-                ArrowField::new("metadata", ArrowDataType::Binary, false),
+                // Keep Variant identity when scalar folding drops the parent field metadata.
+                variant_metadata_field(ArrowDataType::Binary, false),
                 ArrowField::new("value", ArrowDataType::Binary, false),
             ]
             .into(),

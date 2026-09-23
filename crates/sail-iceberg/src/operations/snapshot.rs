@@ -271,12 +271,15 @@ pub enum SnapshotUpdateKind {
     FullOverwrite,
     RowDelta,
     CopyOnWrite,
+    /// Row-level COW actions classified from files added and removed at runtime.
+    RowLevelRewrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SnapshotChanges {
     added_data_files: usize,
     added_delete_files: usize,
+    removed_data_files: usize,
     dynamic_partition_overwrite: bool,
 }
 
@@ -292,11 +295,13 @@ impl SnapshotChanges {
     fn new(
         added_data_files: &[DataFile],
         added_delete_files: &[DataFile],
+        removed_data_files: usize,
         dynamic_partition_overwrite: bool,
     ) -> Self {
         Self {
             added_data_files: added_data_files.len(),
             added_delete_files: added_delete_files.len(),
+            removed_data_files,
             dynamic_partition_overwrite,
         }
     }
@@ -323,8 +328,15 @@ impl SnapshotUpdateKind {
             }
             Self::RowDelta => Operation::Overwrite,
             Self::CopyOnWrite if changes.dynamic_partition_overwrite => Operation::Overwrite,
-            Self::CopyOnWrite if changes.adds_data_files() => Operation::Overwrite,
-            Self::CopyOnWrite => Operation::Delete,
+            Self::RowLevelRewrite
+                if changes.adds_data_files() && changes.removed_data_files == 0 =>
+            {
+                Operation::Append
+            }
+            Self::CopyOnWrite | Self::RowLevelRewrite if changes.adds_data_files() => {
+                Operation::Overwrite
+            }
+            Self::CopyOnWrite | Self::RowLevelRewrite => Operation::Delete,
         }
     }
 
@@ -332,8 +344,8 @@ impl SnapshotUpdateKind {
         !matches!(self, Self::FullOverwrite)
     }
 
-    fn is_targeted_rewrite(self) -> bool {
-        matches!(self, Self::CopyOnWrite)
+    pub(crate) fn is_targeted_rewrite(self) -> bool {
+        matches!(self, Self::CopyOnWrite | Self::RowLevelRewrite)
     }
 
     fn delete_totals_base<'a>(
@@ -675,12 +687,17 @@ impl<'a> SnapshotProducer<'a> {
                     )
                 })?;
             if let Some(current) = &self.manifest_metadata {
-                metadata.schema = current.schema.clone();
-                metadata.schema_id = current.schema_id;
+                // Dropped partition source columns still need their historical types.
+                if partition_spec
+                    .fields()
+                    .iter()
+                    .all(|field| current.schema.field_by_id(field.source_id).is_some())
+                {
+                    metadata.schema = current.schema.clone();
+                }
                 metadata.format_version = current.format_version;
-            } else {
-                metadata.schema_id = metadata.schema.schema_id();
             }
+            metadata.schema_id = metadata.schema.schema_id();
             metadata.partition_spec = partition_spec;
             let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
             let mut inherited_next_row_id = parent_manifest_file.first_row_id;
@@ -817,6 +834,7 @@ impl<'a> SnapshotProducer<'a> {
         let changes = SnapshotChanges::new(
             &self.added_data_files,
             &self.added_delete_files,
+            removed_data_file_paths.len(),
             self.dynamic_partition_overwrite,
         );
         let operation = update_kind.summary_operation(changes);
@@ -1194,6 +1212,71 @@ mod tests {
     use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{DataContentType, DataFileFormat, Transform};
+
+    #[test]
+    fn copy_on_write_classification_preserves_explicit_overwrite_modes() {
+        for (kind, added, removed, dynamic, expected) in [
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                1,
+                0,
+                false,
+                Operation::Append,
+            ),
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                1,
+                1,
+                false,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                0,
+                1,
+                false,
+                Operation::Delete,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                1,
+                0,
+                false,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                0,
+                1,
+                false,
+                Operation::Delete,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                1,
+                0,
+                true,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::FullOverwrite,
+                1,
+                0,
+                false,
+                Operation::Overwrite,
+            ),
+        ] {
+            assert_eq!(
+                kind.summary_operation(SnapshotChanges {
+                    added_data_files: added,
+                    added_delete_files: 0,
+                    removed_data_files: removed,
+                    dynamic_partition_overwrite: dynamic,
+                }),
+                expected
+            );
+        }
+    }
 
     #[derive(Debug)]
     struct ManifestListRejectingStore {
