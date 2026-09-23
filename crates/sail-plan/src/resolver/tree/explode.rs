@@ -167,6 +167,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             UnnestOptions::new().with_null_handling(null_handling),
         )?;
 
+        // TODO: Use the struct field name for single-column inline/inline_outer
+        // without an explicit alias; this scalar path retains the function name.
         let out = match out.one_or_more()? {
             Either::Left(node) => node,
             Either::Right(nodes) => ScalarUDF::from(MultiExpr::new()).call(nodes),

@@ -1,5 +1,20 @@
 Feature: inline generator output names
 
+  @sail-bug
+  Scenario Outline: <function> preserves the default name of a single struct field
+    When query
+      """
+      SELECT <function>(array(named_struct('a', 1)))
+      """
+    Then query result
+      | a |
+      | 1 |
+
+    Examples:
+      | function     |
+      | inline       |
+      | inline_outer |
+
   Scenario Outline: <function> preserves default struct field names
     When query
       """
