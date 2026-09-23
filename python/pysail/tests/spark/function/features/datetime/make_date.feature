@@ -148,6 +148,7 @@ Feature: make_date output schema
         | 1999-07-04 |
 
     Scenario: make_date resolves valid rows from columns under ANSI
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT make_date(y, m, d) AS result

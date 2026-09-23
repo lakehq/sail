@@ -113,8 +113,9 @@ Feature: vector_cosine_similarity
         | eight elements fill exactly one unrolled block   | array(1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F)          | array(8.0F, 7.0F, 6.0F, 5.0F, 4.0F, 3.0F, 2.0F, 1.0F) | 0.5882353  |
         | nine elements add a remainder after the block    | array(1.0E8F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F)  | array(1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F) | 0.33333334 |
 
-    Scenario: the result does not depend on ANSI mode
-      Given config spark.sql.ansi.enabled = false
+    # Independence from ANSI is a claim about both modes, so both are run.
+    Scenario Outline: the result does not depend on ANSI mode <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT
@@ -124,6 +125,11 @@ Feature: vector_cosine_similarity
       Then query result
         | overflow | underflow |
         | NaN      | NULL      |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
     Scenario: the same extremes through columns
       When query
@@ -453,13 +459,18 @@ Feature: vector_cosine_similarity
 
     # The dimension check is not ANSI-gated and runs before the empty and NULL-element checks.
     @sail-bug
-    Scenario: unequal dimensions still raise with ANSI mode off
-      Given config spark.sql.ansi.enabled = false
+    Scenario Outline: unequal dimensions still raise with ANSI mode <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT vector_cosine_similarity(array(1.0F, 2.0F), array(1.0F)) AS result
         """
       Then query error \[VECTOR_DIMENSION_MISMATCH\]
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
     @sail-bug
     Scenario: the dimension is checked before a NULL element can return NULL

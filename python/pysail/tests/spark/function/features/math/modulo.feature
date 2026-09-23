@@ -178,23 +178,35 @@ Feature: Spark-compatible modulo (% / mod / try_mod)
         | NULL   |
 
     @sail-bug
-    Scenario: try_mod double by zero is NULL
+    Scenario Outline: try_mod double by zero is NULL with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT try_mod(CAST(10.0 AS DOUBLE), CAST(0.0 AS DOUBLE)) AS result
         """
       Then query result
         | result |
-        | NULL   |
+        | NULL |
 
-    Scenario: try_mod decimal by zero is NULL
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: try_mod decimal by zero is NULL with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT try_mod(CAST(10.5 AS DECIMAL(10,2)), CAST(0.0 AS DECIMAL(10,2))) AS result
         """
       Then query result
         | result |
-        | NULL   |
+        | NULL |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   Rule: try_mod computes the remainder for non-zero divisors
     @sail-bug
@@ -278,32 +290,50 @@ Feature: Spark-compatible modulo (% / mod / try_mod)
         | result |
         | NaN    |
 
-    Scenario: NaN modulo two is NaN
+    Scenario Outline: NaN modulo two is NaN with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT CAST('NaN' AS DOUBLE) % CAST(2.0 AS DOUBLE) AS result
         """
       Then query result
         | result |
-        | NaN    |
+        | NaN |
 
-    Scenario: value modulo infinity is the value
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: value modulo infinity is the value with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT CAST(5.0 AS DOUBLE) % CAST('Infinity' AS DOUBLE) AS result
         """
       Then query result
         | result |
-        | 5.0    |
+        | 5.0 |
 
-    Scenario: negative zero dividend normalizes to positive zero
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: negative zero dividend normalizes to positive zero with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT CAST(-0.0 AS DOUBLE) % CAST(3.0 AS DOUBLE) AS result
         """
       Then query result
         | result |
-        | 0.0    |
+        | 0.0 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   Rule: NULL propagates
     Scenario: NULL dividend yields NULL
@@ -345,7 +375,8 @@ Feature: Spark-compatible modulo (% / mod / try_mod)
         """
       Then query error (?i)remainder.*zero
 
-    Scenario: try_mod nulls only the zero row in both ANSI modes
+    Scenario Outline: try_mod nulls only the zero row with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT try_mod(a, b) AS result FROM VALUES (10, 3), (7, 0), (8, 4) AS t(a, b) ORDER BY a
@@ -355,3 +386,8 @@ Feature: Spark-compatible modulo (% / mod / try_mod)
         | NULL   |
         | 0      |
         | 1      |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |

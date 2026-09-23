@@ -656,3 +656,14 @@ Feature: last_day comprehensive tests
       Then query result
         | result |
         | NULL   |
+
+    # The other half of the flag: the same string raises under ANSI, so the pair shows the branch
+    # rather than one side of it.
+    @sail-bug
+    Scenario: last_day of an invalid date string raises under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT last_day('2024-02-30') AS result
+        """
+      Then query error \[CAST_INVALID_INPUT\]

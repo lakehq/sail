@@ -36,7 +36,11 @@ Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Ordinary negation is unaffected by ANSI mode
 
-    Scenario Outline: Ordinary negation: <case>
+    # `UnaryMinus` reads `SQLConf.get.ansiEnabled` (`arithmetic.scala`), so "unaffected by ANSI" is a
+    # claim about both modes: the flag is set per row of the table instead of left at its default,
+    # which would prove only the mode that happens to be on.
+    Scenario Outline: Ordinary negation with ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT <expr> AS result
@@ -46,12 +50,17 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | <result> |
 
       Examples:
-        | case                                       | expr                         | result |
-        | negate a positive integer                  | -CAST(5 AS INT)              | -5     |
-        | double negation returns the original value | -(-CAST(5 AS INT))           | 5      |
-        | negate a double                            | -CAST(1.5 AS DOUBLE)         | -1.5   |
-        | negate a decimal                           | -CAST(1.50 AS DECIMAL(10,2)) | -1.50  |
-        | negate NULL returns NULL                   | -CAST(NULL AS INT)           | NULL   |
+        | case                                       | ansi  | expr                         | result |
+        | negate a positive integer                  | true  | -CAST(5 AS INT)              | -5     |
+        | negate a positive integer                  | false | -CAST(5 AS INT)              | -5     |
+        | double negation returns the original value | true  | -(-CAST(5 AS INT))           | 5      |
+        | double negation returns the original value | false | -(-CAST(5 AS INT))           | 5      |
+        | negate a double                            | true  | -CAST(1.5 AS DOUBLE)         | -1.5   |
+        | negate a double                            | false | -CAST(1.5 AS DOUBLE)         | -1.5   |
+        | negate a decimal                           | true  | -CAST(1.50 AS DECIMAL(10,2)) | -1.50  |
+        | negate a decimal                           | false | -CAST(1.50 AS DECIMAL(10,2)) | -1.50  |
+        | negate NULL returns NULL                   | true  | -CAST(NULL AS INT)           | NULL   |
+        | negate NULL returns NULL                   | false | -CAST(NULL AS INT)           | NULL   |
 
   Rule: Floating-point negation never overflows
 

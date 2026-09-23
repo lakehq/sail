@@ -287,7 +287,10 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | int column, ANSI off   | false | n                   |
 
     @sail-bug
-    Scenario: try_divide of a day-time interval by zero returns NULL
+    # The Rule claims the behaviour holds whatever ANSI says, so both modes are run: left at
+    # the session default it would only ever prove the one that happens to be on.
+    Scenario Outline: try_divide of a day-time interval by zero returns NULL with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT try_divide(INTERVAL '1' DAY, 0) AS result
@@ -295,6 +298,11 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
       Then query result
         | result |
         | NULL   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   # DivideDTInterval / MultiplyDTInterval round the microsecond result HALF_UP
   # (LongMath.divide, DoubleMath.roundToLong, BigDecimal.setScale(0, HALF_UP)).
@@ -362,7 +370,10 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | Infinity factor            | true  | i * CAST('Infinity' AS DOUBLE)           | input is infinite or NaN  |
 
     @sail-bug
-    Scenario: try_multiply of a day-time interval overflow returns NULL
+    # The Rule claims the behaviour holds whatever ANSI says, so both modes are run: left at
+    # the session default it would only ever prove the one that happens to be on.
+    Scenario Outline: try_multiply of a day-time interval overflow returns NULL with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT try_multiply(INTERVAL '106751991' DAY, 2) AS result
@@ -370,6 +381,11 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
       Then query result
         | result |
         | NULL   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   # Adding, subtracting and negating day-time intervals use Math.*Exact and raise
   # INTERVAL_ARITHMETIC_OVERFLOW regardless of ANSI (Spark 4.2.0 arithmetic.scala).

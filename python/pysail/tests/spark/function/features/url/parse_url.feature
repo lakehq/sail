@@ -1054,3 +1054,37 @@ Feature: parse_url() extracts URL component
       Then query result
         | result                  |
         | über:pass@example.com   |
+
+  # An unparseable URL is the one branch `parse_url` gates on ANSI: it raises with ANSI on and
+  # gives NULL with ANSI off. `try_parse_url` is the always-NULL variant, so the three together
+  # tell the rule apart from "invalid input is always NULL".
+  Rule: an invalid URL follows ANSI
+
+    @sail-bug
+    Scenario: an invalid URL raises when ANSI is on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT parse_url('inva lid', 'HOST') AS result
+        """
+      Then query error \[INVALID_URL\]
+
+    Scenario: an invalid URL is NULL when ANSI is off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT parse_url('inva lid', 'HOST') AS result
+        """
+      Then query result collected
+        | result |
+        | NULL   |
+
+    Scenario: try_parse_url is NULL whatever ANSI says
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT try_parse_url('inva lid', 'HOST') AS result
+        """
+      Then query result collected
+        | result |
+        | NULL   |

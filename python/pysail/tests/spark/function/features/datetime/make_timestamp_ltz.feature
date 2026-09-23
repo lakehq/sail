@@ -122,3 +122,51 @@ Feature: make_timestamp_ltz
       Then query result
         | result     |
         | 1710066600 |
+
+  # `MakeTimestamp` reads `failOnError = SQLConf.get.ansiEnabled` (`datetimeExpressions.scala:2886`)
+  # and that same flag decides the SCHEMA, not only the value:
+  # `nullable = if (failOnError) children.exists(_.nullable) else true` (:2921). So with ANSI on and
+  # non-null arguments the column is declared NOT nullable, and with ANSI off it is nullable even
+  # though nothing can be null. The Rules above already cover the value side of the flag; this is
+  # the side a values-only test cannot see, and the pair is what tells the rule apart from
+  # "always nullable".
+  @function(nullability)
+  Rule: ANSI decides the nullability of the result
+
+    @sail-bug
+    Scenario: with ANSI on and non-null arguments the result is not nullable
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT make_timestamp_ltz(2024, 3, 5, 6, 7, 8) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+    Scenario: with ANSI off the result is nullable even from non-null arguments
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT make_timestamp_ltz(2024, 3, 5, 6, 7, 8) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    # A nullable argument makes it nullable under ANSI too -- the guard against hardcoding `false`.
+    Scenario: with ANSI on a nullable argument keeps the result nullable
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT make_timestamp_ltz(y, 3, 5, 6, 7, 8) AS result FROM VALUES (2024), (CAST(NULL AS INT)) AS t(y)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """

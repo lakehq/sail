@@ -155,13 +155,20 @@ Feature: to_utc_timestamp
         | 1  | 2024-06-01 03:00:00 |
         | 2  | 2024-06-01 06:15:00 |
 
-    Scenario: `to_utc_timestamp` rejects an invalid time zone id under ANSI off
-      Given config spark.sql.ansi.enabled = false
+    # The zone check is not ANSI-gated, and the only way to show that is to run both modes: with
+    # the flag left at its default only one of them would ever be exercised.
+    Scenario Outline: `to_utc_timestamp` rejects an invalid time zone id with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT to_utc_timestamp(TIMESTAMP '2024-01-01 00:00:00', 'Not/AZone') AS result
         """
       Then query error INVALID_TIMEZONE
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   Rule: The fall-back overlap resolves to the earlier offset
 

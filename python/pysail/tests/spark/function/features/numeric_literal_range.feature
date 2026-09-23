@@ -95,14 +95,21 @@ Feature: Range of suffixed numeric literals
         | FLOAT rounding down to the minimum    | -3.4028235E38F          | -3.4028235E38          | float  |
         | DOUBLE rounding down to the maximum   | 1.7976931348623158E308D | 1.7976931348623158E308 | double |
 
+    # Saying the check does not depend on ANSI is only proved by running BOTH modes: with the flag
+    # left at its default the scenario would test whichever one happens to be on.
     @sail-bug
-    Scenario: the range check does not depend on ANSI mode
-      Given config spark.sql.ansi.enabled = false
+    Scenario Outline: the range check does not depend on ANSI mode <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT 3.4028235E38F AS result
         """
       Then query error \[INVALID_NUMERIC_LITERAL_RANGE\]
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   Rule: A literal below the smallest magnitude underflows to zero instead of raising
 

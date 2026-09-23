@@ -149,7 +149,16 @@ def query(template, docstring, variables):
 
 @then("query schema")
 def query_schema(docstring, query, spark):
-    """Analyze the SQL query and compare schema with expected schema tree string."""
+    """Analyze the SQL query and compare schema with expected schema tree string.
+
+    BLIND SPOT: the tree string spells out `nullable`, `containsNull` and `valueContainsNull`, but
+    it SILENTLY DROPS the collation of a string -- at every depth, so `string collate UTF8_LCASE`
+    prints as plain `string` at the top level, inside an array and inside a struct alike. A
+    collation therefore cannot be asserted here, and a scenario that tries goes green with the
+    collation lost. `schema.simpleString()` is the rendering that carries it (and drops the
+    nullability instead), so the two are complementary and neither contains the other. Measured on
+    the Spark 4.2 JVM, 2026-09-23.
+    """
     df = spark.sql(query)
     assert_schema_tree(df, docstring)
 
@@ -367,6 +376,66 @@ def dataframe_result(datatable, ordered, dataframe):
         assert rows == r
     else:
         assert sorted(rows) == sorted(r)
+
+
+def _stored_numbers(array) -> list[str] | None:
+    """The numbers an Arrow array stores, or `None` when it stores no single number per value.
+
+    A date is days in an `int32`, a time and a timestamp are microseconds (or nanoseconds) in an
+    `int64`, an interval is its microseconds or its months. Arrow refuses `date32 -> int64`, so the
+    width is tried in turn rather than assumed. A float or a decimal already IS a number, and an
+    integer cast would silently truncate it, so its value is read as it stands.
+    """
+    if str(array.type).startswith(("float", "double", "halffloat", "decimal")):
+        return [_format_collected_value(value) for value in array.to_pylist()]
+    for width in ("int64", "int32"):
+        try:
+            return [str(value) for value in array.cast(width).to_pylist()]
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return None
+
+
+@then("stored and printed result")
+def stored_and_printed_result(datatable, query, spark):
+    """Assert what a value STORES, what type it publishes and what it PRINTS, apart.
+
+    What makes a value what it is often does not live in the stored number: the field range of an
+    interval rides in the field metadata, the session zone decides what a timestamp prints, the
+    precision what a time prints, the scale what a decimal prints. Several pieces of code read that
+    on their own -- the schema the query publishes, the renderer behind `show` and the renderer
+    behind `CAST(... AS STRING)` -- so asserting only the printed value cannot tell a wrong VALUE
+    from a right value printed wrong, and a fix that reaches one renderer and not the schema looks
+    green from one lens and wrong from the other. The table is `| stored | type | shown | cast |`;
+    a column may be `-` to leave it unasserted.
+    """
+    header, *rows = datatable
+    assert header == ["stored", "type", "shown", "cast"], (
+        "the table of `stored and printed result` is | stored | type | shown | cast |"
+    )
+    assert len(rows) == 1, "`stored and printed result` asserts a single row"
+    [expected_stored, expected_type, expected_shown, expected_cast] = rows[0]
+
+    df = spark.sql(query)
+    column = df.schema[0].name
+    if expected_stored != "-" and hasattr(df, "toArrow"):
+        # The number behind the value, read off Arrow so that no renderer stands between the
+        # assertion and the data. The PySpark client only offers `toArrow` from 4.0 on; on an older
+        # one this lens is dropped and the other three still apply.
+        array = df.toArrow().column(0)
+        stored = _stored_numbers(array)
+        if stored is None:
+            message = f"the value stores no number: {array.type} {array.to_pylist()}"
+            raise AssertionError(message)
+        assert stored == [expected_stored], f"stored: {stored} != [{expected_stored}]"
+    if expected_type != "-":
+        assert df.schema[0].dataType.simpleString() == expected_type
+    if expected_shown != "-":
+        [_, *shown] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+        assert shown == [[expected_shown]]
+    if expected_cast != "-":
+        rendered = df.selectExpr(f"CAST(`{column}` AS STRING)").collect()[0][0]
+        assert _format_collected_value(rendered) == expected_cast
 
 
 def _format_collected_value(value) -> str:

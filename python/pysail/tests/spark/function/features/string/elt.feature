@@ -177,10 +177,14 @@ Feature: elt output schema
         | result |
         | NULL   |
 
-  Rule: Out-of-range index raises error (ANSI mode, Spark 4.x default)
+  # ANSI is pinned rather than inherited from the session default: these three are the pair of
+  # the non-ANSI Rule above, and a scenario that relies on the default would quietly measure
+  # the other mode if anything before it left the flag set.
+  Rule: Out-of-range index raises error under ANSI
 
     @sail-bug
     Scenario: index zero raises error in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT elt(0, 'hello', 'world') AS result
@@ -189,6 +193,7 @@ Feature: elt output schema
 
     @sail-bug
     Scenario: negative index raises error in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT elt(-1, 'hello', 'world') AS result
@@ -197,6 +202,7 @@ Feature: elt output schema
 
     @sail-bug
     Scenario: index beyond count raises error in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT elt(5, 'a', 'b', 'c') AS result
