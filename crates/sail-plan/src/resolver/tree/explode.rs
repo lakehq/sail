@@ -112,7 +112,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                                 .alias(&field_column),
                             Column::from_name(&field_column),
                         ));
-                        ident(&field_column).alias(field_name)
+                        // Keep an alias after multi-expression expansion extracts the field name.
+                        ident(&field_column).alias(&field_column).alias(field_name)
                     })
                     .collect::<Vec<_>>()),
                 wrong_type => plan_err!(
