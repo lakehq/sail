@@ -20,7 +20,9 @@ pinned to UTC, and values are compared as text so one table serves every client 
 """
 
 import contextlib
+import os
 import re
+import time
 
 import pytest
 
@@ -112,7 +114,7 @@ MATRIX = [
     ("TINYINT", "STRING", True, "1", False),
     ("TINYINT", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION", True),
     ("TINYINT", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("TINYINT", "TIMESTAMP", True, "1970-01-01 01:00:01", False),
+    ("TINYINT", "TIMESTAMP", True, "1970-01-01 00:00:01", False),
     ("TINYINT", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TINYINT", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TINYINT", "INTERVAL_DAY", True, "1 day, 0:00:00", False),
@@ -131,7 +133,7 @@ MATRIX = [
     ("SMALLINT", "STRING", True, "1", False),
     ("SMALLINT", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION", True),
     ("SMALLINT", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("SMALLINT", "TIMESTAMP", True, "1970-01-01 01:00:01", False),
+    ("SMALLINT", "TIMESTAMP", True, "1970-01-01 00:00:01", False),
     ("SMALLINT", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("SMALLINT", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("SMALLINT", "INTERVAL_DAY", True, "1 day, 0:00:00", False),
@@ -150,7 +152,7 @@ MATRIX = [
     ("INT", "STRING", True, "1", False),
     ("INT", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION", True),
     ("INT", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("INT", "TIMESTAMP", True, "1970-01-01 01:00:01", False),
+    ("INT", "TIMESTAMP", True, "1970-01-01 00:00:01", False),
     ("INT", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("INT", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("INT", "INTERVAL_DAY", True, "1 day, 0:00:00", False),
@@ -169,7 +171,7 @@ MATRIX = [
     ("BIGINT", "STRING", True, "1", False),
     ("BIGINT", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION", True),
     ("BIGINT", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("BIGINT", "TIMESTAMP", True, "1970-01-01 01:00:01", False),
+    ("BIGINT", "TIMESTAMP", True, "1970-01-01 00:00:01", False),
     ("BIGINT", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BIGINT", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BIGINT", "INTERVAL_DAY", True, "1 day, 0:00:00", False),
@@ -188,7 +190,7 @@ MATRIX = [
     ("FLOAT", "STRING", True, "1.5", False),
     ("FLOAT", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("FLOAT", "TIMESTAMP", True, "1970-01-01 01:00:01.500000", False),
+    ("FLOAT", "TIMESTAMP", True, "1970-01-01 00:00:01.500000", False),
     ("FLOAT", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -208,7 +210,7 @@ MATRIX = [
     ("DOUBLE", "STRING", True, "1.5", False),
     ("DOUBLE", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("DOUBLE", "TIMESTAMP", True, "1970-01-01 01:00:01.500000", False),
+    ("DOUBLE", "TIMESTAMP", True, "1970-01-01 00:00:01.500000", False),
     ("DOUBLE", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -228,7 +230,7 @@ MATRIX = [
     ("DECIMAL", "STRING", True, "1.50", False),
     ("DECIMAL", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "DATE", True, "!DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION", True),
-    ("DECIMAL", "TIMESTAMP", True, "1970-01-01 01:00:01.500000", False),
+    ("DECIMAL", "TIMESTAMP", True, "1970-01-01 00:00:01.500000", False),
     ("DECIMAL", "TIMESTAMP_NTZ", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "INTERVAL_DAY", True, "1 day, 12:00:00", False),
@@ -286,7 +288,7 @@ MATRIX = [
     ("DATE", "STRING", True, "2024-03-05", False),
     ("DATE", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DATE", "DATE", True, "2024-03-05", False),
-    ("DATE", "TIMESTAMP", True, "2024-03-05 01:00:00", False),
+    ("DATE", "TIMESTAMP", True, "2024-03-05 00:00:00", False),
     ("DATE", "TIMESTAMP_NTZ", True, "2024-03-05 00:00:00", False),
     ("DATE", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DATE", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -306,7 +308,7 @@ MATRIX = [
     ("TIMESTAMP", "STRING", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP", "DATE", True, "2024-03-05", False),
-    ("TIMESTAMP", "TIMESTAMP", True, "2024-03-05 07:07:08", False),
+    ("TIMESTAMP", "TIMESTAMP", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TIMESTAMP_NTZ", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -326,7 +328,7 @@ MATRIX = [
     ("TIMESTAMP_NTZ", "STRING", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "BINARY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP_NTZ", "DATE", True, "2024-03-05", False),
-    ("TIMESTAMP_NTZ", "TIMESTAMP", True, "2024-03-05 07:07:08", False),
+    ("TIMESTAMP_NTZ", "TIMESTAMP", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "TIMESTAMP_NTZ", True, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "TIME", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP_NTZ", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -464,7 +466,7 @@ MATRIX = [
     ("VARIANT", "STRING", True, "1", False),
     ("VARIANT", "BINARY", True, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "DATE", True, "!INVALID_VARIANT_CAST", True),
-    ("VARIANT", "TIMESTAMP", True, "1970-01-01 01:00:01", True),
+    ("VARIANT", "TIMESTAMP", True, "1970-01-01 00:00:01", True),
     ("VARIANT", "TIMESTAMP_NTZ", True, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "TIME", True, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "INTERVAL_DAY", True, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -503,7 +505,7 @@ MATRIX = [
     ("BOOLEAN", "STRING", False, "true", False),
     ("BOOLEAN", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BOOLEAN", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("BOOLEAN", "TIMESTAMP", False, "1970-01-01 01:00:00.000001", True),
+    ("BOOLEAN", "TIMESTAMP", False, "1970-01-01 00:00:00.000001", True),
     ("BOOLEAN", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BOOLEAN", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BOOLEAN", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -523,7 +525,7 @@ MATRIX = [
     ("TINYINT", "STRING", False, "1", False),
     ("TINYINT", "BINARY", False, "b'\\x01'", False),
     ("TINYINT", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("TINYINT", "TIMESTAMP", False, "1970-01-01 01:00:01", False),
+    ("TINYINT", "TIMESTAMP", False, "1970-01-01 00:00:01", False),
     ("TINYINT", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TINYINT", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TINYINT", "INTERVAL_DAY", False, "1 day, 0:00:00", False),
@@ -542,7 +544,7 @@ MATRIX = [
     ("SMALLINT", "STRING", False, "1", False),
     ("SMALLINT", "BINARY", False, "b'\\x00\\x01'", True),
     ("SMALLINT", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("SMALLINT", "TIMESTAMP", False, "1970-01-01 01:00:01", False),
+    ("SMALLINT", "TIMESTAMP", False, "1970-01-01 00:00:01", False),
     ("SMALLINT", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("SMALLINT", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("SMALLINT", "INTERVAL_DAY", False, "1 day, 0:00:00", False),
@@ -561,7 +563,7 @@ MATRIX = [
     ("INT", "STRING", False, "1", False),
     ("INT", "BINARY", False, "b'\\x00\\x00\\x00\\x01'", True),
     ("INT", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("INT", "TIMESTAMP", False, "1970-01-01 01:00:01", False),
+    ("INT", "TIMESTAMP", False, "1970-01-01 00:00:01", False),
     ("INT", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("INT", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("INT", "INTERVAL_DAY", False, "1 day, 0:00:00", False),
@@ -580,7 +582,7 @@ MATRIX = [
     ("BIGINT", "STRING", False, "1", False),
     ("BIGINT", "BINARY", False, "b'\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01'", True),
     ("BIGINT", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("BIGINT", "TIMESTAMP", False, "1970-01-01 01:00:01", False),
+    ("BIGINT", "TIMESTAMP", False, "1970-01-01 00:00:01", False),
     ("BIGINT", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BIGINT", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("BIGINT", "INTERVAL_DAY", False, "1 day, 0:00:00", False),
@@ -599,7 +601,7 @@ MATRIX = [
     ("FLOAT", "STRING", False, "1.5", False),
     ("FLOAT", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("FLOAT", "TIMESTAMP", False, "1970-01-01 01:00:01.500000", False),
+    ("FLOAT", "TIMESTAMP", False, "1970-01-01 00:00:01.500000", False),
     ("FLOAT", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("FLOAT", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -619,7 +621,7 @@ MATRIX = [
     ("DOUBLE", "STRING", False, "1.5", False),
     ("DOUBLE", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("DOUBLE", "TIMESTAMP", False, "1970-01-01 01:00:01.500000", False),
+    ("DOUBLE", "TIMESTAMP", False, "1970-01-01 00:00:01.500000", False),
     ("DOUBLE", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DOUBLE", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -639,7 +641,7 @@ MATRIX = [
     ("DECIMAL", "STRING", False, "1.50", False),
     ("DECIMAL", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "DATE", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
-    ("DECIMAL", "TIMESTAMP", False, "1970-01-01 01:00:01.500000", False),
+    ("DECIMAL", "TIMESTAMP", False, "1970-01-01 00:00:01.500000", False),
     ("DECIMAL", "TIMESTAMP_NTZ", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DECIMAL", "INTERVAL_DAY", False, "1 day, 12:00:00", False),
@@ -697,7 +699,7 @@ MATRIX = [
     ("DATE", "STRING", False, "2024-03-05", False),
     ("DATE", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DATE", "DATE", False, "2024-03-05", False),
-    ("DATE", "TIMESTAMP", False, "2024-03-05 01:00:00", False),
+    ("DATE", "TIMESTAMP", False, "2024-03-05 00:00:00", False),
     ("DATE", "TIMESTAMP_NTZ", False, "2024-03-05 00:00:00", False),
     ("DATE", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("DATE", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -717,7 +719,7 @@ MATRIX = [
     ("TIMESTAMP", "STRING", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP", "DATE", False, "2024-03-05", False),
-    ("TIMESTAMP", "TIMESTAMP", False, "2024-03-05 07:07:08", False),
+    ("TIMESTAMP", "TIMESTAMP", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TIMESTAMP_NTZ", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -737,7 +739,7 @@ MATRIX = [
     ("TIMESTAMP_NTZ", "STRING", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "BINARY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP_NTZ", "DATE", False, "2024-03-05", False),
-    ("TIMESTAMP_NTZ", "TIMESTAMP", False, "2024-03-05 07:07:08", False),
+    ("TIMESTAMP_NTZ", "TIMESTAMP", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "TIMESTAMP_NTZ", False, "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "TIME", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
     ("TIMESTAMP_NTZ", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -875,7 +877,7 @@ MATRIX = [
     ("VARIANT", "STRING", False, "1", False),
     ("VARIANT", "BINARY", False, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "DATE", False, "!INVALID_VARIANT_CAST", True),
-    ("VARIANT", "TIMESTAMP", False, "1970-01-01 01:00:01", True),
+    ("VARIANT", "TIMESTAMP", False, "1970-01-01 00:00:01", True),
     ("VARIANT", "TIMESTAMP_NTZ", False, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "TIME", False, "!INVALID_VARIANT_CAST", True),
     ("VARIANT", "INTERVAL_DAY", False, "!DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION", True),
@@ -904,6 +906,27 @@ MATRIX = [
     ("NULL", "STRUCT", False, "NULL", False),
     ("NULL", "VARIANT", False, "NULL", False),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _utc_process_timezone():
+    """Pin the PROCESS timezone, not only the session one.
+
+    A TIMESTAMP comes back from Connect as a Python `datetime` that the CLIENT builds in its own
+    local zone, so `str(value)` shifts with the machine: the same cast printed 07:07:08 here
+    (Europe/Madrid) and 06:07:08 on the CI runner (UTC). Pinning `spark.sql.session.timeZone` does
+    not cover it -- that is the server's zone. This is the same hazard PR #2644 fixes for the Arrow
+    UDF tests, and the expectations in the tables below are measured with TZ=UTC.
+    """
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    yield
+    if previous is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = previous
+    time.tzset()
 
 
 def _marks(src, dst):
@@ -1011,7 +1034,7 @@ ANSI_OFF = [
     ("BIGINT", "INTERVAL_DAY", "0:00:00", False),
     ("BIGINT", "SMALLINT", "0", False),
     ("BIGINT", "STRING", "0", False),
-    ("BIGINT", "TIMESTAMP", "1970-01-01 01:00:00", False),
+    ("BIGINT", "TIMESTAMP", "1970-01-01 00:00:00", False),
     ("BIGINT", "TINYINT", "0", False),
     ("BIGINT", "VARIANT", "0", False),
     ("BINARY", "BINARY", "b''", False),
@@ -1025,7 +1048,7 @@ ANSI_OFF = [
     ("BOOLEAN", "INT", "0", False),
     ("BOOLEAN", "SMALLINT", "0", False),
     ("BOOLEAN", "STRING", "false", False),
-    ("BOOLEAN", "TIMESTAMP", "1970-01-01 01:00:00", True),
+    ("BOOLEAN", "TIMESTAMP", "1970-01-01 00:00:00", True),
     ("BOOLEAN", "TINYINT", "0", False),
     ("BOOLEAN", "VARIANT", "false", False),
     ("DATE", "BIGINT", "NULL", False),
@@ -1049,7 +1072,7 @@ ANSI_OFF = [
     ("DECIMAL", "INTERVAL_DAY", "-1 day, 23:45:36", False),
     ("DECIMAL", "SMALLINT", "0", False),
     ("DECIMAL", "STRING", "-0.01", False),
-    ("DECIMAL", "TIMESTAMP", "1970-01-01 00:59:59.990000", False),
+    ("DECIMAL", "TIMESTAMP", "1969-12-31 23:59:59.990000", False),
     ("DECIMAL", "TINYINT", "0", False),
     ("DECIMAL", "VARIANT", "-0.01", False),
     ("DOUBLE", "BIGINT", "0", True),
@@ -1071,7 +1094,7 @@ ANSI_OFF = [
     ("FLOAT", "INT", "0", False),
     ("FLOAT", "SMALLINT", "0", False),
     ("FLOAT", "STRING", "0.0", False),
-    ("FLOAT", "TIMESTAMP", "1970-01-01 01:00:00", False),
+    ("FLOAT", "TIMESTAMP", "1970-01-01 00:00:00", False),
     ("FLOAT", "TINYINT", "0", False),
     ("FLOAT", "VARIANT", "0.0", False),
     ("INT", "BIGINT", "-2147483648", False),
@@ -1130,7 +1153,7 @@ ANSI_OFF = [
     ("SMALLINT", "INTERVAL_DAY", "-32768 days, 0:00:00", False),
     ("SMALLINT", "SMALLINT", "-32768", False),
     ("SMALLINT", "STRING", "-32768", False),
-    ("SMALLINT", "TIMESTAMP", "1969-12-31 15:53:52", False),
+    ("SMALLINT", "TIMESTAMP", "1969-12-31 14:53:52", False),
     ("SMALLINT", "TINYINT", "0", True),
     ("SMALLINT", "VARIANT", "-32768", False),
     ("STRING", "BIGINT", "NULL", True),
@@ -1166,13 +1189,13 @@ ANSI_OFF = [
     ("TIMESTAMP", "INT", "1709618828", False),
     ("TIMESTAMP", "SMALLINT", "NULL", True),
     ("TIMESTAMP", "STRING", "2024-03-05 06:07:08", False),
-    ("TIMESTAMP", "TIMESTAMP", "2024-03-05 07:07:08", False),
+    ("TIMESTAMP", "TIMESTAMP", "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TIMESTAMP_NTZ", "2024-03-05 06:07:08", False),
     ("TIMESTAMP", "TINYINT", "NULL", True),
     ("TIMESTAMP", "VARIANT", '"2024-03-05 06:07:08+00:00"', False),
     ("TIMESTAMP_NTZ", "DATE", "2024-03-05", False),
     ("TIMESTAMP_NTZ", "STRING", "2024-03-05 06:07:08", False),
-    ("TIMESTAMP_NTZ", "TIMESTAMP", "2024-03-05 07:07:08", False),
+    ("TIMESTAMP_NTZ", "TIMESTAMP", "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "TIMESTAMP_NTZ", "2024-03-05 06:07:08", False),
     ("TIMESTAMP_NTZ", "VARIANT", '"2024-03-05 06:07:08"', False),
     ("TINYINT", "BIGINT", "-128", False),
@@ -1185,7 +1208,7 @@ ANSI_OFF = [
     ("TINYINT", "INTERVAL_DAY", "-128 days, 0:00:00", False),
     ("TINYINT", "SMALLINT", "-128", False),
     ("TINYINT", "STRING", "-128", False),
-    ("TINYINT", "TIMESTAMP", "1970-01-01 00:57:52", False),
+    ("TINYINT", "TIMESTAMP", "1969-12-31 23:57:52", False),
     ("TINYINT", "TINYINT", "-128", False),
     ("TINYINT", "VARIANT", "-128", False),
     ("VARIANT", "ARRAY", "NULL", True),

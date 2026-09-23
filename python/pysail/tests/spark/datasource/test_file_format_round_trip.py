@@ -14,6 +14,8 @@ separate matter this harness cannot express, since a run talks to a single engin
 """
 
 import contextlib
+import os
+import time
 
 import pytest
 
@@ -210,7 +212,7 @@ COLLECT = {
     ("parquet", "date"): ("2024-03-05", False),
     ("json", "date"): ("2024-03-05", False),
     ("csv", "date"): ("2024-03-05", False),
-    ("parquet", "timestamp"): ("2024-03-05 07:07:08.900000", False),
+    ("parquet", "timestamp"): ("2024-03-05 06:07:08.900000", False),
     ("json", "timestamp"): ("2024-03-05T06:07:08.900Z", False),
     ("csv", "timestamp"): ("2024-03-05T06:07:08.900Z", False),
     ("parquet", "timestamp_ntz"): ("2024-03-05 06:07:08.900000", False),
@@ -427,6 +429,27 @@ REFUSED = {
     ("csv", "struct in an array"): ("UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE", True),
     ("csv", "variant"): ("UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE", True),
 }
+
+
+@pytest.fixture(autouse=True)
+def _utc_process_timezone():
+    """Pin the PROCESS timezone, not only the session one.
+
+    A TIMESTAMP comes back from Connect as a Python `datetime` that the CLIENT builds in its own
+    local zone, so `str(value)` shifts with the machine: the same cast printed 07:07:08 here
+    (Europe/Madrid) and 06:07:08 on the CI runner (UTC). Pinning `spark.sql.session.timeZone` does
+    not cover it -- that is the server's zone. This is the same hazard PR #2644 fixes for the Arrow
+    UDF tests, and the expectations in the tables below are measured with TZ=UTC.
+    """
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    yield
+    if previous is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = previous
+    time.tzset()
 
 
 def _cases(table):
