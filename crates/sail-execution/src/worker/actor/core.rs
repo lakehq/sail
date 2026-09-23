@@ -52,10 +52,15 @@ impl Actor for WorkerActor {
             server: ServerMonitor::new(),
             driver_client_set,
             task_runner: None,
+            system_info_log: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        self.system_info_log = Some(crate::system_info::start_system_info_log(
+            "worker",
+            self.options.worker_id.to_string(),
+        ));
         let worker = ctx.handle().clone();
         let local_streams = LocalStreamManager::new((&self.options).into());
         let storage_streams = match &self.options.shuffle_backend {
@@ -144,6 +149,9 @@ impl Actor for WorkerActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        if let Some(handle) = self.system_info_log.take() {
+            handle.abort();
+        }
         if let Some(task_runner) = self.task_runner.take() {
             let _ = task_runner
                 .send(crate::task_runner::TaskRunnerMessage::Shutdown)

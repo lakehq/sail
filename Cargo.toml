@@ -87,6 +87,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 num_enum = "0.7.6"
 num-traits = "0.2.19"
 log = "0.4.31"
+libc = "0.2.189"
 env_logger = "0.11.10"
 fastrace = { version = "0.7.18", features = ["enable"] }
 fastrace-opentelemetry = "0.18.1"

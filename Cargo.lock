@@ -7739,6 +7739,7 @@ dependencies = [
  "indexmap 2.14.2",
  "k8s-openapi",
  "kube",
+ "libc",
  "log",
  "object_store",
  "opentelemetry-proto",

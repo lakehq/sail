@@ -56,10 +56,15 @@ impl Actor for DriverActor {
             activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
+            system_info_log: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        self.system_info_log = Some(crate::system_info::start_system_info_log(
+            "driver",
+            self.options.driver_id.to_string(),
+        ));
         let driver = ctx.handle().clone();
         let local_streams = LocalStreamManager::new((&self.options).into());
         let storage_streams = match &self.options.shuffle_backend {
@@ -195,6 +200,9 @@ impl Actor for DriverActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        if let Some(handle) = self.system_info_log.take() {
+            handle.abort();
+        }
         self.job_scheduler.stop();
         if let Some(task_runner) = self.task_runner.take() {
             let _ = task_runner.send(TaskRunnerMessage::Shutdown).await;

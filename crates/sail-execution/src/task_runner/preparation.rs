@@ -8,12 +8,11 @@ use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use futures::TryStreamExt;
-use log::debug;
+use futures::{StreamExt, TryStreamExt};
+use log::info;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_telemetry::telemetry::global_metrics;
@@ -65,11 +64,6 @@ impl TaskPreparation {
             plan,
             context.clone(),
         )?;
-        debug!(
-            "{} execution plan\n{}",
-            TaskKeyDisplay(key),
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
         let plan = trace_execution_plan(
             plan,
             TracingExecOptions {
@@ -86,7 +80,34 @@ impl TaskPreparation {
                 "task canceled during preparation".into(),
             ));
         }
-        Ok(plan.execute(key.partition, context)?)
+        let stream = plan.execute(key.partition, context)?;
+        let schema = stream.schema();
+        let key = key.clone();
+        let stream = futures::stream::unfold((stream, plan), move |(mut stream, plan)| {
+            let key = key.clone();
+            async move {
+                match stream.next().await {
+                    Some(Ok(batch)) => Some((Ok(batch), (stream, plan))),
+                    Some(Err(error)) => {
+                        info!(
+                            "{} operator metrics after error: {}",
+                            TaskKeyDisplay(&key),
+                            summarize_plan_metrics(plan.as_ref())
+                        );
+                        Some((Err(error), (stream, plan)))
+                    }
+                    None => {
+                        info!(
+                            "{} operator metrics after completion: {}",
+                            TaskKeyDisplay(&key),
+                            summarize_plan_metrics(plan.as_ref())
+                        );
+                        None
+                    }
+                }
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
     fn rewrite_file_scans(
@@ -146,6 +167,8 @@ impl TaskPreparation {
                     return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
                         streams.reader(key.clone(), input.clone(), placeholder.schema()),
                         placeholder.properties().clone(),
+                        key.clone(),
+                        input.stage,
                     ))));
                 }
                 Ok(Transformed::no(node))
@@ -155,8 +178,40 @@ impl TaskPreparation {
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, &RemoteExecutionCodec)?;
         let writer = streams.writer(key.clone(), output.clone(), schema.clone());
-        Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
+        Ok(Arc::new(ShuffleWriteExec::new(
+            plan,
+            key.clone(),
+            writer,
+            partitioning,
+        )))
     }
+}
+
+/// Keep per-task measurements compact; the job graph is logged once per job.
+fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> String {
+    fn visit(plan: &dyn ExecutionPlan, index: &mut usize, out: &mut Vec<String>) {
+        // TracingExec delegates metrics to its child, so visiting both would duplicate them.
+        if plan.name() != "TracingExec" {
+            let operator = *index;
+            *index += 1;
+            if let Some(metrics) = plan.metrics()
+                && metrics.iter().next().is_some()
+            {
+                out.push(format!(
+                    "{operator}:{} [{}]",
+                    plan.name(),
+                    metrics.aggregate_by_name().sorted_for_display()
+                ));
+            }
+        }
+        for child in plan.children() {
+            visit(child.as_ref(), index, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    visit(plan, &mut 0, &mut out);
+    out.join("; ")
 }
 
 /// Dropping the pending stream cancels preparation cooperatively. The blocking task owns
@@ -181,7 +236,7 @@ fn preparation_stream(
                 ));
             }
             let result = prepare(canceled);
-            debug!(
+            info!(
                 "{} preparation wait={:?} duration={:?}",
                 TaskKeyDisplay(&key),
                 started.duration_since(queued),

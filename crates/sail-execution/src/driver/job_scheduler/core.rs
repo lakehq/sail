@@ -8,7 +8,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::{IndexMap, IndexSet};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -62,7 +62,7 @@ impl JobScheduler {
                 shuffle_backend: self.options.shuffle_backend.clone(),
             },
         )?;
-        debug!("job {job_id} job graph \n{graph}");
+        info!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
@@ -124,6 +124,11 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
+        info!(
+            "{} task state {}",
+            TaskKeyDisplay(key),
+            attempt.state.status()
+        );
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
@@ -210,6 +215,7 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
+            info!("job {job_id} failed");
             event_reporter.report(SystemEvent::JobUpdated {
                 session_id,
                 job_id: u64::from(job_id),
@@ -227,6 +233,7 @@ impl JobScheduler {
             // This drops `JobOutputManager` in the job state,
             // so that `JobOutputStream` turns to the draining state as well.
             job.state = JobState::Draining;
+            info!("job {job_id} finished execution and is draining output");
             event_reporter.report(SystemEvent::JobUpdated {
                 session_id,
                 job_id: u64::from(job_id),
@@ -429,6 +436,10 @@ impl JobScheduler {
             actions.push(JobAction::ScheduleTaskRegion {
                 region: Self::build_task_region(job_id, job, region),
             });
+            info!(
+                "job {job_id} scheduled region {r} with {} tasks",
+                region.tasks.len()
+            );
         }
 
         actions

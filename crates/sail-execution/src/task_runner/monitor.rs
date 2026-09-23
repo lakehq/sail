@@ -1,9 +1,11 @@
 use std::any::Any;
+use std::time::Instant;
 
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::StreamExt;
+use log::info;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -44,11 +46,20 @@ impl TaskMonitor {
             stream,
             signal,
         } = self;
+        let started = Instant::now();
+        info!("{} execution started", TaskKeyDisplay(&key));
         let _ = handle.send(Self::running(key.clone())).await;
         let message = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
+        if let TaskRunnerMessage::ReportTaskStatus { status, .. } = &message {
+            info!(
+                "{} execution finished after {:?} with {status:?}",
+                TaskKeyDisplay(&key),
+                started.elapsed()
+            );
+        }
         let _ = handle.send(message).await;
     }
 

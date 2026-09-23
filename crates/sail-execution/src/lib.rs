@@ -8,6 +8,7 @@ mod proto;
 mod rpc;
 mod shuffle;
 mod stream;
+mod system_info;
 mod task;
 mod task_runner;
 mod worker;

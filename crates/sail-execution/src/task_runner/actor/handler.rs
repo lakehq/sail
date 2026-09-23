@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::{error, warn};
+use log::{error, info, warn};
 use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -32,6 +32,11 @@ impl TaskRunnerActor {
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
+        info!(
+            "admitting job {job_id} stage {stage} batch with {} tasks and {} peers",
+            tasks.len(),
+            peers.len()
+        );
         // Peer tracking is independent of task admission, including canceled or replayed batches.
         if !peers.is_empty()
             && let TaskRunnerPlacement::Worker {
@@ -55,6 +60,7 @@ impl TaskRunnerActor {
             });
         }
         if !self.tasks.check_batch(job_id, stage, &tasks)? {
+            info!("skipping replayed job {job_id} stage {stage} batch");
             return Ok(());
         }
         // Validate shared descriptions before admitting any task. Only descriptions are shared;
@@ -65,6 +71,7 @@ impl TaskRunnerActor {
         self.tasks.record_batch(job_id, stage, &tasks);
         for task in tasks {
             let key = task.task_key(job_id, stage);
+            info!("starting task {key:?}");
             let stream = TaskPreparation {
                 session_id: self.session_id.clone(),
                 handle: ctx.handle().clone(),
@@ -84,6 +91,7 @@ impl TaskRunnerActor {
     }
 
     pub(super) fn handle_stop_task(&mut self, key: TaskKey) -> ActorAction {
+        info!("stopping task {key:?}");
         self.tasks.cancel(&key);
         if let Some(signal) = self.signals.remove(&key) {
             let _ = signal.send(());
@@ -92,6 +100,7 @@ impl TaskRunnerActor {
     }
 
     pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
+        info!("closing job {job_id} streams and tasks");
         self.tasks.close_job(job_id);
         self.extensions.local_streams.remove_streams(job_id, None);
         self.signals.retain(|key, _| key.job_id != job_id);
@@ -106,6 +115,7 @@ impl TaskRunnerActor {
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) -> ActorAction {
+        info!("task {key:?} status {status:?}");
         if !matches!(status, TaskStatus::Running) {
             self.signals.remove(&key);
         }
@@ -178,6 +188,7 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
+        info!("creating local stream {key:?} replicas={replicas}");
         if self.tasks.is_job_closed(key.job_id)
             || self.tasks.is_canceled(&TaskKey::from(key.clone()))
         {
@@ -201,6 +212,7 @@ impl TaskRunnerActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
+        info!("creating storage stream {key:?}");
         if self.tasks.is_job_closed(key.job_id)
             || self.tasks.is_canceled(&TaskKey::from(key.clone()))
         {
@@ -226,6 +238,7 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
+        info!("creating Celeborn stream {key:?} mappers={mappers} channels={channels}");
         if self.tasks.is_job_closed(key.job_id) || self.tasks.is_canceled(&key) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -255,6 +268,7 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!("fetching driver stream {key:?}");
         if self.tasks.is_job_closed(key.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -283,6 +297,7 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!("fetching worker {worker_id} stream {key:?}");
         if self.tasks.is_job_closed(key.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -330,6 +345,7 @@ impl TaskRunnerActor {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!("fetching local stream {key:?}");
         if self.tasks.is_job_closed(key.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -347,6 +363,7 @@ impl TaskRunnerActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!("fetching storage stream {key:?}");
         if self.tasks.is_job_closed(key.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -370,6 +387,7 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!("fetching Celeborn stream job={job_id} stage={stage} channels={channels:?}");
         if self.tasks.is_job_closed(job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
@@ -394,6 +412,7 @@ impl TaskRunnerActor {
         job_id: JobId,
         stage: Option<usize>,
     ) -> ActorAction {
+        info!("cleaning local streams job={job_id} stage={stage:?}");
         self.extensions.local_streams.remove_streams(job_id, stage);
         ActorAction::Continue
     }
@@ -405,6 +424,7 @@ impl TaskRunnerActor {
         stage: Option<usize>,
         context: Arc<TaskContext>,
     ) -> ActorAction {
+        info!("cleaning storage streams job={job_id} stage={stage:?}");
         if let Some(streams) = self.extensions.storage_streams.clone() {
             ctx.spawn(async move {
                 if let Err(error) = streams.remove_streams(job_id, stage, &context).await {
@@ -421,6 +441,7 @@ impl TaskRunnerActor {
         job_id: JobId,
         stage: Option<usize>,
     ) -> ActorAction {
+        info!("cleaning Celeborn streams job={job_id} stage={stage:?}");
         if let Some(streams) = self.extensions.celeborn_streams.clone() {
             let unregister = matches!(self.placement, TaskRunnerPlacement::Driver { .. });
             ctx.spawn(async move {

@@ -9,7 +9,7 @@ use arrow_flight::{
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
 use futures::{Stream, TryStreamExt};
-use log::debug;
+use log::{debug, info};
 use prost::Message;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status, Streaming, async_trait};
@@ -130,6 +130,7 @@ where
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let Ticket { ticket } = request.into_inner();
         let key = K::decode(&ticket)?;
+        info!("Flight do_get stream={key:?}");
         debug!("{key:?}");
         let (tx, rx) = oneshot::channel();
         self.fetcher.fetch(key, tx).await?;

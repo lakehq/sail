@@ -10,6 +10,7 @@ pub use options::{DriverComponents, DriverOptions};
 use sail_celeborn::lifecycle::LocalLifecycleManager;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
@@ -37,4 +38,5 @@ pub struct DriverActor {
     task_sequences: HashMap<TaskKey, u64>,
     /// An optional channel to signal that the driver has stopped.
     shutdown_notifier: Option<oneshot::Sender<()>>,
+    system_info_log: Option<JoinHandle<()>>,
 }

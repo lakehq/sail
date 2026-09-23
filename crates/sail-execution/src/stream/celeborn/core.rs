@@ -37,6 +37,7 @@ impl CelebornStreamManager {
         stage: Option<usize>,
         unregister: bool,
     ) -> Result<()> {
+        log::info!("Celeborn cleanup job={job_id} stage={stage:?} unregister={unregister}");
         let shuffle_ids = self
             .client
             .get_job_shuffle_ids(job_id.into())
@@ -66,6 +67,8 @@ impl CelebornStreamManager {
         channels: usize,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
+        let started = std::time::Instant::now();
+        log::info!("Celeborn create stream {key:?} mappers={mappers} channels={channels}");
         // A Celeborn shuffle spans every map task and reduce channel in one producer stage.
         let shuffle_id = self
             .client
@@ -103,6 +106,10 @@ impl CelebornStreamManager {
                 }) as Box<dyn TaskStreamChannelSink>))
             })
             .collect::<Result<Vec<_>>>()?;
+        log::info!(
+            "Celeborn stream {key:?} ready shuffle_id={shuffle_id} after {:?}",
+            started.elapsed()
+        );
         Ok(Box::new(CelebornTaskStreamSink {
             channels: MultiChannelTaskStreamSink { sinks },
             client: self.client.clone(),
@@ -121,6 +128,8 @@ impl CelebornStreamManager {
         channels: Vec<usize>,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
+        let started = std::time::Instant::now();
+        log::info!("Celeborn fetch job={job_id} stage={stage} channels={channels:?}");
         let shuffle_id = self
             .client
             .get_shuffle_id(job_id.into(), stage as u64)
@@ -164,6 +173,10 @@ impl CelebornStreamManager {
                 ) as TaskStreamSource
             })
             .collect::<Vec<TaskStreamSource>>();
+        log::info!(
+            "Celeborn fetch job={job_id} stage={stage} streams opened after {:?}",
+            started.elapsed()
+        );
         Ok(Box::pin(futures::stream::select_all(streams)))
     }
 }

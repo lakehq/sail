@@ -7,6 +7,7 @@ mod rpc;
 pub(crate) use message::{WorkerLocation, WorkerMessage};
 pub(crate) use options::WorkerOptions;
 use sail_common::actor::ActorHandle;
+use tokio::task::JoinHandle;
 
 use crate::driver::DriverClientSet;
 use crate::rpc::ServerMonitor;
@@ -17,4 +18,5 @@ pub struct WorkerActor {
     server: ServerMonitor,
     driver_client_set: DriverClientSet,
     task_runner: Option<ActorHandle<TaskRunnerActor>>,
+    system_info_log: Option<JoinHandle<()>>,
 }

@@ -213,8 +213,10 @@ impl DriverActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
+        info!("driver received ExecuteJob");
         let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
+            info!("job {job_id} accepted; scheduling tasks");
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
             self.reconcile_worker_demands(ctx);
@@ -229,6 +231,7 @@ impl DriverActor {
         job_id: JobId,
         outcome: JobOutputOutcome,
     ) -> ActorAction {
+        info!("job {job_id} cleaning up with outcome {outcome:?}");
         self.clean_up_job(ctx, job_id, outcome);
         self.run_tasks(ctx);
         self.reconcile_worker_demands(ctx);
@@ -251,11 +254,15 @@ impl DriverActor {
                 .is_some_and(|s| sequence <= *s)
             {
                 // The task status update is outdated, so we skip the remaining logic.
-                warn!("{} sequence {sequence} is stale", TaskKeyDisplay(&key));
+                debug!("{} sequence {sequence} is stale", TaskKeyDisplay(&key));
                 return ActorAction::Continue;
             }
             self.task_sequences.insert(key.clone(), sequence);
         }
+        info!(
+            "{} reported status {status:?} sequence={sequence:?}",
+            TaskKeyDisplay(&key)
+        );
         match status {
             TaskStatus::Running => {
                 self.job_scheduler
@@ -343,6 +350,10 @@ impl DriverActor {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!(
+            "driver fetching local stream {}",
+            TaskStreamKeyDisplay(&key)
+        );
         let Some(task_runner) = self.task_runner.clone() else {
             let _ = result.send(Err(ExecutionError::InternalError(
                 "task runner is not started".to_string(),
@@ -369,6 +380,10 @@ impl DriverActor {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        info!(
+            "driver fetching stream {} from worker {worker_id}",
+            TaskStreamKeyDisplay(&key)
+        );
         let _ = result.send(
             self.worker_pool
                 .fetch_task_stream(ctx, worker_id, &key, schema),
@@ -406,7 +421,12 @@ impl DriverActor {
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
-        debug!("job action: {action:?}");
+        match &action {
+            JobAction::CleanUpJob { job_id, stage, .. } => {
+                info!("job action: CleanUpJob job={job_id} stage={stage:?}");
+            }
+            _ => info!("job action: {action:?}"),
+        }
         match action {
             JobAction::ScheduleTaskRegion { region } => {
                 if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
@@ -606,6 +626,19 @@ impl DriverActor {
     /// scheduling snapshot; batches additionally preserve region and worker boundaries.
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
+        info!("assigning {} task sets", assignments.len());
+        for assignment in &assignments {
+            info!(
+                "task set assignment {:?}: {:?}",
+                assignment.assignment,
+                assignment
+                    .set
+                    .entries
+                    .iter()
+                    .map(|entry| &entry.key)
+                    .collect::<Vec<_>>()
+            );
+        }
         self.task_assigner.track_streams(&assignments);
         let mut batches = indexmap::IndexMap::<_, Vec<TaskKey>>::new();
         for assignment in assignments {
@@ -645,7 +678,7 @@ impl DriverActor {
                             CommonErrorCause::new::<PyErrExtractor>(&error),
                         )
                     });
-                debug!(
+                info!(
                     "job {job_id} stage {stage} definition construction {:?}",
                     started.elapsed()
                 );
@@ -678,9 +711,17 @@ impl DriverActor {
                 })
                 .collect::<Vec<_>>();
             if let Some(worker_id) = worker_id {
+                info!(
+                    "dispatching job {job_id} stage {stage} batch of {} tasks to worker {worker_id}",
+                    tasks.len()
+                );
                 self.worker_pool
                     .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
             } else {
+                info!(
+                    "dispatching job {job_id} stage {stage} batch of {} tasks to driver",
+                    tasks.len()
+                );
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
                 ctx.spawn(async move {

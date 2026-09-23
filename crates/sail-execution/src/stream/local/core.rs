@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use log::info;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -59,6 +60,11 @@ impl LocalStreamManager {
                 };
                 match create(senders.clone()) {
                     Ok((stream, sink)) => {
+                        info!(
+                            "local stream {} published to {} waiting readers",
+                            TaskStreamKeyDisplay(&key),
+                            senders.len()
+                        );
                         *entry.into_mut() = LocalStreamState::Created { stream };
                         Ok(sink)
                     }
@@ -72,6 +78,10 @@ impl LocalStreamManager {
             }
             Entry::Vacant(entry) => match create(vec![]) {
                 Ok((stream, sink)) => {
+                    info!(
+                        "local stream {} created before readers",
+                        TaskStreamKeyDisplay(&key)
+                    );
                     entry.insert(LocalStreamState::Created { stream });
                     Ok(sink)
                 }
@@ -91,8 +101,15 @@ impl LocalStreamManager {
     ) -> ExecutionResult<TaskStreamSource> {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Created { stream } => {
+                    info!("local stream {} subscribed", TaskStreamKeyDisplay(key));
+                    stream.subscribe()
+                }
                 LocalStreamState::Pending { senders } => {
+                    info!(
+                        "local stream {} waiting for producer",
+                        TaskStreamKeyDisplay(key)
+                    );
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);
                     // There is no need to probe the pending stream again.
@@ -105,6 +122,10 @@ impl LocalStreamManager {
                 ))),
             },
             Entry::Vacant(entry) => {
+                info!(
+                    "local stream {} pending first reader",
+                    TaskStreamKeyDisplay(key)
+                );
                 let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
@@ -117,12 +138,17 @@ impl LocalStreamManager {
     }
 
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {
+        let before = self.streams.len();
         if let Some(stage) = stage {
             self.streams
                 .retain(|key, _| key.job_id != job_id || key.stage != stage);
         } else {
             self.streams.retain(|key, _| key.job_id != job_id);
         }
+        info!(
+            "removed {} local streams for job {job_id} stage={stage:?}",
+            before - self.streams.len()
+        );
     }
 
     pub fn fail_stream_if_pending(&mut self, key: &TaskStreamKey) {
@@ -130,6 +156,11 @@ impl LocalStreamManager {
             return;
         };
         if let LocalStreamState::Pending { senders } = value {
+            info!(
+                "local stream {} timed out with {} waiting readers",
+                TaskStreamKeyDisplay(key),
+                senders.len()
+            );
             let message = "local stream is not created within the expected time".to_string();
             let cause = CommonErrorCause::Execution(message);
             Self::fail_senders(senders, &cause);

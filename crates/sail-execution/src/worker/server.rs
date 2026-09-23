@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
-use log::debug;
+use log::{debug, info};
 use prost::Message;
 use sail_common::actor::ActorHandle;
 use tonic::{Request, Response, Status};
@@ -44,6 +44,7 @@ impl WorkerService for WorkerServer {
         request: Request<RunTaskBatchRequest>,
     ) -> Result<Response<RunTaskBatchResponse>, Status> {
         let request = request.into_inner();
+        let started = std::time::Instant::now();
         debug!("{request:?}");
         let RunTaskBatchRequest {
             job_id,
@@ -52,6 +53,12 @@ impl WorkerService for WorkerServer {
             definition,
             peers,
         } = request;
+        info!(
+            "RPC run_task_batch job={job_id} stage={stage} tasks={} peers={} definition_bytes={}",
+            tasks.len(),
+            peers.len(),
+            definition.len()
+        );
         let peers = peers
             .into_iter()
             .map(|x| x.try_into())
@@ -87,6 +94,7 @@ impl WorkerService for WorkerServer {
         rx.await
             .map_err(|_| Status::unavailable("task runner stopped before admission"))??;
         let response = RunTaskBatchResponse {};
+        info!("RPC run_task_batch completed after {:?}", started.elapsed());
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -96,6 +104,7 @@ impl WorkerService for WorkerServer {
         request: Request<StopTaskRequest>,
     ) -> Result<Response<StopTaskResponse>, Status> {
         let request = request.into_inner();
+        let started = std::time::Instant::now();
         debug!("{request:?}");
         let StopTaskRequest {
             job_id,
@@ -103,6 +112,7 @@ impl WorkerService for WorkerServer {
             partition,
             attempt,
         } = request;
+        info!("RPC stop_task job={job_id} stage={stage} partition={partition} attempt={attempt}");
         self.task_runner
             .send(TaskRunnerMessage::StopTask {
                 key: TaskKey {
@@ -115,6 +125,7 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
+        info!("RPC stop_task completed after {:?}", started.elapsed());
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -124,8 +135,10 @@ impl WorkerService for WorkerServer {
         request: Request<CleanUpJobRequest>,
     ) -> Result<Response<CleanUpJobResponse>, Status> {
         let request = request.into_inner();
+        let started = std::time::Instant::now();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
+        info!("RPC clean_up_job job={job_id} stage={stage:?}");
         let job_id = job_id.into();
         let stage = stage.map(|x| x as usize);
         if stage.is_none() {
@@ -143,6 +156,7 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};
+        info!("RPC clean_up_job completed after {:?}", started.elapsed());
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -152,13 +166,16 @@ impl WorkerService for WorkerServer {
         request: Request<StopWorkerRequest>,
     ) -> Result<Response<StopWorkerResponse>, Status> {
         let request = request.into_inner();
+        let started = std::time::Instant::now();
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
+        info!("RPC stop_worker");
         self.worker
             .send(WorkerMessage::Shutdown)
             .await
             .map_err(ExecutionError::from)?;
         let response = StopWorkerResponse {};
+        info!("RPC stop_worker completed after {:?}", started.elapsed());
         debug!("{response:?}");
         Ok(Response::new(response))
     }
