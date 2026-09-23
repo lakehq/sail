@@ -16,6 +16,72 @@ from pysail.testing.spark.steps.iceberg import (
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
 
 
+@pytest.mark.parametrize("list_type", [pa.list_, pa.large_list], ids=["list", "large_list"])
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_list_offset_widths_preserve_values_and_field_ids(spark, sql_catalog, tmp_path, list_type, metadata_as_data):
+    identifier = "default.list_offsets"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "tags", ListType(3, StringType(), element_required=False), required=False),
+            NestedField(
+                4,
+                "items",
+                ListType(5, StructType(NestedField(6, "old", LongType(), required=False)), element_required=False),
+                required=False,
+            ),
+        ),
+    )
+    try:
+        schema = table.schema().as_arrow()
+        schema = pa.schema(
+            [schema.field("id")]
+            + [
+                schema.field(name).with_type(list_type(schema.field(name).type.value_field))
+                for name in ["tags", "items"]
+            ]
+        )
+        data = pa.Table.from_pylist(
+            [
+                {"id": 1, "tags": ["alpha", None, "中文"], "items": [{"old": 10}, None, {"old": None}]},
+                {"id": 2, "tags": [], "items": []},
+                {"id": 3, "tags": None, "items": None},
+                {"id": 4, "tags": [None], "items": [None]},
+            ],
+            schema=schema,
+        )
+        imported = tmp_path / "lists.parquet"
+        pq.write_table(data, imported)
+        assert pq.read_schema(imported).equals(schema, check_metadata=True)
+        table.add_files([imported.as_uri()])
+        with table.update_schema() as update:
+            update.rename_column(("items", "element", "old"), "value")
+
+        frame = (
+            spark.read.format("iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(table.location())
+        )
+        assert frame.schema.simpleString() == "struct<id:bigint,tags:array<string>,items:array<struct<value:bigint>>>"
+        assert [row.asDict(recursive=True) for row in frame.orderBy("id").collect()] == [
+            {"id": 1, "tags": ["alpha", None, "中文"], "items": [{"value": 10}, None, {"value": None}]},
+            {"id": 2, "tags": [], "items": []},
+            {"id": 3, "tags": None, "items": None},
+            {"id": 4, "tags": [None], "items": [None]},
+        ]
+        assert [tuple(row) for row in frame.selectExpr("id", "CAST(tags AS STRING)").orderBy("id").collect()] == [
+            (1, "[alpha, NULL, 中文]"),
+            (2, "[]"),
+            (3, None),
+            (4, "[NULL]"),
+        ]
+        assert [row.id for row in frame.filter("array_contains(tags, 'alpha')").collect()] == [1]
+        assert frame.selectExpr("get(items, 0).value AS value").filter("value = 10").collect()[0].value == 10  # noqa: PLR2004
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
 @pytest.mark.parametrize(("format_version", "with_deletes"), [(2, False), (2, True), (3, False)])
 def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, tmp_path, format_version, with_deletes):
     from pyiceberg.manifest import DataFile, DataFileContent, FileFormat, ManifestContent
