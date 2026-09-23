@@ -239,7 +239,7 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         if !has_bare_lambda {
             validate_map_filter_null_expr(&lambda.body, input.function_context.schema)?;
             // Spark replaces NullType predicates with Boolean NULL before evaluation.
-            lambda.body = Box::new(lit(ScalarValue::Boolean(None)));
+            *lambda.body = lit(ScalarValue::Boolean(None));
         }
     }
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
