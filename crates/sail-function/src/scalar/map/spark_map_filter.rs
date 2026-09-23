@@ -68,6 +68,8 @@ impl HigherOrderUDFImpl for SparkMapFilter {
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
         let (map, _) = value_lambda_pair(self.name(), fields)?;
+        // TODO: Fix mixed empty-map/NULL VALUES inference upstream; its Null
+        // column type currently prevents map lambda binding (see the sail-bug test).
         let DataType::Map(entries, _) = map.data_type() else {
             return plan_err!("map_filter expected a map, got {}", map.data_type());
         };

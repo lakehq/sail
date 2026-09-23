@@ -192,6 +192,8 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // TODO: Defer shared literal-zero division validation so NullType operands
+    // containing 1 / 0 can reach the coercions below (see the sail-bug tests).
     let (mut map, predicate) = input.arguments.two()?;
     // Spark binds an ordinary expression as a hidden lambda whose parameters
     // are unused. Avoid capturing variables from any enclosing lambda.

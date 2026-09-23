@@ -519,3 +519,41 @@ Feature: map_filter with lambda
       Then query result
         | result |
         | {}     |
+
+  Rule: Null-typed operands are coerced before arithmetic evaluation
+
+    @sail-bug
+    Scenario Outline: Discard literal division in a null-typed <case>
+      When query
+        """
+        SELECT map_filter(<arguments>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case      | arguments                                                | result |
+        | predicate | map(1, 2), (k, v) -> CASE WHEN 1 / 0 > 0 THEN NULL END    | {}     |
+        | map       | CASE WHEN 1 / 0 > 0 THEN NULL END, true                   | NULL   |
+
+  Rule: Map columns are inferred across all VALUES rows
+
+    @sail-bug
+    Scenario: Filter a VALUES map column beginning with empty and untyped null maps
+      When query
+        """
+        SELECT id, map_filter(m, (k, v) -> v > id) AS result
+        FROM VALUES
+          (1, map()),
+          (2, NULL),
+          (3, map(1, 4, 2, 2)),
+          (4, map(1, 5))
+        AS t(id, m)
+        """
+      Then query result
+        | id | result   |
+        | 1  | {}       |
+        | 2  | NULL     |
+        | 3  | {1 -> 4} |
+        | 4  | {1 -> 5} |
