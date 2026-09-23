@@ -421,6 +421,20 @@ _DELTA_SCHEMA_MATRIX_QUERIES = [
     "SELECT a.id, b.name FROM {t} a JOIN {t} b ON a.id = b.id ORDER BY a.id",
     "SELECT count(*) AS n FROM (SELECT id, m FROM {t} UNION ALL SELECT id, m FROM {t})",
     "SELECT id, name, m FROM {t} ORDER BY dbl DESC LIMIT 2",
+    "SELECT s.* FROM {t} ORDER BY a",
+    "SELECT DISTINCT s FROM {t} ORDER BY s.a",
+    "SELECT s, count(*) AS n FROM {t} GROUP BY s ORDER BY s.a",
+    "SELECT min(s) AS mn, max(s) AS mx, count(DISTINCT s) AS n FROM {t}",
+    "SELECT a.id FROM {t} a JOIN {t} b ON a.s = b.s ORDER BY a.id",
+    "SELECT id, s FROM {t} UNION SELECT id, s FROM {t} ORDER BY id",
+    "SELECT id, s, arr_s FROM {t} INTERSECT SELECT id, s, arr_s FROM {t} ORDER BY id",
+    "SELECT id, s FROM {t} EXCEPT SELECT id, s FROM {t} WHERE id = 1 ORDER BY id",
+    "SELECT id, row_number() OVER (PARTITION BY name ORDER BY s.a) AS rn, max(s) OVER (PARTITION BY name) AS mx"
+    " FROM {t} ORDER BY id",
+    "SELECT id, transform(arr_s, e -> e.x) AS xs, filter(arr_s, e -> e.x > 1) AS f, arr_s.y AS ys FROM {t} ORDER BY id",
+    "SELECT id, inline(arr_s) FROM {t} ORDER BY id",
+    "SELECT id, to_json(s) AS j, CAST(s AS STRING) AS str FROM {t} ORDER BY id",
+    "SELECT id, named_struct('x', s.a, 'y', nested.inner_arr) AS n, struct(s.a, s.b) AS t2 FROM {t} ORDER BY id",
 ]
 
 
