@@ -37,3 +37,17 @@ Feature: shiftrightunsigned output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Implicit casts
+
+    @sail-bug
+    Scenario: shiftrightunsigned casts a CASE value widened to DECIMAL to INT
+      When query
+        """
+        SELECT id, shiftrightunsigned(CASE WHEN id = 0 THEN 8 ELSE 2.5 END, 1) AS result
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result |
+        | 0  | 4      |
+        | 1  | 1      |

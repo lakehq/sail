@@ -369,6 +369,7 @@ fn percentile_cont(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let percentile = input.arguments.one()?;
 
     // Combine: [column, percentile] as DataFusion expects
+    // FIXME: Spark returns DOUBLE for FLOAT values, but DataFusion returns FLOAT.
     let args = vec![column, percentile];
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {

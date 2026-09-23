@@ -208,6 +208,8 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    // FIXME: Spark resolves the view with the SQL configuration captured when the view
+    //  was created (e.g. `spark.sql.ansi.enabled`), but the current session configuration is used here.
     async fn resolve_table_view(
         &self,
         definition: String,

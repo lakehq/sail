@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
@@ -33,7 +33,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
-    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let branch_values = coerce_branch_values(branch_values, &function_context)?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -53,7 +53,7 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     let (then_expr, else_expr) =
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
+        coerce_branch_values(vec![then_expr, else_expr], &function_context)?.two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -70,14 +70,144 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(arguments))
 }
 
+/// Coerces the CASE/IF result values to a common type before building the expression,
+/// since DataFusion types a CASE expression by its first non-null result value.
+fn coerce_branch_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let arguments = coerce_string_temporal_values(arguments, function_context)?;
+    coerce_numeric_values(arguments, function_context)
+}
+
+fn argument_types(
+    arguments: &[expr::Expr],
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<DataType>> {
+    Ok(arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
+/// Values of other types are left unchanged.
+// TODO: Coerce non-numeric values (e.g. string and numeric, or nested types) to
+//  Spark's wider common type as well.
+fn coerce_numeric_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = argument_types(&arguments, function_context)?;
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let Some(common_type) = data_types.iter().try_fold(DataType::Null, |left, right| {
+        wider_numeric_type(&left, right, ansi_mode)
+    }) else {
+        return Ok(arguments);
+    };
+    arguments
+        .into_iter()
+        .zip(data_types)
+        .map(|(arg, data_type)| {
+            if data_type.is_null() {
+                // NULL values are coerced to the common type by DataFusion.
+                // TODO: Parameter markers are typed NULL until they are bound,
+                //  so they are not taken into account for the common type.
+                Ok(arg)
+            } else {
+                // Like DataFusion's type coercion, this keeps values of the common type unchanged
+                // and casts a scalar subquery inside the subquery.
+                Ok(arg.cast_to(&common_type, function_context.schema)?)
+            }
+        })
+        .collect()
+}
+
+/// Returns Spark's wider type of two numeric (or NULL) types,
+/// following `findWiderTypeForTwo` in `TypeCoercion` and `AnsiTypeCoercion`.
+fn wider_numeric_type(left: &DataType, right: &DataType, ansi_mode: bool) -> Option<DataType> {
+    match (left, right) {
+        (DataType::Null, other) | (other, DataType::Null) => {
+            (other.is_null() || is_numeric_type(other)).then(|| other.clone())
+        }
+        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+            Some(wider_decimal_type((*p1, *s1), (*p2, *s2)))
+        }
+        (DataType::Decimal128(precision, scale), other)
+        | (other, DataType::Decimal128(precision, scale)) => match other {
+            DataType::Float32 | DataType::Float64 => Some(DataType::Float64),
+            _ => Some(wider_decimal_type(
+                (integral_decimal_precision(other)?, 0),
+                (*precision, *scale),
+            )),
+        },
+        _ => {
+            let wider = if numeric_precedence(left)? >= numeric_precedence(right)? {
+                left
+            } else {
+                right
+            };
+            // In ANSI mode, Spark widens integral and FLOAT values to DOUBLE
+            // to avoid losing precision.
+            if ansi_mode && left != right && wider == &DataType::Float32 {
+                Some(DataType::Float64)
+            } else {
+                Some(wider.clone())
+            }
+        }
+    }
+}
+
+/// Follows `DecimalPrecisionTypeCoercion.widerDecimalType` in Spark,
+/// which keeps the integral digits when the precision exceeds the maximum.
+// TODO: Support `spark.sql.legacy.decimal.retainFractionDigitsOnTruncate`,
+//  which keeps the fraction digits instead.
+fn wider_decimal_type((p1, s1): (u8, i8), (p2, s2): (u8, i8)) -> DataType {
+    let scale = i16::from(s1.max(s2));
+    let range = (i16::from(p1) - i16::from(s1)).max(i16::from(p2) - i16::from(s2));
+    let precision = scale + range;
+    let max_precision = i16::from(DECIMAL128_MAX_PRECISION);
+    if precision <= max_precision {
+        DataType::Decimal128(precision as u8, scale as i8)
+    } else {
+        let scale = (scale - (precision - max_precision)).max(0);
+        DataType::Decimal128(DECIMAL128_MAX_PRECISION, scale as i8)
+    }
+}
+
+fn is_numeric_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Decimal128(_, _)) || numeric_precedence(data_type).is_some()
+}
+
+/// Follows `UpCastRule.numericPrecedence` in Spark.
+fn numeric_precedence(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Int8 => Some(0),
+        DataType::Int16 => Some(1),
+        DataType::Int32 => Some(2),
+        DataType::Int64 => Some(3),
+        DataType::Float32 => Some(4),
+        DataType::Float64 => Some(5),
+        _ => None,
+    }
+}
+
+/// Follows `DecimalType.forType` in Spark for integral types.
+fn integral_decimal_precision(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Int8 => Some(3),
+        DataType::Int16 => Some(5),
+        DataType::Int32 => Some(10),
+        DataType::Int64 => Some(20),
+        _ => None,
+    }
+}
+
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let data_types = arguments
-        .iter()
-        .map(|arg| arg.get_type(function_context.schema))
-        .collect::<Result<Vec<_>, _>>()?;
+    let data_types = argument_types(&arguments, function_context)?;
     let has_string = data_types.iter().any(is_string_type);
     let temporal_type =
         common_temporal_type(&data_types, &function_context.plan_config.session_timezone);
@@ -186,6 +316,8 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
+        // FIXME: Spark types `nvl2` by its last two arguments only,
+        //  but DataFusion coerces the first argument to the result type as well.
         ("nvl2", F::ternary(expr_fn::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),

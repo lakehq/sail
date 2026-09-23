@@ -1,5 +1,7 @@
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
@@ -12,6 +14,13 @@ def test_sql_positional_parameters(spark):
         (1,),
     ]
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_sql_case_widens_parameter_marker_branch(spark):
+    df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])
+    assert df.dtypes == [("v", "bigint")]
+    assert df.collect() == [(1,), (2,)]
 
 
 def test_keyword_as_explicit_column_alias(spark):
