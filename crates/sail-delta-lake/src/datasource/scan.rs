@@ -144,7 +144,9 @@ fn logical_file_schema_for_scan(
                     let field =
                         with_variant_extension_if_marked_storage(logical_field.as_ref().clone())
                             .with_name(physical_field.name());
-                    let field = if column_mapping_mode == ColumnMappingMode::Id {
+                    let field = if column_mapping_mode == ColumnMappingMode::Id
+                        && field.data_type().is_nested()
+                    {
                         with_physical_name_aliases(field)
                     } else {
                         field
@@ -161,12 +163,14 @@ fn logical_file_schema_for_scan(
     ))
 }
 
-/// Adds the physical name of each field as a schema evolution alias in column mapping ID mode.
+/// Adds the physical name of a nested field and its children as schema evolution aliases in
+/// column mapping ID mode.
 ///
 /// Fields are matched by Parquet field ID in ID mode. The Parquet reader drops the field IDs
 /// of nested fields when it coerces INT96 timestamps (as written by Spark by default), and
 /// the alias lets such fields be matched by their physical name instead. Aliases only apply
-/// to Parquet fields without a field ID.
+/// to Parquet fields without a field ID. Top-level primitive fields keep their field IDs, so
+/// they are left unchanged to avoid casts in the scan.
 fn with_physical_name_aliases(field: Field) -> Field {
     let data_type = match field.data_type() {
         ArrowDataType::Struct(children) => ArrowDataType::Struct(
