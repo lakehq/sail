@@ -64,8 +64,6 @@ def test_map_filter_arrow_map_slice_with_hidden_null_entries(spark):
     source = spark.createDataFrame(pa.table({"attributes": maps}))
     threshold = 3
     result = source.select(
-        F.map_filter(
-            "attributes", lambda _key, value: ((F.lit(1) / value) > 0) & (value < threshold)
-        ).alias("filtered")
+        F.map_filter("attributes", lambda _key, value: ((F.lit(1) / value) > 0) & (value < threshold)).alias("filtered")
     )
     assert [row.filtered for row in result.collect()] == [None, {}, {"keep": 2}]
