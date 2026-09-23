@@ -190,13 +190,6 @@ Feature: map_filter with lambda
       Then query result
         | result |
         | NULL   |
-      Then query schema
-        """
-        root
-         |-- result: map (nullable = true)
-         |    |-- key: void
-         |    |-- value: void (valueContainsNull = true)
-        """
 
       Examples:
         | map                 |

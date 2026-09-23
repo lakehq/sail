@@ -15,6 +15,14 @@ def test_map_filter_removes_null_metadata_values(spark):
     assert [row.filtered for row in result.collect()] == [{"keep": "1"}, {}, None]
 
 
+@pytest.mark.parametrize("map_expression", ["NULL", "raise_error('boom')"])
+def test_map_filter_preserves_null_typed_map_schema(spark, map_expression):
+    result = spark.sql(f"SELECT map_filter({map_expression}, true) AS result")
+    assert result.schema == T.StructType(
+        [T.StructField("result", T.MapType(T.NullType(), T.NullType(), valueContainsNull=True), nullable=True)]
+    )
+
+
 @pytest.mark.parametrize("nullable", [False, True])
 @pytest.mark.parametrize("value_contains_null", [False, True])
 def test_map_filter_preserves_input_schema(spark, nullable, value_contains_null):
