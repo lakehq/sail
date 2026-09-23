@@ -76,7 +76,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for a filter.
     filter_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
-    /// Outputs whose descendants contain names from outside this resolver state.
+    /// Outputs whose descendants cannot participate in missing-reference resolution.
     filter_input_boundaries: Vec<DFSchemaRef>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
@@ -156,12 +156,18 @@ impl PlanResolverState {
         self.register_field_info(name, true)
     }
 
-    /// Sets the display name of an already-registered field. Used to give a
-    /// materialized column (e.g. an unnested `window` column) a referenceable name.
+    /// Sets the display name of a materialized field, registering an internal field
+    /// when it becomes referenceable (e.g. an unnested `window` grouping column).
     pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
-        if let Some(info) = self.fields.get_mut(field_id) {
-            info.name = name.into();
-        }
+        let info = self
+            .fields
+            .entry(field_id.to_string())
+            .or_insert_with(|| FieldInfo {
+                plan_ids: HashSet::new(),
+                name: String::new(),
+                hidden: false,
+            });
+        info.name = name.into();
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {

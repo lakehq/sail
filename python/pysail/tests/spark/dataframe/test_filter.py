@@ -546,3 +546,50 @@ def test_filter_empty_view_does_not_hide_unrelated_missing_attribute(spark):
         assert result.columns == []
     finally:
         spark.catalog.dropTempView(name)
+
+
+def test_filter_unpivot_rejects_removed_input_attribute(spark):
+    source = spark.createDataFrame([(1, 10, 20), (2, 30, 40)], "id int, a int, b int")
+    unpivoted = source.unpivot("id", ["a", "b"], "variable", "value")
+    with pytest.raises(AnalysisException):
+        unpivoted.where(F.col("a") == 10).collect()  # noqa: PLR2004
+
+
+def test_filter_unpivot_recovers_projected_output_attributes(spark):
+    source = spark.createDataFrame([(1, 10, 20), (2, 30, 40)], "id int, a int, b int")
+    unpivoted = source.unpivot("id", ["a", "b"], "variable", "value")
+    projected = unpivoted.select("id")
+    result = projected.where((F.col("variable") == "a") & (F.col("value") == 10))  # noqa: PLR2004
+    assert result.collect() == [Row(id=1)]
+    assert result.schema == projected.schema
+
+
+@pytest.mark.parametrize("operation", ["explode", "inline", "monotonic-id", "partition-id", "window"])
+@pytest.mark.parametrize("has_empty_column", [False, True], ids=["unknown-name", "missing-input"])
+def test_filter_missing_attribute_ignores_internal_auxiliaries(spark, operation, has_empty_column):
+    source = spark.createDataFrame([(1, [1, 2])], "id int, values array<int>")
+    if has_empty_column:
+        source = source.withColumn("", F.lit(100))
+    if operation == "explode":
+        generated = F.explode("values")
+    elif operation == "inline":
+        generated = F.inline(F.array(F.struct(F.col("id").alias("item"))))
+    elif operation == "monotonic-id":
+        generated = F.monotonically_increasing_id()
+    elif operation == "partition-id":
+        generated = F.spark_partition_id()
+    else:
+        source = source.orderBy("id")
+        generated = F.row_number().over(Window.orderBy("id"))
+    projected = source.select(generated.alias("generated"))
+    predicate = F.col("") == 100  # noqa: PLR2004
+
+    if has_empty_column:
+        expected = projected.collect()
+        assert expected
+        result = projected.where(predicate)
+        assert result.collect() == expected
+        assert result.schema == projected.schema
+    else:
+        with pytest.raises(AnalysisException):
+            projected.where(predicate).collect()
