@@ -8,7 +8,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use sail_logical_plan::range::Range;
 
@@ -68,12 +68,28 @@ impl RangeExec {
 }
 
 impl DisplayAs for RangeExec {
-    fn fmt_as(
-        &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "RangeExec")
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
+                f,
+                "{}: start={}, end={}, step={}, num_partitions={}, projection={:?}",
+                Self::static_name(),
+                self.range.start,
+                self.range.end,
+                self.range.step,
+                self.num_partitions,
+                self.projection,
+            ),
+            DisplayFormatType::TreeRender => writeln!(
+                f,
+                "start={}\nend={}\nstep={}\nnum_partitions={}\nprojection={:?}",
+                self.range.start,
+                self.range.end,
+                self.range.step,
+                self.num_partitions,
+                self.projection,
+            ),
+        }
     }
 }
 

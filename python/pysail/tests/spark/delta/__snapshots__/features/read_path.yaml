@@ -629,7 +629,7 @@ data:
     ProjectionExec: expr=[#2@0 as present]
       ProjectionExec: expr=[1 as #2]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[0]
 ---
 name: "test_partition_metadata_aggregation_preserves_counts_and_distinct_values[false]"
 data:

@@ -3287,10 +3287,10 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
           ProjectionExec: expr=[id@0 as #0]
-            RangeExec
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
         ProjectionExec: expr=[id@0 as #1]
-          RangeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     initial_physical_plan_with_stats:
@@ -3298,10 +3298,10 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
           ProjectionExec: expr=[id@0 as #0], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
-            RangeExec, statistics=[Rows=Exact(2), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(2), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
       ProjectionExec: expr=[#1@0 as #2], statistics=[Rows=Exact(0), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #1], statistics=[Rows=Exact(0), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
-          RangeExec, statistics=[Rows=Exact(0), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(0), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -3309,10 +3309,10 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
-            RangeExec, schema=[id:Int64]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
         ProjectionExec: expr=[id@0 as #1], schema=[#1:Int64]
-          RangeExec, schema=[id:Int64]
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -3321,10 +3321,10 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
             ProjectionExec: expr=[id@0 as #0]
-              RangeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
         ProjectionExec: expr=[id@0 as #1]
-          RangeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -3356,18 +3356,18 @@ data:
       OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
-            RangeExec
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
-        RangeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
         ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
-          RangeExec
+          RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
-        RangeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after LimitAggregation:
@@ -3396,10 +3396,10 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
         ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
           CooperativeExec
-            RangeExec
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after FilterPushdown(Post):
@@ -3423,10 +3423,10 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
-              RangeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
           CooperativeExec
-            RangeExec
+            RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     == Physical Plan ==
@@ -3435,10 +3435,10 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
-              RangeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
           CooperativeExec
-            RangeExec
+            RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     == Distributed Plan ==
@@ -3450,7 +3450,7 @@ data:
     placement=Worker
     ProjectionExec: expr=[id@0 as #2]
       CooperativeExec
-        RangeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Broadcast)]
@@ -3463,7 +3463,7 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
-              RangeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_empty_scalar_subquery_result"

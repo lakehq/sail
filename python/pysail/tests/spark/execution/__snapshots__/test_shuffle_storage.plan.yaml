@@ -246,10 +246,10 @@ data:
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
                 ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                    RangeExec
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                 ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                    RangeExec
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     initial_physical_plan_with_stats:
@@ -261,10 +261,10 @@ data:
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(64), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:),(Col[2]: Null=Exact(0)),(Col[3]:)]]
                 ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-                    RangeExec, statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
                 ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-                    RangeExec, statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -276,10 +276,10 @@ data:
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #2:Int64, #4:Int64, #5:Int64]
                 ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, schema=[#1:Int64, #2:Int64]
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], schema=[#1:Int64, #2:Int64]
-                    RangeExec, schema=[#0:Int64]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[#0:Int64]
                 ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, schema=[#4:Int64, #5:Int64]
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], schema=[#4:Int64, #5:Int64]
-                    RangeExec, schema=[#3:Int64]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[#3:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -292,10 +292,10 @@ data:
                 HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
                   ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                      RangeExec
+                      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                   ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                      RangeExec
+                      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -311,10 +311,10 @@ data:
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)]
                   ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                      RangeExec
+                      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                   ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                      RangeExec
+                      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after LimitedDistinctAggregation:
@@ -339,10 +339,10 @@ data:
                       CoalescePartitionsExec
                         ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                           ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                            RangeExec
+                            RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                       ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after CombinePartialFinalAggregate:
@@ -364,10 +364,10 @@ data:
                       CoalescePartitionsExec
                         ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                           ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                            RangeExec
+                            RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                       ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after OutputRequirements:
@@ -382,10 +382,10 @@ data:
                     CoalescePartitionsExec
                       ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                     ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                       ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                        RangeExec
+                        RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after LimitAggregation:
@@ -427,10 +427,10 @@ data:
                     CoalescePartitionsExec
                       RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                     RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                       ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                        RangeExec
+                        RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after RewriteCollectLeftHashJoin:
@@ -455,10 +455,10 @@ data:
                       CoalescePartitionsExec
                         RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                           ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                            RangeExec
+                            RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     == Physical Plan ==
@@ -474,10 +474,10 @@ data:
                       CoalescePartitionsExec
                         RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                           ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                            RangeExec
+                            RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     == Distributed Plan ==
@@ -488,7 +488,7 @@ data:
     distribution=Hash(keys=[#1@0], channels=8)
     placement=Worker
     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-      RangeExec
+      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Shuffle)]
@@ -521,7 +521,7 @@ data:
     distribution=Hash(keys=[#4@0], channels=8)
     placement=Worker
     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-      RangeExec
+      RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
     === stage 5 ===
     inputs=[StageInput(stage=4, mode=Shuffle)]

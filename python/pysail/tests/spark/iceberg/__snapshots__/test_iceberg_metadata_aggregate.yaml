@@ -109,7 +109,7 @@ data:
             IcebergMetadataScanExec
               ProjectionExec: expr=[128 as v]
                 CooperativeExec
-                  RangeExec
+                  RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_cast_overflow_preserves_null_counts.1"
 data:
@@ -122,7 +122,7 @@ data:
             IcebergMetadataScanExec
               ProjectionExec: expr=[128 as v]
                 CooperativeExec
-                  RangeExec
+                  RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[non-null]"
 data:
@@ -137,11 +137,11 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[2 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[3 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[10 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[non-null].1"
 data:
@@ -156,11 +156,11 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[2 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[3 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[10 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[non-null].2"
 data:
@@ -175,11 +175,11 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[2 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[3 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[10 as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[null-file]"
 data:
@@ -194,13 +194,13 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(2 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(3 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(10 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[null-file].1"
 data:
@@ -215,13 +215,13 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(2 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(3 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(10 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[null-file].2"
 data:
@@ -236,13 +236,13 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(2 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(3 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(10 AS Int64) as v]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_decimal_metadata_preserves_integer_precision[aggregate_table0]"
 data:

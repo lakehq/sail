@@ -40,9 +40,9 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[1 as category]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[2 as category]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_explain_for_join_between_two_iceberg_tables"
 data:

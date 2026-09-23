@@ -68,11 +68,11 @@ data:
               IcebergMetadataScanExec
                 UnionExec
                   ProjectionExec: expr=[NULL as p]
-                    RangeExec
+                    RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                   ProjectionExec: expr=[CAST(a AS Utf8) as p]
-                    RangeExec
+                    RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                   ProjectionExec: expr=[CAST(b AS Utf8) as p]
-                    RangeExec
+                    RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
   grouped: |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as p, #3@1 as count]
@@ -84,11 +84,11 @@ data:
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[NULL as p]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(a AS Utf8) as p]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
                     ProjectionExec: expr=[CAST(b AS Utf8) as p]
-                      RangeExec
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_lazy_limit_does_not_open_later_manifests"
 data:
@@ -265,7 +265,7 @@ data:
         IcebergMetadataScanExec
           ProjectionExec: expr=[10 as id]
             CooperativeExec
-              RangeExec
+              RangeExec: start=0, end=1, step=1, num_partitions=1, projection=[]
 ---
 name: "test_unpartitioned_numeric_metrics_avoid_data_file_io[False-2]"
 data:
