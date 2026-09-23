@@ -468,3 +468,54 @@ Feature: map_filter with lambda
         | map entries   | map_entries(map_filter(map(1, 2), (a, b) -> b)) IS NOT NULL                                         |
         | nested lambda | transform(array(1), x -> map_filter(map(1, 2), (a, b) -> b)) IS NOT NULL                             |
         | runtime cast  | CAST('x' AS BOOLEAN)                                                                               |
+
+  Rule: Nested aggregates retain their accumulator types
+
+    Scenario Outline: A nested <function> predicate matches an explicit identity finish
+      When query
+        """
+        SELECT map_filter(map('a', true, 'b', false),
+                          (k, v) -> <function>(array(v), false,
+                                              (acc, x) -> acc OR x)) AS implicit_finish,
+               map_filter(map('a', true, 'b', false),
+                          (k, v) -> <function>(array(v), false,
+                                              (acc, x) -> acc OR x, acc -> acc)) AS explicit_finish
+        """
+      Then query result
+        | implicit_finish | explicit_finish |
+        | {a -> true}     | {a -> true}     |
+
+      Examples:
+        | function  |
+        | aggregate |
+        | reduce    |
+
+    Scenario: A nested aggregate with an integer result is not a Boolean predicate
+      When query
+        """
+        SELECT map_filter(map('a', 1, 'b', 2),
+                          (k, v) -> aggregate(array(v), 0, (acc, x) -> acc + x)) AS result
+        """
+      Then query error (?i)boolean
+
+    Scenario: A nested aggregate map argument retains its map type
+      When query
+        """
+        SELECT transform(array(1, 2), x ->
+                 map_filter(aggregate(array(map('a', x)), map('seed', 0),
+                                      (acc, m) -> m), true)) AS result
+        """
+      Then query result
+        | result              |
+        | [{a -> 1}, {a -> 2}] |
+
+    Scenario: A nested aggregate with a null result remains unevaluated
+      When query
+        """
+        SELECT map_filter(map('a', 1),
+                          (k, v) -> aggregate(array(v), NULL,
+                                              (acc, x) -> raise_error('boom'))) AS result
+        """
+      Then query result
+        | result |
+        | {}     |

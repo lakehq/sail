@@ -2,7 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::arrow::compute::can_cast_types;
-use datafusion_common::arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
@@ -342,9 +342,14 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                     .unwrap_or_else(|| "acc".to_string()),
                 _ => "acc".to_string(),
             };
+            let finish_field = Arc::new(Field::new(
+                acc.clone(),
+                zero.get_type(input.function_context.schema)?,
+                true,
+            ));
             let finish = expr::Expr::Lambda(Lambda::new(
                 vec![acc.clone()],
-                expr::Expr::LambdaVariable(LambdaVariable::new(acc, None)),
+                expr::Expr::LambdaVariable(LambdaVariable::new(acc, Some(finish_field))),
             ));
             (array, zero, merge, finish)
         }
