@@ -63,8 +63,14 @@ impl PlanResolver<'_> {
             };
             // Tuple IN is lowered to EXISTS with its left-hand columns represented
             // as outer references, which column_refs() deliberately excludes.
+            // Nested lateral joins also advertise references to their own inputs;
+            // only references reachable from this filter need to be recovered here.
+            // TODO: Support nested tuple IN values that already reference an enclosing
+            // query; their scope must survive EXISTS lowering and decorrelation.
             for expr in &subquery.outer_ref_columns {
-                if let Expr::OuterReferenceColumn(_, column) = expr {
+                if let Expr::OuterReferenceColumn(_, column) = expr
+                    && schema.has_column(column)
+                {
                     columns.insert(column);
                 }
             }

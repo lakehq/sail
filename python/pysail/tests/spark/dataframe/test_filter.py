@@ -34,7 +34,7 @@ def test_filter_missing_projection_attribute(filter_source, predicate_kind):
 
 def test_filter_missing_attribute_with_visible_alias(filter_source):
     result = filter_source.select("key", (F.col("value") + 10).alias("adjusted")).where(
-        (F.col("adjusted") == 12) & (F.col("regionality") != "DOMESTIC")
+        (F.col("adjusted") == 12) & (F.col("regionality") != "DOMESTIC")  # noqa: PLR2004
     )
     assert result.collect() == [Row(key="b", adjusted=12)]
 
@@ -44,7 +44,7 @@ def test_filter_missing_attribute_preserves_alias_precedence(filter_source, hide
     projected = filter_source.select("key", F.lit("CURRENT").alias("regionality"))
     if hide_alias:
         projected = projected.select("key")
-    result = projected.where((F.col("regionality") == "CURRENT") & (F.col("value") == 2))
+    result = projected.where((F.col("regionality") == "CURRENT") & (F.col("value") == 2))  # noqa: PLR2004
     expected = Row(key="b") if hide_alias else Row(key="b", regionality="CURRENT")
     assert result.collect() == [expected]
 
@@ -53,7 +53,7 @@ def test_filter_missing_attributes_through_nested_projections(filter_source):
     result = (
         filter_source.select("key", "regionality")
         .select("key")
-        .where((F.col("value") == 2) & (F.col("regionality") != "DOMESTIC"))
+        .where((F.col("value") == 2) & (F.col("regionality") != "DOMESTIC"))  # noqa: PLR2004
     )
     assert result.collect() == [Row(key="b")]
 
@@ -99,7 +99,7 @@ def test_filter_missing_attribute_preserves_nulls_and_output_schema(spark):
 def test_filter_missing_attribute_through_unary_plan(filter_source, operation):
     projected = filter_source.select("key", "value")
     if operation == "filter":
-        projected = projected.where(F.col("value") < 3)
+        projected = projected.where(F.col("value") < 3)  # noqa: PLR2004
     elif operation == "limit":
         projected = projected.orderBy("key").limit(1)
     elif operation == "sort":
@@ -225,7 +225,7 @@ def test_filter_column_regex_uses_visible_projection(filter_source):
 def test_filter_missing_attributes_in_subquery(spark, filter_source, columns):
     spark.createDataFrame([("INTRA", 2)], "regionality string, value int").createOrReplaceTempView("filter_lookup")
     try:
-        result = filter_source.select("key").where(f"({columns}) IN (SELECT {columns} FROM filter_lookup)")
+        result = filter_source.select("key").where(f"({columns}) IN (SELECT {columns} FROM filter_lookup)")  # noqa: S608
         assert result.collect() == [Row(key="b")]
     finally:
         spark.catalog.dropTempView("filter_lookup")
@@ -294,7 +294,7 @@ def filter_temp_view(spark, filter_source, request):
 
 def test_filter_temp_view_rejects_attribute_removed_before_registration(spark, filter_temp_view):
     with pytest.raises(AnalysisException):
-        spark.table(filter_temp_view).where(F.col("value") == 2).collect()
+        spark.table(filter_temp_view).where(F.col("value") == 2).collect()  # noqa: PLR2004
 
 
 def test_filter_temp_view_recovers_attribute_removed_after_read(spark, filter_temp_view):
@@ -305,12 +305,12 @@ def test_filter_temp_view_recovers_attribute_removed_after_read(spark, filter_te
 @pytest.mark.parametrize("reference", ["alias", "cte"])
 def test_filter_temp_view_visible_qualified_attributes(spark, filter_temp_view, reference):
     if reference == "alias":
-        query = f"SELECT v.key FROM {filter_temp_view} v WHERE v.regionality = 'INTRA'"
+        query = f"SELECT v.key FROM {filter_temp_view} v WHERE v.regionality = 'INTRA'"  # noqa: S608
     else:
         query = f"""
             WITH visible AS (SELECT key, regionality FROM {filter_temp_view})
             SELECT visible.key FROM visible WHERE visible.regionality = 'INTRA'
-        """
+        """  # noqa: S608
     assert spark.sql(query).collect() == [Row(key="b")]
 
 
@@ -324,16 +324,40 @@ def test_filter_temp_views_preserve_correlated_attributes(spark, subquery):
                 (10, 1, 1, 1, 1.0, 70.0, 0.0, 0.0, "N", "O", "1996-01-01", "1996-01-01", "1996-01-01", "", "", ""),
                 (11, 1, 1, 1, 100.0, 700.0, 0.0, 0.0, "N", "O", "1996-01-01", "1996-01-01", "1996-01-01", "", "", ""),
             ],
-            columns="""
-                l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax
-                l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment
-            """.split(),
+            columns=[
+                "l_orderkey",
+                "l_partkey",
+                "l_suppkey",
+                "l_linenumber",
+                "l_quantity",
+                "l_extendedprice",
+                "l_discount",
+                "l_tax",
+                "l_returnflag",
+                "l_linestatus",
+                "l_shipdate",
+                "l_commitdate",
+                "l_receiptdate",
+                "l_shipinstruct",
+                "l_shipmode",
+                "l_comment",
+            ],
         )
     )
     part = spark.createDataFrame(
         pd.DataFrame(
             [(1, "part", "manufacturer", "Brand#42", "type", 1, "LG BAG", 1.0, "")],
-            columns="p_partkey p_name p_mfgr p_brand p_type p_size p_container p_retailprice p_comment".split(),
+            columns=[
+                "p_partkey",
+                "p_name",
+                "p_mfgr",
+                "p_brand",
+                "p_type",
+                "p_size",
+                "p_container",
+                "p_retailprice",
+                "p_comment",
+            ],
         )
     )
     lineitem.createOrReplaceTempView("filter_lineitem")
@@ -356,7 +380,7 @@ def test_filter_temp_views_preserve_correlated_attributes(spark, subquery):
             FROM filter_lineitem, filter_part
             WHERE p_partkey = l_partkey AND p_brand = 'Brand#42' AND p_container = 'LG BAG'
                 AND {predicate}
-        """)
+        """)  # noqa: S608
         assert result.collect() == [Row(avg_yearly=10.0)]
     finally:
         spark.catalog.dropTempView("filter_lineitem")
@@ -375,7 +399,7 @@ def test_filter_physical_column_name_preserves_correlated_scope(spark, tmp_path,
     result = spark.sql(f"""
         SELECT id FROM {outer}
         WHERE EXISTS (SELECT 1 FROM parquet.`{path}` WHERE {predicates[reference]})
-    """)
+    """)  # noqa: S608
     assert result.collect() == [Row(id=0)]
 
 

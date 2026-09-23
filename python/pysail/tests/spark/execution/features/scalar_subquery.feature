@@ -1,4 +1,42 @@
 Feature: Scalar subqueries in distributed execution
+  Scenario Outline: Filter subqueries preserve lateral correlation scope
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW lateral_scalar_outer AS
+      SELECT * FROM VALUES (0, 1), (1, 2) AS t(c1, c2)
+      """
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW lateral_scalar_inner AS
+      SELECT * FROM VALUES (0, 2), (0, 3) AS t(c1, c2)
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS lateral_scalar_outer
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS lateral_scalar_inner
+      """
+    When query
+      """
+      SELECT * FROM lateral_scalar_outer
+      WHERE <predicate> (
+        SELECT <projection> FROM lateral_scalar_inner, LATERAL (SELECT c1 AS a)
+        <correlation>
+      )
+      """
+    Then query result collected
+      | c1 | c2 |
+      | 0  | 1  |
+
+    Examples:
+      | predicate | projection | correlation                       |
+      | c1 =      | MIN(a)     |                                   |
+      | c1 =      | MIN(a)     | WHERE c1 = lateral_scalar_outer.c1 |
+      | EXISTS    | 1          | WHERE a = lateral_scalar_outer.c1  |
+      | c1 IN     | a          |                                   |
+
   Scenario: Scalar subquery in Parquet scan predicate
     Given variable location for temporary directory scalar_subquery_parquet
     Given statement template
