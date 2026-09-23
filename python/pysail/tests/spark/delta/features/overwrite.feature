@@ -27,6 +27,26 @@ Feature: Delta Lake Overwrite
         AS tab(id, category, value)
         """
 
+    @sail-bug
+    Scenario: Conditional overwrite rejects a non-deterministic predicate before writing
+      When query
+        """
+        INSERT INTO delta_overwrite_basic
+        REPLACE WHERE rand(0) > 0.5 AND id > 0
+        SELECT * FROM VALUES (5, 'A', 100) AS tab(id, category, value)
+        """
+      Then query error Non-deterministic expressions are not allowed in OVERWRITE conditions
+      When query
+        """
+        SELECT id, category, value FROM delta_overwrite_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | category | value |
+        | 1  | A        | 10    |
+        | 2  | B        | 20    |
+        | 3  | A        | 30    |
+        | 4  | B        | 40    |
+
     Scenario: EXPLAIN plan for conditional overwrite (REPLACE WHERE category = 'A')
       When query
         """
