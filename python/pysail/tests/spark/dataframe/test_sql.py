@@ -1,5 +1,7 @@
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
@@ -12,6 +14,15 @@ def test_sql_positional_parameters(spark):
         (1,),
     ]
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
+
+
+# Spark binds a parameter before analysis, so `round` implicitly casts a STRING parameter to DOUBLE.
+# Sail resolves a parameter marker as an untyped placeholder and binds its value after planning,
+# so `round` never sees the STRING type and fails to plan.
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_round_of_string_parameter(spark):
+    assert spark.sql("SELECT round(:p, 1) AS r", args={"p": "1.25"}).collect() == [(1.3,)]
+    assert spark.sql("SELECT round(?, 1) AS r", args=["1.25"]).collect() == [(1.3,)]
 
 
 def test_keyword_as_explicit_column_alias(spark):

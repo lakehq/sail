@@ -70,3 +70,84 @@ Feature: round with an argument coming from a column
         root
          |-- result: double (nullable = true)
         """
+
+  # Spark's `Round` implicitly casts a string value to DOUBLE (`NumericType.defaultConcreteType`),
+  # so the result is DOUBLE. The cast follows ANSI mode. All expected values were captured on
+  # Spark JVM 4.1.1.
+  Rule: A string value is implicitly cast to double
+
+    Scenario Outline: round string coercion: <case>
+      When query
+        """
+        SELECT round(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                     | args                    | result    |
+        | round a numeric string                   | '0.123456', 5           | 0.12346   |
+        | round a numeric string with no scale     | '2.5'                   | 3.0       |
+        | round a negative tie away from zero      | '-2.5', 0               | -3.0      |
+        | round a numeric string to negative scale | '1234.5678', -2         | 1200.0    |
+        | round an exponent string                 | '1e2', 0                | 100.0     |
+        | round an integral string returns double  | '7', 2                  | 7.0       |
+        | round a string with surrounding spaces   | ' 1.5 ', 0              | 2.0       |
+        | round a NaN string                       | 'NaN', 2                | NaN       |
+        | round a negative infinity string         | '-Infinity', 2          | -Infinity |
+        | round a NULL string                      | CAST(NULL AS STRING), 2 | NULL      |
+
+    Scenario: round a string column
+      When query
+        """
+        SELECT i, round(v, 5) AS result FROM VALUES (1, '0.123456'), (2, '0.987654'), (3, NULL) AS t(i, v) ORDER BY i
+        """
+      Then query result ordered
+        | i | result  |
+        | 1 | 0.12346 |
+        | 2 | 0.98765 |
+        | 3 | NULL    |
+
+    Scenario: round of a string column returns double
+      When query
+        """
+        SELECT round(v, 1) AS result FROM VALUES ('1.25'), (NULL) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+    Scenario: round a malformed string returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT i, round(v, 1) AS result FROM VALUES (1, '1.25'), (2, 'x') AS t(i, v) ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | 1.3    |
+        | 2 | NULL   |
+
+    Scenario: round a malformed string errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round('abc', 2) AS result
+        """
+      Then query error (?i)cannot (be )?cast
+
+    # Spark rounds a DOUBLE via `BigDecimal(d).setScale(scale, HALF_UP)`, i.e. on the shortest
+    # decimal representation of the double, so the tie in '1.005' rounds up. Sail uses DataFusion's
+    # `(x * 10^scale).round() / 10^scale`, which sees 100.49999999999999: Sail returns 1.0.
+    @sail-bug
+    Scenario: round a string whose decimal tie is not exact in binary
+      When query
+        """
+        SELECT round('1.005', 2) AS result
+        """
+      Then query result
+        | result |
+        | 1.01   |
