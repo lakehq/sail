@@ -194,10 +194,9 @@ impl TimestampParser {
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
-        // TODO: Trim Spark whitespace and ISO control characters before `parse_timestamp`
-        // like Spark does for dated strings, then drop the dated timestamp pre-trim
-        // in `sequence_cast`.
-        let timestamp = match parse_timestamp(value) {
+        // Keep the original input for the time-only branch's leading T check.
+        let trimmed = value.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
+        let timestamp = match parse_timestamp(trimmed) {
             Ok(v) => v,
             Err(e) => {
                 if let TimestampParser::Ltz { default_timezone } = self {

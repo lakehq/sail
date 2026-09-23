@@ -276,8 +276,6 @@ Feature: Time-only strings as timestamps
       | result |
       | true   |
 
-  # TODO: Trim Spark whitespace before parsing dated strings, then drop the sequence pre-trim.
-  @sail-bug
   Scenario: Dated timestamp ignores leading whitespace
     Given config spark.sql.ansi.enabled = false
     When query
