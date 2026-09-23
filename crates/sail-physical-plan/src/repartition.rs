@@ -6,12 +6,17 @@ use datafusion::arrow::array::PrimitiveArray;
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::common::config::ConfigOptions;
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
+};
+use datafusion::physical_plan::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase,
 };
 use datafusion::physical_plan::projection::{
     ProjectionExec, all_columns, make_with_child, update_expr,
@@ -562,7 +567,59 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         ))))
     }
 
-    // Do not implement Filter pushdown, as its evaluation can be potentially
-    // expensive, and the presence of explicit repartitioning indicates that
-    // the user wants to evaluate the filters after repartitioning.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Preserve the user's placement of ordinary filters. Dynamic filters are
+        // optional pruning hints and can also reduce the input to the exchange.
+        let child = ChildFilterDescription::all_unsupported(&parent_filters).with_self_filters(
+            parent_filters
+                .into_iter()
+                .filter(|filter| filter.is::<DynamicFilterPhysicalExpr>())
+                .collect(),
+        );
+        Ok(FilterDescription::new().with_child(child))
+    }
+}
+
+#[cfg(test)]
+mod dynamic_filter_tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_expr::expressions::{Column, lit};
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter_pushdown::PushedDown;
+
+    use super::*;
+
+    #[test]
+    fn copies_dynamic_filters_without_moving_user_filters() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let plan = ExplicitRepartitionExec::new(
+            Arc::new(EmptyExec::new(schema)),
+            Partitioning::RoundRobinBatch(4),
+        );
+        let dynamic: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("k", 0))],
+            lit(true),
+        ));
+        let filters = plan.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![lit(false), dynamic.clone()],
+            &ConfigOptions::default(),
+        )?;
+        assert_eq!(filters.self_filters()[0].len(), 1);
+        assert_eq!(
+            filters.self_filters()[0][0].expression_id(),
+            dynamic.expression_id()
+        );
+        assert!(
+            filters.parent_filters()[0]
+                .iter()
+                .all(|predicate| matches!(predicate.discriminant, PushedDown::No))
+        );
+        Ok(())
+    }
 }

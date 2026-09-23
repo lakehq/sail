@@ -40,6 +40,47 @@ use crate::task::scheduling::{
 };
 
 impl JobScheduler {
+    pub(crate) fn exchange_dynamic_filters(
+        &mut self,
+        key: &TaskKey,
+        updates: Vec<crate::driver::r#gen::DynamicFilterUpdate>,
+        revision: u64,
+    ) -> ExecutionResult<crate::driver::r#gen::ExchangeDynamicFiltersResponse> {
+        let job = self.jobs.get_mut(&key.job_id).ok_or_else(|| {
+            ExecutionError::InvalidArgument("dynamic filter job does not exist".into())
+        })?;
+        if !matches!(job.state, JobState::Running { .. }) {
+            return Err(ExecutionError::InvalidArgument(
+                "dynamic filter job is closed".into(),
+            ));
+        }
+        let attempts = job
+            .stages
+            .iter()
+            .enumerate()
+            .flat_map(|(stage, descriptor)| {
+                descriptor
+                    .tasks
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(partition, task)| {
+                        let attempt = task.attempts.last()?;
+                        if matches!(attempt.state, TaskState::Failed | TaskState::Canceled) {
+                            return None;
+                        }
+                        Some(((stage, partition), task.attempts.len() - 1))
+                    })
+            })
+            .collect();
+        job.dynamic_filters.exchange(
+            key,
+            &job.graph.dynamic_filters,
+            &attempts,
+            updates,
+            revision,
+        )
+    }
+
     fn next_job_id(&mut self) -> ExecutionResult<JobId> {
         self.job_id_generator.generate()
     }
@@ -625,6 +666,7 @@ impl JobScheduler {
             context: job.context.clone(),
         });
         job.state.finish_output(outcome);
+        job.dynamic_filters.clear();
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,
             job_id: u64::from(job_id),
@@ -673,6 +715,16 @@ impl JobScheduler {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
+            dynamic_filter_ids: job
+                .graph
+                .dynamic_filters
+                .iter()
+                .filter_map(|(id, route)| {
+                    (route.producers.contains_key(&key.stage)
+                        || route.consumers.contains(&key.stage))
+                    .then_some(*id)
+                })
+                .collect(),
             plan: Arc::from(plan),
             inputs,
             output,

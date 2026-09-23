@@ -21,6 +21,12 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
+    ExchangeDynamicFilters {
+        key: TaskKey,
+        updates: Vec<r#gen::DynamicFilterUpdate>,
+        revision: u64,
+        result: oneshot::Sender<ExecutionResult<r#gen::ExchangeDynamicFiltersResponse>>,
+    },
     Activate {
         result: oneshot::Sender<ExecutionResult<()>>,
     },
@@ -139,6 +145,7 @@ impl From<TaskStatus> for r#gen::TaskStatus {
 impl SpanAssociation for DriverMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
+            DriverMessage::ExchangeDynamicFilters { .. } => "ExchangeDynamicFilters",
             DriverMessage::Activate { .. } => "Activate",
             DriverMessage::RegisterWorker { .. } => "RegisterWorker",
             DriverMessage::WorkerHeartbeat { .. } => "WorkerHeartbeat",
@@ -163,6 +170,15 @@ impl SpanAssociation for DriverMessage {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
+            DriverMessage::ExchangeDynamicFilters { key, .. } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, key.job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, key.stage.to_string()));
+                p.push((
+                    SpanAttribute::EXECUTION_PARTITION,
+                    key.partition.to_string(),
+                ));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, key.attempt.to_string()));
+            }
             DriverMessage::Activate { result: _ } => {}
             DriverMessage::RegisterWorker {
                 worker_id,

@@ -1,0 +1,24 @@
+# serializer version: 1
+---
+name: "test_join_dynamic_filter_is_enabled_in_cluster_mode"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as id, #5@1 as label]
+      SortExec: expr=[#4@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#0@0 as #4, #1@1 as #5]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #3@0)], projection=[#0@0, #1@1]
+            DataSourceExec: file_groups={1 group: [[<tmp>/dynamic_filter_build/<id>_0.zst.parquet]]}, projection=[id@0 as #0, label@1 as #1], file_type=parquet
+            DataSourceExec: file_groups={1 group: [[<tmp>/dynamic_filter_probe/<id>_0.zst.parquet]]}, projection=[id@0 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      SortPreservingMergeExec: [#0@0 DESC NULLS LAST], fetch=5
+        ProjectionExec: expr=[id@0 as #0]
+          SortExec: TopK(fetch=5), expr=[id@0 DESC NULLS LAST], preserve_partitioning=[true]
+            FilterExec: id@0 >= 10
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/dynamic_filter_top_k/<id>_0.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 >= 10 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 >= 10, required_guarantees=[]

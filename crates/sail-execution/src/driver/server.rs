@@ -28,6 +28,35 @@ impl DriverServer {
 
 #[tonic::async_trait]
 impl DriverService for DriverServer {
+    async fn exchange_dynamic_filters(
+        &self,
+        request: Request<r#gen::ExchangeDynamicFiltersRequest>,
+    ) -> Result<Response<r#gen::ExchangeDynamicFiltersResponse>, Status> {
+        let request = request.into_inner();
+        let key = TaskKey {
+            job_id: request.job_id.into(),
+            stage: usize::try_from(request.stage)
+                .map_err(|_| Status::invalid_argument("invalid stage"))?,
+            partition: usize::try_from(request.partition)
+                .map_err(|_| Status::invalid_argument("invalid partition"))?,
+            attempt: usize::try_from(request.attempt)
+                .map_err(|_| Status::invalid_argument("invalid attempt"))?,
+        };
+        let (tx, rx) = oneshot::channel();
+        self.registry
+            .get(request.driver_id.into())
+            .await?
+            .send(DriverMessage::ExchangeDynamicFilters {
+                key,
+                updates: request.updates,
+                revision: request.revision,
+                result: tx,
+            })
+            .await
+            .map_err(ExecutionError::from)?;
+        Ok(Response::new(rx.await.map_err(ExecutionError::from)??))
+    }
+
     async fn register_worker(
         &self,
         request: Request<RegisterWorkerRequest>,

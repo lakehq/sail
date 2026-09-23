@@ -7,6 +7,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
@@ -109,17 +110,19 @@ def test_dataframe_operations(spark):
 
 
 @pytest.mark.timeout(30)
-def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_path):
+@pytest.mark.yamlsnapshot(group="plan")
+def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_path, snapshot):
     path = str(tmp_path / "dynamic_filter_top_k")
     spark.range(100, numPartitions=4).write.parquet(path)
 
     query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)  # noqa: PLR2004
-    assert "DynamicFilter" in query._explain_string()  # noqa: SLF001
+    assert normalize_plan_text(query._explain_string()) == snapshot  # noqa: SLF001
     assert [row.id for row in query.collect()] == [99, 98, 97, 96, 95]
 
 
 @pytest.mark.timeout(30)
-def test_join_dynamic_filter_is_disabled_in_cluster_mode(spark, tmp_path):
+@pytest.mark.yamlsnapshot(group="plan")
+def test_join_dynamic_filter_is_enabled_in_cluster_mode(spark, tmp_path, snapshot):
     build_path = str(tmp_path / "dynamic_filter_build")
     probe_path = str(tmp_path / "dynamic_filter_probe")
     spark.createDataFrame([(1, "one"), (3, "three")], "id LONG, label STRING").coalesce(1).write.parquet(build_path)
@@ -128,9 +131,7 @@ def test_join_dynamic_filter_is_disabled_in_cluster_mode(spark, tmp_path):
     build = spark.read.parquet(build_path)
     probe = spark.read.parquet(probe_path).withColumnRenamed("id", "probe_id")
     query = build.join(probe, build.id == probe.probe_id).select("id", "label").orderBy("id")
-    plan = query._explain_string()  # noqa: SLF001
-    assert "HashJoinExec" in plan
-    assert "DynamicFilter" not in plan
+    assert normalize_plan_text(query._explain_string()) == snapshot  # noqa: SLF001
     assert [(row.id, row.label) for row in query.collect()] == [(1, "one"), (3, "three")]
 
 
