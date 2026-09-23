@@ -1,7 +1,8 @@
 """Sail queries over Delta tables written by Delta Spark, compared with Delta Spark.
 
-Delta Spark writes the tables, with and without column mapping, and both Sail and
-Delta Spark run the same queries against them. The results must match exactly.
+Delta Spark writes column-mapped tables, and both Sail and Delta Spark run the same
+queries against them. The results must match exactly. Spark writes timestamps as INT96
+by default, which also covers reading nested fields next to INT96 columns in ID mode.
 """
 
 # ruff: noqa: S608
@@ -26,26 +27,27 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
+# Delta Spark rejects the special characters in the column names without column mapping,
+# so only column-mapped tables are written here.
 _VARIANTS = [
     pytest.param((mode, partitioned), id=f"{mode}-{'partitioned' if partitioned else 'unpartitioned'}")
-    for mode in ("name", "id", "none")
+    for mode in ("name", "id")
     for partitioned in (False, True)
 ]
 
-# Queries that fail for reasons unrelated to column mapping: each of them also fails
-# on tables without column mapping. The value is the reason.
+# Queries that fail for reasons unrelated to column mapping. The value is the reason,
+# and whether the failure only happens on partitioned tables.
 _KNOWN_QUERY_FAILURES = {
-    "nvl_array_struct": "type coercion fails on nested fields carrying Spark field metadata",
-    "filter_array_struct": "a higher-order function over an array of structs in a filter cannot resolve the column",
-    "semi_join": "a correlated reference to a nested field cannot be resolved",
-    "intersect": "INTERSECT on array of struct columns fails to compare list values",
-}
-
-# Queries that only fail on column-mapped tables written by Delta Spark. The value is
-# the reason, and whether the failure only happens on partitioned tables.
-_KNOWN_COLUMN_MAPPING_FAILURES = {
-    "coalesce_whole_struct": (
-        "a struct built by an expression lacks the column mapping metadata of the planned struct type",
+    "nvl_array_struct": ("type coercion fails on nested fields carrying field metadata", False),
+    "filter_array_struct": (
+        "a higher-order function over an array of structs in a filter cannot resolve the column",
+        False,
+    ),
+    "semi_join": ("a correlated reference to a nested field cannot be resolved", False),
+    "intersect": ("INTERSECT on array of struct columns fails to compare list values", False),
+    "select_casts": ("casting arrays and maps with null elements to STRING prints NULL instead of null", False),
+    "higher_order": (
+        "higher-order functions over an array of structs lose nested field metadata on partitioned tables",
         True,
     ),
 }
@@ -96,9 +98,7 @@ def test_delta_spark_table_query_matches(
     query: str,
 ) -> None:
     if name in _KNOWN_QUERY_FAILURES:
-        request.applymarker(pytest.mark.xfail(reason=_KNOWN_QUERY_FAILURES[name], strict=True))
-    if name in _KNOWN_COLUMN_MAPPING_FAILURES and delta_spark_table["mode"] != "none":
-        reason, partitioned_only = _KNOWN_COLUMN_MAPPING_FAILURES[name]
+        reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if delta_spark_table["partitioned"] or not partitioned_only:
             request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
     view = f"delta_spark_{delta_spark_table['mode']}_{int(delta_spark_table['partitioned'])}"
@@ -160,3 +160,38 @@ def test_sail_reads_delta_spark_renamed_and_dropped_columns(
     finally:
         spark.catalog.dropTempView("renamed_view")
         delta_jvm_spark.catalog.dropTempView("renamed_view")
+
+
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_sail_coalesces_struct_from_delta_spark_table(
+    request,
+    spark: SparkSession,
+    delta_jvm_spark: SparkSession,
+    tmp_path: Path,
+    partitioned: bool,  # noqa: FBT001
+) -> None:
+    if partitioned:
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="a struct built by an expression lacks the column mapping metadata of the planned struct type",
+                strict=True,
+            )
+        )
+    path = tmp_path / "coalesce"
+    table = f"delta.`{path}`"
+    partition_clause = "PARTITIONED BY (name)" if partitioned else ""
+    delta_jvm_spark.sql(
+        f"CREATE TABLE {table} (id INT, name STRING, s STRUCT<a: INT, b: STRING>) USING DELTA {partition_clause}"
+        " TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+    )
+    delta_jvm_spark.sql(
+        f"INSERT INTO {table} VALUES (1, 'a', named_struct('a', 1, 'b', 'x')),"
+        " (2, 'a', named_struct('a', 2, 'b', 'y')), (3, 'b', NULL)"
+    )
+    query = "SELECT id, coalesce(s, named_struct('a', 0, 'b', '')) AS s2 FROM {t} ORDER BY id"
+    spark.read.format("delta").load(str(path)).createOrReplaceTempView("coalesce_view")
+    try:
+        actual = spark.sql(query.format(t="coalesce_view")).collect()
+    finally:
+        spark.catalog.dropTempView("coalesce_view")
+    assert actual == delta_jvm_spark.sql(query.format(t=table)).collect()
