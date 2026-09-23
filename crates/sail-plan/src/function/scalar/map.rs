@@ -68,28 +68,12 @@ fn coerce_ansi_map_strings(
     if !types.iter().any(DataType::is_string) {
         return Ok(arguments);
     }
-    let mut target = None;
-    for data_type in types.iter().filter(|t| !t.is_string() && !t.is_null()) {
-        let promoted = if data_type.is_integer() {
-            DataType::Int64
-        } else if data_type.is_numeric() {
-            DataType::Float64
-        } else if data_type.is_nested()
-            || matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
-        {
-            return Err(PlanError::analysis("map arguments have incompatible types"));
-        } else {
-            data_type.clone()
-        };
-        target = Some(match target {
-            None => promoted,
-            Some(previous) => comparison_coercion(&previous, &promoted)
-                .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?,
-        });
-    }
-    let Some(target) = target else {
-        return Ok(arguments);
-    };
+    let target = types
+        .iter()
+        .try_fold(DataType::Null, |previous, data_type| {
+            ansi_map_common_type(&previous, data_type)
+        })
+        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
     arguments
         .into_iter()
         .zip(types)
@@ -106,6 +90,33 @@ fn coerce_ansi_map_strings(
             }
         })
         .collect()
+}
+
+fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

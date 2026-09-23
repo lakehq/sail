@@ -69,7 +69,8 @@ def test_pandas_window_retraction_preserves_nulls_and_multiple_arguments(spark, 
     assert actual == expected
 
 
-def test_pandas_window_retracts_to_an_empty_range(spark):
+@pytest.mark.parametrize("invocation", ["inline", "registered"])
+def test_pandas_window_retracts_to_an_empty_range(spark, invocation):
     from pyspark.sql import functions as F  # noqa: N812
 
     @pandas_udf("long", PandasUDFType.GROUPED_AGG)
@@ -78,6 +79,11 @@ def test_pandas_window_retracts_to_an_empty_range(spark):
 
     df = spark.createDataFrame([(0,), (1,), (8,), (9,)], "id long")
     window = Window.orderBy("id").rangeBetween(-2, -1)
-    actual = df.select("id", frame_size("id").over(window).alias("n")).orderBy("id").collect()
+    if invocation == "registered":
+        spark.udf.register("pandas_frame_size", frame_size)
+        value = F.expr("pandas_frame_size(id) OVER (ORDER BY id RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING)")
+    else:
+        value = frame_size("id").over(window)
+    actual = df.select("id", value.alias("n")).orderBy("id").collect()
     expected = df.select("id", F.count("id").over(window).alias("n")).orderBy("id").collect()
     assert actual == expected

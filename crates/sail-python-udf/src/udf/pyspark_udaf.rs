@@ -25,10 +25,17 @@ pub enum PySparkGroupAggKind {
     Arrow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PySparkAggregateMode {
+    Grouped,
+    Window,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
     kind: PySparkGroupAggKind,
+    mode: PySparkAggregateMode,
     name: String,
     payload: Vec<u8>,
     deterministic: bool,
@@ -47,6 +54,7 @@ impl PySparkGroupAggregateUDF {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         kind: PySparkGroupAggKind,
+        mode: PySparkAggregateMode,
         name: String,
         payload: Vec<u8>,
         deterministic: bool,
@@ -66,6 +74,7 @@ impl PySparkGroupAggregateUDF {
         Self {
             signature,
             kind,
+            mode,
             name,
             payload,
             deterministic,
@@ -80,6 +89,10 @@ impl PySparkGroupAggregateUDF {
 
     pub fn kind(&self) -> PySparkGroupAggKind {
         self.kind
+    }
+
+    pub fn mode(&self) -> PySparkAggregateMode {
+        self.mode
     }
 
     pub fn actual_arg_count(&self) -> usize {
@@ -161,8 +174,12 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
         Ok(Box::new(self.batch_accumulator()?))
     }
 
-    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
-        self.batch_accumulator()?.evaluate()
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        match self.mode {
+            // Optimizer defaults must not execute Python. Empty windows are evaluated at runtime.
+            PySparkAggregateMode::Grouped => ScalarValue::try_from(data_type),
+            PySparkAggregateMode::Window => self.batch_accumulator()?.evaluate(),
+        }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
