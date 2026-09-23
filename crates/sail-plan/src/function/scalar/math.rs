@@ -666,9 +666,6 @@ fn negate_literal(arg: &Expr) -> Option<Expr> {
     Some(lit(negated))
 }
 
-/// Spark's implicit cast of a string to DOUBLE where a numeric input is expected.
-/// The cast honors ANSI mode: an invalid string is NULL under ANSI off and errors
-/// under ANSI on.
 fn string_to_double(arg: Expr, ansi_mode: bool) -> Expr {
     if ansi_mode {
         cast(arg, DataType::Float64)
@@ -677,8 +674,6 @@ fn string_to_double(arg: Expr, ansi_mode: bool) -> Expr {
     }
 }
 
-/// Spark `round(expr[, scale])`. Spark's `Round` implicitly casts a string `expr`
-/// to DOUBLE (the default concrete type of `NumericType`), so the result is DOUBLE.
 // TODO: Spark rounds a DOUBLE via `BigDecimal(d).setScale(scale, HALF_UP)` on the shortest
 //  decimal representation, while DataFusion computes `(x * 10^scale).round() / 10^scale`,
 //  so inexact binary ties differ (e.g. `round('1.005', 2)` is 1.01 in Spark but 1.0 in Sail).
