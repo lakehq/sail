@@ -306,6 +306,25 @@ Feature: Timestamp and string predicate coercion
         | day_column | day_to_second_column | day_expression | month_column | year_to_month_column |
         | true       | true                 | true           | true         | true                 |
 
+    Scenario: Legacy IN uses zero-padded interval strings
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          INTERVAL '1:02' HOUR TO MINUTE IN (
+            CONCAT('INTERVAL ', CHR(39), '01:02', CHR(39), ' HOUR TO MINUTE'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS literal_match,
+          v IN (
+            CONCAT('INTERVAL ', CHR(39), '01:02', CHR(39), ' HOUR TO MINUTE'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS column_match
+        FROM VALUES (INTERVAL '1:02' HOUR TO MINUTE) AS t(v)
+        """
+      Then query result
+        | literal_match | column_match |
+        | true          | true         |
+
     Scenario: Floating-point literal names use Spark-compatible rendering
       When query
         """
@@ -363,6 +382,56 @@ Feature: Timestamp and string predicate coercion
       Then query result
         | timestamp_ordering | equality_still_parses |
         | false              | true                  |
+
+    Scenario Outline: Timestamp NTZ ordering parses strings with datetimeToString <enabled>
+      Given config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.typeCoercion.datetimeToString.enabled = <enabled>
+      When query
+        """
+        SELECT
+          TIMESTAMP_NTZ '2024-01-01 00:00:00' > '9' AS timestamp_first,
+          '9' < TIMESTAMP_NTZ '2024-01-01 00:00:00' AS string_first,
+          NOT (TIMESTAMP_NTZ '2024-01-01 00:00:00' > '9') AS negated,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00' >= '2024-1-1' AS valid_date
+        """
+      Then query result
+        | timestamp_first | string_first | negated | valid_date |
+        | NULL            | NULL         | NULL    | true       |
+
+      Examples:
+        | enabled |
+        | true    |
+        | false   |
+
+    @sail-only
+    Scenario: Timestamp string comparison pushes a literal predicate into Parquet
+      Given config spark.sql.session.timeZone = UTC
+      And variable location for temporary directory timestamp_predicate_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS timestamp_predicate_pushdown
+        """
+      Given statement template
+        """
+        CREATE TABLE timestamp_predicate_pushdown USING PARQUET LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (TIMESTAMP '2024-01-01 00:00:00'),
+          (TIMESTAMP '2024-01-02 00:00:00'),
+          (TIMESTAMP '2024-01-03 00:00:00') AS t(ts)
+        """
+      When query
+        """
+        EXPLAIN SELECT ts FROM timestamp_predicate_pushdown WHERE ts >= '2024-01-02 00:00:00'
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        SELECT ts FROM timestamp_predicate_pushdown WHERE ts >= '2024-01-02 00:00:00'
+        """
+      Then query result
+        | ts                  |
+        | 2024-01-02 00:00:00 |
+        | 2024-01-03 00:00:00 |
 
     @function(nullability)
     Scenario: Null-safe timestamp comparisons remain non-nullable after coercion

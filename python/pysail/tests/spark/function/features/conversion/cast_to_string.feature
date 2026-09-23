@@ -199,6 +199,31 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | integer gains its scale     | CAST(1 AS DECIMAL(10,2))   | 1.00   |
         | decimal has no signed zero  | CAST(-0.0 AS DECIMAL(2,1)) | 0.0    |
 
+  Rule: Interval strings pad leading hours minutes and seconds
+
+    Scenario Outline: Interval rendering: <case>
+      When query
+        """
+        SELECT CAST(<input> AS STRING) AS literal_value, CAST(v AS STRING) AS column_value
+        FROM VALUES (<input>) AS t(v)
+        """
+      Then query result
+        | literal_value | column_value |
+        | <result>      | <result>     |
+
+      Examples:
+        | case                    | input                                   | result                                  |
+        | day stays unpadded      | INTERVAL '1' DAY                        | INTERVAL '1' DAY                        |
+        | single hour             | INTERVAL '1' HOUR                       | INTERVAL '01' HOUR                      |
+        | hour to minute          | INTERVAL '1:02' HOUR TO MINUTE           | INTERVAL '01:02' HOUR TO MINUTE          |
+        | negative hour to second | INTERVAL '-1:02:03.4' HOUR TO SECOND     | INTERVAL '-01:02:03.4' HOUR TO SECOND    |
+        | single minute           | INTERVAL '1' MINUTE                     | INTERVAL '01' MINUTE                    |
+        | minute to second        | INTERVAL '1:02.3' MINUTE TO SECOND       | INTERVAL '01:02.3' MINUTE TO SECOND      |
+        | single second           | INTERVAL '1' SECOND                     | INTERVAL '01' SECOND                    |
+        | fractional second       | INTERVAL '-0.000001' SECOND             | INTERVAL '-00.000001' SECOND             |
+        | zero second             | INTERVAL '0' SECOND                     | INTERVAL '00' SECOND                    |
+        | large leading hour      | INTERVAL '123:04' HOUR TO MINUTE         | INTERVAL '123:04' HOUR TO MINUTE         |
+
   Rule: Temporal types print a fraction only when it is non-zero
     # appendFraction(NANO_OF_SECOND, 0, 9, true) has minWidth 0, so a zero sub-second part
     # prints neither the dot nor any digit; a non-zero one prints 1..9 digits with trailing

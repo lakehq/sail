@@ -383,6 +383,68 @@ Feature: to_timestamp (strict variant)
         | result |
         | NULL   |
 
+  Rule: Malformed offsets and numeric segments follow the configured error policy
+
+    Scenario Outline: Safe parsing rejects malformed input with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT try_to_timestamp('2024-01-01 00:00:00+€1') AS invalid_offset,
+               try_to_timestamp('99999999999999999999-01-01') AS invalid_year
+        """
+      Then query result
+        | invalid_offset | invalid_year |
+        | NULL           | NULL         |
+      When query
+        """
+        SELECT try_to_timestamp(s) AS result FROM VALUES
+          ('2024-01-01 00:00:00+€1'),
+          ('2024-01-01 00:00:00+1€11'),
+          ('99999999999999999999-01-01'),
+          ('2024-01-01 99999999999999999999:00:00'),
+          ('2024-01-01 00:00:00.123456789012345678901234567890'),
+          (NULL) AS t(s)
+        """
+      Then query result
+        | result                     |
+        | NULL                       |
+        | NULL                       |
+        | NULL                       |
+        | NULL                       |
+        | 2024-01-01 00:00:00.123456 |
+        | NULL                       |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario: Invalid timestamp casts return NULL without ANSI
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_timestamp(s) AS parsed, CAST(s AS TIMESTAMP) AS casted FROM VALUES
+          ('2024-01-01 00:00:00+€1'),
+          ('99999999999999999999-01-01') AS t(s)
+        """
+      Then query result
+        | parsed | casted |
+        | NULL   | NULL   |
+        | NULL   | NULL   |
+
+    Scenario Outline: Strict parsing rejects <case> with a timestamp error
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('<input>') AS result
+        """
+      Then query error (?i)(invalid (timestamp|time zone)|CAST_INVALID_INPUT)
+
+      Examples:
+        | case           | input                         |
+        | Unicode offset | 2024-01-01 00:00:00+€1       |
+        | oversized year | 99999999999999999999-01-01    |
+
   Rule: Lowercase mm in a pattern means MINUTES, not months
     # Regression cover for a currently-agreeing case that is pure trap: 'yyyy-mm-dd'
     # against '2016-12-31' parses 12 as MINUTES and leaves the month at its default of 1,

@@ -7,7 +7,6 @@ use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, Lam
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
-use datafusion_functions::core::with_metadata::WithMetadataFunc;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -475,12 +474,12 @@ fn coerce_timestamp_pair(
         && config.legacy_type_coercion_datetime_to_string
         && is_ordering_comparison(operator)
     {
-        if is_datetime_type(&left_type) && is_string_type(&right_type) {
+        if is_date_or_timestamp_ltz(&left_type) && is_string_type(&right_type) {
             let left =
                 stringify_non_ansi_expression(left, &left_type, schema, &config.session_timezone)?;
             return Ok((left, right));
         }
-        if is_string_type(&left_type) && is_datetime_type(&right_type) {
+        if is_string_type(&left_type) && is_date_or_timestamp_ltz(&right_type) {
             let right = stringify_non_ansi_expression(
                 right,
                 &right_type,
@@ -524,19 +523,12 @@ fn stringify_non_ansi_expression(
     if is_string_type(data_type) || data_type == &DataType::Null {
         return Ok(expression);
     }
-    let expression =
-        if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
-            let metadata = interval
-                .to_json()
-                .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
-            ScalarUDF::from(WithMetadataFunc::new()).call(vec![
-                expression,
-                lit(spec::SAIL_SPARK_INTERVAL_METADATA_KEY),
-                lit(metadata),
-            ])
-        } else {
-            expression
-        };
+    if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
+        let metadata = interval
+            .to_json()
+            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+        return Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression, lit(metadata)]));
+    }
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
 }
@@ -665,10 +657,10 @@ fn struct_field_names_equal(left: &str, right: &str, case_sensitive: bool) -> bo
     }
 }
 
-fn is_datetime_type(data_type: &DataType) -> bool {
+fn is_date_or_timestamp_ltz(data_type: &DataType) -> bool {
     matches!(
         data_type,
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, Some(_))
     )
 }
 

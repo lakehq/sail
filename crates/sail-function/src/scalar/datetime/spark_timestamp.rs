@@ -186,6 +186,9 @@ fn parse_zone_offset(value: &str) -> Option<FixedOffset> {
         Some(b'-') => (-1_i32, &value[1..]),
         _ => return None,
     };
+    if !body.is_ascii() {
+        return None;
+    }
     let (hours, minutes, seconds) = if body.contains(':') {
         let parts = body.split(':').collect::<Vec<_>>();
         match parts.as_slice() {
@@ -417,8 +420,8 @@ impl SparkTimestamp {
         Ok(Self {
             timezone,
             parser,
-            // Time-only inputs resolve their date from the runtime clock for Spark parity.
-            signature: Signature::variadic_any(Volatility::Volatile),
+            // Time-only inputs depend on the current date, but remain stable within a query.
+            signature: Signature::variadic_any(Volatility::Stable),
             ansi_mode,
             is_try,
         })
@@ -652,13 +655,6 @@ fn get_or_parse_format<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn unformatted_parser_is_volatile_because_time_only_values_read_the_clock() -> Result<()> {
-        let parser = SparkTimestamp::try_new(Some(Arc::from("UTC")), false, false)?;
-        assert_eq!(parser.signature().volatility, Volatility::Volatile);
-        Ok(())
-    }
 
     #[test]
     fn unformatted_parser_rejects_leap_seconds_in_safe_and_strict_modes() -> Result<()> {

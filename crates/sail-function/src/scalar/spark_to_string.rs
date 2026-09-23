@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{DataFusionError, Result, exec_err};
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
@@ -34,7 +34,10 @@ macro_rules! define_to_string_udf {
         impl $udf {
             pub fn new() -> Self {
                 Self {
-                    signature: Signature::any(1, Volatility::Immutable),
+                    signature: Signature::one_of(
+                        vec![TypeSignature::Any(1), TypeSignature::Any(2)],
+                        Volatility::Immutable,
+                    ),
                     options: FormatOptions::default(),
                 }
             }
@@ -54,9 +57,9 @@ macro_rules! define_to_string_udf {
             }
 
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                let [arg] = args.arg_fields else {
+                let ([arg] | [arg, _]) = args.arg_fields else {
                     return exec_err!(
-                        "{} expects exactly one argument, got {}",
+                        "{} expects one or two arguments, got {}",
                         self.name(),
                         args.arg_fields.len()
                     );
@@ -67,9 +70,30 @@ macro_rules! define_to_string_udf {
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
                 let ScalarFunctionArgs {
-                    args, arg_fields, ..
+                    mut args,
+                    arg_fields,
+                    ..
                 } = args;
-                let arg_field = arg_fields.one()?;
+                let (mut arg_field, _) = arg_fields.at_least_one()?;
+                if args.len() == 2 {
+                    // An explicit qualifier survives serialization of intermediate UDF fields.
+                    let metadata = match args.pop() {
+                        Some(ColumnarValue::Scalar(value)) => {
+                            value.try_as_str().flatten().map(str::to_owned)
+                        }
+                        _ => None,
+                    }
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "interval metadata must be a non-null constant string".to_string(),
+                        )
+                    })?;
+                    let mut field = arg_field.as_ref().clone();
+                    field
+                        .metadata_mut()
+                        .insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata);
+                    arg_field = Arc::new(field);
+                }
                 let args = ColumnarValue::values_to_arrays(&args)?;
                 let arg = args.one()?;
                 let array = $func(&arg, &self.options, &arg_field)?;

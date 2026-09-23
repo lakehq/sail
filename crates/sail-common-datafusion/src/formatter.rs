@@ -428,7 +428,11 @@ impl Display for SparkDayTimeIntervalFormatter {
         };
         let leading = magnitude / leading_unit;
         magnitude %= leading_unit;
-        let mut body = leading.to_string();
+        let mut body = if start == DayTimeIntervalField::Day {
+            leading.to_string()
+        } else {
+            format!("{leading:02}")
+        };
 
         if start < DayTimeIntervalField::Hour && end >= DayTimeIntervalField::Hour {
             write!(body, " {:02}", magnitude / MICROSECONDS_PER_HOUR)?;

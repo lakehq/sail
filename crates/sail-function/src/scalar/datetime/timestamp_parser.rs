@@ -57,7 +57,7 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
                 fractional_digits += 1;
             }
             if segment != 6 || current_digits < 6 {
-                current_value = current_value * 10 + parsed;
+                current_value = current_value.checked_mul(10)?.checked_add(parsed)?;
             }
             current_digits += 1;
         } else if position == 0 && byte == b'T' {
