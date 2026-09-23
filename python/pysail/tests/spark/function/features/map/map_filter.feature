@@ -439,6 +439,20 @@ Feature: map_filter with lambda
         | map IF             | IF(array(1), NULL, NULL), true                             |
         | map assert_true    | assert_true(array(1)), true                                |
 
+    Scenario Outline: Null-typed operands retain cast validation: <case>
+      When query
+        """
+        SELECT map_filter(<arguments>) AS result
+        """
+      Then query error (?i)cast
+
+      Examples:
+        | case              | arguments                                                            |
+        | lambda CAST       | map(1, 2), (k, v) -> CASE WHEN CAST(array(v) AS BOOLEAN) THEN NULL END |
+        | ordinary TRY_CAST | map(1, 2), CASE WHEN TRY_CAST(array(1) AS BOOLEAN) THEN NULL END       |
+        | map CAST          | CASE WHEN CAST(array(1) AS BOOLEAN) THEN NULL END, true               |
+        | direct CAST       | map(1, 2), (k, v) -> CAST(array(v) AS VOID)                            |
+
     Scenario Outline: Null-typed predicates discard unchecked higher-order returns: <case>
       When query
         """

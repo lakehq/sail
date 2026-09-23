@@ -1,9 +1,10 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
+use datafusion_common::arrow::compute::can_cast_types;
 use datafusion_common::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
     ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
@@ -260,6 +261,16 @@ fn validate_map_filter_null_expr(expression: &expr::Expr, schema: &DFSchema) -> 
             Ok(TreeNodeRecursion::Continue)
         })?;
         if inputs_resolved {
+            // Type coercion does not validate explicit casts. Preserve their
+            // type errors before replacing a NullType operand with a literal.
+            if let expr::Expr::Cast(expr::Cast { expr, field })
+            | expr::Expr::TryCast(expr::TryCast { expr, field }) = &expression
+            {
+                let from = expr.get_type(schema)?;
+                if !can_cast_types(&from, field.data_type()) {
+                    return plan_err!("cannot cast {from} to {}", field.data_type());
+                }
+            }
             rewriter.f_up(expression)
         } else {
             Ok(Transformed::no(expression))
