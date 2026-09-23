@@ -47,7 +47,7 @@ All remote catalog providers (excluding the [Memory catalog](./memory)) support 
 - `database_cache_size` (optional): The maximum number of entries in the database listing cache. Set this option to `0` for an unbounded cache.
 - `database_cache_ttl_secs` (optional): The time-to-live for cached database listings. Set this option in seconds. Set it to `0` to disable expiration.
 - `table_cache_type` (optional): The scope of the table cache, which holds table listings and the tables loaded from the catalog for reads. Valid values are `none`, `global`, and `session`. The default is `none`.
-- `table_cache_size` (optional): The maximum number of entries in the table cache. Set this option to `0` for an unbounded cache.
+- `table_cache_size` (optional): The maximum number of entries in the table cache. The limit applies separately to table listings and to each kind of cached entry for loaded tables. Set this option to `0` for an unbounded cache.
 - `table_cache_ttl_secs` (optional): The time-to-live for cached table listings and loaded tables. Set this option in seconds. Set it to `0` to disable expiration for table listings; loaded tables always expire, after 60 seconds when no time-to-live is set.
 - `view_cache_type` (optional): The scope of the view listing cache. Valid values are `none`, `global`, and `session`. The default is `none`.
 - `view_cache_size` (optional): The maximum number of entries in the view listing cache. Set this option to `0` for an unbounded cache.
@@ -55,7 +55,7 @@ All remote catalog providers (excluding the [Memory catalog](./memory)) support 
 
 The cache is automatically invalidated when a write operation (like `CREATE TABLE` or `DROP DATABASE`) is performed through Sail.
 
-When the table cache is enabled, a query reads a table as it was when the table was loaded, until the cached entry expires. Writes made through Sail always load the current table and invalidate the cached entry, but a write made by another client is not visible until then. Loaded tables whose storage credentials expire are dropped from the cache before the credentials do.
+When the table cache is enabled, a query reads a table as it was when the table was loaded, until the cached entry expires. Writes made through Sail always load the current table and invalidate the cached entry, but a write made by another client is not visible until then. When the catalog reports an expiry for a table's storage credentials, the loaded table is dropped from the cache before the credentials expire.
 
 ## Support Matrix
 

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -49,11 +51,16 @@ const DEFAULT_LOADED_TABLE_TTL_SECS: u64 = 60;
 /// drops the cached entries for that table first, so writes always plan against the
 /// current table metadata. Commits, `ALTER TABLE`, `DROP TABLE`, and `CREATE TABLE`
 /// through Sail drop the cached entries for the table as well.
+///
+/// A load that was already in flight when an invalidation happened must not put its
+/// result back, since it may predate the change. Every invalidation bumps a generation
+/// counter, and a load only keeps its entry if the generation did not move while it ran.
 #[derive(Clone)]
 pub struct LoadedTableCache {
     status: Cache<TableKey, TableStatus>,
     resolved: Cache<(TableKey, ResolveLakehouseTableRequest), LakehouseResolvedTable>,
     access: Cache<(TableKey, BeginTableAccessRequest), TableAccessSession>,
+    generation: Arc<AtomicU64>,
 }
 
 struct TableAccessExpiry;
@@ -114,6 +121,7 @@ impl LoadedTableCache {
             access: loaded_table_cache_builder(size, ttl_secs)
                 .expire_after(TableAccessExpiry)
                 .build(),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -121,13 +129,37 @@ impl LoadedTableCache {
         (database.clone(), table.to_string())
     }
 
+    /// The generation to pass to [`Self::insert_loaded`] for a load that starts now.
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Caches a value loaded since `generation`, unless an invalidation happened meanwhile.
+    /// The generation is checked again after the insert, so an invalidation that lands
+    /// between the check and the insert still removes the entry.
+    async fn insert_loaded<K, V>(&self, cache: &Cache<K, V>, key: K, value: V, generation: u64)
+    where
+        K: Hash + Eq + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        if self.generation() != generation {
+            return;
+        }
+        cache.insert(key.clone(), value).await;
+        if self.generation() != generation {
+            cache.invalidate(&key).await;
+        }
+    }
+
     async fn invalidate_table(&self, database: &Namespace, table: &str) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let key = Self::key(database, table);
         self.status.invalidate(&key).await;
         self.invalidate_requests(move |k| *k == key);
     }
 
     fn invalidate_database(&self, database: &Namespace) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let status_database = database.clone();
         if let Err(e) = self
             .status
@@ -480,11 +512,13 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         if let Some(v) = c.resolved.get(&key).await {
             return Ok(v);
         }
+        let generation = c.generation();
         let v = self
             .inner
             .resolve_lakehouse_table(database, table, request)
             .await?;
-        c.resolved.insert(key, v.clone()).await;
+        c.insert_loaded(&c.resolved, key, v.clone(), generation)
+            .await;
         Ok(v)
     }
 
@@ -525,6 +559,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         if let Some(v) = c.access.get(&key).await {
             return Ok(v);
         }
+        let generation = c.generation();
         let v = self
             .inner
             .begin_table_access(database, table, request)
@@ -533,7 +568,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         if v.expires_at_ms
             .is_none_or(|ms| !table_access_remaining(ms).is_zero())
         {
-            c.access.insert(key, v.clone()).await;
+            c.insert_loaded(&c.access, key, v.clone(), generation).await;
         }
         Ok(v)
     }
@@ -588,8 +623,9 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             if let Some(v) = c.status.get(&key).await {
                 return Ok(v);
             }
+            let generation = c.generation();
             let v = self.inner.get_table(database, table).await?;
-            c.status.insert(key, v.clone()).await;
+            c.insert_loaded(&c.status, key, v.clone(), generation).await;
             Ok(v)
         } else {
             self.inner.get_table(database, table).await
@@ -1502,6 +1538,36 @@ mod tests {
         read_table(&provider, &ns, "t1").await;
         read_table(&provider, &ns, "t1").await;
         assert_eq!(mock.access_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_loaded_table_cache_drops_loads_that_race_an_invalidation() {
+        let cache = LoadedTableCache::new(None, Some(60));
+        let ns = Namespace::try_from(vec!["db1"]).unwrap();
+        let key = LoadedTableCache::key(&ns, "t1");
+        let status = MockProvider::new().get_table(&ns, "t1").await.unwrap();
+
+        // A load that started before an invalidation of any table is not cached.
+        let generation = cache.generation();
+        cache.invalidate_table(&ns, "t1").await;
+        cache
+            .insert_loaded(&cache.status, key.clone(), status.clone(), generation)
+            .await;
+        assert!(cache.status.get(&key).await.is_none());
+
+        let generation = cache.generation();
+        cache.invalidate_database(&ns);
+        cache
+            .insert_loaded(&cache.status, key.clone(), status.clone(), generation)
+            .await;
+        assert!(cache.status.get(&key).await.is_none());
+
+        // A load with no invalidation in between is cached.
+        let generation = cache.generation();
+        cache
+            .insert_loaded(&cache.status, key.clone(), status, generation)
+            .await;
+        assert!(cache.status.get(&key).await.is_some());
     }
 
     #[test]
