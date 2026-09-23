@@ -236,6 +236,7 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 38;
     StrToMapUdf str_to_map = 39;
     SparkSequenceUdf spark_sequence = 40;
+    JevUdf jev = 41;
   }
 }
 
@@ -261,6 +262,10 @@ message PercentileDiscUdaf {
 }
 
 message StandardUdf {}
+
+message JevUdf {
+  string name = 1;
+}
 
 message PySparkUdf {
   PySparkUdfKind kind = 1;

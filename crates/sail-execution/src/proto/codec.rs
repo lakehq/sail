@@ -187,6 +187,7 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_function::scalar::jev::{JevFunction, JevKind};
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
@@ -2926,6 +2927,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         match udf_kind {
             UdfKind::Standard(r#gen::StandardUdf {}) => {}
+            UdfKind::Jev(r#gen::JevUdf { name }) => {
+                let kind = match name.as_str() {
+                    "jev_noul" => JevKind::Noul,
+                    "jev_choice" => JevKind::Choice,
+                    "jev_score" => JevKind::Score,
+                    "jev_evaluate" => JevKind::Evaluate,
+                    _ => return plan_err!("unknown Jev function: {name}"),
+                };
+                return Ok(Arc::new(ScalarUDF::from(JevFunction::new(kind))));
+            }
             UdfKind::PySpark(r#gen::PySparkUdf {
                 kind,
                 name,
@@ -3515,6 +3526,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node_inner.downcast_ref::<StrToMap>() {
             UdfKind::StrToMap(r#gen::StrToMapUdf {
                 last_value_wins: func.last_value_wins(),
+            })
+        } else if node_inner.is::<JevFunction>() {
+            UdfKind::Jev(r#gen::JevUdf {
+                name: node.name().to_string(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
             let kind = self.try_encode_pyspark_udf_kind(func.kind())?;
@@ -5463,6 +5478,24 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    /// Checks that workers can reconstruct each Jev function from its encoded UDF.
+    #[test]
+    fn test_round_trip_jev_udfs() -> Result<()> {
+        for kind in [
+            JevKind::Noul,
+            JevKind::Choice,
+            JevKind::Score,
+            JevKind::Evaluate,
+        ] {
+            let udf = ScalarUDF::from(JevFunction::new(kind));
+            let name = udf.name().to_string();
+            let decoded = round_trip_udf(udf)?;
+            downcast_udf::<JevFunction>(&decoded, "JevFunction")?;
+            assert_eq!(decoded.name(), name);
+        }
+        Ok(())
     }
 
     fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
