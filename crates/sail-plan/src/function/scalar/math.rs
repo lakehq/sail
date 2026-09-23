@@ -696,8 +696,10 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
         )
     {
         // Guard the string before casting so a NULL scale skips malformed literals too.
-        let guarded = when(scale.is_null(), lit(ScalarValue::Utf8(None)))
-            .otherwise(value.clone())?;
+        // TODO: Shared expression resolution raises literal division-by-zero errors before
+        //  this guard; defer those errors so a NULL scale can skip the entire value.
+        let guarded =
+            when(scale.is_null(), lit(ScalarValue::Utf8(None))).otherwise(value.clone())?;
         // Preserve Spark's nullable result; the inner ANSI cast still propagates errors.
         *value = try_cast(
             string_to_double(guarded, function_context.plan_config.ansi_mode),

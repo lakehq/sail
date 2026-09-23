@@ -182,6 +182,19 @@ Feature: round with an argument coming from a column
         | column value          | v     | CAST(NULL AS INT)         |
         | folded NULL scale     | 'abc' | CAST(NULL AS INT) + 1     |
 
+    @sail-bug
+    Scenario: round skips a string expression with a literal zero divisor when scale is NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round(CAST(1 / 0 AS STRING), CAST(NULL AS INT)) AS result
+        FROM range(2)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+
     Scenario: round of a malformed string column still errors under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
