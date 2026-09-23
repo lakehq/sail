@@ -1,0 +1,281 @@
+# serializer version: 1
+---
+name: "test_a_selective_filter_does_not_make_an_expensive_dimension_scan_cheap_to_duplicate[131072]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #8@0)], projection=[#0@0, #9@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #0]
+              FilterExec: marker@1 = 1, projection=[k@0]
+                DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_1.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_2.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_3.zst.parquet]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+          ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+            FilterExec: sum(a.#4)@1 > 5
+              AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #5@0), (#3@1, #6@1)], projection=[#2@0, #4@2]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[k@0 as #2, ticket@1 as #3, amount@2 as #4]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                            AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                  FilterExec: marker@1 = 1, projection=[k@0]
+                                    DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_1.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_2.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_3.zst.parquet]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+                            DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_facts/<id>_0.zst.parquet], [<tmp>/early_filter_facts/<id>_1.zst.parquet], [<tmp>/early_filter_facts/<id>_2.zst.parquet], [<tmp>/early_filter_facts/<id>_3.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                      DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_facts/<id>_0.zst.parquet], [<tmp>/early_filter_facts/<id>_1.zst.parquet], [<tmp>/early_filter_facts/<id>_2.zst.parquet], [<tmp>/early_filter_facts/<id>_3.zst.parquet]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_a_selective_filter_does_not_make_an_expensive_dimension_scan_cheap_to_duplicate[131073]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #8@0)], projection=[#0@0, #9@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #0]
+              FilterExec: marker@1 = 1, projection=[k@0]
+                DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_1.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_2.zst.parquet], [<tmp>/early_filter_large_dimension/<id>_3.zst.parquet]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+          ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+            FilterExec: sum(a.#4)@1 > 5
+              AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#5@0, #2@0), (#6@1, #3@1)], projection=[#2@2, #4@4]
+                      CoalescePartitionsExec
+                        DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_facts/<id>_0.zst.parquet], [<tmp>/early_filter_facts/<id>_1.zst.parquet], [<tmp>/early_filter_facts/<id>_2.zst.parquet], [<tmp>/early_filter_facts/<id>_3.zst.parquet]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet
+                      DataSourceExec: file_groups={4 groups: [[<tmp>/early_filter_facts/<id>_0.zst.parquet], [<tmp>/early_filter_facts/<id>_1.zst.parquet], [<tmp>/early_filter_facts/<id>_2.zst.parquet], [<tmp>/early_filter_facts/<id>_3.zst.parquet]]}, projection=[k@0 as #2, ticket@1 as #3, amount@2 as #4], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_a_semi_join_that_only_filters_by_a_scan_is_not_a_reduction_boundary[k + 0]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#8@0 as ticket]
+      ProjectionExec: expr=[#1@0 as #8]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#6@0, #0@0)], projection=[#1@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #6]
+              FilterExec: color@1 = red, projection=[k@0]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#5@0, #0@0)]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[k@0 + 0 as #5]
+                  FilterExec: color@1 = blue OR color@1 = red, projection=[k@0]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = blue OR color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= blue AND blue <= color_max@1 OR color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (blue, red)]
+              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_a_semi_join_that_only_filters_by_a_scan_is_not_a_reduction_boundary[k]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#8@0 as ticket]
+      ProjectionExec: expr=[#1@0 as #8]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #6@0)], projection=[#1@1]
+          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#5@0, #0@0)]
+            CoalescePartitionsExec
+              ProjectionExec: expr=[k@0 as #5]
+                FilterExec: color@1 = blue OR color@1 = red, projection=[k@0]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = blue OR color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= blue AND blue <= color_max@1 OR color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (blue, red)]
+            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+          ProjectionExec: expr=[k@0 as #6]
+            FilterExec: color@1 = red, projection=[k@0]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+---
+name: "test_composite_restrictions_keep_key_tuples_together"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#11@0 as k, #12@1 as n]
+      SortPreservingMergeExec: [#11@0 ASC]
+        ProjectionExec: expr=[#0@0 as #11, count(Int64(1))@1 as #12]
+          SortExec: expr=[#0@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[count(Int64(1))]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #9@0), (#1@1, #10@1)], projection=[#0@0], NullsEqual: true
+                    CoalescePartitionsExec
+                      ProjectionExec: expr=[k@0 as #0, shade@1 as #1]
+                        FilterExec: tag@2 = x, projection=[k@0, shade@1]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, shade, tag], file_type=parquet, predicate=tag@2 = x, pruning_predicate=tag_null_count@2 != row_count@3 AND tag_min@0 <= x AND x <= tag_max@1, required_guarantees=[tag in (x)]
+                    ProjectionExec: expr=[#6@0 as #9, #8@1 as #10]
+                      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6, #8@1 as #8, #7@2 as #7], aggr=[]
+                        RepartitionExec: partitioning=Hash([#6@0, #8@1, #7@2], 4), input_partitions=4
+                          AggregateExec: mode=Partial, gby=[#6@0 as #6, #8@2 as #8, #7@1 as #7], aggr=[]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#7@1, #4@0)]
+                                ProjectionExec: expr=[k@0 as #6, ticket@1 as #7, shade@2 as #8]
+                                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0), (__early_join_key_1@1, shade@2)], NullsEqual: true
+                                    AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0, __early_join_key_1@1 as __early_join_key_1], aggr=[]
+                                      CoalescePartitionsExec
+                                        ProjectionExec: expr=[k@0 as __early_join_key_0, shade@1 as __early_join_key_1]
+                                          FilterExec: tag@2 = x, projection=[k@0, shade@1]
+                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, shade, tag], file_type=parquet, predicate=tag@2 = x, pruning_predicate=tag_null_count@2 != row_count@3 AND tag_min@0 <= x AND x <= tag_max@1, required_guarantees=[tag in (x)]
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, shade], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[ticket@1 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_early_reductions_avoid_fact_inputs_already_restricted_to_eligible_keys"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #8@0)], projection=[#0@0, #9@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #0]
+              FilterExec: color@1 = red, projection=[k@0]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+            AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)], ordering_mode=Sorted
+              RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)], ordering_mode=Sorted
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#5@0, #2@0), (#6@1, #3@1)], projection=[#2@2, #4@4]
+                    CoalescePartitionsExec
+                      ProjectionExec: expr=[k@0 as #5, ticket@1 as #6]
+                        FilterExec: k@0 = 1
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=k@0 = 1, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 1 AND 1 <= k_max@1, required_guarantees=[k in (1)]
+                    ProjectionExec: expr=[k@0 as #2, ticket@1 as #3, amount@2 as #4]
+                      FilterExec: k@0 = 1
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=k@0 = 1 AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 1 AND 1 <= k_max@1, required_guarantees=[k in (1)]
+---
+name: "test_early_reductions_survive_parquet_filter_pushdown_on_the_dimension_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #8@0)], projection=[#0@0, #9@2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as #0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+            FilterExec: sum(a.#4)@1 > 5
+              AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#5@0, #2@0), (#6@1, #3@1)], projection=[#2@2, #4@4]
+                      ProjectionExec: expr=[k@0 as #5, ticket@1 as #6]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                          AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as __early_join_key_0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        ProjectionExec: expr=[k@0 as #2, ticket@1 as #3, amount@2 as #4]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                            AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as __early_join_key_0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_inner_joins_in_the_same_reorder_region_as_the_dimension_get_no_early_reduction"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#8@0 as ticket, #9@1 as amount]
+      ProjectionExec: expr=[ticket@0 as #8, amount@1 as #9]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0), (ticket@1, ticket@1)], projection=[ticket@1, amount@2]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[k@1, ticket@2, amount@3]
+            CoalescePartitionsExec
+              FilterExec: color@1 = red, projection=[k@0]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_selective_grouping_keys_reach_both_fact_inputs_in_the_physical_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #8@0)], projection=[#0@0, #9@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #0]
+              FilterExec: color@1 = red, projection=[k@0]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+            FilterExec: sum(a.#4)@1 > 5
+              AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#5@0, #2@0), (#6@1, #3@1)], projection=[#2@2, #4@4]
+                      ProjectionExec: expr=[k@0 as #5, ticket@1 as #6]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                          AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                FilterExec: color@1 = red, projection=[k@0]
+                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        ProjectionExec: expr=[k@0 as #2, ticket@1 as #3, amount@2 as #4]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                            AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                  FilterExec: color@1 = red, projection=[k@0]
+                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+---
+name: "test_selective_keys_reach_the_fact_inputs_below_a_semi_join_filtered_by_an_aggregate"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#14@0 as k, #15@1 as ticket]
+      ProjectionExec: expr=[#0@0 as #14, #13@1 as #15]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #12@0)], projection=[#0@0, #13@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[k@0 as #0]
+              FilterExec: color@1 = red, projection=[k@0]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          ProjectionExec: expr=[#2@0 as #12, #3@1 as #13]
+            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#11@0, #2@0)]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[#8@0 as #11]
+                  FilterExec: count(Int64(1))@1 > 5, projection=[#8@0]
+                    AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8], aggr=[count(Int64(1))]
+                      RepartitionExec: partitioning=Hash([#8@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#8@0 as #8], aggr=[count(Int64(1))]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[k@0 as #8]
+                              HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                                AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                      FilterExec: color@1 = red, projection=[k@0]
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #5@0), (#3@1, #6@1)], projection=[#2@0, #3@1]
+                ProjectionExec: expr=[k@0 as #2, ticket@1 as #3]
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                    AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[k@0 as __early_join_key_0]
+                          FilterExec: color@1 = red, projection=[k@0]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[k@0 as #5, ticket@1 as #6]
+                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                      AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[k@0 as __early_join_key_0]
+                            FilterExec: color@1 = red, projection=[k@0]
+                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
