@@ -151,3 +151,67 @@ Feature: round with an argument coming from a column
       Then query result
         | result |
         | 1.01   |
+
+    Scenario: round of a non-null string has a nullable double schema under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round(v) AS default_scale, round(v, 1) AS explicit_scale
+        FROM VALUES ('1.25') AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- default_scale: double (nullable = true)
+         |-- explicit_scale: double (nullable = true)
+        """
+
+    Scenario Outline: round skips a malformed string with a NULL scale: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round(<value>, <scale>) AS result FROM VALUES ('abc') AS t(v)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case                  | value | scale                     |
+        | literal value         | 'abc' | CAST(NULL AS INT)         |
+        | column value          | v     | CAST(NULL AS INT)         |
+        | folded NULL scale     | 'abc' | CAST(NULL AS INT) + 1     |
+
+    Scenario: round of a malformed string column still errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round(v, 1) AS result FROM VALUES ('abc') AS t(v)
+        """
+      Then query error (?i)cannot (be )?cast
+
+  # CASE branch coercion and final expression typing are shared analyzer limitations.
+  Rule: Deferred common-type coercion of mixed CASE arguments
+
+    @sail-bug
+    Scenario: round of a mixed CASE uses the final string type under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT round(CASE WHEN id = 0 THEN 2 ELSE '1.25' END, 1) AS result
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | result |
+        | 2.0    |
+        | 1.3    |
+
+    @sail-bug
+    Scenario: round respects ANSI coercion inside a mixed CASE
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT round(CASE WHEN id = 0 THEN '1.25' ELSE 2 END, 1) AS result
+        FROM range(2)
+        """
+      Then query error (?i)cannot (be )?cast

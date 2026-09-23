@@ -5,7 +5,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
@@ -682,16 +682,27 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
         mut arguments,
         function_context,
     } = input;
+    let scale = arguments.get(1).cloned().unwrap_or_else(|| lit(0));
     // TODO: A SQL parameter marker (`:p` or `?`) is resolved as an untyped placeholder whose
     //  value is bound after planning, so a STRING parameter is not cast here and `round(:p)`
     //  still fails to plan, while Spark binds parameters before analysis.
+    // TODO: Resolve CASE branch coercion before checking the argument type here. Mixed
+    //  CASE expressions can expose the first branch's type instead of their final type,
+    //  and their shared coercion does not yet follow Spark's ANSI rules.
     if let Some(value) = arguments.first_mut()
         && matches!(
             value.get_type(function_context.schema),
             Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
         )
     {
-        *value = string_to_double(value.clone(), function_context.plan_config.ansi_mode);
+        // Guard the string before casting so a NULL scale skips malformed literals too.
+        let guarded = when(scale.is_null(), lit(ScalarValue::Utf8(None)))
+            .otherwise(value.clone())?;
+        // Preserve Spark's nullable result; the inner ANSI cast still propagates errors.
+        *value = try_cast(
+            string_to_double(guarded, function_context.plan_config.ansi_mode),
+            DataType::Float64,
+        );
     }
     Ok(expr_fn::round(arguments))
 }
