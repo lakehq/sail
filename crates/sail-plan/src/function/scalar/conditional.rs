@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_expr::type_coercion::binary::type_union_coercion;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -39,11 +40,14 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .zip(branch_values)
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
-    Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
-        when_then_expr,
-        else_expr: None,
-    }))
+    resolve_numeric_conditional(
+        expr::Case {
+            expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
+            when_then_expr,
+            else_expr: None,
+        },
+        &function_context,
+    )
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -54,11 +58,14 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     let (then_expr, else_expr) =
         coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
-    Ok(expr::Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
-        else_expr: Some(Box::new(else_expr)),
-    }))
+    resolve_numeric_conditional(
+        expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
+            else_expr: Some(Box::new(else_expr)),
+        },
+        &function_context,
+    )
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -68,6 +75,102 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+fn resolve_numeric_conditional(
+    case: expr::Case,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<expr::Expr> {
+    let data_types = case
+        .when_then_expr
+        .iter()
+        .map(|(_, value)| value)
+        .chain(case.else_expr.iter())
+        .map(|value| value.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types
+        .iter()
+        .all(|data_type| data_type.is_numeric() || data_type == &DataType::Null)
+    {
+        // TODO: Match Spark's ANSI numeric/string and recursive complex coercion.
+        // Preserve the existing analyzer handling of these branches until then.
+        return Ok(expr::Expr::Case(case));
+    }
+    let common_type = data_types.iter().try_fold(DataType::Null, |left, right| {
+        conditional_common_type(&left, right, function_context.plan_config.ansi_mode)
+    });
+    let Some(common_type) = common_type else {
+        return Ok(expr::Expr::Case(case));
+    };
+    if data_types.iter().all(|data_type| data_type == &common_type) {
+        return Ok(expr::Expr::Case(case));
+    }
+    let analyzer_type = data_types.iter().try_fold(DataType::Null, |left, right| {
+        type_union_coercion(&left, right)
+    });
+    if analyzer_type.as_ref() != Some(&common_type) {
+        // TODO: Match Spark's ANSI integral/FLOAT and decimal/floating promotion,
+        // and precision-38 scale reduction with HALF_UP rounding. These require
+        // coercion after all branch types resolve: eager casts change numeric
+        // siblings when a projected branch later resolves to STRING or DECIMAL.
+        return Ok(expr::Expr::Case(case));
+    }
+
+    // Expr::Case reports the first non-null THEN type before DataFusion analysis.
+    // An outer CASE exposes the common type while leaving the original CASE
+    // intact for analysis. Projected branches can later resolve to STRING or
+    // DECIMAL: coercing or reordering the original branches changes their values,
+    // formatting, or decimal capacity. The non-null zero preserves nullability;
+    // its unreachable branch is removed after analysis during simplification.
+    Ok(expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(lit(false)),
+            Box::new(lit(create_zero_literal(&common_type))),
+        )],
+        else_expr: Some(Box::new(expr::Expr::Case(case))),
+    }))
+}
+
+fn conditional_common_type(left: &DataType, right: &DataType, ansi: bool) -> Option<DataType> {
+    use DataType::*;
+
+    match (left, right) {
+        (left, right) if left == right => Some(left.clone()),
+        (Null, other) | (other, Null) => Some(other.clone()),
+        (Decimal128(..), Float32 | Float64) | (Float32 | Float64, Decimal128(..)) => Some(Float64),
+        (Float32, Int8 | Int16 | Int32 | Int64) | (Int8 | Int16 | Int32 | Int64, Float32)
+            if ansi =>
+        {
+            Some(Float64)
+        }
+        (Decimal128(..), _) | (_, Decimal128(..)) if left.is_numeric() && right.is_numeric() => {
+            let decimal = |data_type: &DataType| match data_type {
+                Int8 => Some((3, 0)),
+                Int16 => Some((5, 0)),
+                Int32 => Some((10, 0)),
+                Int64 => Some((20, 0)),
+                Decimal128(p, s) => Some((i16::from(*p), i16::from(*s))),
+                _ => None,
+            };
+            match (decimal(left), decimal(right)) {
+                (Some((p1, s1)), Some((p2, s2))) => {
+                    // Spark's widerDecimalType and boundedPreferIntegralDigits.
+                    let scale = s1.max(s2);
+                    let precision = (p1 - s1).max(p2 - s2) + scale;
+                    let scale = if precision > 38 {
+                        (scale - (precision - 38)).max(0)
+                    } else {
+                        scale
+                    };
+                    Some(Decimal128(precision.min(38) as u8, scale as i8))
+                }
+                _ => type_union_coercion(left, right),
+            }
+        }
+        // The analyzer's numeric union coercion handles the remaining widths.
+        _ => type_union_coercion(left, right),
+    }
 }
 
 fn coerce_string_temporal_values(
