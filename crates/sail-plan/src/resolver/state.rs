@@ -126,7 +126,7 @@ impl PlanResolverState {
         }
     }
 
-    fn next_field_id(&mut self) -> String {
+    pub fn next_field_id(&mut self) -> String {
         let id = self.next_id;
         self.next_id += 1;
         format!("#{id}")
@@ -214,6 +214,12 @@ impl PlanResolverState {
             .as_ref()
             .filter(|(input, _)| Arc::ptr_eq(input, schema))
             .map(|(_, schemas)| schemas.as_slice())
+    }
+
+    pub fn discard_filter_schemas_from(&mut self, index: usize) {
+        if let Some((_, schemas)) = &mut self.filter_resolution {
+            schemas.truncate(index);
+        }
     }
 
     pub fn register_filter_input_boundary(&mut self, schema: DFSchemaRef) {
@@ -438,7 +444,9 @@ pub(crate) struct QueryScope<'a> {
 
 impl<'a> QueryScope<'a> {
     fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
-        // Missing local filter inputs must not become visible as outer references.
+        // Subqueries cannot recover missing local inputs solely for correlation.
+        // TODO: Resolve the filter's local references before its subqueries so that
+        // directly recovered inputs become visible to correlation in either order.
         let schema = state
             .get_filter_schemas(&schema)
             .and_then(|schemas| schemas.first())

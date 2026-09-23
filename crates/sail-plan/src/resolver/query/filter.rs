@@ -49,9 +49,31 @@ impl PlanResolver<'_> {
             output_schema.metadata().clone(),
         )?);
         let predicate = {
+            let mut schema_count = schemas.len();
+            let mut first_error = None;
             let mut scope = state.enter_filter_scope(Arc::clone(&schema), schemas);
-            self.resolve_expression(condition, &schema, scope.state())
-                .await?
+            loop {
+                match self
+                    .resolve_expression(condition.clone(), &schema, scope.state())
+                    .await
+                {
+                    Ok(predicate) => break predicate,
+                    Err(error) => {
+                        let remaining = scope
+                            .state()
+                            .get_filter_schemas(&schema)
+                            .map_or(0, |schemas| schemas.len());
+                        if remaining >= schema_count {
+                            return Err(first_error.unwrap_or(error));
+                        }
+                        // Discard bindings from the failed descendant and deeper
+                        // outputs, retaining earlier outputs and outer references.
+                        // Each retry removes at least one name-resolution schema.
+                        first_error.get_or_insert(error);
+                        schema_count = remaining;
+                    }
+                }
+            }
         };
         let mut columns = predicate.column_refs();
         predicate.apply(|expr| {

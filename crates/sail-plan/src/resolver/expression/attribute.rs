@@ -87,19 +87,24 @@ impl PlanResolver<'_> {
         }
         // TODO: Spark can discard all tentative bindings at an invalid descendant
         // and retry deeper. That requires name resolution before type resolution;
-        // until then, retain errors rather than mix bindings from a failed tier.
-        for schema in filter_schemas.iter().skip(1) {
-            if let Some((name, expr)) =
-                self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        // until then, retry only earlier outputs and outer references.
+        for (index, schema) in filter_schemas.iter().enumerate().skip(1) {
+            if let Some((name, expr)) = self
+                .resolve_field_or_nested_field(&name, plan_id, schema, state)
+                .inspect_err(|_| state.discard_filter_schemas_from(index))?
             {
                 return Ok(NamedExpr::new(vec![name], expr));
             }
             if Self::has_filter_attribute_root(&name, plan_id, schema, state) {
+                state.discard_filter_schemas_from(index);
                 return Err(PlanError::analysis(format!(
                     "attribute {name:?} is missing from the schema: cannot resolve attribute"
                 )));
             }
-            if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+            if let Some((name, expr)) = self
+                .resolve_hidden_field(&name, plan_id, schema, state)
+                .inspect_err(|_| state.discard_filter_schemas_from(index))?
+            {
                 return Ok(NamedExpr::new(vec![name], expr));
             }
         }

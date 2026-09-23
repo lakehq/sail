@@ -1,7 +1,7 @@
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
-from pyspark.errors import AnalysisException
+from pyspark.errors import AnalysisException, SparkRuntimeException
 from pyspark.sql import Row, Window
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
@@ -189,6 +189,82 @@ def test_filter_missing_attributes_discard_failed_projection_resolution(spark, f
     assert result.collect() == [Row(keep="keep")]
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
+def test_filter_correlated_subquery_discards_failed_descendant_bindings(spark, failure):
+    outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
+    if failure == "nested-field":
+        columns = [F.struct(F.lit(42).alias("y")).alias("o")]
+        reference = "o.x"
+    else:
+        columns = [F.lit(41).alias("x"), F.lit(42).alias("x")]
+        reference = "x"
+
+    inner = (
+        spark.range(1)
+        .select(*columns, F.lit("INNER").alias("marker"))
+        .select(F.lit(1).alias("keep"))
+        .where((F.col("marker").outer() == "OUTER") & (F.col(reference).outer() == 1))
+    )
+    assert outer.where(inner.exists()).collect() == [Row(x=1, marker="OUTER")]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
+@pytest.mark.parametrize("reverse_predicate", [False, True])
+def test_filter_descendant_fallback_preserves_earlier_bindings(spark, failure, reverse_predicate):
+    outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
+    if failure == "nested-field":
+        columns = [F.struct(F.lit(42).alias("y")).alias("o")]
+        reference = "o.x"
+    else:
+        columns = [F.lit(41).alias("x"), F.lit(42).alias("x")]
+        reference = "x"
+
+    predicates = [F.col("marker").outer() == "OUTER", F.col(reference).outer() == 1]
+    if reverse_predicate:
+        predicates.reverse()
+    inner = (
+        spark.range(1)
+        .select(*columns)
+        .select(F.lit("NEAR").alias("marker"))
+        .select(F.lit(1).alias("keep"))
+        .where(predicates[0] & predicates[1])
+    )
+    assert outer.where(inner.exists()).collect() == []
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+def test_filter_descendant_fallback_discards_multiple_failed_outputs(spark):
+    outer = spark.createDataFrame([(1, 2)], "x int, z int")
+    inner = (
+        spark.range(1)
+        .select(F.lit(41).alias("x"), F.lit(42).alias("x"))
+        .select(F.lit(51).alias("z"), F.lit(52).alias("z"))
+        .select(F.lit(1).alias("keep"))
+        .where((F.col("x").outer() == 1) & (F.col("z").outer() == 2))  # noqa: PLR2004
+    )
+    assert outer.where(inner.exists()).collect() == [Row(x=1, z=2)]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("failure", ["visible-root", "descendant-type"])
+def test_filter_descendant_fallback_preserves_resolution_errors(spark, failure):
+    if failure == "visible-root":
+        outer = spark.createDataFrame([(1,)], "x int").alias("o")
+        inner = spark.range(1).select(F.struct(F.lit(42).alias("y")).alias("o")).where(F.col("o.x").outer() == 1)
+    else:
+        outer = spark.createDataFrame([([1],)], "xs array<int>")
+        inner = (
+            spark.range(1)
+            .select(F.lit(1).alias("xs"))
+            .select(F.lit(1).alias("keep"))
+            .where(F.array_max(F.col("xs").outer()) == 1)
+        )
+    with pytest.raises((AnalysisException, SparkRuntimeException)):
+        outer.where(inner.exists()).collect()
+
+
 def test_filter_visible_predicate_preserves_projection(filter_source):
     projected = filter_source.select("key", F.lit("CURRENT").alias("regionality"))
     result = projected.where((F.col("key") == "b") & (F.col("regionality") == "CURRENT"))
@@ -231,6 +307,30 @@ def test_filter_missing_attributes_in_subquery(spark, filter_source, columns):
         spark.catalog.dropTempView("filter_lookup")
 
 
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "value > 1 AND EXISTS (SELECT 1 FROM filter_recovered_lookup WHERE lookup_value = value)",
+        "EXISTS (SELECT 1 FROM filter_recovered_lookup WHERE lookup_value = value) AND value > 1",
+        "value > 1 AND (SELECT MAX(lookup_value) FROM filter_recovered_lookup WHERE lookup_value = value) > 1",
+        "value IN (SELECT lookup_value FROM filter_recovered_lookup WHERE lookup_value = value)",
+    ],
+    ids=["exists-after-local", "exists-before-local", "scalar", "in"],
+)
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Correlated subqueries cannot yet use inputs recovered by the enclosing filter's predicate",
+    strict=True,
+)
+def test_filter_recovered_attributes_are_visible_to_correlated_subqueries(spark, filter_source, predicate):
+    spark.createDataFrame([(2,)], "lookup_value int").createOrReplaceTempView("filter_recovered_lookup")
+    try:
+        result = filter_source.select("key").where(predicate)
+        assert result.collect() == [Row(key="b")]
+    finally:
+        spark.catalog.dropTempView("filter_recovered_lookup")
+
+
 @pytest.mark.parametrize("with_missing_attribute", [False, True])
 def test_filter_correlated_subquery_preserves_visible_alias(spark, filter_source, with_missing_attribute):
     spark.createDataFrame([(12,)], "lookup_value int").createOrReplaceTempView("filter_correlated_lookup")
@@ -267,6 +367,22 @@ def test_filter_missing_attributes_in_lambda(spark, predicate_kind):
 def test_filter_missing_attribute_through_dataframe_distinct(filter_source):
     result = filter_source.select("key", "value").distinct().where(F.col("regionality") != "DOMESTIC")
     assert result.collect() == [Row(key="b", value=2)]
+
+
+@pytest.mark.parametrize(
+    ("with_replacement", "name"),
+    [(False, "rand_value"), (True, "rand_value"), (True, "array_value")],
+)
+def test_filter_missing_attribute_ignores_sampling_auxiliaries(spark, with_replacement, name):
+    source = spark.range(1).select(F.lit("keep").alias("key"), F.lit(100).alias(name))
+    sampled = source.select("key").sample(with_replacement, 10.0 if with_replacement else 1.0, 42)
+    expected = sampled.collect()
+    assert expected
+
+    result = sampled.where(F.col(name) == 100)  # noqa: PLR2004
+
+    assert result.collect() == expected
+    assert result.schema == sampled.schema
 
 
 def test_filter_missing_grouping_attribute(filter_source):

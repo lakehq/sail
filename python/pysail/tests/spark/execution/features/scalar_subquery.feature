@@ -1,4 +1,19 @@
 Feature: Scalar subqueries in distributed execution
+  Scenario: Sampling auxiliaries do not shadow correlated outer attributes
+    When query
+      """
+      WITH filter_sample_input AS (SELECT 1 AS id)
+      SELECT rand_value FROM VALUES (100), (-100) AS outer_t(rand_value)
+      WHERE EXISTS (
+        SELECT 1 FROM filter_sample_input
+        TABLESAMPLE (100 PERCENT) REPEATABLE (42)
+        WHERE rand_value > 1
+      )
+      """
+    Then query result collected
+      | rand_value |
+      | 100        |
+
   Scenario Outline: Filter subqueries preserve lateral correlation scope
     Given statement
       """
