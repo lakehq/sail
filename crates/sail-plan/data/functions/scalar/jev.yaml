@@ -1,0 +1,27 @@
+- name: "jev_choice"
+  scope: "sail_extension"
+  signatures:
+    - "jev_choice(state, instructions, criteria, api_key[, model])"
+  usage: "Evaluates a Jev Choice question and returns the selected choice, confidence, and option probabilities. Criteria is a SQL map or JSON object string."
+  note: "The API key is sent as a bearer token. Avoid placing secrets directly in shared SQL text or logs."
+
+- name: "jev_evaluate"
+  scope: "sail_extension"
+  signatures:
+    - "jev_evaluate(state, questions, api_key[, model])"
+  usage: "Evaluates a named map of Jev Noul, Choice, and Score questions against one state in one API request. Returns the full JSON response, including answers, resolved model, and usage."
+  note: "Questions is a SQL map or JSON object string. The API key is sent as a bearer token."
+
+- name: "jev_noul"
+  scope: "sail_extension"
+  signatures:
+    - "jev_noul(state, instructions, api_key[, model])"
+  usage: "Evaluates a Jev yes/no question and returns the probability of yes as a double."
+  note: "The API key is sent as a bearer token."
+
+- name: "jev_score"
+  scope: "sail_extension"
+  signatures:
+    - "jev_score(state, instructions, criteria, api_key[, model])"
+  usage: "Evaluates a Jev Score question and returns its weighted score, confidence, level probabilities, and legend. Criteria is an ordered SQL array or JSON array string."
+  note: "The API key is sent as a bearer token."

@@ -14,4 +14,5 @@ pub use json_as_text::{JsonAsText, json_as_text_udf};
 pub use json_length::{JsonLength, json_length_udf};
 pub use json_object_keys::{JsonObjectKeys, json_object_keys_udf};
 pub use schema_of_json::SparkSchemaOfJson;
+pub(crate) use to_json::json_value_from_array;
 pub use to_json::{SparkToJson, to_json_udf};

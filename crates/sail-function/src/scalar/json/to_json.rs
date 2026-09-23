@@ -390,6 +390,11 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
     }
 }
 
+/// Converts one Arrow value to JSON using the standard Sail JSON options.
+pub(crate) fn json_value_from_array(array: &ArrayRef, index: usize) -> Result<Value> {
+    array_value_to_json(array, index, &ToJsonOptions::default())
+}
+
 fn struct_to_json(
     struct_array: &StructArray,
     row_index: usize,
