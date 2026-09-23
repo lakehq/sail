@@ -23,6 +23,53 @@ Feature: struct function
         | {1, x} |
         | {2, y} |
 
+  Rule: Struct field names
+
+    Scenario Outline: struct preserves names extracted from computed structs
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT to_json(struct(<argument>)) AS result
+        """
+      Then query result
+        | result     |
+        | <expected> |
+
+      Examples:
+        | argument                                              | expected          |
+        | named_struct('Temperature', 1).Temperature              | {"Temperature":1} |
+        | named_struct('Temperature', 1).TEMPERATURE              | {"TEMPERATURE":1} |
+        | named_struct('Temperature', 1).TEMPERATURE AS renamed   | {"renamed":1}     |
+
+    Scenario: struct preserves computed field reference spelling in a lambda
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT to_json(transform(array(-1, 2), reading ->
+          struct(named_struct('Temperature', reading).TEMPERATURE))) AS result
+        """
+      Then query result
+        | result                                |
+        | [{"TEMPERATURE":-1},{"TEMPERATURE":2}] |
+
+    Scenario Outline: struct preserves <case> in HAVING
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT max(id) AS foo
+        FROM range(1)
+        HAVING to_json(struct(<argument>)) = '<expected>'
+        """
+      Then query result
+        | foo |
+        | 0   |
+
+      Examples:
+        | case                       | argument       | expected      |
+        | alias reference spelling   | FOO            | {"FOO":0}     |
+        | alias declaration spelling | foo            | {"foo":0}     |
+        | explicit field alias       | FOO AS renamed | {"renamed":0} |
+
   Rule: Struct nullability — struct itself is never NULL
 
     Scenario: struct with NULL fields is not NULL

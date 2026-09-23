@@ -6,10 +6,11 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as value, #5@2 as category]
       ProjectionExec: expr=[id@0 as #3, value@1 as #4, category@2 as #5]
-        IcebergScanByDataFilesExec: table_url=file://<table_url>
-          IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              IcebergManifestScanExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>
+        UnionExec
+          ProjectionExec: expr=[id@0 as id, value@1 as value, category@2 as category]
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_read_metadata_partitioned/data/category=1/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, category], file_type=parquet
+          ProjectionExec: expr=[id@0 as id, value@1 as value, category@2 as category]
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_read_metadata_partitioned/data/category=2/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, category], file_type=parquet
 ---
 name: "test_explain_select_with_default_options_uses_driver_file_scan"
 data:

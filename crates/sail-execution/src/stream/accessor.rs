@@ -16,37 +16,37 @@ use crate::stream::writer::{
     MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter,
 };
 use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
-use crate::task_runner::{TaskRunnerActor, TaskRunnerExtensions, TaskRunnerMessage};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-pub struct TaskStreamFactory<'a> {
+pub struct TaskStreamFactory {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
-    extensions: &'a TaskRunnerExtensions,
+    celeborn: bool,
     mappers: usize,
 }
 
-impl Clone for TaskStreamFactory<'_> {
+impl Clone for TaskStreamFactory {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
             context: self.context.clone(),
-            extensions: self.extensions,
+            celeborn: self.celeborn,
             mappers: self.mappers,
         }
     }
 }
 
-impl<'a> TaskStreamFactory<'a> {
+impl TaskStreamFactory {
     pub fn new(
         handle: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
-        extensions: &'a TaskRunnerExtensions,
+        celeborn: bool,
         mappers: usize,
     ) -> Self {
         Self {
             handle,
             context,
-            extensions,
+            celeborn,
             mappers,
         }
     }
@@ -72,9 +72,7 @@ impl<'a> TaskStreamFactory<'a> {
         output: TaskOutput,
         schema: SchemaRef,
     ) -> Arc<dyn TaskStreamWriter> {
-        if self.extensions.celeborn_streams.is_some()
-            && matches!(output.locator, TaskOutputLocator::Blocking)
-        {
+        if self.celeborn && matches!(output.locator, TaskOutputLocator::Blocking) {
             Arc::new(CelebornTaskStreamWriter::new(
                 self.handle.clone(),
                 self.context.clone(),
@@ -285,7 +283,7 @@ impl fmt::Debug for MultiChannelTaskStreamReader {
 #[tonic::async_trait]
 impl TaskStreamReader for MultiChannelTaskStreamReader {
     async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
-        let streams = match &self.input.locator {
+        let streams = match self.input.locator.as_ref() {
             TaskInputLocator::Driver { keys } => {
                 let keys = keys.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))

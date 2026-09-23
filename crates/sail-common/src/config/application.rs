@@ -989,6 +989,13 @@ pub enum OtlpProtocol {
     HttpJson,
 }
 
+/// Environment variables for application execution configuration.
+pub struct ExecutionConfigEnv;
+
+impl ExecutionConfigEnv {
+    pub const BATCH_SIZE: &'static str = "SAIL_EXECUTION__BATCH_SIZE";
+}
+
 /// Environment variables for application cluster configuration.
 pub struct ClusterConfigEnv;
 

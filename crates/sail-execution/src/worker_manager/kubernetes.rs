@@ -14,7 +14,7 @@ use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
 use rand::distr::Uniform;
 use sail_common::actor::ActorSystem;
-use sail_common::config::ClusterConfigEnv;
+use sail_common::config::{ClusterConfigEnv, ExecutionConfigEnv};
 use sail_common::telemetry::ContextPropagationEnv;
 use sail_common::utils::retry::RetryStrategy;
 use tokio::sync::OnceCell;
@@ -129,6 +129,7 @@ impl KubernetesWorkerService {
     fn build_pod_env(&self, id: WorkerId, options: WorkerLaunchOptions) -> Vec<EnvVar> {
         let WorkerLaunchOptions {
             enable_tls,
+            batch_size,
             driver_id,
             session_id,
             driver_external_host,
@@ -176,6 +177,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::ENABLE_TLS.to_string(),
                 value: Some(enable_tls.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ExecutionConfigEnv::BATCH_SIZE.to_string(),
+                value: Some(batch_size.to_string()),
                 value_from: None,
             },
             EnvVar {
