@@ -78,8 +78,9 @@ impl Truth {
 pub(crate) enum Predicate {
     Unknown,
     Constant(Option<bool>),
-    And(Box<Self>, Box<Self>),
-    Or(Box<Self>, Box<Self>),
+    // Keep IN lists and scan filter conjunctions shallow when serialized to workers.
+    And(Vec<Self>),
+    Or(Vec<Self>),
     Not(Box<Self>),
     IsTrue(Box<Self>),
     IsNull(Box<Self>),
@@ -104,12 +105,7 @@ pub(crate) enum Operation {
 
 impl Predicate {
     pub(crate) fn conjunction(schema: &Schema, filters: &[Expr]) -> Self {
-        filters
-            .iter()
-            .map(|expr| Self::new(schema, expr))
-            .fold(Self::Constant(Some(true)), |left, right| {
-                Self::And(Box::new(left), Box::new(right))
-            })
+        Self::And(filters.iter().map(|expr| Self::new(schema, expr)).collect())
     }
 
     pub(crate) fn new(schema: &Schema, expr: &Expr) -> Self {
@@ -121,18 +117,12 @@ impl Predicate {
                 left,
                 op: Operator::And,
                 right,
-            }) => Self::And(
-                Box::new(Self::new(schema, left)),
-                Box::new(Self::new(schema, right)),
-            ),
+            }) => Self::And(vec![Self::new(schema, left), Self::new(schema, right)]),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Or,
                 right,
-            }) => Self::Or(
-                Box::new(Self::new(schema, left)),
-                Box::new(Self::new(schema, right)),
-            ),
+            }) => Self::Or(vec![Self::new(schema, left), Self::new(schema, right)]),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (field, scalar, op) = if let (Some(field), Expr::Literal(value, _)) =
                     (source_field(schema, left), right.as_ref())
@@ -211,13 +201,14 @@ impl Predicate {
                 }
             }
             Expr::InList(list) => {
-                let predicate = list
-                    .list
-                    .iter()
-                    .map(|value| Self::new(schema, &list.expr.as_ref().clone().eq(value.clone())))
-                    .fold(Self::Constant(Some(false)), |left, right| {
-                        Self::Or(Box::new(left), Box::new(right))
-                    });
+                let predicate = Self::Or(
+                    list.list
+                        .iter()
+                        .map(|value| {
+                            Self::new(schema, &list.expr.as_ref().clone().eq(value.clone()))
+                        })
+                        .collect(),
+                );
                 if list.negated {
                     predicate.negate()
                 } else {
@@ -342,7 +333,7 @@ impl Predicate {
     pub(crate) fn supported(&self) -> bool {
         match self {
             Self::Unknown => false,
-            Self::And(left, right) | Self::Or(left, right) => left.supported() && right.supported(),
+            Self::And(predicates) | Self::Or(predicates) => predicates.iter().all(Self::supported),
             Self::Not(value) | Self::IsTrue(value) | Self::IsNull(value) => value.supported(),
             _ => true,
         }
@@ -352,8 +343,16 @@ impl Predicate {
         match self {
             Self::Unknown => Truth::UNKNOWN,
             Self::Constant(value) => value.map(Truth::boolean).unwrap_or(Truth::NULL),
-            Self::And(left, right) => left.evaluate(leaf).combine(right.evaluate(leaf), true),
-            Self::Or(left, right) => left.evaluate(leaf).combine(right.evaluate(leaf), false),
+            Self::And(predicates) => predicates
+                .iter()
+                .map(|predicate| predicate.evaluate(leaf))
+                .reduce(|left, right| left.combine(right, true))
+                .unwrap_or(Truth::TRUE),
+            Self::Or(predicates) => predicates
+                .iter()
+                .map(|predicate| predicate.evaluate(leaf))
+                .reduce(|left, right| left.combine(right, false))
+                .unwrap_or(Truth::FALSE),
             Self::Not(value) => value.evaluate(leaf).not(),
             Self::IsTrue(value) => {
                 let truth = value.evaluate(leaf);
