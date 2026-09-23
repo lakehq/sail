@@ -1,8 +1,9 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion_common::ScalarValue;
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
     ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
@@ -199,6 +200,7 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         // Spark coerces a null map only when the predicate is already resolved.
         // An explicit lambda remains unresolved and must still reject this input.
         if map.get_type(input.function_context.schema)? == DataType::Null {
+            validate_map_filter_null_expr(&map, input.function_context.schema)?;
             map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
                 &DataType::Null,
                 &DataType::Null,
@@ -232,6 +234,7 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 Ok(has_lambda_child)
             })?;
         if !has_bare_lambda {
+            validate_map_filter_null_expr(&lambda.body, input.function_context.schema)?;
             // Spark replaces NullType predicates with Boolean NULL before evaluation.
             lambda.body = Box::new(lit(ScalarValue::Boolean(None)));
         }
@@ -240,6 +243,29 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Arc::clone(&SPARK_MAP_FILTER_UDF),
         vec![map, predicate],
     )))
+}
+
+fn validate_map_filter_null_expr(expression: &expr::Expr, schema: &DFSchema) -> PlanResult<()> {
+    let mut rewriter = TypeCoercionRewriter::new(schema);
+    expression.clone().transform_up(|expression| {
+        // Spark may discard a nested higher-order function before checking its
+        // return type. Only run coercion when its input fields can be inferred.
+        let mut inputs_resolved = true;
+        expression.apply_children(|child| {
+            let child = match child {
+                expr::Expr::Lambda(lambda) => lambda.body.as_ref(),
+                child => child,
+            };
+            inputs_resolved &= child.to_field(schema).is_ok();
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if inputs_resolved {
+            rewriter.f_up(expression)
+        } else {
+            Ok(Transformed::no(expression))
+        }
+    })?;
+    Ok(())
 }
 
 fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

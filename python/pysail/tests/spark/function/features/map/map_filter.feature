@@ -419,3 +419,38 @@ Feature: map_filter with lambda
         | wrong arity with null body | map(1, 2), k -> raise_error('boom')           |
         | bare nested lambda         | map(1, 2), (k, v) -> (x -> NULL)              |
         | lambda in scalar predicate | map(1, 2), (k, v) -> coalesce(x -> NULL, NULL) |
+
+  Rule: Null-typed operands retain scalar type validation
+
+    Scenario Outline: Reject an invalid null-typed operand: <case>
+      When query
+        """
+        SELECT map_filter(<arguments>) AS result
+        """
+      Then query error (?i)boolean
+
+      Examples:
+        | case               | arguments                                                 |
+        | lambda CASE        | map(1, 2), (k, v) -> CASE WHEN array(1) THEN NULL END       |
+        | ordinary CASE      | map(1, 2), CASE WHEN array(1) THEN NULL END                 |
+        | map CASE           | CASE WHEN array(1) THEN NULL END, true                     |
+        | lambda IF          | map(1, 2), (k, v) -> IF(array(1), NULL, NULL)               |
+        | lambda assert_true | map(1, 2), (k, v) -> assert_true(array(1))                  |
+        | map IF             | IF(array(1), NULL, NULL), true                             |
+        | map assert_true    | assert_true(array(1)), true                                |
+
+    Scenario Outline: Null-typed predicates discard unchecked higher-order returns: <case>
+      When query
+        """
+        SELECT map_filter(map(1, 2), (k, v) ->
+          CASE WHEN <condition> THEN NULL END) AS result
+        """
+      Then query result
+        | result |
+        | {}     |
+
+      Examples:
+        | case          | condition                                                                                         |
+        | map entries   | map_entries(map_filter(map(1, 2), (a, b) -> b)) IS NOT NULL                                         |
+        | nested lambda | transform(array(1), x -> map_filter(map(1, 2), (a, b) -> b)) IS NOT NULL                             |
+        | runtime cast  | CAST('x' AS BOOLEAN)                                                                               |
