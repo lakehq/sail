@@ -312,7 +312,8 @@ def test_input_file_block_metadata_from_parquet_splits(spark, tmp_path):
     assert sum(block_length for _, block_length in ranges) == file_size
 
 
-def test_input_file_metadata_from_delta_scan(spark, tmp_path):
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_input_file_metadata_from_delta_scan(spark, tmp_path, metadata_as_data):
     location = tmp_path / "input-file-name-delta"
     first_ids = [1, 2]
     second_ids = [3, 4, 5]
@@ -326,6 +327,7 @@ def test_input_file_metadata_from_delta_scan(spark, tmp_path):
 
     rows = (
         spark.read.format("delta")
+        .option("metadataAsDataRead", str(metadata_as_data).lower())
         .load(str(location))
         .select(
             "id",
@@ -354,3 +356,42 @@ def test_input_file_metadata_from_delta_scan(spark, tmp_path):
     assert len(second_file) == 1
     assert first_file.isdisjoint(second_file)
     assert first_file | second_file == data_files
+
+
+@pytest.mark.parametrize("column_mapping", ["name", "id"])
+def test_input_file_metadata_restores_delta_columns(spark, tmp_path, column_mapping):
+    location = tmp_path / "mapped-input-file"
+    source = spark.createDataFrame(
+        [(1, "east", (10,), 100), (2, "west", (20,), 200)],
+        "id long, part string, payload struct<value:long>, __sail_input_file_metadata_0 long",
+    )
+    (
+        source.write.format("delta")
+        .option("delta.columnMapping.mode", column_mapping)
+        .partitionBy("part")
+        .save(str(location))
+    )
+    data_files = {path.resolve() for path in location.rglob("*.parquet")}
+    rows = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(location))
+        .selectExpr(
+            "id",
+            "input_file_name() AS file_name",
+            "concat(part, ':', input_file_name()) AS label",
+            "payload.value + input_file_block_start() AS value",
+            "__sail_input_file_metadata_0 + input_file_block_start() AS original",
+            "transform(array(id), x -> x + input_file_block_start()) AS transformed",
+        )
+        .orderBy("id")
+        .collect()
+    )
+    assert [row.id for row in rows] == [1, 2]
+    for row, part in zip(rows, ["east", "west"], strict=True):
+        data_file = Path(unquote(urlparse(row.file_name).path)).resolve()
+        assert data_file in data_files
+        assert row.label == f"{part}:{row.file_name}"
+        assert row.value == row.id * 10
+        assert row.original == row.id * 100
+        assert row.transformed == [row.id]
