@@ -211,6 +211,21 @@ Feature: Time-only strings as timestamps
       | '01:58:00.'                    | 01:58:00        |
       | ' 01:58:00 '                   | 01:58:00        |
 
+  Scenario Outline: Time-only timestamp requires a leading T or an hour colon for <input>
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT CAST(<input> AS TIMESTAMP_LTZ) AS result
+      """
+    Then query result
+      | result |
+      | NULL   |
+
+    Examples:
+      | input        |
+      | ' T01:58:00' |
+      | '12'         |
+
   Scenario Outline: Time-only timezone spelling <suffix>
     When query
       """
@@ -260,6 +275,45 @@ Feature: Time-only strings as timestamps
     Then query result
       | result |
       | true   |
+
+  # TODO: Trim Spark whitespace before parsing dated strings, then drop the sequence pre-trim.
+  @sail-bug
+  Scenario: Dated timestamp ignores leading whitespace
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT CAST(' 2020-01-01 01:58:00' AS TIMESTAMP_LTZ) AS result
+      """
+    Then query result
+      | result              |
+      | 2020-01-01 01:58:00 |
+
+  @sail-bug
+  Scenario: Sequence rejects whitespace before the time-only marker
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT sequence(' T01:58', TIMESTAMP '2100-01-01 00:00:00', INTERVAL '36500' DAY) AS result
+      """
+    Then query error .*
+
+  # TODO: Resolve Java offset and GMT/UT prefix spellings before using Arrow's timezone parser.
+  @sail-bug
+  Scenario Outline: Time-only timestamp resolves Java zone spelling <suffix>
+    When query
+      """
+      SELECT CAST('01:58:00 <suffix>' AS TIMESTAMP_LTZ) =
+             CAST(concat(date_format(current_timestamp() + INTERVAL 5 HOURS, 'yyyy-MM-dd'),
+                         ' 01:58:00 +05:00') AS TIMESTAMP_LTZ) AS result
+      """
+    Then query result
+      | result |
+      | true   |
+
+    Examples:
+      | suffix    |
+      | +5        |
+      | GMT+05:00 |
 
   Scenario: Timestamp function and ANSI coalesce parse time-only strings
     Given config spark.sql.ansi.enabled = true

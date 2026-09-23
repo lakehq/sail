@@ -31,16 +31,19 @@ static TIME_ONLY_TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
 fn time_only_timestamp(value: &str, default_timezone: &str) -> Result<Option<i64>> {
     let trimmed = value.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
     // Spark recognizes a leading T only at the beginning of the original string.
-    if trimmed.starts_with('T') && !value.starts_with('T') {
+    // Without T, a colon is required to distinguish a time from a year.
+    // Checking both before the regex keeps other invalid strings off its slow path.
+    let may_be_time = value.starts_with('T')
+        || matches!(
+            trimmed.as_bytes(),
+            [b'0'..=b'9', b':', ..] | [b'0'..=b'9', b'0'..=b'9', b':', ..]
+        );
+    if !may_be_time {
         return Ok(None);
     }
     let Some(parts) = TIME_ONLY_TIMESTAMP.captures(trimmed) else {
         return Ok(None);
     };
-    // Without T, a colon is required to distinguish a time from a year.
-    if parts.get(1).is_none() && parts.get(3).is_none() {
-        return Ok(None);
-    }
     let number = |index| {
         parts.get(index).map_or(0, |x| {
             x.as_str()
@@ -81,6 +84,7 @@ fn time_only_timestamp(value: &str, default_timezone: &str) -> Result<Option<i64
     }
     // TODO: Support Java ZoneId aliases such as PST in the timestamp timezone
     // resolver. Time-only inputs retain the dated parser's supported zone domain.
+    // The resolver also lacks Java's +h, +hh:mm:ss, and GMT/UT prefix forms.
     let timezone: Tz = timezone.parse()?;
     let date = Utc::now().with_timezone(&timezone).date_naive();
     Ok(Some(
@@ -190,6 +194,9 @@ impl TimestampParser {
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
+        // TODO: Trim Spark whitespace and ISO control characters before `parse_timestamp`
+        // like Spark does for dated strings, then drop the pre-trim for timestamps in
+        // `sequence_cast`, which hides leading whitespace from the time-only `T` rule.
         let timestamp = match parse_timestamp(value) {
             Ok(v) => v,
             Err(e) => {
@@ -246,12 +253,6 @@ pub struct SparkTimestamp {
 
 impl SparkTimestamp {
     pub fn try_new(timezone: Option<Arc<str>>, ansi_mode: bool, is_try: bool) -> Result<Self> {
-        // An unformatted LTZ string may omit its date and therefore depend on today.
-        let volatility = if timezone.is_some() {
-            Volatility::Stable
-        } else {
-            Volatility::Immutable
-        };
         let parser = if let Some(ref timezone) = timezone {
             TimestampParser::Ltz {
                 default_timezone: timezone.as_ref().to_string(),
@@ -262,7 +263,7 @@ impl SparkTimestamp {
         Ok(Self {
             timezone,
             parser,
-            signature: Signature::variadic_any(volatility),
+            signature: Signature::variadic_any(Volatility::Immutable),
             ansi_mode,
             is_try,
         })
