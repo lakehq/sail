@@ -27,6 +27,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -237,13 +238,16 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8View::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
@@ -272,15 +276,47 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        let named_expr = NamedExpr::new(name, expr);
         Ok(match spark_interval_metadata {
-            Some(metadata) => named_expr.with_metadata(vec![(
-                spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                metadata,
-            )]),
-            None => named_expr,
+            Some(metadata) => {
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
+            }
+            None => NamedExpr::new(name, expr),
         })
     }
+}
+
+fn spark_string_cast_arguments(
+    expr: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let mut arguments = vec![expr];
+    if let Some(interval) = interval {
+        // Physical expression serialization does not preserve intermediate field metadata.
+        arguments.push(lit(interval.to_json()?));
+    }
+    Ok(arguments)
 }
 
 /// Returns true if the cast from `from` to `to` involves a Struct

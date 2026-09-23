@@ -33,6 +33,23 @@ Feature: Casting intervals to numeric types
         | CAST     |
         | TRY_CAST |
 
+    Scenario Outline: <cast> preserves parsed years inside an integer cast
+      When query
+        """
+        SELECT CAST(<cast>(CONCAT('INTERVAL ', CHR(39), id, CHR(39), ' YEAR')
+                          AS INTERVAL YEAR) AS BIGINT) AS years
+        FROM range(1, 3)
+        """
+      Then query result
+        | years |
+        | 1     |
+        | 2     |
+
+      Examples:
+        | cast     |
+        | CAST     |
+        | TRY_CAST |
+
     Scenario: Integer casts use the trailing interval field
       When query
         """

@@ -358,6 +358,39 @@ Feature: Timestamp and string predicate coercion
         | case_interval | zero_year_month |
         | true          | true            |
 
+    Scenario: Legacy IN preserves interval qualifiers on nested casts
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(id AS INTERVAL DAY) IN (
+          CONCAT('INTERVAL ', CHR(39), id, CHR(39), ' DAY'),
+          TIMESTAMP '2000-01-01 00:00:00'
+        ) AS matched
+        FROM range(1, 3)
+        """
+      Then query result
+        | matched |
+        | true    |
+        | true    |
+
+    Scenario Outline: Legacy datetimeToString configuration accepts padded <value>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.typeCoercion.datetimeToString.enabled = {{ ' <value> ' }}
+      When query
+        """
+        SELECT TIMESTAMP '2024-01-01 00:00:00' > '9' AS ordering
+        """
+      Then query result
+        | ordering |
+        | <result> |
+
+      Examples:
+        | value | result |
+        | true  | false  |
+        | TrUe  | false  |
+        | false | NULL   |
+
     Scenario: Legacy datetime ordering honors datetimeToString configuration
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = false

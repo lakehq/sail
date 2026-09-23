@@ -224,6 +224,29 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | zero second             | INTERVAL '0' SECOND                     | INTERVAL '00' SECOND                    |
         | large leading hour      | INTERVAL '123:04' HOUR TO MINUTE         | INTERVAL '123:04' HOUR TO MINUTE         |
 
+  Rule: Nested interval casts preserve the target qualifier
+
+    Scenario Outline: <cast> preserves <case> when nested inside a string cast
+      When query
+        """
+        SELECT CAST(<cast>(<input> AS INTERVAL <qualifier>) AS STRING) AS literal_value,
+               CAST(<cast>(v AS INTERVAL <qualifier>) AS STRING) AS column_value
+        FROM VALUES (<input>), (NULL) AS t(v)
+        """
+      Then query result
+        | literal_value | column_value |
+        | <result>      | <result>     |
+        | <result>      | NULL         |
+
+      Examples:
+        | cast     | case                   | input                                                      | qualifier | result              |
+        | CAST     | numeric days           | 1                                                          | DAY       | INTERVAL '1' DAY    |
+        | TRY_CAST | numeric days           | 1                                                          | DAY       | INTERVAL '1' DAY    |
+        | CAST     | parsed years           | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR')          | YEAR      | INTERVAL '1' YEAR   |
+        | TRY_CAST | parsed years           | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR')          | YEAR      | INTERVAL '1' YEAR   |
+        | CAST     | a changed month unit   | INTERVAL '1' YEAR                                          | MONTH     | INTERVAL '12' MONTH |
+        | TRY_CAST | a changed month unit   | INTERVAL '1' YEAR                                          | MONTH     | INTERVAL '12' MONTH |
+
   Rule: Temporal types print a fraction only when it is non-zero
     # appendFraction(NANO_OF_SECOND, 0, 9, true) has minWidth 0, so a zero sub-second part
     # prints neither the dot nor any digit; a non-zero one prints 1..9 digits with trailing
