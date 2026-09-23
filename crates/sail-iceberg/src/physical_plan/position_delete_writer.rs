@@ -274,8 +274,9 @@ async fn write_position_delete_file(
         ],
     )?;
 
-    let mut writer = ArrowParquetWriter::try_new(&delete_schema, WriterProperties::default())
-        .map_err(DataFusionError::Execution)?;
+    let mut writer =
+        ArrowParquetWriter::try_new(&delete_schema, WriterProperties::default(), Vec::new())
+            .map_err(DataFusionError::Execution)?;
     writer
         .write_batch(&batch)
         .await

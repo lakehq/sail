@@ -89,7 +89,8 @@ pub async fn load_manifest_list(
         .bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ManifestList::parse_with_version(&bytes, FormatVersion::V2).map_err(DataFusionError::Execution)
+    // The v3 reader also accepts older manifest lists and preserves row-ID inheritance.
+    ManifestList::parse_with_version(&bytes, FormatVersion::V3).map_err(DataFusionError::Execution)
 }
 
 pub async fn load_manifest(

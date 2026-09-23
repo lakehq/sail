@@ -177,6 +177,7 @@ impl PlanResolver<'_> {
         let info = TableInfo {
             lakehouse_table: None,
             columns,
+            default_values: Default::default(),
             location: None,
             format: format.clone(),
             partition_by: vec![],

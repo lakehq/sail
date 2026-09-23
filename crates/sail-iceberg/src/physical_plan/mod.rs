@@ -42,3 +42,5 @@ pub use write_context::{
 };
 pub use writer_exec::IcebergWriterExec;
 pub use writer_options::IcebergWriterExecOptions;
+
+pub use crate::row_lineage::RowLineage;
