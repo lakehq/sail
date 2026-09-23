@@ -3,10 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, Result};
-use datafusion_expr::{Aggregate, Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_common::{DFSchema, Result, ScalarValue};
+use datafusion_expr::{
+    Aggregate, Expr, ExprSchemable, LogicalPlan, Operator, Projection, binary_expr, lit,
+};
 
-/// Rewrites binary grouping keys to BinaryView while preserving the output schema.
+/// Rewrites binary grouping keys to LargeBinary while preserving the output schema.
 #[derive(Debug, Default)]
 pub struct RewriteBinaryGrouping;
 
@@ -53,7 +55,8 @@ impl OptimizerRule for RewriteBinaryGrouping {
         }
 
         // Binary grouping accumulates all distinct bytes in one i32-offset buffer.
-        // BinaryView stores them in separate buffers, avoiding the 2 GiB limit.
+        // LargeBinary widens the offsets, and repartition's take copies selected
+        // bytes instead of retaining BinaryView backing buffers.
         let schema = aggregate.schema;
         let aggregate = Arc::new(LogicalPlan::Aggregate(Aggregate::try_new(
             aggregate.input,
@@ -67,6 +70,18 @@ impl OptimizerRule for RewriteBinaryGrouping {
             .map(|(column, field)| {
                 let expr = Expr::Column(column.clone());
                 if field.data_type() == &DataType::Binary {
+                    // Rebase this slice's offsets and isolate its values before casting.
+                    // The view round trip drops excess capacity retained by concatenation.
+                    let expr = if expr.get_type(aggregate.schema())? == DataType::LargeBinary {
+                        binary_expr(
+                            expr,
+                            Operator::StringConcat,
+                            lit(ScalarValue::LargeBinary(Some(vec![]))),
+                        )
+                        .cast_to(&DataType::BinaryView, aggregate.schema())?
+                    } else {
+                        expr
+                    };
                     Ok(expr
                         .cast_to(&DataType::Binary, aggregate.schema())?
                         .alias_qualified_with_metadata(
@@ -93,7 +108,7 @@ fn binary_grouping_expr(expr: Expr, schema: &DFSchema) -> Result<Transformed<Exp
     }
     let expr = expr
         .unalias()
-        .cast_to(&DataType::BinaryView, schema)?
+        .cast_to(&DataType::LargeBinary, schema)?
         .alias_qualified_with_metadata(qualifier, field.name(), Some(field.metadata().into()));
     Ok(Transformed::yes(expr))
 }
