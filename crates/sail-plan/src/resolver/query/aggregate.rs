@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
@@ -6,6 +7,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
@@ -180,6 +182,16 @@ impl PlanResolver<'_> {
             .collect()
     }
 
+    /// Whether a projection holds an aggregate, which turns it into an aggregation without
+    /// grouping (`GlobalAggregates`).
+    pub(super) fn contains_aggregate(expr: &[NamedExpr]) -> bool {
+        expr.iter().any(|e| {
+            e.expr
+                .exists(|e| Ok(matches!(e, Expr::AggregateFunction(_))))
+                .unwrap_or(false)
+        })
+    }
+
     pub(super) fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
@@ -190,6 +202,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        let has_grouping = !grouping.is_empty();
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -251,7 +264,20 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = x;
+                // An aggregate is not a named expression, so Spark reports no metadata for it,
+                // while DataFusion carries over the metadata of the column it reads. The
+                // expression is read before it is rebased, since rebasing turns it into a
+                // reference to the output of the aggregation.
+                let inherits = Self::inherits_metadata(&expr);
                 let expr = Self::rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
+                let metadata = if metadata.is_empty()
+                    && !inherits
+                    && Self::has_spark_metadata(&expr, plan.schema())
+                {
+                    vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), "{}".to_string())]
+                } else {
+                    metadata
+                };
                 Ok(NamedExpr {
                     name,
                     expr,
@@ -259,6 +285,22 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
+        // Without grouping every column has to be read inside an aggregate (`CheckAnalysis`,
+        // `MISSING_GROUP_BY`), and one that is not is left pointing at the input.
+        if !has_grouping
+            && projections.iter().any(|x| {
+                x.expr
+                    .column_refs()
+                    .iter()
+                    .any(|column| !plan.schema().has_column(column))
+            })
+        {
+            return Err(PlanError::AnalysisError(
+                "[MISSING_GROUP_BY] The query does not include a GROUP BY clause. Add GROUP BY \
+                 or turn it into the window functions using OVER clauses."
+                    .to_string(),
+            ));
+        }
         let plan = match having {
             Some(having) => {
                 let having =
@@ -283,9 +325,15 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    metadata,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let field_id = state.register_field_name(name.one()?);
+                if metadata.is_empty() {
+                    Ok(expr.alias(field_id))
+                } else {
+                    let metadata: HashMap<String, String> = metadata.into_iter().collect();
+                    Ok(expr.alias_with_metadata(field_id, Some(FieldMetadata::from(metadata))))
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)

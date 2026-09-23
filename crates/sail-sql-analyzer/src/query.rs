@@ -948,6 +948,12 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         }
         Some(JoinOperator::RightAnti(_, _)) => spec::JoinType::RightAnti,
     };
+    // Checked while the query is parsed, before any table is looked up (`AstBuilder`).
+    if natural.is_some() && join_type == spec::JoinType::Cross {
+        return Err(SqlError::analysis(
+            "[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible.",
+        ));
+    }
     let join_criteria = match (natural, criteria) {
         (Some(_), None) => Some(spec::JoinCriteria::Natural),
         (Some(_), Some(_)) => return Err(SqlError::invalid("NATURAL JOIN with criteria")),

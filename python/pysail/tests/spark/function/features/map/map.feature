@@ -22,7 +22,6 @@ Feature: map output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to map yields the schema Spark declares
       When query
         """
@@ -36,7 +35,6 @@ Feature: map output schema
          |    |-- value: string (valueContainsNull = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to map stays nullable
       When query
         """

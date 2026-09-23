@@ -194,13 +194,43 @@ impl PlanResolver<'_> {
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
 
-        // Add anchors to match the entire column name (like Spark does)
-        let anchored_pattern = format!("^{}$", pattern_str);
-
-        // Compile the regex pattern
+        // `String.matches` matches the whole name, so the pattern is grouped before it is
+        // anchored: an alternation would otherwise bind tighter than the anchors. It is printed
+        // back from its syntax tree first, since in extended mode a trailing comment would
+        // otherwise run over the parenthesis that closes the group.
+        let normalized_pattern = regex_syntax::ast::parse::Parser::new()
+            .parse(pattern_str)
+            .map_err(|e| {
+                PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
+            })?
+            .to_string();
+        let anchored_pattern = format!("^(?:{normalized_pattern})$");
+        // This one does not fold: Rust folds all of Unicode where Java folds only ASCII, so
+        // folding here would match `Ä` with `ä`, which Spark does not. Measured on the oracle:
+        // the pattern `ä` matches only `ä`, while `col_ä` does match `COL_ä`.
         let pattern = Regex::new(&anchored_pattern).map_err(|e| {
             PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
         })?;
+
+        // Spark compiles the pattern case-insensitively unless the analysis is case sensitive, and
+        // Java's `(?i)` folds ASCII alone
+        // (`org.apache.spark.sql.catalyst.analysis.UnresolvedRegex#expandStar`), where Rust's folds
+        // all of Unicode. Turning the Unicode mode off gives the same folding, at the price of
+        // matching bytes rather than characters, so it is only used for a name that is ASCII.
+        //
+        // TODO: fold ASCII in a name that is not, and in a pattern the byte builder refuses.
+        // Both land on the pattern above, which does not fold at all. Rewriting each ASCII letter
+        // of the parsed pattern into a two-element class would be Java's rule exactly and would
+        // remove the need for the byte pattern. See `test_col_regex_folds_only_ascii`.
+        let ascii_pattern = if self.config.case_sensitive {
+            None
+        } else {
+            regex::bytes::RegexBuilder::new(&anchored_pattern)
+                .case_insensitive(true)
+                .unicode(false)
+                .build()
+                .ok()
+        };
 
         // Collect all matching columns
         let mut matching_columns = Vec::new();
@@ -219,7 +249,11 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
+            let matched = match &ascii_pattern {
+                Some(ascii) if field_name.is_ascii() => ascii.is_match(field_name.as_bytes()),
+                _ => pattern.is_match(field_name),
+            };
+            if matched && info.has_plan_id(plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new(
                     qualifier.cloned(),
                     field.name(),
@@ -344,18 +378,17 @@ impl PlanResolver<'_> {
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
-                let Ok(name) = fields
-                    .iter()
-                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
-                    .map(|x| x.name().to_string())
-                    .collect::<Vec<_>>()
-                    .one()
-                else {
-                    return Err(PlanError::AnalysisError(format!(
-                        "missing or ambiguous field: {name}"
-                    )));
+                // The field is matched the way every other name is, so it folds the case
+                // unless the analysis is case sensitive, and a name that matches more than one
+                // field is ambiguous rather than missing.
+                let Some(field) = self.resolve_struct_field(&fields, &name)? else {
+                    let names = fields
+                        .iter()
+                        .map(|x| x.name().to_string())
+                        .collect::<Vec<_>>();
+                    return Err(Self::field_not_found_error(&name, &names));
                 };
-                expr.field(name)
+                expr.field(field.name().clone())
             }
             _ => {
                 return Err(PlanError::AnalysisError(format!(
@@ -387,9 +420,23 @@ impl PlanResolver<'_> {
             )));
         };
 
+        // Spark prints a lambda parameter as `namedlambdavariable()` rather than by its name
+        // (`NamedLambdaVariable.toString`), and Sail's name for one is generated per call, so
+        // echoing it would put a name in the message that changes between identical runs.
+        let name = if matches!(expr, expr::Expr::LambdaVariable(_)) {
+            "namedlambdavariable()".to_string()
+        } else {
+            name
+        };
+
+        // The type is read before the expression is consumed, so that the levels of the path can
+        // be checked against it below.
+        let data_type = expr.get_type(schema)?;
+
         // Spark names the column after the `UpdateFields` expression tree, where
         // each operation is rendered as `WithField(<value name>)` (the value
         // expression's display name, not the target field name) or `dropfield()`.
+        let levels = field_name.clone();
         let (op, new_expr) = if let Some(value_expression) = value_expression {
             let NamedExpr {
                 name: value_name,
@@ -400,14 +447,25 @@ impl PlanResolver<'_> {
                 .await?;
             (
                 format!("WithField({})", value_name.one()?),
-                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+                ScalarUDF::from(UpdateStructField::new(
+                    field_name,
+                    self.config.case_sensitive,
+                ))
+                .call(vec![expr, value_expr]),
             )
         } else {
             (
                 "dropfield()".to_string(),
-                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+                ScalarUDF::from(DropStructField::new(field_name, self.config.case_sensitive))
+                    .call(vec![expr]),
             )
         };
+        // Every level of the path but the last is read before it is rebuilt, and reading it
+        // checks the input of `update_fields`, so a level that is not a struct is refused here
+        // rather than by the function. The message names the expression that reads the level and
+        // writes its type the way SQL writes it, neither of which the function can do.
+        self.check_update_fields_input(&data_type, &name, &levels, &op)?;
+
         // Spark collapses chained `withField`/`dropFields` into a single
         // `update_fields(x, op1, op2, ...)`, so splice the new operation into an
         // existing `update_fields(...)` name rather than nesting.
@@ -416,6 +474,76 @@ impl PlanResolver<'_> {
             _ => format!("update_fields({name}, {op})"),
         };
         Ok(NamedExpr::new(vec![result_name], new_expr))
+    }
+
+    /// Checks the input of every `update_fields` a path builds. Spark rewrites `withField("a.b")`
+    /// into one `UpdateFields` per level, and each of them refuses an input that is not a struct
+    /// (`UpdateFields.checkInputDataTypes`), naming the expression that reads it. The last name
+    /// is only ever written or dropped, so it is not read and not checked.
+    fn check_update_fields_input(
+        &self,
+        data_type: &DataType,
+        base: &str,
+        levels: &[String],
+        op: &str,
+    ) -> PlanResult<()> {
+        let mut base = base.to_string();
+        let mut data_type = data_type.clone();
+        for level in levels.iter().take(levels.len().saturating_sub(1)) {
+            let DataType::Struct(fields) = &data_type else {
+                // A level before the last one is READ before it is rebuilt, and the read is the
+                // `ExtractValue` that `updateFieldsHelper` builds. It is built while the plan is,
+                // so it refuses a base that is not a complex type before the `update_fields`
+                // above it is type checked, and with the class that reading the same name on its
+                // own raises. An array or a map IS complex, so the read succeeds there and the
+                // refusal is the one below; a NULL base is read as NULL
+                // (`ExtractValue.applyOrNull`) and is likewise refused below.
+                //
+                // TODO: Spark keeps extracting through an array or a map, so the level it names
+                // is deeper than the one named here. See
+                // `test_a_level_that_is_complex_but_not_a_struct_names_the_level_spark_names`.
+                if matches!(
+                    data_type,
+                    DataType::Null
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                        | DataType::Map(_, _)
+                ) {
+                    return Err(self.update_fields_input_type_error(&base, op, &data_type)?);
+                }
+                return Err(self.invalid_extract_base_error(&base, &data_type)?);
+            };
+            // A level that matches nothing, or matches twice, is reported by the function, which
+            // walks the same path with the same resolver.
+            let Ok(Some(field)) = self.resolve_struct_field(fields, level) else {
+                return Ok(());
+            };
+            base = format!("{base}.{level}");
+            data_type = field.data_type().clone();
+        }
+        if !matches!(data_type, DataType::Struct(_)) {
+            return Err(self.update_fields_input_type_error(&base, op, &data_type)?);
+        }
+        Ok(())
+    }
+
+    /// The error `UpdateFields` raises for an input that is not a struct
+    /// (`UpdateFields.checkInputDataTypes`), naming the expression that reads it.
+    fn update_fields_input_type_error(
+        &self,
+        base: &str,
+        op: &str,
+        data_type: &DataType,
+    ) -> PlanResult<PlanError> {
+        Ok(PlanError::AnalysisError(format!(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \
+             \"update_fields({base}, {op})\" due to data type mismatch: The first parameter \
+             requires the \"STRUCT\" type, however \"{base}\" has the type \"{}\".",
+            self.spark_type_name(data_type)?
+        )))
     }
 
     /// Rewrites the resolved expression to refer to columns in an external schema.

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringBuilder, OffsetSizeTrait, StringViewBuilder,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -44,6 +44,13 @@ macro_rules! define_to_string_udf {
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
                 Ok($return_type)
+            }
+
+            // Formatting a value never makes NULL, so the string is NULL only where the input
+            // is (`Cast.forceNullable` is false for a cast to a string).
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+                let nullable = args.arg_fields.iter().any(|x| x.is_nullable());
+                Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

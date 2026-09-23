@@ -8,10 +8,9 @@ use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -244,19 +243,20 @@ impl PlanResolver<'_> {
             .await;
         match sort_expr {
             Ok(sort_expr) => Ok(sort_expr),
-            Err(_) => {
-                let mut sorts = Vec::with_capacity(plan.inputs().len());
-                for input_plan in plan.inputs() {
-                    let sort_expr = self
-                        .resolve_query_sort_order_by_plan(input_plan, sort, state)
-                        .await?;
-                    sorts.push(sort_expr);
-                }
-                if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!("sort expression: {sort:?}")))
-                } else {
-                    Ok(sorts.one()?)
-                }
+            Err(error) => {
+                // A plan with several inputs has no single schema to fall back to, and resolving
+                // the sort against each of them would register names that are then discarded.
+                let inputs = plan.inputs();
+                let [input_plan] = inputs.as_slice() else {
+                    return Err(error);
+                };
+                // The sort is resolved against the output of the plan first and against its input
+                // only as a fallback, so when neither works the failure to report is the one from
+                // the output: the fallback saw a narrower schema and its message would name fewer
+                // columns.
+                self.resolve_query_sort_order_by_plan(input_plan, sort, state)
+                    .await
+                    .map_err(|_| error)
             }
         }
     }

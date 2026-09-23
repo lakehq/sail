@@ -1,6 +1,7 @@
 use chumsky::Parser;
 use chumsky::input::Input;
 use chumsky::span::SimpleSpan;
+use sail_common::spec;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
@@ -13,6 +14,7 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
+use sail_sql_parser::string::create_attribute_name_parser;
 use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
@@ -96,6 +98,45 @@ pub fn parse_one_statement(s: &str) -> SqlResult<Statement> {
 
 pub fn parse_object_name(s: &str) -> SqlResult<ObjectName> {
     parse!(s, create_object_name_parser)
+}
+
+/// Splits the name of an attribute the way Spark's `AttributeNameParser` does. This is not the SQL
+/// grammar of [`parse_object_name`]: Spark Connect parses an attribute name this way and keeps the
+/// SQL grammar for table and function names, so the two parsers are not interchangeable.
+///
+/// Returns `None` when the name is malformed, which is the single syntax error the Spark parser
+/// raises. The caller reports it, so that the error class and the message stay with the rest of
+/// the Spark errors.
+pub fn parse_attribute_name(name: &str) -> Option<spec::ObjectName> {
+    parse_simple!(name, create_attribute_name_parser)
+        .ok()
+        .map(spec::ObjectName::from)
+}
+
+/// Renders a name the way Spark's `toSQLId` does: it parses the name with the attribute grammar
+/// above and quotes each part, doubling the back quotes a part contains
+/// (`org.apache.spark.sql.errors.DataTypeErrorsBase#toSQLId` over
+/// `org.apache.spark.sql.catalyst.util.QuotingUtils#quoteIdentifier`). A part that contains a dot
+/// is therefore written as several quoted parts, and a name the parser rejects is quoted whole,
+/// since its syntax has an error condition of its own.
+///
+/// This lives here, beside the parser it uses, because the same error classes are built both in
+/// the query resolver and in the functions the resolver builds, and the two have to read alike.
+pub fn to_sql_id(name: &str) -> String {
+    match parse_attribute_name(name) {
+        Some(object) => object
+            .parts()
+            .iter()
+            .map(|x| quote_identifier_part(x.as_ref()))
+            .collect::<Vec<_>>()
+            .join("."),
+        None => quote_identifier_part(name),
+    }
+}
+
+/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does.
+pub fn quote_identifier_part(part: &str) -> String {
+    format!("`{}`", part.replace('`', "``"))
 }
 
 pub fn parse_qualified_wildcard(s: &str) -> SqlResult<QualifiedWildcard> {

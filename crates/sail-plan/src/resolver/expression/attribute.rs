@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ScalarUDF, col, expr, lit};
+use datafusion_expr::{LogicalPlan, ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
@@ -12,6 +12,340 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+
+/// Builds the error Spark reports when a name matches more than one attribute.
+/// A name that carries a plan ID comes from a DataFrame column object, and Spark reports it
+/// with a different error condition than a name written in a query
+/// (`QueryCompilationErrors.ambiguousColumnReferences` vs `ambiguousReferenceError`).
+fn ambiguous_attribute_error(
+    name: &spec::ObjectName,
+    plan_id: Option<i64>,
+    references: Vec<Vec<String>>,
+) -> PlanError {
+    if plan_id.is_some() {
+        // The condition has four sentences in the catalog, and `ErrorClassesJSONReader` joins
+        // them with a newline rather than with a space, so the message is written on four lines.
+        return PlanError::AnalysisError(format!(
+            "[AMBIGUOUS_COLUMN_REFERENCE] Column \"{}\" is ambiguous. It's because you joined \
+             several DataFrame together, and some of these DataFrames are the same.\n\
+             This column points to one of the DataFrames but Spark is unable to figure out \
+             which one.\n\
+             Please alias the DataFrames with different names via `DataFrame.alias` before \
+             joining them,\n\
+             and specify the column using qualified name, e.g. \
+             `df.alias(\"a\").join(df.alias(\"b\"), col(\"a.id\") > col(\"b.id\"))`.",
+            pretty_attribute(name)
+        ));
+    }
+    let mut references = references
+        .iter()
+        .map(|x| quote_identifier_parts(x.iter().map(|x| x.as_str())))
+        .collect::<Vec<_>>();
+    references.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
+    PlanError::AnalysisError(format!(
+        "[AMBIGUOUS_REFERENCE] Reference {} is ambiguous, could be: [{}].",
+        quote_identifier(name),
+        references.join(", ")
+    ))
+}
+
+/// Renders an object name the way Spark's `toSQLId` does.
+fn quote_identifier(name: &spec::ObjectName) -> String {
+    quote_identifier_parts(name.parts().iter().map(|x| x.as_ref()))
+}
+
+/// The parts of a qualifier, as the user wrote them. The reference is already split, so the parts
+/// are read from it rather than from its rendering: splitting that on dots would cut a single part
+/// that contains one, naming a qualifier nobody wrote.
+///
+/// A relation the user did not name carries DataFusion's placeholder qualifier, while the matching
+/// attribute in Spark has no qualifier at all, so it contributes nothing.
+pub(crate) fn qualifier_parts(relation: Option<&TableReference>) -> Vec<String> {
+    match relation {
+        Some(relation) if relation.table() != UNNAMED_TABLE => relation
+            .catalog()
+            .into_iter()
+            .chain(relation.schema())
+            .chain(std::iter::once(relation.table()))
+            .map(|x| x.to_string())
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn quote_identifier_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+    parts
+        .map(quote_identifier_part)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does.
+pub(crate) use sail_sql_analyzer::parser::quote_identifier_part;
+/// Renders a name that reaches a message as a single string the way Spark's `toSQLId` does. The
+/// same classes are built in `sail-function` for the operations the resolver builds, so the
+/// renderer is shared rather than written twice: two spellings of one error class is what this
+/// replaces.
+pub(in crate::resolver) use sail_sql_analyzer::parser::to_sql_id as quote_identifier_name;
+
+/// Quotes one part unless it is a plain identifier, as `QuotingUtils.quoteIfNeeded` does. This is
+/// the rendering `UnresolvedAttribute.sql` uses, which is the name the suggestion is ordered by.
+pub(in crate::resolver) fn quote_if_needed(part: &str) -> String {
+    let mut characters = part.chars();
+    let plain = matches!(characters.next(), Some(x) if x.is_ascii_alphabetic() || x == '_')
+        && characters.all(|x| x.is_ascii_alphanumeric() || x == '_');
+    if plain {
+        part.to_string()
+    } else {
+        quote_identifier_part(part)
+    }
+}
+
+/// Renders an attribute the way `UnresolvedAttribute.name` does, which is what reaches the
+/// message through `toSQLExpr`. Only a part that contains a dot is quoted, since that is the one
+/// case where joining the parts would be ambiguous, and the back quotes it contains are not
+/// doubled. This is a different rule from the fully quoted form used for a column name.
+fn pretty_attribute(name: &spec::ObjectName) -> String {
+    name.parts()
+        .iter()
+        .map(|x| {
+            let part = x.as_ref();
+            if part.contains('.') {
+                format!("`{part}`")
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The sort key of a name, as a Java string compares: by UTF-16 code unit rather than by
+/// character, which orders a name outside the BMP before one in the high part of it.
+pub(in crate::resolver) fn utf16_key(name: Option<&str>) -> Option<Vec<u16>> {
+    name.map(|x| x.encode_utf16().collect())
+}
+
+/// The edit distance Spark orders the suggested names by
+/// (`org.apache.commons.text.similarity.LevenshteinDistance`). It walks a Java string, so the
+/// units it counts are UTF-16 code units and a character outside the BMP counts as two.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right = right.encode_utf16().collect::<Vec<_>>();
+    let mut row = (0..=right.len()).collect::<Vec<_>>();
+    for (i, left_char) in left.encode_utf16().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let substitution = previous + usize::from(left_char != *right_char);
+            previous = row[j + 1];
+            row[j + 1] = substitution.min(row[j] + 1).min(row[j + 1] + 1);
+        }
+    }
+    row[right.len()]
+}
+
+/// Orders the names Spark suggests for an unresolved column, as
+/// `StringUtils.orderSuggestedIdentifiersBySimilarity` does. A qualifier that every candidate
+/// shares is stripped, since it is not what tells them apart.
+///
+/// The base the distance is measured against is passed in rather than derived from the name,
+/// because Spark measures against a different string per call site: the analyzer renders the name
+/// first, while `Project.reorderFields` uses the raw field name.
+fn order_candidates_by_similarity(
+    name: &spec::ObjectName,
+    base: &str,
+    candidates: Vec<Vec<String>>,
+) -> Vec<String> {
+    let parts = name.parts().len();
+    let shared = |depth: usize| {
+        let mut prefixes = candidates
+            .iter()
+            .map(|x| &x[..x.len().saturating_sub(depth)]);
+        let first = prefixes.next();
+        first.is_some_and(|first| prefixes.all(|x| x == first))
+    };
+    let stripped = if parts == 1 && shared(1) {
+        1
+    } else if parts <= 2 && shared(2) {
+        2
+    } else {
+        usize::MAX
+    };
+    // The caller orders the candidates the way the analyzer reads them, since the sort by
+    // distance below is stable and so never undoes that order.
+    let mut candidates = candidates
+        .into_iter()
+        .map(|parts| {
+            let start = parts.len().saturating_sub(stripped);
+            quote_identifier_parts(parts[start..].iter().map(|x| x.as_str()))
+        })
+        .collect::<Vec<_>>();
+    // The distance is a dynamic program over every candidate, and the candidates are every
+    // column in scope, so it is computed once per name rather than once per comparison.
+    candidates.sort_by_cached_key(|x| edit_distance(x, base));
+    candidates
+}
+
+/// Builds the error Spark reports when a name resolves to no column. The suggestion lists the
+/// first few columns in scope, and its absence selects the other sub-condition, as
+/// `QueryCompilationErrors.unresolvedColumnError` does.
+pub(in crate::resolver) fn unresolved_column_error(
+    name: &spec::ObjectName,
+    schema: &DFSchemaRef,
+    state: &PlanResolverState,
+) -> PlanError {
+    let mut candidates = schema
+        .columns()
+        .into_iter()
+        .filter_map(|column| {
+            let info = state.get_field_info(column.name()).ok()?;
+            if info.is_hidden() {
+                return None;
+            }
+            // The placeholder qualifier of a relation that has no name is not part of the name
+            // of the column, so it must not reach the suggestion.
+            let mut parts = qualifier_parts(column.relation.as_ref());
+            parts.push(info.name().to_string());
+            Some(parts)
+        })
+        .collect::<Vec<_>>();
+    // The candidates of the schema reach the analyzer through `AttributeSet.toSeq`, which sorts
+    // them by name.
+    candidates.sort_by_cached_key(|parts| utf16_key(parts.last().map(|x| x.as_str())));
+    // Inside a `HAVING` clause the aggregate expressions are names of their own, and they come
+    // BEFORE the columns rather than through that sorted set, so one of them wins a tie in
+    // distance. The grouping expressions are the columns themselves, which are already there.
+    let grouping = state
+        .get_grouping_for_having()
+        .iter()
+        .flat_map(|x| x.name.iter())
+        .collect::<Vec<_>>();
+    // The filter that carries the `HAVING` reads the OUTPUT of the aggregate, which is its SELECT
+    // list, so a column of its input that the list does not carry through is not a name there and
+    // must not reach the suggestion. A grouping expression is only one when it is selected too.
+    // Outside a `HAVING` the schema is the input itself and every column is a name.
+    //
+    // A wildcard in that list is not a name of its own: it has not been expanded yet, so it is
+    // still called `*`, and what it contributes to the output are the columns of what it targets.
+    // It must neither become a candidate nor take the real ones away.
+    let is_wildcard = |x: &NamedExpr| x.name.as_slice() == ["*"];
+    let wildcards = state
+        .get_projections_for_having()
+        .iter()
+        .filter(|x| is_wildcard(x))
+        .map(|x| match &x.expr {
+            #[expect(deprecated)]
+            expr::Expr::Wildcard { qualifier, .. } => qualifier.clone(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let projections = state
+        .get_projections_for_having()
+        .iter()
+        .filter(|x| !is_wildcard(x))
+        .flat_map(|x| x.name.iter())
+        .collect::<Vec<_>>();
+    let candidates = if projections.is_empty() && wildcards.is_empty() {
+        candidates
+    } else {
+        let expanded = |qualifier: &[String]| {
+            wildcards.iter().any(|x| match x {
+                // The expansion compares the qualifier literally, and the one the wildcard
+                // carries was already replaced with the matching one in the schema.
+                Some(x) => qualifier.ends_with(qualifier_parts(Some(x)).as_slice()),
+                None => true,
+            })
+        };
+        candidates
+            .into_iter()
+            .filter(|parts| {
+                let (name, qualifier) = match parts.split_last() {
+                    Some((name, qualifier)) => (name, qualifier),
+                    None => return false,
+                };
+                projections.contains(&name) || expanded(qualifier)
+            })
+            .collect::<Vec<_>>()
+    };
+    let candidates = state
+        .get_projections_for_having()
+        .iter()
+        .filter(|x| !is_wildcard(x))
+        .filter_map(|x| match x.name.as_slice() {
+            [name] if !grouping.contains(&name) => Some(vec![name.clone()]),
+            _ => None,
+        })
+        .chain(candidates)
+        .fold(Vec::new(), |mut out, parts| {
+            if !out.contains(&parts) {
+                out.push(parts);
+            }
+            out
+        });
+    // The analyzer measures the distance against `a.sql`, the name rendered with `quoteIfNeeded`.
+    let base = name
+        .parts()
+        .iter()
+        .map(|x| quote_if_needed(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(".");
+    let proposal = order_candidates_by_similarity(name, &base, candidates)
+        .into_iter()
+        .take(5)
+        .collect::<Vec<_>>();
+    let name = quote_identifier(name);
+    if proposal.is_empty() {
+        PlanError::AnalysisError(format!(
+            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter \
+             with name {name} cannot be resolved."
+        ))
+    } else {
+        PlanError::AnalysisError(format!(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with \
+             name {name} cannot be resolved. Did you mean one of the following? [{}].",
+            proposal.join(", ")
+        ))
+    }
+}
+
+/// Builds the unresolved column error that `Dataset.resolve` reports. Unlike the suggestion of a
+/// name written in a query, this one lists every field of the schema, in order and untruncated.
+pub(in crate::resolver) fn unresolved_column_fields_error<T: AsRef<str>>(
+    name: &spec::ObjectName,
+    fields: &[T],
+) -> PlanError {
+    // Unlike the suggestion of a name written in a query, this one has no sub-condition to fall
+    // back to: it reports an empty list rather than the other condition.
+    let name = quote_identifier(name);
+    let proposal = fields
+        .iter()
+        .map(|x| quote_identifier_name(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    PlanError::AnalysisError(format!(
+        "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name \
+         {name} cannot be resolved. Did you mean one of the following? [{proposal}]."
+    ))
+}
+
+/// Builds the error Spark reports for a name that the attribute parser rejects. The name is the
+/// one the user wrote, since there is nothing to quote it against yet.
+pub(in crate::resolver) fn invalid_attribute_name_error(name: &str) -> PlanError {
+    PlanError::AnalysisError(format!(
+        "[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: {name}. Check that \
+         backticks appear in pairs, a quoted string is a complete name part and use a backtick \
+         only inside quoted name parts."
+    ))
+}
+
+/// Builds the error Spark reports when `replace` is given a name that walks into a column.
+pub(in crate::resolver) fn replace_nested_column_error(name: &spec::ObjectName) -> PlanError {
+    PlanError::AnalysisError(format!(
+        "[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN] The feature is not supported: The replace \
+         function does not support nested column {}.",
+        quote_identifier(name)
+    ))
+}
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
@@ -32,7 +366,7 @@ impl PlanResolver<'_> {
         if plan_id.is_none()
             && let [first, rest @ ..] = name.parts()
             && let Some((declared, field)) = state
-                .resolve_lambda_parameter(first.as_ref())
+                .resolve_lambda_parameter(first.as_ref(), |a, b| self.match_lambda_parameter(a, b))
                 .map(|(param, field)| (param.to_string(), field.cloned()))
         {
             let display = rest
@@ -50,12 +384,12 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![display], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
+            self.resolve_aggregate_field(&name, state.get_grouping_for_having(), true)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_projections_for_having())?
+            self.resolve_aggregate_field(&name, state.get_projections_for_having(), true)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -65,77 +399,213 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
+            self.resolve_aggregate_field(&name, state.get_projections_for_grouping(), false)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
+        // A name that carries a plan ID comes from a DataFrame column object, which Spark
+        // reports on its own error condition instead of the one for a name in a query.
+        if plan_id.is_some() {
             return Err(PlanError::AnalysisError(format!(
-                // Spark tests expect the error message to start with: "attribute {name:?} is missing"
-                "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                "[CANNOT_RESOLVE_DATAFRAME_COLUMN] Cannot resolve dataframe column \"{}\". \
+                 It's probably because of illegal references like `df1.select(df2.col(\"a\"))`.",
+                pretty_attribute(&name)
             )));
+        }
+        let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
+            return Err(unresolved_column_error(&name, schema, state));
         };
         match self.resolve_outer_field(&name, &outer_schema, state)? {
             Some((name, expr)) => Ok(NamedExpr::new(vec![name], expr)),
-            None => Err(PlanError::AnalysisError(format!(
-                // Spark tests expect the error message to start with: "attribute {name:?} is missing"
-                "attribute {name:?} is missing from the schema: cannot resolve attribute or outer attribute"
-            ))),
+            None => Err(unresolved_column_error(&name, schema, state)),
         }
     }
 
-    fn resolve_field_or_nested_field(
+    pub(in crate::resolver) fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
-        let mut candidates = schema
-            .iter()
-            .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field_info(field.name()) else {
-                    return vec![];
-                };
-                if info.is_hidden() {
-                    return vec![];
+        // The analyzer tries the interpretations of the name from the longest qualifier down and
+        // stops at the first one whose attribute matches anything, so a qualifier wins over a
+        // struct that is named like it, and the struct field is never considered. Once the
+        // attribute has matched, a part that names no field of what it reached is a missing field
+        // rather than a name that did not resolve.
+        for (qualifier_name, field_name, inner) in
+            Self::generate_qualified_nested_field_candidates(name.parts())
+                .into_iter()
+                .rev()
+        {
+            let matched = schema
+                .iter()
+                .filter(|(qualifier, field)| {
+                    let Ok(info) = state.get_field_info(field.name()) else {
+                        return false;
+                    };
+                    !info.is_hidden()
+                        && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier)
+                        && self.match_field(info, field_name.as_ref(), plan_id)
+                })
+                .collect::<Vec<_>>();
+            let [(qualifier, field)] = matched.as_slice() else {
+                if matched.is_empty() {
+                    continue;
                 }
-                candidates
+                let references = matched
                     .iter()
-                    .filter_map(|(q, name, inner)| {
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), plan_id)
-                        {
-                            let expr = Self::resolve_potentially_nested_field(
-                                col((qualifier, field)),
-                                field.data_type(),
-                                inner,
-                            )?;
-                            let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some((name, expr))
-                        } else {
-                            None
-                        }
+                    .map(|(qualifier, _)| {
+                        // A plan that the user did not name carries DataFusion's placeholder
+                        // qualifier, while the matching attribute in Spark has no qualifier at
+                        // all, so it must not reach the reference list.
+                        let mut reference = qualifier_parts(*qualifier);
+                        reference.push(field_name.as_ref().to_string());
+                        reference
                     })
-                    .collect()
-            })
-            .collect::<Vec<_>>();
-        if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous attribute: {name:?}"
-            )));
+                    .collect();
+                return Err(ambiguous_attribute_error(name, plan_id, references));
+            };
+            let column = col((*qualifier, *field));
+            let Some(expr) =
+                self.resolve_potentially_nested_field(column, field.data_type(), inner)?
+            else {
+                // Spark renders the base with `toSQLExpr`, which prints the name the user
+                // wrote rather than the one the attribute resolved to.
+                let base = field_name.as_ref().to_string();
+                return match self.missing_struct_field_error(&base, field.data_type(), inner)? {
+                    Some(error) => Err(error),
+                    // The interpretation reached something this resolver cannot walk into, which
+                    // is reported as a name that did not resolve, the way it always was.
+                    None => Ok(None),
+                };
+            };
+            let display = inner.last().unwrap_or(field_name).as_ref().to_string();
+            return Ok(Some((display, expr)));
         }
-        Ok(candidates.pop())
+        Ok(None)
     }
 
+    /// The error for a part of the name that does not name a field of what it reached, as Spark
+    /// reports it once the attribute itself has matched: a name that is not a field of the struct
+    /// is a missing field, and a base that is not a complex type at all is a different error.
+    fn missing_struct_field_error<T: AsRef<str>>(
+        &self,
+        base: &str,
+        data_type: &DataType,
+        inner: &[T],
+    ) -> PlanResult<Option<PlanError>> {
+        let mut base = base.to_string();
+        let mut data_type = data_type.clone();
+        for part in inner {
+            let fields = match &data_type {
+                DataType::Struct(fields) => fields.clone(),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _) => match field.data_type() {
+                    DataType::Struct(fields) => fields.clone(),
+                    // An array of anything else is read by index, so the name is not a field that
+                    // is missing but an index whose type is wrong: Spark builds a `GetArrayItem`
+                    // here rather than refusing the base (`ExtractValue.extractValue`).
+                    _ => return Ok(Some(Self::array_index_type_error(&base, part.as_ref()))),
+                },
+                // A map is a complex type that Spark walks into by key. Sail does not reach it
+                // through a dotted name, and that gap is reported the way it always was.
+                DataType::Map(..) => return Ok(None),
+                _ => return self.invalid_extract_base_error(&base, &data_type).map(Some),
+            };
+            match self.resolve_struct_field(&fields, part.as_ref()) {
+                Ok(Some(field)) => {
+                    // The base of the next step is the whole path walked so far, as Spark
+                    // prints it, and not just the name of the field that was reached.
+                    base = format!("{base}.{}", part.as_ref());
+                    // A field read through an array is an array of that field, so the next step
+                    // sees the type the expression has and not the one the field was declared
+                    // with.
+                    data_type = match &data_type {
+                        DataType::List(_) => DataType::List(Arc::new(Field::new_list_field(
+                            field.data_type().clone(),
+                            true,
+                        ))),
+                        DataType::LargeList(_) => DataType::LargeList(Arc::new(
+                            Field::new_list_field(field.data_type().clone(), true),
+                        )),
+                        DataType::FixedSizeList(_, size) => DataType::FixedSizeList(
+                            Arc::new(Field::new_list_field(field.data_type().clone(), true)),
+                            *size,
+                        ),
+                        _ => field.data_type().clone(),
+                    };
+                }
+                _ => {
+                    let names = fields
+                        .iter()
+                        .map(|x| x.name().to_string())
+                        .collect::<Vec<_>>();
+                    return Ok(Some(Self::field_not_found_error(part.as_ref(), &names)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The error for a name that reads an array, which Spark takes as an index into it: the
+    /// extraction becomes a `GetArrayItem` whose second parameter has to be integral, while the
+    /// name is a string.
+    fn array_index_type_error(base: &str, name: &str) -> PlanError {
+        PlanError::AnalysisError(format!(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{base}[{name}]\" due to \
+             data type mismatch: The second parameter requires the \"INTEGRAL\" type, however \
+             \"{name}\" has the type \"STRING\"."
+        ))
+    }
+
+    /// The error for a name that walks into something that is not a complex type.
+    pub(in crate::resolver::expression) fn invalid_extract_base_error(
+        &self,
+        base: &str,
+        data_type: &DataType,
+    ) -> PlanResult<PlanError> {
+        let rendered = self.spark_type_name(data_type)?;
+        Ok(PlanError::AnalysisError(format!(
+            "[INVALID_EXTRACT_BASE_FIELD_TYPE] Can't extract a value from \"{base}\". \
+             Need a complex type [STRUCT, ARRAY, MAP] but got \"{rendered}\"."
+        )))
+    }
+
+    pub(in crate::resolver) fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {
+        // Spark renders both through `toSQLId`, which parses the name first, so a field whose
+        // own name contains a dot is written as several quoted parts.
+        let fields = fields
+            .iter()
+            .map(|x| quote_identifier_name(x))
+            .collect::<Vec<_>>()
+            .join(", ");
+        PlanError::AnalysisError(format!(
+            "[FIELD_NOT_FOUND] No such struct field {} in {}.",
+            quote_identifier_name(name),
+            fields
+        ))
+    }
+
+    /// Resolves a name against the expressions of an aggregate.
+    ///
+    /// A name that matches more than one of them is an ambiguous reference when the aggregate has
+    /// already been built and the name reads its output, which is what a `HAVING` does. While the
+    /// grouping expressions are still being resolved there is no output to be ambiguous about:
+    /// Spark keeps the first match there (`ResolveReferencesInAggregate.resolveGroupByAlias` uses
+    /// `find`) and reports the query later on its own condition.
+    ///
+    /// TODO: keep the first match for the grouping instead of rejecting it, which needs the
+    /// condition Spark reports afterwards. See `test_a_repeated_alias_in_a_group_by`.
     fn resolve_aggregate_field(
         &self,
         name: &spec::ObjectName,
         expressions: &[NamedExpr],
+        ambiguity_is_a_reference: bool,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let [name] = name.parts() else {
             return Ok(None);
@@ -147,7 +617,10 @@ impl PlanResolver<'_> {
                     name: agg, expr, ..
                 } = expr;
                 match agg.as_slice() {
-                    [agg] if agg.eq_ignore_ascii_case(name.as_ref()) => {
+                    // The alias is looked up with the rule for an attribute reference rather than
+                    // with the resolver alone, so a name that only the resolver would match, such
+                    // as `ıd` against `Id`, does not resolve.
+                    [agg] if self.match_attribute(agg, name.as_ref()) => {
                         Some((name.as_ref().to_string(), expr.clone()))
                     }
                     _ => None,
@@ -155,27 +628,119 @@ impl PlanResolver<'_> {
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
+            if ambiguity_is_a_reference {
+                let references = vec![vec![name.as_ref().to_string()]; candidates.len()];
+                return Err(ambiguous_attribute_error(
+                    &spec::ObjectName::bare(name.as_ref()),
+                    None,
+                    references,
+                ));
+            }
             return Err(PlanError::AnalysisError(format!(
-                "ambiguous aggregate expression: {name:?}"
+                "ambiguous aggregate expression: `{}`",
+                name.as_ref()
             )));
         }
         Ok(candidates.pop())
     }
 
-    fn resolve_hidden_field(
+    /// Resolves a column given by name, the way `Dataset.resolve` does for the names that
+    /// `DataFrameNaFunctions` receives. The name is resolved in full before anything decides what
+    /// to do with it: the longest qualifier is tried first, a field it walks into is reached, and
+    /// a key a join hid is still reachable through its qualifier (`LogicalPlan.resolve` falls back
+    /// to the metadata output).
+    pub(in crate::resolver) fn resolve_column_reference(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        if let Some(found) = self.resolve_field_or_nested_field(name, None, schema, state)? {
+            return Ok(Some(found));
+        }
+        self.resolve_hidden_field(name, None, schema, state)
+    }
+
+    /// The fields a bare name matches when it matches more than one of them and they are all the
+    /// same attribute, which is what selecting the same column twice gives. Spark removes
+    /// duplicate candidates before it looks for an ambiguity (`AttributeSeq.resolve`), so those
+    /// are one attribute rather than an ambiguous name, while two expressions given the same name
+    /// are two attributes and the name is ambiguous.
+    pub(in crate::resolver) fn resolve_repeated_column(
+        &self,
+        name: &spec::ObjectName,
+        plan: &LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<Option<Vec<String>>> {
+        let [identifier] = name.parts() else {
+            return Ok(None);
+        };
+        let mut ids = Vec::new();
+        for (_, field) in plan.schema().iter() {
+            let info = state.get_field_info(field.name())?;
+            if !info.is_hidden() && self.match_field(info, identifier.as_ref(), None) {
+                ids.push(field.name().to_string());
+            }
+        }
+        let roots = ids
+            .iter()
+            .map(|id| Self::root_attribute(plan, id))
+            .collect::<Vec<_>>();
+        let one_attribute = roots.windows(2).all(|pair| pair[0] == pair[1]);
+        Ok((ids.len() > 1 && one_attribute).then_some(ids))
+    }
+
+    /// The field an output field is a bare reference to, followed through the projections that
+    /// only pass it on under another name and through the operators that pass their input
+    /// through. Selecting a column twice gives two outputs that lead to the same field, where
+    /// Spark sees one attribute (`Project [a#1, a#1]`); an expression given a name is a new
+    /// attribute, so it leads to itself. A join is not walked into, so the two sides stay two.
+    fn root_attribute(plan: &LogicalPlan, id: &str) -> String {
+        match plan {
+            LogicalPlan::Projection(projection) => {
+                let defined = projection.expr.iter().find_map(|expr| match expr {
+                    expr::Expr::Alias(alias) if alias.name == id => Some(alias.expr.as_ref()),
+                    expr::Expr::Column(column) if column.name == id => Some(expr),
+                    _ => None,
+                });
+                match defined {
+                    Some(expr::Expr::Column(column)) => {
+                        Self::root_attribute(&projection.input, &column.name)
+                    }
+                    _ => id.to_string(),
+                }
+            }
+            LogicalPlan::Filter(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Repartition(_) => match plan.inputs().as_slice() {
+                [input] => Self::root_attribute(input, id),
+                _ => id.to_string(),
+            },
+            _ => id.to_string(),
+        }
+    }
+
+    pub(in crate::resolver) fn resolve_hidden_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let [name] = name.parts() else {
-            return Ok(None);
+        // A hidden field is reachable by its name alone, and the key of a join also through the
+        // qualifier of the side it came from, which is what tells `l.k` from `r.k` once the join
+        // has merged them into one column.
+        let (written, identifier) = match name.parts() {
+            [identifier] => (None, identifier),
+            [qualifier, identifier] => (Some(TableReference::bare(qualifier.as_ref())), identifier),
+            _ => return Ok(None),
         };
         let mut candidates = schema
             .iter()
             .filter_map(|(qualifier, field)| {
-                if qualifier.is_some() {
+                if !self.match_attribute_qualifier(written.as_ref(), qualifier) {
                     return None;
                 }
                 let Ok(info) = state.get_field_info(field.name()) else {
@@ -184,9 +749,12 @@ impl PlanResolver<'_> {
                 if !info.is_hidden() {
                     return None;
                 }
-                if info.matches(name.as_ref(), plan_id) {
+                if self.match_field(info, identifier.as_ref(), plan_id) {
+                    let mut reference = qualifier_parts(qualifier);
+                    reference.push(identifier.as_ref().to_string());
                     Some((
-                        name.as_ref().to_string(),
+                        reference,
+                        identifier.as_ref().to_string(),
                         expr::Expr::Column(Column::new_unqualified(field.name())),
                     ))
                 } else {
@@ -195,11 +763,13 @@ impl PlanResolver<'_> {
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous attribute: {name:?}"
-            )));
+            let references = candidates
+                .into_iter()
+                .map(|(reference, _, _)| reference)
+                .collect();
+            return Err(ambiguous_attribute_error(name, plan_id, references));
         }
-        Ok(candidates.pop())
+        Ok(candidates.pop().map(|(_, name, expr)| (name, expr)))
     }
 
     fn resolve_outer_field(
@@ -221,8 +791,8 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), None)
+                        self.match_attribute_qualifier(q.as_ref(), qualifier)
+                            && self.match_field(info, name.as_ref(), None)
                     })
                     .map(|(_, name)| {
                         (
@@ -237,58 +807,67 @@ impl PlanResolver<'_> {
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous outer attribute: {name:?}"
-            )));
+            let references = candidates
+                .iter()
+                .map(|(reference, expr)| match expr {
+                    expr::Expr::OuterReferenceColumn(_, column) => {
+                        let mut parts = qualifier_parts(column.relation.as_ref());
+                        parts.push(reference.clone());
+                        parts
+                    }
+                    _ => vec![reference.clone()],
+                })
+                .collect();
+            return Err(ambiguous_attribute_error(name, None, references));
         }
         Ok(candidates.pop())
     }
 
-    fn resolve_potentially_nested_field<T: AsRef<str>>(
+    pub(in crate::resolver) fn resolve_potentially_nested_field<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<expr::Expr> {
+    ) -> PlanResult<Option<expr::Expr>> {
         match inner {
-            [] => Some(expr),
+            [] => Ok(Some(expr)),
             [name, remaining @ ..] => match data_type {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                    .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
-                    }),
+                // Reading a field of a NULL base is NULL rather than an error, however far the path
+                // goes on (`ExtractValue.applyOrNull`).
+                DataType::Null => Ok(Some(lit(ScalarValue::Null))),
+                DataType::Struct(fields) => {
+                    let Some(field) = self.resolve_struct_field(fields, name.as_ref())? else {
+                        return Ok(None);
+                    };
+                    let args = vec![expr, lit(field.name().to_string())];
+                    let expr =
+                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    self.resolve_potentially_nested_field(expr, field.data_type(), remaining)
+                }
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => {
                     let DataType::Struct(fields) = field.data_type() else {
-                        return None;
+                        return Ok(None);
                     };
-                    fields
-                        .iter()
-                        .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                        .and_then(|child| {
-                            let expr = ScalarUDF::from(ArrayStructField::new())
-                                .call(vec![expr, lit(child.name().to_string())]);
-                            let item = Arc::new(Field::new_list_field(
-                                child.data_type().clone(),
-                                field.is_nullable() || child.is_nullable(),
-                            ));
-                            let data_type = match data_type {
-                                DataType::List(_) => DataType::List(item),
-                                DataType::LargeList(_) => DataType::LargeList(item),
-                                DataType::FixedSizeList(_, size) => {
-                                    DataType::FixedSizeList(item, *size)
-                                }
-                                _ => unreachable!("list data type matched above"),
-                            };
-                            Self::resolve_potentially_nested_field(expr, &data_type, remaining)
-                        })
+                    let Some(child) = self.resolve_struct_field(fields, name.as_ref())? else {
+                        return Ok(None);
+                    };
+                    let expr = ScalarUDF::from(ArrayStructField::new())
+                        .call(vec![expr, lit(child.name().to_string())]);
+                    let item = Arc::new(Field::new_list_field(
+                        child.data_type().clone(),
+                        field.is_nullable() || child.is_nullable(),
+                    ));
+                    let data_type = match data_type {
+                        DataType::List(_) => DataType::List(item),
+                        DataType::LargeList(_) => DataType::LargeList(item),
+                        DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
+                        _ => unreachable!("list data type matched above"),
+                    };
+                    self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }
-                _ => None,
+                _ => Ok(None),
             },
         }
     }
@@ -333,41 +912,5 @@ impl PlanResolver<'_> {
             ));
         }
         out
-    }
-}
-
-/// Returns whether the qualifier matches the target qualifier.
-/// Identifiers are case-insensitive.
-/// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
-pub(super) fn qualifier_matches(
-    qualifier: Option<&TableReference>,
-    target: Option<&TableReference>,
-) -> bool {
-    let table_matches = |table: &str| {
-        target
-            .map(|x| x.table())
-            .is_some_and(|x| x.eq_ignore_ascii_case(table))
-    };
-    let schema_matches = |schema: &str| {
-        target
-            .and_then(|x| x.schema())
-            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
-    };
-    let catalog_matches = |catalog: &str| {
-        target
-            .and_then(|x| x.catalog())
-            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
-    };
-    match qualifier {
-        Some(TableReference::Bare { table }) => table_matches(table),
-        Some(TableReference::Partial { schema, table }) => {
-            schema_matches(schema) && table_matches(table)
-        }
-        Some(TableReference::Full {
-            catalog,
-            schema,
-            table,
-        }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
-        None => true,
     }
 }
