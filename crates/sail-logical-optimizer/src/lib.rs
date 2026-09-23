@@ -4,9 +4,11 @@ use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
 mod resolve_lambda_variables;
+mod scalar_iterator_udf;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
+use scalar_iterator_udf::ExtractScalarIteratorUDF;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -18,6 +20,8 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
     rules.extend(built_in_rules);
+    // Iterator UDFs need partition streams and must be extracted before scalar folding.
+    rules.push(Arc::new(ExtractScalarIteratorUDF));
     rules
 }
 

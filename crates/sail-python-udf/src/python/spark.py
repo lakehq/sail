@@ -786,9 +786,13 @@ class PySparkScalarPandasIterUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
+        passthrough_columns: int,
+        output_name: str,
         config,
     ):
         self._udf = udf
+        self._passthrough_columns = passthrough_columns
+        self._output_name = output_name
         self._max_records_per_batch = config.arrow_max_records_per_batch
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
@@ -801,8 +805,42 @@ class PySparkScalarPandasIterUdf:
             **_pandas_serializer_kwargs(config),
         )
 
-    def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
-        return _call_scalar_pandas_udf(self._udf, args, num_rows, self._serializer, self._max_records_per_batch)
+    def __call__(self, batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        input_batches, passthrough_batches = itertools.tee(batches)
+
+        def pandas_batches():
+            for batch in input_batches:
+                batch_size = max(batch.num_rows, 1)
+                if self._max_records_per_batch > 0:
+                    batch_size = min(batch_size, self._max_records_per_batch)
+                for start in range(0, batch.num_rows, batch_size):
+                    yield tuple(
+                        _arrow_column_to_pandas(column.slice(start, batch_size), self._serializer)
+                        for column in batch.columns[self._passthrough_columns :]
+                    )
+
+        passthrough = None
+        passthrough_offset = 0
+        for output, output_type in self._udf(None, pandas_batches()):
+            array = _pandas_to_arrow_array(output, output_type, self._serializer)
+            output_offset = 0
+            while output_offset < len(array):
+                while passthrough is None or passthrough_offset == passthrough.num_rows:
+                    passthrough = next(passthrough_batches, None)
+                    passthrough_offset = 0
+                    if passthrough is None:
+                        msg = "scalar iterator UDF returned more rows than its input"
+                        raise ValueError(msg)
+                length = min(len(array) - output_offset, passthrough.num_rows - passthrough_offset)
+                columns = [
+                    column.slice(passthrough_offset, length)
+                    for column in passthrough.columns[: self._passthrough_columns]
+                ]
+                columns.append(array.slice(output_offset, length))
+                names = [*passthrough.schema.names[: self._passthrough_columns], self._output_name]
+                yield pa.RecordBatch.from_arrays(columns, names=names)
+                output_offset += length
+                passthrough_offset += length
 
 
 class PySparkScalarArrowUdf:

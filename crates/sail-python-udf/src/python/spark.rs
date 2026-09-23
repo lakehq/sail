@@ -78,12 +78,14 @@ impl PySpark {
     pub fn scalar_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
+        passthrough_columns: usize,
+        output_name: &str,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasIterUdf"),
-            (udf, config.clone()),
+            (udf, passthrough_columns, output_name, config.clone()),
         )
     }
 
