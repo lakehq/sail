@@ -2925,7 +2925,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
         match udf_kind {
-            UdfKind::Standard(r#gen::StandardUdf {}) => {}
+            UdfKind::Standard(r#gen::StandardUdf {}) => {
+                if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
+                    return Ok(Arc::new(kind.udf()));
+                }
+            }
             UdfKind::PySpark(r#gen::PySparkUdf {
                 kind,
                 name,
@@ -3370,7 +3374,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+        let udf_kind: UdfKind = if (node.as_async().is_some()
+            && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
+            || node_inner.is::<ArrayElement>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -5458,6 +5464,38 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let decoded = round_trip_udf(kind.udf())?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_some());
+            assert_eq!(decoded.signature(), kind.udf().signature());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_udf_named_jev_preserves_python_codec() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let udf = PySparkUDF::new(
+                PySparkUdfKind::Batch,
+                kind.name().to_owned(),
+                vec![1, 2, 3],
+                true,
+                vec![DataType::Utf8],
+                DataType::Utf8,
+                Arc::new(PySparkUdfConfig::default()),
+            );
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_none());
+            let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
+            assert_eq!(decoded.payload(), &[1, 2, 3]);
+        }
+        Ok(())
     }
 
     fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {

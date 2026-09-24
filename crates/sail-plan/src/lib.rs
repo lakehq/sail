@@ -39,6 +39,7 @@ pub async fn resolve_and_execute_plan(
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let sensitive_jev_options = function::jev_plan_has_explicit_options(&plan)?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
@@ -62,5 +63,10 @@ pub async fn resolve_and_execute_plan(
         PlanType::FinalPhysicalPlan,
         displayable(plan.as_ref()).indent(true).to_string(),
     ));
+    if sensitive_jev_options {
+        for plan in &mut info {
+            plan.plan = Arc::new(function::JEV_REDACTED_PLAN.to_owned());
+        }
+    }
     Ok((plan, info))
 }

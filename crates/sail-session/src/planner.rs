@@ -96,6 +96,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data;
         }
+        sail_plan::function::validate_jev_async_nesting(&logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),

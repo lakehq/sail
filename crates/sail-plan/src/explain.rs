@@ -83,6 +83,7 @@ pub struct ExplainString {
 }
 
 struct CollectedPlan {
+    sensitive_jev_options: bool,
     initial_logical: LogicalPlan,
     analyzed_logical: LogicalPlan,
     optimized_logical: LogicalPlan,
@@ -181,6 +182,7 @@ async fn collect_plan_with(
     plan_future: impl Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
 ) -> PlanResult<CollectedPlan> {
     let (plan, fields) = plan_future.await?;
+    let sensitive_jev_options = crate::function::jev_plan_has_explicit_options(&plan)?;
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
@@ -320,7 +322,16 @@ async fn collect_plan_with(
         }
     }
 
+    if sensitive_jev_options {
+        for plan in &mut stringified {
+            plan.plan = Arc::new(crate::function::JEV_REDACTED_PLAN.to_owned());
+        }
+        if physical_error.is_some() {
+            physical_error = Some(crate::function::JEV_REDACTED_PLAN.to_owned());
+        }
+    }
     Ok(CollectedPlan {
+        sensitive_jev_options,
         initial_logical,
         analyzed_logical,
         optimized_logical,
@@ -416,6 +427,13 @@ async fn explain_from_collected(
     maybe_collect_metrics(&options, &collected.physical_plan, ctx)
         .await
         .map_err(PlanError::from)?;
+
+    if collected.sensitive_jev_options {
+        return Ok(ExplainString {
+            output: crate::function::JEV_REDACTED_PLAN.to_owned(),
+            stringified_plans: collected.stringified,
+        });
+    }
 
     let logical_simple =
         collected.logical_string(&collected.initial_logical, PlanType::InitialLogicalPlan);

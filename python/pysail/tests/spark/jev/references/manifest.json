@@ -1,0 +1,79 @@
+{
+  "retrieved_at": "2026-09-24T04:01:38.422538+00:00",
+  "python_sdk_commit": "0ffd094c72ed9445223060b24ffd7a56aa781fb4",
+  "artifacts": [
+    {
+      "path": "python-sdk/pyproject.toml.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/pyproject.toml",
+      "sha256": "1f09a249894002f45a3b7519840f69ba087a1e3eca94cd639e363e47b1d2326e"
+    },
+    {
+      "path": "python-sdk/LICENSE",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/LICENSE",
+      "sha256": "002c2696d92b5c8cf956c11072baa58eaf9f6ade995c031ea635c6a1ee342ad1"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/retry.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/retry.py",
+      "sha256": "6a71a8b1c6b518d2f8489d397d22b20f5929d449c7a69dfae726ac902d6ae601"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/errors.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/errors.py",
+      "sha256": "797febf0db799e7154ae9a5659394bd33c88ee9fdef25d049f817ac0458c9eb2"
+    },
+    {
+      "path": "openapi.json",
+      "url": "https://api.typesafe.ai/openapi.json",
+      "sha256": "a191f8a7df6bd6fedced8120dd0fd106f88575d1d1c8360d08900a6c7c0360d5"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/config.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/config.py",
+      "sha256": "9c00692bc67a3747dddf6e359232e2cbe25523726c55e7348e5487674d87f552"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/constants.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/constants.py",
+      "sha256": "e2b5ac4147b93a7d4182c03b3118f2d1be83d6181877c149702de89645830e2b"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_version.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_version.py",
+      "sha256": "da8827186c43948f5a01c0248aa87179aa6777e5edce2b8ff4973adb8798c031"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/response_types.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/response_types.py",
+      "sha256": "cf06ac0dffa02b3fd1abcf26f962c4bed13b146064b56b11b19dfbef87dfe0df"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_schemas/models.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_schemas/models.py",
+      "sha256": "ef4df0873cf8934b29adb4fddd894b694d9469a53bd6b35f22bdc508d26df707"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/transport.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/transport.py",
+      "sha256": "dd2d2c0a29f4a084def920a2d5dbee0c0e687e1012026ba73521165f6f298fab"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/questions.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/questions.py",
+      "sha256": "217cbb46a6737954efe08d67d6500e6811d75f956792085e53a907c24120e812"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/_core/question_types.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/_core/question_types.py",
+      "sha256": "55b212d7a3bc9277fd9961ad4ea69bac754deb9ae0b9a76b2bc02b120452a109"
+    },
+    {
+      "path": "python-sdk/src/typesafe_sdk/constants.py.txt",
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-python/0ffd094c72ed9445223060b24ffd7a56aa781fb4/src/typesafe_sdk/constants.py",
+      "sha256": "53be709ac7cde59cb10b9c29efd058d572b03cce2c0e6f7dc5186d6322999fff"
+    }
+  ],
+  "python_sdk_version": "0.7.1",
+  "openapi_version": "3.1.0",
+  "api_version": "0.2.0"
+}
