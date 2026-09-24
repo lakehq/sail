@@ -52,6 +52,8 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
 
 // Prepare asynchronous functions for physical planning.
 // The current checks and rewrites apply only to Jev calls.
+// When adding an async UDF, check whether it needs these rules.
+// If it does, extend the eligibility checks below.
 pub fn prepare_async_functions(
     plan: datafusion_expr::LogicalPlan,
 ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
@@ -64,7 +66,7 @@ pub fn prepare_async_functions(
     use datafusion_expr::{Aggregate, Filter, JoinType, LogicalPlan, Projection};
     use sail_function::scalar::jev::JevKind;
 
-    let contains_jev = |expr: &Expr| {
+    let contains_async = |expr: &Expr| {
         expr.exists(|expr| {
             Ok(matches!(expr, Expr::ScalarFunction(function)
                 if function.func.as_async().is_some()
@@ -73,16 +75,16 @@ pub fn prepare_async_functions(
     };
     // This scan avoids plan transformation for queries without async Jev calls,
     // at the cost of another scan when they are present.
-    let has_jev = plan.apply_with_subqueries(|node| {
+    let has_async = plan.apply_with_subqueries(|node| {
         node.apply_expressions(|expr| {
-            Ok(if contains_jev(expr)? {
+            Ok(if contains_async(expr)? {
                 TreeNodeRecursion::Stop
             } else {
                 TreeNodeRecursion::Continue
             })
         })
     })? == TreeNodeRecursion::Stop;
-    if !has_jev {
+    if !has_async {
         return Ok(plan);
     }
     plan.transform_up_with_subqueries(|plan| {
@@ -116,14 +118,14 @@ pub fn prepare_async_functions(
                 let Some(predicate) = join.filter.take() else {
                     return Ok(Transformed::no(LogicalPlan::Join(join)));
                 };
-                if !contains_jev(&predicate)? {
+                if !contains_async(&predicate)? {
                     join.filter = Some(predicate);
                     return Ok(Transformed::no(LogicalPlan::Join(join)));
                 }
                 let mut asynchronous = Vec::new();
                 let mut synchronous = Vec::new();
                 for predicate in split_conjunction_owned(predicate) {
-                    if contains_jev(&predicate)? {
+                    if contains_async(&predicate)? {
                         asynchronous.push(predicate);
                     } else {
                         synchronous.push(predicate);
@@ -149,11 +151,11 @@ pub fn prepare_async_functions(
                 let mut projection = output.clone();
                 let mut next_alias = 0usize;
                 for order in &mut sort.expr {
-                    if !contains_jev(&order.expr)? {
+                    if !contains_async(&order.expr)? {
                         continue;
                     }
                     let name = loop {
-                        let name = format!("__sail_jev_sort_{next_alias}");
+                        let name = format!("__sail_async_sort_{next_alias}");
                         next_alias += 1;
                         if !sort.input.schema().has_column_with_unqualified_name(&name) {
                             break name;
@@ -197,7 +199,7 @@ pub fn prepare_async_functions(
                                     && JevKind::from_name(function.func.name()).is_some()
                                 {
                                     let name = loop {
-                                        let name = format!("__sail_jev_aggregate_{next_alias}");
+                                        let name = format!("__sail_async_aggregate_{next_alias}");
                                         next_alias += 1;
                                         if !aggregate
                                             .input
