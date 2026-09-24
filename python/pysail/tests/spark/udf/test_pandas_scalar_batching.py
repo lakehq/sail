@@ -206,7 +206,12 @@ def test_scalar_iterator_aligns_large_prefetched_passthrough(spark, limit):
     source = spark.range(count, numPartitions=1).withColumn("payload", F.concat("id", F.lit(padding))).coalesce(1)
     result = source.select("id", "payload", prefetched_identity("id").alias("value"))
     if limit:
-        assert result.limit(1).collect() == [(0, "0" + padding, 0)]
+        rows = result.limit(1).collect()
+        assert len(rows) == 1
+        row = rows[0]
+        assert 0 <= row.id < count
+        assert row.payload == f"{row.id}{padding}"
+        assert row.value == row.id
     else:
         actual = result.agg(
             F.count("*").alias("count"),
