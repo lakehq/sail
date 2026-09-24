@@ -497,6 +497,17 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
             } else {
                 plan
             };
+            // Like Spark, alias an unaliased derived table so that enclosing
+            // operators cannot resolve columns hidden inside the subquery.
+            let plan = if alias.is_none() {
+                spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                    input: Box::new(plan),
+                    name: spec::Identifier::from("__auto_generated_subquery_name"),
+                    columns: vec![],
+                })
+            } else {
+                plan
+            };
             let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }

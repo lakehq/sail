@@ -25,6 +25,19 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
         let output_schema = Arc::clone(input.schema());
+        // Most predicates only reference the input's output. Resolving them against it
+        // first avoids building the descendant schema, which grows with the chain depth.
+        // An outer reference may instead belong to a descendant, so it takes the full path.
+        if let Ok(predicate) = self
+            .resolve_expression(condition.clone(), &output_schema, state)
+            .await
+            && !predicate.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn(..))))?
+        {
+            return Ok(LogicalPlan::Filter(Filter::try_new(
+                predicate,
+                Arc::new(input),
+            )?));
+        }
         let mut schemas = vec![Arc::clone(&output_schema)];
         let mut plan = &input;
         while let Some(child) = Self::filter_missing_input_child(plan, state) {
@@ -122,7 +135,7 @@ impl PlanResolver<'_> {
         plan: &'a LogicalPlan,
         state: &PlanResolverState,
     ) -> Option<&'a LogicalPlan> {
-        if state.is_filter_input_boundary(plan.schema()) {
+        if state.is_filter_input_boundary(plan) {
             return None;
         }
         let transparent = match plan {
@@ -144,6 +157,9 @@ impl PlanResolver<'_> {
             // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing
             // filter attributes. Sail's Distinct lowering cannot do so without
             // changing its deduplication keys; preserve those keys before supporting it.
+            // The same applies to dropDuplicates with a subset, which Sail lowers to DistinctOn.
+            // TODO: Spark's LateralJoin is a unary node over its left input, so a filter can
+            // recover attributes removed from that input. Sail lowers it to a Join instead.
             _ => false,
         };
         transparent

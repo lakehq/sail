@@ -77,7 +77,9 @@ pub(super) struct PlanResolverState {
     /// The type-checking schema and ordered name-resolution schemas for a filter.
     filter_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
     /// Outputs whose descendants cannot participate in missing-reference resolution.
-    filter_input_boundaries: Vec<DFSchemaRef>,
+    /// Each output is paired with its input so that a pass-through projection that
+    /// reproduces the output over a wider input (e.g. a join) is not a boundary.
+    filter_input_boundaries: Vec<(DFSchemaRef, Option<DFSchemaRef>)>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
@@ -228,17 +230,28 @@ impl PlanResolverState {
         }
     }
 
-    pub fn register_filter_input_boundary(&mut self, schema: DFSchemaRef) {
+    pub fn register_filter_input_boundary(&mut self, plan: &LogicalPlan) {
         // Empty outputs have no IDs distinguishing them from unrelated projections.
         // Their imported descendants already end at an empty alias or table scan.
-        if !schema.fields().is_empty() {
-            self.filter_input_boundaries.push(schema);
+        if !plan.schema().fields().is_empty() {
+            self.filter_input_boundaries
+                .push(Self::filter_input_boundary_key(plan));
         }
     }
 
-    pub fn is_filter_input_boundary(&self, schema: &DFSchemaRef) -> bool {
+    pub fn is_filter_input_boundary(&self, plan: &LogicalPlan) -> bool {
         // Rewriters can rebuild a projection's schema while preserving its field IDs.
-        self.filter_input_boundaries.contains(schema)
+        self.filter_input_boundaries
+            .contains(&Self::filter_input_boundary_key(plan))
+    }
+
+    fn filter_input_boundary_key(plan: &LogicalPlan) -> (DFSchemaRef, Option<DFSchemaRef>) {
+        (
+            Arc::clone(plan.schema()),
+            plan.inputs()
+                .first()
+                .map(|input| Arc::clone(input.schema())),
+        )
     }
 
     pub fn enter_filter_scope(

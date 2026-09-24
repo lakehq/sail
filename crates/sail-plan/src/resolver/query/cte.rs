@@ -42,6 +42,10 @@ impl PlanResolver<'_> {
             )?);
             state.insert_cte(reference, plan);
         }
-        self.resolve_query_plan(input, state).await
+        let plan = self.resolve_query_plan(input, state).await?;
+        // Spark's `WithCTE` also has the CTE definitions as children, so
+        // missing-reference recovery resolves only against the query output.
+        state.register_filter_input_boundary(&plan);
+        Ok(plan)
     }
 }

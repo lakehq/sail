@@ -136,8 +136,9 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>();
 
                 let plan = if is_all {
-                    let left_row_number_alias = state.register_field_name("row_num");
-                    let right_row_number_alias = state.register_field_name("row_num");
+                    // The row numbers are internal and must not be referenceable by name.
+                    let left_row_number_alias = state.next_field_id();
+                    let right_row_number_alias = state.next_field_id();
                     let left_row_number_window =
                         Expr::WindowFunction(Box::new(expr::WindowFunction {
                             fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),

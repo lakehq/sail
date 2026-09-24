@@ -171,7 +171,7 @@ impl PlanResolver<'_> {
                 let plan = rename_logical_plan(plan.as_ref().clone(), &names)?;
                 // The stored plan's internal field IDs belong to another resolver
                 // state. Missing-reference recovery must see only the fresh output.
-                state.register_filter_input_boundary(Arc::clone(plan.schema()));
+                state.register_filter_input_boundary(&plan);
                 plan
             }
         };
@@ -233,7 +233,11 @@ impl PlanResolver<'_> {
             Ok(plan)
         } else {
             let names = state.register_field_names(columns.iter().map(|c| &c.name));
-            Ok(rename_logical_plan(plan, &names)?)
+            let plan = rename_logical_plan(plan, &names)?;
+            // Spark renames view columns below the view's alias, so missing-reference
+            // recovery must not see the definition's column names under this output.
+            state.register_filter_input_boundary(&plan);
+            Ok(plan)
         }
     }
 
@@ -563,7 +567,7 @@ impl PlanResolver<'_> {
             let plan = rename_logical_plan(table_scan, &names)?;
             // Physical column names (including names such as "#0") are not
             // resolver field IDs. Only the renamed output is a resolution input.
-            state.register_filter_input_boundary(Arc::clone(plan.schema()));
+            state.register_filter_input_boundary(&plan);
             Ok(plan)
         } else {
             Ok(table_scan)
