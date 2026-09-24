@@ -46,6 +46,8 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
     .otherwise(value.clone())?;
 
+    // TODO: Match Spark's 5-bit INT and 6-bit BIGINT shift-count masking;
+    //  DataFusion's coercion can reject negative counts or use the wrong width.
     Ok(cast(cast(unsigned, unsigned_type) >> shift, input_type))
 }
 

@@ -161,3 +161,21 @@ Feature: shiftrightunsigned output schema
         | id | result |
         | 0  | 4      |
         | 1  | 0      |
+
+  Rule: Shift counts
+
+    @sail-bug
+    Scenario Outline: shiftrightunsigned masks the shift count for <kind> inputs
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT shiftrightunsigned(CAST(<value> AS <kind>), <shift>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | kind   | value | shift | result |
+        | INT    | 8     | 32    | 8      |
+        | BIGINT | -1    | -1    | 1      |

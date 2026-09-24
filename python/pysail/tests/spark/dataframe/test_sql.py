@@ -89,6 +89,44 @@ def test_sql_nvl2_preserves_widened_parameter_schema(spark, marker, named, ansi,
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param(
+            "SELECT 0 AS id, 1 AS v UNION ALL SELECT 1 AS id, {marker} AS v",
+            id="union-all",
+        ),
+        pytest.param(
+            "SELECT 0 AS id, 1 AS v UNION SELECT 1 AS id, {marker} AS v",
+            id="union-distinct",
+        ),
+        pytest.param(
+            "SELECT id, CASE WHEN id = 0 THEN 1 ELSE {marker} END AS v FROM range(2)",
+            id="case-projection",
+        ),
+    ],
+)
+def test_sql_conditional_preserves_composed_parameter_precision(spark, marker, named, query):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        args = {"value": 16777217.0} if named else [16777217.0]
+        df = spark.sql(query.format(marker=marker), args=args)
+        result = df.selectExpr(
+            "id",
+            "CASE WHEN id = 0 THEN CAST(2 AS FLOAT) ELSE v END AS case_result",
+            "if(id = 0, CAST(2 AS FLOAT), v) AS if_result",
+            "nvl2(nullif(id, 1), CAST(2 AS FLOAT), v) AS nvl2_result",
+        ).orderBy("id")
+        assert result.collect() == [
+            (0, 2.0, 2.0, 2.0),
+            (1, 16777217.0, 16777217.0, 16777217.0),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_sql_case_widens_parameter_marker_branch(spark):
     df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])

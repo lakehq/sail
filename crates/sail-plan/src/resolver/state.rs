@@ -88,6 +88,8 @@ pub(super) struct PlanResolverState {
     /// Positional parameter values available for IDENTIFIER clause evaluation.
     /// Set alongside `param_values` when resolving a `WithParameters` query node.
     positional_param_values: Vec<ScalarValue>,
+    /// Parameter-derived schemas may remain provisional after their values are bound.
+    has_parameterized_input: bool,
     /// Stack of in-scope lambda parameter frames (innermost last).
     /// Each frame holds the declared parameter names of one enclosing lambda
     /// function, along with the parameter field when the enclosing
@@ -115,6 +117,7 @@ impl PlanResolverState {
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
             positional_param_values: Vec::new(),
+            has_parameterized_input: false,
             lambda_param_scopes: Vec::new(),
             windows: HashMap::new(),
         }
@@ -294,9 +297,9 @@ impl PlanResolverState {
         &mut self.config
     }
 
-    /// Whether query parameters will be substituted after plan resolution.
+    /// Whether parameter-derived schemas still require deferred type coercion.
     pub fn has_unbound_parameters(&self) -> bool {
-        !self.param_values.is_empty() || !self.positional_param_values.is_empty()
+        self.has_parameterized_input
     }
 
     /// Returns the named parameter value for the given name, if any.
@@ -358,6 +361,9 @@ impl<'a> ParamValuesScope<'a> {
         named: HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> Self {
+        // Keep deferring coercion in callers after this scope ends: substituting
+        // parameters does not fully analyze CASE and UNION output schemas.
+        state.has_parameterized_input |= !named.is_empty() || !positional.is_empty();
         let previous_param_values = std::mem::replace(&mut state.param_values, named);
         let previous_positional_param_values =
             std::mem::replace(&mut state.positional_param_values, positional);
