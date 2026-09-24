@@ -436,12 +436,9 @@ async fn send(
         message: "Jev response body could not be read".to_owned(),
     })?;
     if !status.is_success() {
-        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        let detail = body
-            .get("detail")
-            .or_else(|| body.get("message"))
-            .or_else(|| body.get("error"));
-        let detail = detail.map(Value::to_string).unwrap_or_default();
+        let detail = serde_json::from_slice::<Value>(&bytes)
+            .map(|body| body.to_string())
+            .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
         // Redact the JSON-escaped spelling too (keys may contain quotes/backslashes).
         let quoted_key = Value::String(group.options.api_key.to_string()).to_string();
         let detail = detail

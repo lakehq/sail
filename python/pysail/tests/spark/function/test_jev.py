@@ -441,6 +441,25 @@ def test_permanent_status_is_not_retried(spark, jev, status):
     assert jev.request_count == 1
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"provider rejection marker: mock-default-key",
+        b'"provider rejection marker: mock-default-key"',
+        b'{"errors":[{"message":"provider rejection marker: mock-default-key"}]}',
+        b'{"detail":[],"message":"provider rejection marker: mock-default-key"}',
+        b'{"detail":[],"errors":[{"message":"provider rejection marker: mock-default-key"}]}',
+    ],
+)
+def test_http_errors_keep_provider_diagnostics(spark, jev, body):
+    jev.statuses.append((422, {}))
+    jev.encode_response = lambda _response: body
+    with pytest.raises(Exception, match="provider rejection marker") as error:
+        spark.sql("SELECT jev_noul('text', 'yes?')").collect()
+    assert "mock-default-key" not in str(error.value)
+    assert jev.request_count == 1
+
+
 def test_retry_header_precedence_and_budget(spark, jev):
     expected_attempts = 2
     jev.statuses.append((429, {"retry-after-ms": "1", "Retry-After": "60"}))
