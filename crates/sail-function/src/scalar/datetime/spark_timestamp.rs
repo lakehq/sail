@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use chrono::NaiveDateTime;
+use chrono::{FixedOffset, NaiveDateTime, NaiveTime, Utc};
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
@@ -11,11 +11,86 @@ use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use regex::Regex;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::scalar::datetime::format::DateTimeFormat;
+
+#[expect(clippy::expect_used)]
+static TIME_ONLY_TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)\A(T)?([0-9]{1,2})(?::([0-9]{1,2})(?::([0-9]{1,2})(?:\.([0-9]*))?([^0-9.].*)?)?)?\z",
+    )
+    .expect("valid time-only timestamp pattern")
+});
+
+/// The time-only branch of SparkDateTimeUtils.stringToTimestamp. Keep this
+/// separate from the dated parser: NTZ and explicit formats do not use today.
+fn time_only_timestamp(value: &str, default_timezone: &str) -> Result<Option<i64>> {
+    let trimmed = value.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
+    // Spark recognizes a leading T only at the beginning of the original string.
+    // Without T, a colon is required to distinguish a time from a year.
+    // Checking both before the regex keeps other invalid strings off its slow path.
+    let may_be_time = value.starts_with('T')
+        || matches!(
+            trimmed.as_bytes(),
+            [b'0'..=b'9', b':', ..] | [b'0'..=b'9', b'0'..=b'9', b':', ..]
+        );
+    if !may_be_time {
+        return Ok(None);
+    }
+    let Some(parts) = TIME_ONLY_TIMESTAMP.captures(trimmed) else {
+        return Ok(None);
+    };
+    let number = |index| {
+        parts.get(index).map_or(0, |x| {
+            x.as_str()
+                .bytes()
+                .fold(0, |n, b| n * 10 + u32::from(b - b'0'))
+        })
+    };
+    let micros = parts.get(5).map_or(0, |x| {
+        x.as_str()
+            .bytes()
+            .chain(std::iter::repeat(b'0'))
+            .take(6)
+            .fold(0, |n, b| n * 10 + u32::from(b - b'0'))
+    });
+    let time = NaiveTime::from_hms_micro_opt(number(2), number(3), number(4), micros)
+        .ok_or_else(|| exec_datafusion_err!("invalid timestamp time: {value}"))?;
+    let timezone = parts
+        .get(6)
+        .map(|x| x.as_str().trim_matches(|c: char| c <= ' '))
+        .unwrap_or(default_timezone);
+    let timezone = if timezone == "Z" {
+        "UTC"
+    } else if timezone.starts_with("UTC+") || timezone.starts_with("UTC-") {
+        &timezone[3..]
+    } else {
+        timezone
+    };
+    if timezone.starts_with(['+', '-']) {
+        let normalized = (timezone.len() == 3).then(|| format!("{timezone}:00"));
+        let offset = normalized
+            .as_deref()
+            .unwrap_or(timezone)
+            .parse::<FixedOffset>()
+            .map_err(|e| exec_datafusion_err!("invalid timestamp timezone: {e}"))?;
+        if offset.local_minus_utc().unsigned_abs() > 18 * 60 * 60 {
+            return exec_err!("invalid timestamp timezone: {timezone}");
+        }
+    }
+    // TODO: Support Java ZoneId aliases such as PST in the timestamp timezone
+    // resolver. Time-only inputs retain the dated parser's supported zone domain.
+    // The resolver also lacks Java's +h, +hh:mm:ss, and GMT/UT prefix forms.
+    let timezone: Tz = timezone.parse()?;
+    let date = Utc::now().with_timezone(&timezone).date_naive();
+    Ok(Some(
+        localize_with_fallback(&timezone, &date.and_time(time))?.timestamp_micros(),
+    ))
+}
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -119,10 +194,25 @@ impl TimestampParser {
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
-        let timestamp = match parse_timestamp(value) {
+        // Keep the original input for the time-only branch's leading T check.
+        let trimmed = value.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
+        let timestamp = match parse_timestamp(trimmed) {
             Ok(v) => v,
-            Err(_e) if safe => return Ok(None),
-            Err(e) => return Err(exec_datafusion_err!("{e}")),
+            Err(e) => {
+                if let TimestampParser::Ltz { default_timezone } = self {
+                    match time_only_timestamp(value, default_timezone) {
+                        Ok(Some(v)) => return Ok(Some(v)),
+                        Err(_) if safe => return Ok(None),
+                        Err(e) => return Err(e),
+                        Ok(None) => {}
+                    }
+                }
+                return if safe {
+                    Ok(None)
+                } else {
+                    Err(exec_datafusion_err!("{e}"))
+                };
+            }
         };
         if timestamp.time.second == 60 {
             return if safe {
