@@ -1,10 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
-use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
@@ -13,6 +14,7 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -28,6 +30,7 @@ use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
     SparkRegexpExtract, SparkRegexpExtractAll,
 };
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -37,6 +40,7 @@ use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
+use crate::function::scalar::lambda::lambda_with_fresh_parameter;
 
 fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
     let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
@@ -81,6 +85,55 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
     let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
     Ok(array_element(matches, lit(1i64)))
+}
+
+fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (string, pattern, index) = match input.arguments.len() {
+        2 => {
+            let (string, pattern) = input.arguments.two()?;
+            (string, pattern, lit(0i32))
+        }
+        3 => input.arguments.three()?,
+        _ => {
+            return Err(PlanError::analysis(
+                "regexp_instr requires 2 or 3 arguments",
+            ));
+        }
+    };
+    let schema = input.function_context.schema;
+    for arg in [&string, &pattern] {
+        if arg.get_type(schema)?.is_nested() {
+            return Err(PlanError::analysis(
+                "regexp_instr requires string arguments",
+            ));
+        }
+    }
+    let index_type = index.get_type(schema)?;
+    if !(index_type.is_numeric() || index_type.is_string() || index_type.is_null()) {
+        return Err(PlanError::analysis(
+            "regexp_instr requires an integer index",
+        ));
+    }
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let index = if index_type.is_string() && !ansi_mode {
+        ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![index])
+    } else {
+        // ANSI conversion is deferred until the search arguments are evaluated.
+        // Non-ANSI numeric narrowing preserves NULLs, and the converted value is unused.
+        index
+    };
+    Ok(expr::Expr::HigherOrderFunction(
+        expr::HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(
+                ansi_mode,
+            ))),
+            vec![
+                cast(string, DataType::Utf8),
+                cast(pattern, DataType::Utf8),
+                lambda_with_fresh_parameter(index, "_regexp_instr")?,
+            ],
+        ),
+    ))
 }
 
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -430,7 +483,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::udf(SparkRegexpExtract::new())),
         ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
-        ("regexp_instr", F::udf(RegexpInstrFunc::new())),
+        ("regexp_instr", F::custom(regexp_instr)),
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),

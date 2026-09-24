@@ -7912,6 +7912,8 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "sail-logical-plan",
+ "sail-python-udf",
 ]
 
 [[package]]

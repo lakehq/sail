@@ -25,6 +25,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -380,6 +383,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -752,6 +758,9 @@ data:
               Projection: distributed_iceberg_commit.#0 AS id, __sail_file_path
                 Projection: distributed_iceberg_commit.id AS #0, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, distributed_iceberg_commit.__sail_iceberg_partition_spec_id AS __sail_iceberg_partition_spec_id, distributed_iceberg_commit.__sail_iceberg_partition AS __sail_iceberg_partition
                   TableScan: distributed_iceberg_commit projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition]
+
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
@@ -1230,6 +1239,9 @@ data:
                           Projection: range.#1 AS #2
                             Projection: range.id AS #1
                               TableScan: range
+
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
@@ -1911,6 +1923,9 @@ data:
                 Projection: distributed_iceberg_commit.id AS #0, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, distributed_iceberg_commit.__sail_iceberg_partition_spec_id AS __sail_iceberg_partition_spec_id, distributed_iceberg_commit.__sail_iceberg_partition AS __sail_iceberg_partition
                   TableScan: distributed_iceberg_commit projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition]
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -2384,6 +2399,9 @@ data:
               Projection: distributed_iceberg_commit.#0 AS id, __sail_file_path
                 Projection: distributed_iceberg_commit.id AS #0, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, distributed_iceberg_commit.__sail_iceberg_partition_spec_id AS __sail_iceberg_partition_spec_id, distributed_iceberg_commit.__sail_iceberg_partition AS __sail_iceberg_partition
                   TableScan: distributed_iceberg_commit projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition]
+
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
