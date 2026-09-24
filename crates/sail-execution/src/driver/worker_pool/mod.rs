@@ -7,6 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 pub use options::WorkerPoolOptions;
 use sail_telemetry::events::SystemEventReporter;
+use tokio::sync::oneshot;
 
 use crate::driver::worker_pool::state::WorkerDescriptor;
 use crate::id::{IdGenerator, WorkerId};
@@ -20,6 +21,7 @@ pub struct WorkerPool {
     worker_id_generator: IdGenerator<WorkerId>,
     event_reporter: SystemEventReporter,
     pub(crate) profile: Option<ProfileHandle>,
+    pending_stops: Vec<oneshot::Receiver<()>>,
 }
 
 impl WorkerPool {
@@ -35,6 +37,7 @@ impl WorkerPool {
             worker_id_generator: IdGenerator::new(),
             event_reporter,
             profile: None,
+            pending_stops: Vec::new(),
         }
     }
 }

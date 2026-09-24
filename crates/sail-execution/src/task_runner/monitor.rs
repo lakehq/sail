@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::sync::Arc;
 use std::time::Instant;
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -15,6 +16,7 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::profiling::{ProfileEvent, ProfileHandle, now_us};
+use crate::task_runner::preparation::TaskMetrics;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 pub struct TaskMonitor {
@@ -23,6 +25,7 @@ pub struct TaskMonitor {
     stream: SendableRecordBatchStream,
     signal: oneshot::Receiver<()>,
     profile: Option<ProfileHandle>,
+    metrics: Option<Arc<TaskMetrics>>,
 }
 
 impl TaskMonitor {
@@ -32,6 +35,7 @@ impl TaskMonitor {
         stream: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
         profile: Option<ProfileHandle>,
+        metrics: Option<Arc<TaskMetrics>>,
     ) -> Self {
         Self {
             handle,
@@ -39,6 +43,7 @@ impl TaskMonitor {
             stream,
             signal,
             profile,
+            metrics,
         }
     }
 
@@ -49,6 +54,7 @@ impl TaskMonitor {
             stream,
             signal,
             profile,
+            metrics,
         } = self;
         let started = profile.as_ref().map(|_| Instant::now());
         let started_at = profile.as_ref().map(|_| now_us());
@@ -57,21 +63,15 @@ impl TaskMonitor {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
-        if let TaskRunnerMessage::ReportTaskStatus { status, .. } = &message
-            && let (Some(profile), Some(started_at), Some(started)) =
-                (&profile, started_at, started)
-        {
-            profile.record_batch([
-                (started_at, ProfileEvent::task_started(&key)),
-                (
-                    now_us(),
-                    ProfileEvent::task_finished(
-                        &key,
-                        format!("{status:?}"),
-                        started.elapsed().as_micros(),
-                    ),
-                ),
-            ]);
+        if let TaskRunnerMessage::ReportTaskStatus { status, .. } = &message {
+            Self::record_finished(
+                profile.as_ref(),
+                metrics.as_deref(),
+                &key,
+                *status,
+                started_at,
+                started,
+            );
         }
         let _ = handle.send(message).await;
     }
@@ -79,6 +79,10 @@ impl TaskMonitor {
     pub async fn supervise(self) {
         let handle = self.handle.clone();
         let key = self.key.clone();
+        let profile = self.profile.clone();
+        let metrics = self.metrics.clone();
+        let started = profile.as_ref().map(|_| Instant::now());
+        let started_at = profile.as_ref().map(|_| now_us());
         // Admission now has one span per batch. Preserve task identity on the monitor
         // so preparation and execution spans can still be attributed to each attempt.
         let span = Span::enter_with_local_parent("TaskMonitor::run").with_properties(|| {
@@ -94,7 +98,43 @@ impl TaskMonitor {
         });
         let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
+            if let TaskRunnerMessage::ReportTaskStatus { key, status, .. } = &message {
+                Self::record_finished(
+                    profile.as_ref(),
+                    metrics.as_deref(),
+                    key,
+                    *status,
+                    started_at,
+                    started,
+                );
+            }
             let _ = handle.send(message).await;
+        }
+    }
+
+    fn record_finished(
+        profile: Option<&ProfileHandle>,
+        metrics: Option<&TaskMetrics>,
+        key: &TaskKey,
+        status: TaskStatus,
+        started_at: Option<u128>,
+        started: Option<Instant>,
+    ) {
+        if let (Some(profile), Some(started_at), Some(started)) = (profile, started_at, started) {
+            if let Some(metrics) = metrics {
+                metrics.record(profile, key, matches!(status, TaskStatus::Succeeded));
+            }
+            profile.record_batch([
+                (started_at, ProfileEvent::task_started(key)),
+                (
+                    now_us(),
+                    ProfileEvent::task_finished(
+                        key,
+                        format!("{status:?}"),
+                        started.elapsed().as_micros(),
+                    ),
+                ),
+            ]);
         }
     }
 

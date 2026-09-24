@@ -55,6 +55,7 @@ impl Actor for WorkerActor {
             task_runner: None,
             system_info_profile: None,
             profile: None,
+            shutdown_notifier: None,
         }
     }
 
@@ -151,7 +152,10 @@ impl Actor for WorkerActor {
                 self.handle_server_ready(ctx, port, signal)
             }
             WorkerMessage::StartHeartbeat => self.handle_start_heartbeat(ctx),
-            WorkerMessage::Shutdown => ActorAction::Stop,
+            WorkerMessage::Shutdown { result } => {
+                self.shutdown_notifier = result;
+                ActorAction::Stop
+            }
         }
     }
 
@@ -164,12 +168,19 @@ impl Actor for WorkerActor {
                 .send(crate::task_runner::TaskRunnerMessage::Shutdown)
                 .await;
         }
-        self.server.stop().await;
+        let server = std::mem::take(&mut self.server).begin_stop();
         ctx.children_mut().join().await;
         if let Some(profile) = self.profile.take()
             && let Err(error) = profile.finish().await
         {
             error!("failed to write worker profile: {error}");
+        }
+        // Let the stop RPC return before waiting for the server's graceful shutdown.
+        if let Some(result) = self.shutdown_notifier.take() {
+            let _ = result.send(());
+        }
+        if let Some(server) = server {
+            let _ = server.await;
         }
         info!("worker {} server has stopped", self.options.worker_id);
     }

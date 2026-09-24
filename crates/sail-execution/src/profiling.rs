@@ -2,6 +2,7 @@
 //!
 //! Set `SAIL_PROFILE_ENABLED=1` and `SAIL_PROFILE_LOCATION` to a directory,
 //! `file://` directory URL, or `s3://bucket/prefix` to write gzip JSONL files.
+//! Kubernetes workers need an S3 location or a directory on a shared persistent volume.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,8 +22,8 @@ use url::Url;
 
 use crate::id::TaskKey;
 
-const ENABLED: &str = "SAIL_PROFILE_ENABLED";
-const LOCATION: &str = "SAIL_PROFILE_LOCATION";
+pub(crate) const ENABLED: &str = "SAIL_PROFILE_ENABLED";
+pub(crate) const LOCATION: &str = "SAIL_PROFILE_LOCATION";
 
 static SENDER: Mutex<Option<mpsc::UnboundedSender<Message>>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<RecordedEvent>> = Mutex::new(Vec::new());

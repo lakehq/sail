@@ -212,22 +212,21 @@ impl WorkerService for WorkerServer {
         request: Request<StopWorkerRequest>,
     ) -> Result<Response<StopWorkerResponse>, Status> {
         let request = request.into_inner();
-        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
         rpc!(self, "stop_worker", "start", None, "stop_worker");
+        let (result, receiver) = tokio::sync::oneshot::channel();
         self.worker
-            .send(WorkerMessage::Shutdown)
+            .send(WorkerMessage::Shutdown {
+                result: Some(result),
+            })
             .await
             .map_err(ExecutionError::from)?;
+        // The driver may delete the worker pod after this RPC returns.
+        receiver
+            .await
+            .map_err(|_| Status::unavailable("worker stopped before shutdown completed"))?;
         let response = StopWorkerResponse {};
-        rpc!(
-            self,
-            "stop_worker",
-            "complete",
-            started.map(|x| x.elapsed().as_micros()),
-            "completed"
-        );
         debug!("{response:?}");
         Ok(Response::new(response))
     }

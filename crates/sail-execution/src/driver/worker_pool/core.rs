@@ -33,6 +33,12 @@ impl WorkerPool {
         for worker_id in worker_ids {
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
+        // A completed stop RPC means the worker has finished its profile write attempt.
+        // Wait for all stop requests, including workers stopped before driver shutdown,
+        // before deleting Kubernetes worker pods.
+        for receiver in std::mem::take(&mut self.pending_stops) {
+            let _ = receiver.await;
+        }
         // TODO: support timeout for worker manager stop
         self.worker_manager.stop().await?;
         Ok(())
@@ -200,11 +206,14 @@ impl WorkerPool {
                         return;
                     }
                 };
+                let (done, receiver) = tokio::sync::oneshot::channel();
                 ctx.spawn(async move {
                     if let Err(e) = client.stop_worker().await {
                         Self::log_worker_control_error("stop worker", worker_id, &e);
                     }
+                    let _ = done.send(());
                 });
+                self.pending_stops.push(receiver);
                 worker.state = WorkerState::Completed;
                 worker.messages.extend(reason);
                 event_reporter.report(SystemEvent::WorkerUpdated {

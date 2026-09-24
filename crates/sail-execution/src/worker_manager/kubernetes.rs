@@ -21,6 +21,7 @@ use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
+use crate::profiling;
 use crate::shuffle::ShuffleBackendKind;
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
@@ -258,6 +259,15 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
+        for name in [profiling::ENABLED, profiling::LOCATION] {
+            if let Ok(value) = env::var(name) {
+                env.push(EnvVar {
+                    name: name.to_string(),
+                    value: Some(value),
+                    value_from: None,
+                });
+            }
+        }
         if let ShuffleBackendKind::Flight { compression } = &shuffle_backend {
             env.push(EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),

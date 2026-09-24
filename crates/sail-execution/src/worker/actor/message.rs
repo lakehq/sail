@@ -15,7 +15,9 @@ pub enum WorkerMessage {
         signal: oneshot::Sender<()>,
     },
     StartHeartbeat,
-    Shutdown,
+    Shutdown {
+        result: Option<oneshot::Sender<()>>,
+    },
 }
 
 impl SpanAssociation for WorkerMessage {
@@ -23,7 +25,7 @@ impl SpanAssociation for WorkerMessage {
         match self {
             Self::ServerReady { .. } => "ServerReady",
             Self::StartHeartbeat => "StartHeartbeat",
-            Self::Shutdown => "Shutdown",
+            Self::Shutdown { .. } => "Shutdown",
         }
         .into()
     }
@@ -34,7 +36,7 @@ impl SpanAssociation for WorkerMessage {
             Self::ServerReady { port, signal: _ } => {
                 properties.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
-            Self::StartHeartbeat | Self::Shutdown => {}
+            Self::StartHeartbeat | Self::Shutdown { .. } => {}
         }
         properties
             .into_iter()

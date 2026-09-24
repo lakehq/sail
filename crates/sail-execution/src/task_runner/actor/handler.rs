@@ -82,7 +82,7 @@ impl TaskRunnerActor {
         for task in tasks {
             let key = task.task_key(job_id, stage);
             profile!(self, "task_starting", "{key:?}");
-            let stream = TaskPreparation {
+            let (stream, metrics) = TaskPreparation {
                 session_id: self.session_id.clone(),
                 profile: self.profile.clone(),
                 handle: ctx.handle().clone(),
@@ -97,8 +97,15 @@ impl TaskRunnerActor {
             let (tx, rx) = oneshot::channel();
             self.signals.insert(key.clone(), tx);
             ctx.spawn(
-                TaskMonitor::new(ctx.handle().clone(), key, stream, rx, self.profile.clone())
-                    .supervise(),
+                TaskMonitor::new(
+                    ctx.handle().clone(),
+                    key,
+                    stream,
+                    rx,
+                    self.profile.clone(),
+                    metrics,
+                )
+                .supervise(),
             );
         }
         Ok(())
@@ -182,7 +189,7 @@ impl TaskRunnerActor {
                         .await;
                     if let Err(error) = output {
                         error!("failed to report task status with retries: {error}");
-                        let _ = worker.send(WorkerMessage::Shutdown).await;
+                        let _ = worker.send(WorkerMessage::Shutdown { result: None }).await;
                     }
                 });
             }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use datafusion::arrow::datatypes::Schema;
@@ -12,7 +12,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use log::debug;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -36,6 +36,26 @@ pub(super) struct TaskPreparation {
     pub celeborn: bool,
 }
 
+#[derive(Default)]
+pub(super) struct TaskMetrics {
+    plan: OnceLock<Arc<dyn ExecutionPlan>>,
+}
+
+impl TaskMetrics {
+    pub(super) fn record(&self, profile: &ProfileHandle, key: &TaskKey, success: bool) {
+        if let Some(plan) = self.plan.get() {
+            profile.record(ProfileEvent::OperatorMetrics {
+                job_id: key.job_id.into(),
+                stage: key.stage,
+                partition: key.partition,
+                attempt: key.attempt,
+                metrics: summarize_plan_metrics(plan.as_ref()),
+                success,
+            });
+        }
+    }
+}
+
 impl TaskPreparation {
     /// The returned schema belongs to ShuffleWriteExec's completion stream, not the stage's data.
     pub fn stream(
@@ -44,10 +64,23 @@ impl TaskPreparation {
         definition: Arc<TaskDefinition>,
         proto: Arc<PhysicalPlanNode>,
         context: Arc<TaskContext>,
-    ) -> SendableRecordBatchStream {
-        preparation_stream(key.clone(), self.profile.clone(), move |canceled| {
-            self.execute_plan(&key, &definition, &proto, &canceled, context)
-        })
+    ) -> (SendableRecordBatchStream, Option<Arc<TaskMetrics>>) {
+        let metrics = self
+            .profile
+            .as_ref()
+            .map(|_| Arc::new(TaskMetrics::default()));
+        let plan_metrics = metrics.clone();
+        let stream = preparation_stream(key.clone(), self.profile.clone(), move |canceled| {
+            self.execute_plan(
+                &key,
+                &definition,
+                &proto,
+                &canceled,
+                plan_metrics.as_deref(),
+                context,
+            )
+        });
+        (stream, metrics)
     }
 
     fn execute_plan(
@@ -56,6 +89,7 @@ impl TaskPreparation {
         definition: &TaskDefinition,
         proto: &PhysicalPlanNode,
         canceled: &CancellationToken,
+        metrics: Option<&TaskMetrics>,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
@@ -72,15 +106,6 @@ impl TaskPreparation {
             TaskKeyDisplay(key),
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        if let Some(profile) = &self.profile {
-            profile.diagnostic("execution_plan", || {
-                format!(
-                    "{} execution plan\n{}",
-                    TaskKeyDisplay(key),
-                    DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-                )
-            });
-        }
         let plan = trace_execution_plan(
             plan,
             TracingExecOptions {
@@ -98,27 +123,10 @@ impl TaskPreparation {
             ));
         }
         let stream = plan.execute(key.partition, context)?;
-        let schema = stream.schema();
-        let key = key.clone();
-        let profile = self.profile.clone();
-        let stream = futures::stream::unfold((stream, plan), move |(mut stream, plan)| {
-            let key = key.clone();
-            let profile = profile.clone();
-            async move {
-                match stream.next().await {
-                    Some(Ok(batch)) => Some((Ok(batch), (stream, plan))),
-                    Some(Err(error)) => {
-                        record_operator_metrics(profile.as_ref(), &key, plan.as_ref(), false);
-                        Some((Err(error), (stream, plan)))
-                    }
-                    None => {
-                        record_operator_metrics(profile.as_ref(), &key, plan.as_ref(), true);
-                        None
-                    }
-                }
-            }
-        });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        if let Some(metrics) = metrics {
+            let _ = metrics.plan.set(plan);
+        }
+        Ok(stream)
     }
 
     fn rewrite_file_scans(
@@ -197,24 +205,6 @@ impl TaskPreparation {
             partitioning,
             self.profile.clone(),
         )))
-    }
-}
-
-fn record_operator_metrics(
-    profile: Option<&ProfileHandle>,
-    key: &TaskKey,
-    plan: &dyn ExecutionPlan,
-    success: bool,
-) {
-    if let Some(profile) = profile {
-        profile.record(ProfileEvent::OperatorMetrics {
-            job_id: key.job_id.into(),
-            stage: key.stage,
-            partition: key.partition,
-            attempt: key.attempt,
-            metrics: summarize_plan_metrics(plan),
-            success,
-        });
     }
 }
 

@@ -7,6 +7,7 @@ mod rpc;
 pub(crate) use message::{WorkerLocation, WorkerMessage};
 pub(crate) use options::WorkerOptions;
 use sail_common::actor::ActorHandle;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::driver::DriverClientSet;
@@ -21,4 +22,5 @@ pub struct WorkerActor {
     task_runner: Option<ActorHandle<TaskRunnerActor>>,
     system_info_profile: Option<JoinHandle<()>>,
     profile: Option<ProfileHandle>,
+    shutdown_notifier: Option<oneshot::Sender<()>>,
 }
