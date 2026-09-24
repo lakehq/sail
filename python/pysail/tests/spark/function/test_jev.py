@@ -19,6 +19,16 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = [pytest.mark.skipif(is_jvm_spark(), reason="Jev functions are Sail extensions"), pytest.mark.timeout(60)]
 
+EXPECTED_NOUL = 0.75
+EXPECTED_CONFIDENCE = 0.8
+EXPECTED_INPUT_TOKENS = 17
+EXPECTED_OUTPUT_TOKENS = 3
+DEFAULT_ATTEMPTS = 3
+MAX_CONCURRENCY = 4
+BATCH_TARGET_QUESTIONS = 4
+BATCH_TARGET_BYTES = 4096
+MAX_REQUEST_BYTES = 32768
+
 
 @pytest.fixture(scope="module")
 def jev_service():
@@ -35,12 +45,12 @@ def remote(jev_service):
         "TYPESAFE_BASE_URL": jev_service.url,
         "TYPESAFE_API_KEY": "mock-default-key",
         "TYPESAFE_DEFAULT_MODEL": "jev-test",
-        "SAIL_JEV_MAX_CONCURRENCY": "4",
+        "SAIL_JEV_MAX_CONCURRENCY": str(MAX_CONCURRENCY),
         "SAIL_JEV_MAX_PENDING_REQUESTS": "8",
         "SAIL_JEV_MAX_PENDING_BYTES": "262144",
-        "SAIL_JEV_BATCH_TARGET_QUESTIONS": "4",
-        "SAIL_JEV_BATCH_TARGET_BYTES": "4096",
-        "SAIL_JEV_MAX_REQUEST_BYTES": "32768",
+        "SAIL_JEV_BATCH_TARGET_QUESTIONS": str(BATCH_TARGET_QUESTIONS),
+        "SAIL_JEV_BATCH_TARGET_BYTES": str(BATCH_TARGET_BYTES),
+        "SAIL_JEV_MAX_REQUEST_BYTES": str(MAX_REQUEST_BYTES),
     }
     with spark_connect_server(envs=envs) as server:
         yield server.remote
@@ -66,22 +76,22 @@ def test_noul_metadata_and_options_position(spark, jev):
         .first()
         .j
     )
-    assert result.noul == 0.75
+    assert result.noul == EXPECTED_NOUL
     assert result.model == "jev-pinned"
     assert result.request_id == "mock-1"
     assert result.batch_id
-    assert result.usage.input_tokens == 17
-    assert result.usage.output_tokens == 3
+    assert result.usage.input_tokens == EXPECTED_INPUT_TOKENS
+    assert result.usage.output_tokens == EXPECTED_OUTPUT_TOKENS
     assert jev.requests[0]["authorization"] == "Bearer override-key"
     assert jev.requests[0]["path"] == "/v1/systemone"
-    assert list(jev.requests[0]["body"]["questions"].values())[0]["instructions"] == "yes?"
+    assert next(iter(jev.requests[0]["body"]["questions"].values()))["instructions"] == "yes?"
 
 
 def test_choice_keeps_complete_distribution(spark, jev):
     result = spark.sql("SELECT jev_choice('text', NULL, map('a', 'first', 'b', NULL)) AS j").first().j
     assert result.choice == "a"
     assert result.probabilities == {"a": 0.5, "b": 0.5}
-    assert result.confidence == 0.8
+    assert result.confidence == EXPECTED_CONFIDENCE
     question = next(iter(jev.requests[0]["body"]["questions"].values()))
     assert question["criteria"] == {"a": "first", "b": None}
     assert "instructions" not in question
@@ -89,7 +99,7 @@ def test_choice_keeps_complete_distribution(spark, jev):
 
 def test_nullable_noul_descriptions(spark, jev):
     result = spark.sql("SELECT jev_noul('text', 'yes?', map('true', NULL, 'false', 'no')) AS j").first().j
-    assert result.noul == 0.75
+    assert result.noul == EXPECTED_NOUL
     question = next(iter(jev.requests[0]["body"]["questions"].values()))
     assert question["criteria"] == {"true": None, "false": "no"}
 
@@ -103,7 +113,7 @@ def test_score_operating_guidance_is_not_local_schema_validation(spark, jev, lev
 
 
 def test_string_state_is_literal_and_json_null_instructions_are_preserved(spark, jev):
-    assert spark.sql("SELECT jev_noul('{\"text\": 1}', parse_json('null')) AS j").first().j.noul == 0.75
+    assert spark.sql("SELECT jev_noul('{\"text\": 1}', parse_json('null')) AS j").first().j.noul == EXPECTED_NOUL
     body = jev.requests[0]["body"]
     assert body["state"] == '{"text": 1}'
     question = next(iter(body["questions"].values()))
@@ -112,12 +122,13 @@ def test_string_state_is_literal_and_json_null_instructions_are_preserved(spark,
 
 
 def test_score_preserves_structured_legend(spark, jev):
+    expected_score = 0.5
     row = spark.sql(
         "SELECT j.score, j.probabilities, to_json(j.legend['0']) AS low, to_json(j.legend['1']) AS high "
         'FROM (SELECT jev_score(parse_json(\'{"text": ["nested"]}\'), parse_json(\'["rate"]\'), '
         'parse_json(\'[{"label": "low"}, ["high"]]\')) AS j)'
     ).first()
-    assert row.score == 0.5
+    assert row.score == expected_score
     assert row.probabilities == {"0": 0.5, "1": 0.5}
     assert json.loads(row.low) == {"label": "low"}
     assert json.loads(row.high) == ["high"]
@@ -132,7 +143,7 @@ def test_mixed_questions_preserve_ids_and_additional_answer_fields(spark, jev):
     }
     encoded = json.dumps(questions)
     row = spark.sql(
-        f"SELECT to_json(j.answers['q/0']) AS noul, to_json(j.answers['q.1']) AS choice, "
+        f"SELECT to_json(j.answers['q/0']) AS noul, to_json(j.answers['q.1']) AS choice, "  # noqa: S608 -- fixed test JSON
         f"to_json(j.answers['q:2']) AS score FROM (SELECT jev_system_one('text', parse_json('{encoded}')) AS j)"
     ).first()
     answers = [json.loads(row.noul), json.loads(row.choice), json.loads(row.score)]
@@ -143,83 +154,91 @@ def test_mixed_questions_preserve_ids_and_additional_answer_fields(spark, jev):
 
 @pytest.mark.parametrize("expression", ["jev_noul('text', 'yes?')", "jev_models()"])
 def test_all_scalar_and_zero_argument_row_cardinality(spark, jev, expression):
-    rows = spark.sql(f"SELECT {expression} AS j FROM range(0, 17, 1, 1)").collect()
-    assert len(rows) == 17
+    expected_rows = 17
+    rows = spark.sql(f"SELECT {expression} AS j FROM range(0, 17, 1, 1)").collect()  # noqa: S608 -- fixed test expressions
+    assert len(rows) == expected_rows
     assert all(row.j is not None for row in rows)
     if expression.startswith("jev_models"):
         assert all(row.j.models[0].name == "jev-test" for row in rows)
         assert all(request["path"] == "/v1/models" for request in jev.requests)
     else:
-        assert all(row.j.noul == 0.75 for row in rows)
+        assert all(row.j.noul == EXPECTED_NOUL for row in rows)
         assert jev.request_count < len(rows)
-        assert all(len(request["body"]["questions"]) <= 4 for request in jev.requests)
-        assert sum(len(request["body"]["questions"]) for request in jev.requests) == 17
+        assert all(len(request["body"]["questions"]) <= BATCH_TARGET_QUESTIONS for request in jev.requests)
+        assert sum(len(request["body"]["questions"]) for request in jev.requests) == expected_rows
 
 
 @pytest.mark.parametrize("expression", ["jev_noul('text', 'yes?')", "jev_models()"])
 def test_zero_rows_issue_no_requests(spark, jev, expression):
-    assert spark.sql(f"SELECT {expression} FROM range(0, 0, 1, 1)").collect() == []
+    assert spark.sql(f"SELECT {expression} FROM range(0, 0, 1, 1)").collect() == []  # noqa: S608 -- fixed test expressions
     assert jev.request_count == 0
 
 
 def test_null_skipping_is_row_specific(spark, jev):
+    expected_rows = 9
+    expected_questions = 4
     rows = spark.sql(
         "SELECT id, jev_noul(CASE WHEN id % 2 = 0 THEN CAST(NULL AS STRING) ELSE 'text' END, 'yes?') AS j "
         "FROM range(0, 9, 1, 1)"
     ).collect()
-    assert len(rows) == 9
+    assert len(rows) == expected_rows
     assert all((row.j is None) == (row.id % 2 == 0) for row in rows)
-    assert sum(len(request["body"]["questions"]) for request in jev.requests) == 4
+    assert sum(len(request["body"]["questions"]) for request in jev.requests) == expected_questions
 
 
 def test_entirely_null_state_issues_no_requests(spark, jev):
+    expected_rows = 9
     rows = spark.sql("SELECT jev_noul(CAST(NULL AS STRING), 'yes?') AS j FROM range(0, 9, 1, 1)").collect()
-    assert len(rows) == 9
+    assert len(rows) == expected_rows
     assert all(row.j is None for row in rows)
     assert jev.request_count == 0
 
 
 def test_batch_usage_is_shared_without_losing_rows(spark, jev):
+    expected_rows = 9
     rows = spark.sql("SELECT id, jev_noul('text', concat('question ', id)) AS j FROM range(0, 9, 1, 1)").collect()
     batches = {row.j.batch_id for row in rows}
-    assert len(rows) == 9
-    assert len(batches) == jev.request_count < 9
+    assert len(rows) == expected_rows
+    assert len(batches) == jev.request_count < expected_rows
     for batch_id in batches:
         batch = [row.j for row in rows if row.j.batch_id == batch_id]
         assert len({row.request_id for row in batch}) == 1
-        assert all(row.usage.input_tokens == 17 for row in batch)
-    assert sum(row.j.usage.input_tokens for row in rows) == 9 * 17
-    assert len(batches) * 17 < 9 * 17
+        assert all(row.usage.input_tokens == EXPECTED_INPUT_TOKENS for row in batch)
+    assert sum(row.j.usage.input_tokens for row in rows) == expected_rows * EXPECTED_INPUT_TOKENS
+    assert len(batches) * EXPECTED_INPUT_TOKENS < expected_rows * EXPECTED_INPUT_TOKENS
 
 
 def test_separate_expressions_do_not_merge_requests(spark, jev):
+    expected_rows = 9
     rows = spark.sql(
         "SELECT jev_noul('text', 'yes?') AS n, jev_choice('text', 'which?', map('a', 'A', 'b', 'B')) AS c "
         "FROM range(0, 9, 1, 1)"
     ).collect()
-    assert len(rows) == 9
-    assert all(row.n.noul == 0.75 and row.c.choice == "a" for row in rows)
+    assert len(rows) == expected_rows
+    assert all(row.n.noul == EXPECTED_NOUL and row.c.choice == "a" for row in rows)
     assert all(len({q["type"] for q in request["body"]["questions"].values()}) == 1 for request in jev.requests)
     assert {q["type"] for request in jev.requests for q in request["body"]["questions"].values()} == {"noul", "choice"}
 
 
 def test_different_states_overlap_and_return_to_original_rows(spark, jev):
+    expected_rows = 24
     jev.delay = lambda body, _ordinal: 0.02 * (4 - int(body["state"]) % 4)
     rows = spark.sql("SELECT id, jev_noul(CAST(id AS STRING), 'yes?') AS j FROM range(0, 24, 1, 4)").collect()
-    assert len(rows) == 24
+    assert len(rows) == expected_rows
     assert all(row.j.noul == pytest.approx(row.id / 100) for row in rows)
-    assert jev.request_count == 24
-    assert 1 < jev.peak_active <= 4
+    assert jev.request_count == expected_rows
+    assert 1 < jev.peak_active <= MAX_CONCURRENCY
     assert all(len(request["body"]["questions"]) == 1 for request in jev.requests)
 
 
 def test_credentials_and_model_split_batches(spark, jev):
+    expected_rows = 12
     rows = spark.sql(
         "SELECT id, jev_noul('text', 'yes?', NULL, "
         "map('model', concat('model-', id % 2), 'api_key', concat('key-', id % 3))) AS j "
         "FROM range(0, 12, 1, 1)"
     ).collect()
-    assert len(rows) == 12
+    assert len(rows) == expected_rows
     assert all(row.j.model == f"model-{row.id % 2}" for row in rows)
     assert {request["authorization"] for request in jev.requests} == {"Bearer key-0", "Bearer key-1", "Bearer key-2"}
 
@@ -239,7 +258,7 @@ def test_missing_required_response_fields_are_errors(spark, jev, field):
         return response
 
     jev.transform = remove
-    with pytest.raises(Exception, match=f"(?i){field}"):
+    with pytest.raises(Exception, match=rf"(?i){field}"):
         spark.sql("SELECT jev_noul('text', 'yes?')").collect()
     assert jev.request_count == 1
 
@@ -260,13 +279,13 @@ def test_invalid_answers_are_errors_without_retry(spark, jev, corruption):
         return response
 
     jev.transform = corrupt
-    with pytest.raises(Exception, match="(?i)(answer|noul|type|probability)"):
+    with pytest.raises(Exception, match=r"(?i)(answer|noul|type|probability)"):
         spark.sql("SELECT jev_noul('text', 'yes?')").collect()
     assert jev.request_count == 1
 
 
 @pytest.mark.parametrize(
-    "expression, field",
+    ("expression", "field"),
     [
         ("jev_choice('text', 'which?', map('a', 'A', 'b', 'B'))", "probabilities"),
         ("jev_score('text', 'rate', array('low', 'high'))", "legend"),
@@ -278,7 +297,7 @@ def test_missing_choice_and_score_fields_are_errors(spark, jev, expression, fiel
         return response
 
     jev.transform = corrupt
-    with pytest.raises(Exception, match=f"(?i){field}"):
+    with pytest.raises(Exception, match=rf"(?i){field}"):
         spark.sql(f"SELECT {expression}").collect()
     assert jev.request_count == 1
 
@@ -289,7 +308,7 @@ def test_model_discovery_validates_required_fields(spark, jev):
         return response
 
     jev.transform = corrupt
-    with pytest.raises(Exception, match="(?i)(description|model)"):
+    with pytest.raises(Exception, match=r"(?i)(description|model)"):
         spark.sql("SELECT jev_models()").collect()
     assert jev.request_count == 1
 
@@ -303,7 +322,7 @@ def test_answer_extra_fields_cannot_overwrite_request_metadata(spark, jev):
     jev.transform = poison
     result = spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j
     assert result.model == "jev-test"
-    assert result.usage.input_tokens == 17
+    assert result.usage.input_tokens == EXPECTED_INPUT_TOKENS
     assert result.batch_id != "fake"
     assert result.request_id == "mock-1"
     row = spark.sql(
@@ -311,7 +330,7 @@ def test_answer_extra_fields_cannot_overwrite_request_metadata(spark, jev):
         'FROM (SELECT jev_system_one(\'text\', parse_json(\'{"q": {"type": "noul"}}\')) AS j)'
     ).first()
     assert row.model == "jev-test"
-    assert row.tokens == 17
+    assert row.tokens == EXPECTED_INPUT_TOKENS
     assert json.loads(row.answer)["model"] == "untrusted-model"
     assert json.loads(row.answer)["usage"] == {"input_tokens": 999}
 
@@ -332,8 +351,8 @@ def test_error_detail_redacts_raw_and_json_escaped_api_keys(spark, jev):
 @pytest.mark.parametrize("status", [408, 429, 500, 529])
 def test_transient_status_retries_reuse_request_bytes(spark, jev, status):
     jev.statuses.extend([(status, {"retry-after-ms": "1"}), (status, {"retry-after-ms": "1"})])
-    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == 0.75
-    assert jev.request_count == 3
+    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL
+    assert jev.request_count == DEFAULT_ATTEMPTS
     assert len({request["encoded"] for request in jev.requests}) == 1
 
 
@@ -346,28 +365,31 @@ def test_permanent_status_is_not_retried(spark, jev, status):
 
 
 def test_retry_header_precedence_and_budget(spark, jev):
+    expected_attempts = 2
     jev.statuses.append((429, {"retry-after-ms": "1", "Retry-After": "60"}))
     assert (
-        spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '1000')) AS j").first().j.noul == 0.75
+        spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '1000')) AS j").first().j.noul
+        == EXPECTED_NOUL
     )
-    assert jev.request_count == 2
+    assert jev.request_count == expected_attempts
     jev.reset()
     jev.statuses.append((429, {"retry-after-ms": "60000"}))
-    with pytest.raises(Exception, match="(?i)(429|retry|budget)"):
+    with pytest.raises(Exception, match=r"(?i)(429|retry|budget)"):
         spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '10'))").collect()
     assert jev.request_count == 1
 
 
 def test_attempt_timeout_releases_capacity_for_following_query(spark, jev):
+    expected_rows = 16
     jev.delay = 0.2
-    with pytest.raises(Exception, match="(?i)(timeout|timed out|deadline)"):
+    with pytest.raises(Exception, match=r"(?i)(timeout|timed out|deadline)"):
         spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('timeout_ms', '10', 'max_retries', '0'))").collect()
     jev.delay = 0
-    assert len(spark.sql("SELECT jev_noul('text', 'yes?') AS j FROM range(0, 16, 1, 4)").collect()) == 16
+    assert len(spark.sql("SELECT jev_noul('text', 'yes?') AS j FROM range(0, 16, 1, 4)").collect()) == expected_rows
 
 
 @pytest.mark.parametrize(
-    "expression, message",
+    ("expression", "message"),
     [
         ("jev_noul(parse_json('null'), 'yes?')", "(?i)state"),
         ("jev_noul(parse_json('true'), 'yes?')", "(?i)state"),
@@ -388,28 +410,29 @@ def test_invalid_inputs_never_reach_service(spark, jev, expression, message):
 
 
 def test_preferred_batch_size_is_not_a_hard_row_limit(spark, jev):
+    expected_rows = 3
     rows = spark.sql("SELECT jev_noul(repeat('x', 6000), 'yes?') AS j FROM range(0, 3, 1, 1)").collect()
-    assert len(rows) == 3
-    assert jev.request_count == 3
-    assert all(4096 < len(request["encoded"]) < 32768 for request in jev.requests)
+    assert len(rows) == expected_rows
+    assert jev.request_count == expected_rows
+    assert all(BATCH_TARGET_BYTES < len(request["encoded"]) < MAX_REQUEST_BYTES for request in jev.requests)
 
 
 def test_hard_limit_rejects_without_request_and_releases_reservations(spark, jev):
-    with pytest.raises(Exception, match="(?i)(limit|size|bytes|large)"):
+    with pytest.raises(Exception, match=r"(?i)(limit|size|bytes|large)"):
         spark.sql("SELECT jev_noul(repeat('x', 40000), 'yes?')").collect()
     assert jev.request_count == 0
-    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == 0.75
+    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL
 
 
 def test_request_at_hard_byte_limit_can_make_progress(spark, jev):
     spark.sql("SELECT jev_noul('x', 'yes?') AS j").collect()
     body_overhead = len(jev.requests[0]["encoded"]) - 1
     # A single-row call consistently namespaces its question as row zero.
-    payload_length = 32768 - body_overhead
+    payload_length = MAX_REQUEST_BYTES - body_overhead
     rows = spark.sql(f"SELECT jev_noul(repeat('x', {payload_length}), 'yes?') AS j").collect()
     assert len(rows) == 1
-    assert rows[0].j.noul == 0.75
-    assert len(jev.requests[-1]["encoded"]) == 32768
+    assert rows[0].j.noul == EXPECTED_NOUL
+    assert len(jev.requests[-1]["encoded"]) == MAX_REQUEST_BYTES
 
 
 def test_explain_and_schema_do_not_make_requests(spark, jev):
@@ -436,7 +459,7 @@ def test_environment_api_key_does_not_enter_plan(spark, jev, mode):
 
 def test_invalid_argument_diagnostics_redact_explicit_api_key(spark, jev):
     key = "do-not-log-this-secret-key"
-    with pytest.raises(Exception) as error:
+    with pytest.raises(Exception, match=r"(?i)unsupported type") as error:
         spark.sql(f"SELECT jev_noul(12, 'yes?', NULL, map('api_key', '{key}'))").collect()
     assert key not in str(error.value)
     assert jev.request_count == 0
@@ -465,7 +488,7 @@ def test_registered_python_function_named_like_jev_is_not_intercepted(remote, je
 
 
 @pytest.mark.parametrize(
-    "query, expected",
+    ("query", "expected"),
     [
         ("SELECT round(jev_noul('text', 'yes?').noul, 1) AS x", [0.8]),
         ("SELECT id AS x FROM range(0, 4, 1, 1) WHERE jev_noul(CAST(id AS STRING), 'yes?').noul >= 0.02", [2, 3]),
@@ -474,17 +497,19 @@ def test_registered_python_function_named_like_jev_is_not_intercepted(remote, je
         ("SELECT id = 0 OR jev_noul('text', 'yes?').noul < 0.5 AS x FROM range(0, 2)", [True, False]),
     ],
 )
-def test_surrounding_expressions(spark, jev, query, expected):
+@pytest.mark.usefixtures("jev")
+def test_surrounding_expressions(spark, query, expected):
     assert [row.x for row in spark.sql(query).collect()] == expected
 
 
 def test_direct_async_nesting_is_diagnosed(spark, jev):
-    with pytest.raises(Exception, match="(?i)(nest|async|materializ)"):
+    with pytest.raises(Exception, match=r"(?i)(nest|async|materializ)"):
         spark.sql("SELECT jev_noul(CAST(jev_noul('text', 'first?').noul AS STRING), 'second?')").collect()
     assert jev.request_count == 0
 
 
 def test_cancellation_releases_reservations(spark, jev):
+    expected_rows = 24
     jev.delay = 0.5
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
@@ -496,13 +521,13 @@ def test_cancellation_releases_reservations(spark, jev):
     # A subsequent query needs all reservations again; leaked permits would hang.
     jev.delay = 0
     rows = spark.sql("SELECT jev_noul(CAST(id AS STRING), 'yes?') AS j FROM range(0, 24, 1, 4)").collect()
-    assert len(rows) == 24
+    assert len(rows) == expected_rows
 
 
 def test_retry_after_http_date_obeys_budget(spark, jev):
     retry_at = format_datetime(datetime.now(timezone.utc) + timedelta(minutes=1), usegmt=True)
     jev.statuses.append((429, {"Retry-After": retry_at}))
-    with pytest.raises(Exception, match="(?i)(429|retry|budget)"):
+    with pytest.raises(Exception, match=r"(?i)(429|retry|budget)"):
         spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '10'))").collect()
     assert jev.request_count == 1
 
@@ -511,7 +536,7 @@ def test_default_retry_count_is_two(spark, jev):
     jev.statuses.extend([(503, {"retry-after-ms": "1"})] * 4)
     with pytest.raises(Exception, match="503"):
         spark.sql("SELECT jev_noul('text', 'yes?')").collect()
-    assert jev.request_count == 3
+    assert jev.request_count == DEFAULT_ATTEMPTS
 
 
 def test_cancellation_during_backoff_releases_reservations(spark, jev):
@@ -525,4 +550,4 @@ def test_cancellation_during_backoff_releases_reservations(spark, jev):
         time.sleep(0.1)
         spark.interruptAll()
         assert future.exception(timeout=10) is not None
-    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == 0.75
+    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL

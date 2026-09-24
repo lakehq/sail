@@ -7,6 +7,8 @@ import socket
 import threading
 import time
 from collections import deque
+from contextlib import suppress
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -32,19 +34,17 @@ class JevMock:
                 self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
             def handle(self):
-                try:
+                # The client may cancel while the keep-alive loop awaits another request.
+                with suppress(BrokenPipeError, ConnectionResetError):
                     super().handle()
-                except (BrokenPipeError, ConnectionResetError):
-                    # The client may cancel while the keep-alive loop awaits another request.
-                    pass
 
             def log_message(self, *_args):
                 pass
 
-            def do_POST(self):  # noqa: N802
+            def do_POST(self):
                 self.respond()
 
-            def do_GET(self):  # noqa: N802
+            def do_GET(self):
                 self.respond()
 
             def respond(self):
@@ -68,16 +68,16 @@ class JevMock:
                                 "started": time.monotonic(),
                             }
                         )
-                    status, headers = mock.statuses.popleft() if mock.statuses else (200, {})
+                    status, headers = mock.statuses.popleft() if mock.statuses else (HTTPStatus.OK, {})
                     mock.started.set()
                 try:
                     delay = mock.delay(body, ordinal) if callable(mock.delay) else mock.delay
                     if delay:
                         time.sleep(delay)
                     if self.path not in {"/v1/systemone", "/v1/models"}:
-                        status = 404
-                    response = mock.response(body) if status == 200 else mock.error_response
-                    if mock.transform is not None and status == 200:
+                        status = HTTPStatus.NOT_FOUND
+                    response = mock.response(body) if status == HTTPStatus.OK else mock.error_response
+                    if mock.transform is not None and status == HTTPStatus.OK:
                         response = mock.transform(response, body)
                     output = json.dumps(response).encode()
                     self.send_response(status)

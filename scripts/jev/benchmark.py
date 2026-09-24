@@ -44,8 +44,9 @@ def measure(args):
         }
         os.environ.update(settings)
         # Import after configuring the process. No external server is used.
-        from pysail.spark import SparkConnectServer
         from pyspark.sql import SparkSession
+
+        from pysail.spark import SparkConnectServer
 
         server = SparkConnectServer("127.0.0.1", 0)
         server.start(background=True)
@@ -59,24 +60,29 @@ def measure(args):
                 state = f"parse_json(to_json(named_struct('id', id, 'payload', repeat('x', {args.payload_bytes}))))"
             else:
                 state = "concat('row-', id)"
-            query = f"SELECT jev_noul({state}, 'yes?') AS j FROM range(0, {args.row_count}, 1, {args.partitions})"
+            # State expressions are fixed above; counts and payload sizes are parsed as integers.
+            query = f"SELECT jev_noul({state}, 'yes?') AS j FROM range(0, {args.row_count}, 1, {args.partitions})"  # noqa: S608
             rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             started = time.perf_counter()
             rows = spark.sql(query).collect()
             elapsed = time.perf_counter() - started
             rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             if len(rows) != args.row_count or any(row.j is None for row in rows):
-                raise RuntimeError("Jev evaluation changed row cardinality or returned an unexpected null")
+                message = "Jev evaluation changed row cardinality or returned an unexpected null"
+                raise RuntimeError(message)
             if mock.peak_active > args.concurrency:
-                raise RuntimeError("Worker concurrency cap was exceeded")
+                message = "Worker concurrency cap was exceeded"
+                raise RuntimeError(message)
             if args.concurrency > 1 and args.workload != "repeated" and mock.peak_active <= 1:
-                raise RuntimeError("Independent HTTP requests did not overlap")
+                message = "Independent HTTP requests did not overlap"
+                raise RuntimeError(message)
             if (
                 args.workload == "repeated"
                 and args.row_count > args.partitions
                 and mock.request_count >= args.row_count
             ):
-                raise RuntimeError("Same-state requests did not batch")
+                message = "Same-state requests did not batch"
+                raise RuntimeError(message)
             divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
             return {
                 "workload": args.workload,
@@ -125,7 +131,8 @@ def main():
     if args.child:
         print("JEV_BENCHMARK " + json.dumps(measure(args)))  # noqa: T201
         return
-    if args.repeat < 1 or any(rows < 8 for rows in args.rows) or args.delay_ms <= 0:
+    minimum_rows = 8
+    if args.repeat < 1 or any(rows < minimum_rows for rows in args.rows) or args.delay_ms <= 0:
         parser.error("use at least one repeat, at least eight rows, and a positive mock delay")
     runs = []
     for row_count in args.rows:
@@ -158,10 +165,11 @@ def main():
                             command.extend(["--" + name.replace("_", "-"), str(getattr(args, name))])
                         completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
                         if completed.returncode:
-                            raise RuntimeError(
+                            message = (
                                 f"Benchmark child failed ({workload}, rows={row_count}, partitions={partitions}, "
                                 f"concurrency={concurrency}):\n{completed.stdout}\n{completed.stderr}"
                             )
+                            raise RuntimeError(message)
                         result = next(
                             line for line in completed.stdout.splitlines() if line.startswith("JEV_BENCHMARK ")
                         )
@@ -187,7 +195,8 @@ def main():
                                 or groups > args.pending_requests
                                 or pending_bytes > args.pending_bytes
                             ):
-                                raise RuntimeError("Worker resource reservation cap was exceeded")
+                                message = "Worker resource reservation cap was exceeded"
+                                raise RuntimeError(message)
                         else:
                             run["pending_measurement_note"] = "VERIFICATION GAP: no Jev resource peak log was emitted."
                         runs.append(run)
@@ -222,9 +231,11 @@ def main():
         args.output.write_text(output)
     print(output, end="")  # noqa: T201
     if any(run["peak_pending_groups"] is None for run in runs):
-        raise SystemExit("Resource peak instrumentation was not observed; pending-work bounds remain unverified.")
+        message = "Resource peak instrumentation was not observed; pending-work bounds remain unverified."
+        raise SystemExit(message)
     if any(c["speedup_8_vs_1"] <= 1 for c in comparisons if c["workload"] in {"distinct", "large"}):
-        raise SystemExit("Distinct-state throughput did not improve; inspect the recorded measurements.")
+        message = "Distinct-state throughput did not improve; inspect the recorded measurements."
+        raise SystemExit(message)
 
 
 if __name__ == "__main__":

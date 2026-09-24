@@ -13,9 +13,10 @@ def spark_doctest():
 
 
 def test_reference_artifact_hashes():
+    git_commit_hex_length = 40
     references = Path(__file__).parent / "references"
     manifest = json.loads((references / "manifest.json").read_text())
-    assert len(manifest["python_sdk_commit"]) == 40
+    assert len(manifest["python_sdk_commit"]) == git_commit_hex_length
     for artifact in manifest["artifacts"]:
         assert hashlib.sha256((references / artifact["path"]).read_bytes()).hexdigest() == artifact["sha256"]
 
