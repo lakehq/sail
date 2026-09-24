@@ -54,6 +54,38 @@ def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
     assert {bytes(r.b) if r.b is not None else None for r in df.collect()} == {b"\x00\x01", None}
 
 
+@pytest.mark.parametrize("force_view_types", ["true", "false"])
+def test_parquet_merges_view_and_plain_columns(spark, tmp_path, force_view_types):
+    # A directory can hold the same column as a view type in one file and a plain type in
+    # another (e.g. a raw write followed by an INSERT). Inference must reconcile the two
+    # whichever way `schemaForceViewTypes` is set.
+    path = tmp_path / "mixed_view_and_plain"
+    path.mkdir()
+    view_string = "a string longer than twelve bytes"
+    view_bytes = b"binary data longer than twelve bytes"
+    pq.write_table(
+        pa.table(
+            {
+                "s": pa.array([view_string], type=pa.string_view()),
+                "b": pa.array([view_bytes], type=pa.binary_view()),
+            }
+        ),
+        path / "a_view.parquet",
+    )
+    pq.write_table(
+        pa.table({"s": pa.array(["plain"], type=pa.string()), "b": pa.array([b"plain"], type=pa.binary())}),
+        path / "b_plain.parquet",
+    )
+
+    df = spark.read.option("schemaForceViewTypes", force_view_types).parquet(str(path))
+
+    assert df.schema.simpleString() == "struct<s:string,b:binary>"
+    assert sorted((r.s, bytes(r.b)) for r in df.collect()) == [
+        (view_string, view_bytes),
+        ("plain", b"plain"),
+    ]
+
+
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     path = str(tmp_path / "parquet_basic")
     sample_df.write.parquet(path, mode="overwrite")

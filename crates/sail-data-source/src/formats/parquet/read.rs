@@ -21,7 +21,7 @@ use sail_common_datafusion::scan::{ParquetRowGroup, ParquetScanMetadata};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::try_merge_normalized;
+use crate::listing::utils::{ViewTypes, try_merge_normalized};
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -165,10 +165,13 @@ impl ReadFormat for ParquetReadFormat {
         // renders such a column in the session zone; Sail currently keeps the producer's label.
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
+        // Reconcile view and plain string/binary columns the way `schema_force_view_types` says:
+        // upcast to views when the reader produces views anyway, collapse otherwise.
+        let view_types = ViewTypes::from_force_view_types(options.global.schema_force_view_types);
         let merged = if options.global.skip_metadata {
-            try_merge_normalized(schemas.map(clear_metadata))
+            try_merge_normalized(schemas.map(clear_metadata), view_types)
         } else {
-            try_merge_normalized(schemas)
+            try_merge_normalized(schemas, view_types)
         }?;
 
         let merged = if options.global.binary_as_string {
