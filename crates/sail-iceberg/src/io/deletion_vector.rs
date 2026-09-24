@@ -7,7 +7,7 @@ use roaring::{RoaringBitmap, RoaringTreemap};
 use url::Url;
 
 use super::StoreContext;
-use crate::spec::{DataContentType, DataFile, DataFileFormat};
+use crate::spec::{DataContentType, DataFile, DataFileFormat, Literal};
 
 const PUFFIN_MAGIC: &[u8; 4] = b"PFA1";
 const VECTOR_MAGIC: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
@@ -75,25 +75,25 @@ fn decode_blob(blob: &[u8], cardinality: u64) -> Result<RoaringTreemap> {
 
 pub(crate) async fn read_deletion_vector(
     store_ctx: &StoreContext,
-    file: &DataFile,
+    file_path: &str,
+    range: std::ops::Range<u64>,
+    cardinality: u64,
 ) -> Result<RoaringTreemap> {
-    file.validate_deletion_vector()
-        .map_err(DataFusionError::Execution)?;
-    let (Some(offset), Some(size)) = (file.content_offset, file.content_size_in_bytes) else {
-        return exec_err!("Iceberg deletion vector is missing its content range");
-    };
-    let (store, path) = store_ctx.resolve(&file.file_path)?;
-    let blob = store
-        .get_range(&path, offset as u64..(offset + size) as u64)
-        .await?;
-    decode_blob(&blob, file.record_count)
+    if range.start < 4 || range.start >= range.end || range.end > i64::MAX as u64 {
+        return exec_err!("Invalid Iceberg deletion vector range");
+    }
+    let (store, path) = store_ctx.resolve(file_path)?;
+    let blob = store.get_range(&path, range).await?;
+    decode_blob(&blob, cardinality)
 }
 
 /// One blob per file keeps publication and cleanup independent across writers.
 pub(crate) async fn write_deletion_vector(
     store_ctx: &StoreContext,
     data_url: &Url,
-    target: &DataFile,
+    target_path: &str,
+    partition_spec_id: i32,
+    partition: Vec<Option<Literal>>,
     mut positions: RoaringTreemap,
 ) -> Result<DataFile> {
     let blob = encode_blob(&mut positions)?;
@@ -109,7 +109,7 @@ pub(crate) async fn write_deletion_vector(
             "offset": 4,
             "length": size,
             "properties": {
-                "referenced-data-file": target.file_path,
+                "referenced-data-file": target_path,
                 "cardinality": positions.len().to_string(),
             },
         }],
@@ -143,11 +143,11 @@ pub(crate) async fn write_deletion_vector(
         content: DataContentType::PositionDeletes,
         file_path,
         file_format: DataFileFormat::Puffin,
-        partition: target.partition.clone(),
-        partition_spec_id: target.partition_spec_id,
+        partition,
+        partition_spec_id,
         record_count: positions.len(),
         file_size_in_bytes,
-        referenced_data_file: Some(target.file_path.clone()),
+        referenced_data_file: Some(target_path.to_string()),
         content_offset: Some(4),
         content_size_in_bytes: Some(size),
         column_sizes: Default::default(),

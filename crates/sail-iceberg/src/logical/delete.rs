@@ -73,7 +73,7 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
             [
                 MERGE_ROW_INDEX_COLUMN,
                 crate::row_level_metadata::MERGE_PARTITION_SPEC_ID_COLUMN,
-                crate::row_level_metadata::MERGE_PARTITION_COLUMN,
+                crate::row_level_metadata::MERGE_FILE_METADATA_COLUMN,
             ]
             .map(col),
         );

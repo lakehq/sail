@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-use crate::spec::manifest::{DataContentType, DataFile};
+use crate::spec::manifest::{DataContentType, DataFile, DataFileFormat};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 
 /// A single delete file, augmented with the sequence number inherited from its
@@ -27,6 +27,52 @@ impl DeleteFileRef {
     /// Whether this ref describes a v3 deletion vector (Puffin blob).
     pub fn is_deletion_vector(&self) -> bool {
         self.data_file.is_deletion_vector()
+    }
+}
+
+/// The read descriptor after snapshot, sequence, and partition matching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PositionDeleteFile {
+    Parquet {
+        path: String,
+        size: u64,
+    },
+    DeletionVector {
+        path: String,
+        range: std::ops::Range<u64>,
+        cardinality: u64,
+    },
+}
+
+impl TryFrom<&DataFile> for PositionDeleteFile {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(file: &DataFile) -> Result<Self, Self::Error> {
+        if file.is_deletion_vector() {
+            file.validate_deletion_vector()
+                .map_err(Self::Error::Execution)?;
+            let (Some(offset), Some(size)) = (file.content_offset, file.content_size_in_bytes)
+            else {
+                return datafusion_common::exec_err!("Missing Iceberg deletion vector range");
+            };
+            Ok(Self::DeletionVector {
+                path: file.file_path.clone(),
+                range: offset as u64..(offset + size) as u64,
+                cardinality: file.record_count,
+            })
+        } else if file.content == DataContentType::PositionDeletes
+            && file.file_format == DataFileFormat::Parquet
+        {
+            Ok(Self::Parquet {
+                path: file.file_path.clone(),
+                size: file.file_size_in_bytes,
+            })
+        } else {
+            datafusion_common::exec_err!(
+                "Unsupported Iceberg position delete file: {}",
+                file.file_path
+            )
+        }
     }
 }
 

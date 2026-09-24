@@ -1706,7 +1706,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 file_column_name,
                 row_index_column_name,
                 data_file_partition_spec_id,
-                data_file_partition_json,
+                data_file_metadata_json,
                 row_lineage,
                 file_lineage,
             }) => {
@@ -1743,7 +1743,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                                 "Iceberg merge metadata plan is missing partition spec id"
                             )
                         })?,
-                        data_file_partition_json.ok_or_else(|| {
+                        data_file_metadata_json.ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Iceberg merge metadata plan is missing partition values"
                             )
@@ -2854,8 +2854,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         data_sequence_number: lineage.data_sequence_number,
                     }),
                 data_file_partition_spec_id: merge_metadata.data_file_partition_spec_id(),
-                data_file_partition_json: merge_metadata
-                    .data_file_partition_json()
+                data_file_metadata_json: merge_metadata
+                    .data_file_metadata_json()
                     .map(ToString::to_string),
             })
         } else if let Some(equality_writer) = node.downcast_ref::<IcebergEqualityDeleteWriterExec>()
@@ -5819,7 +5819,6 @@ mod tests {
             current_schema_id: 0,
             last_partition_id: 999,
             current_snapshot_id: Some(42),
-            current_manifest_list: Some("file:///tmp/table/metadata/snap-42.avro".to_string()),
         });
         let plan = Arc::new(IcebergWriterExec::new_copy_on_write(
             Arc::new(EmptyExec::new(input_schema)),
@@ -5845,14 +5844,6 @@ mod tests {
                 .as_ref()
                 .and_then(|base| base.current_snapshot_id),
             Some(42)
-        );
-        assert_eq!(
-            writer
-                .write_context()
-                .base_table
-                .as_ref()
-                .and_then(|base| base.current_manifest_list.as_deref()),
-            Some("file:///tmp/table/metadata/snap-42.avro")
         );
         Ok(())
     }
@@ -5928,7 +5919,6 @@ mod tests {
             current_schema_id: 0,
             last_partition_id: 999,
             current_snapshot_id: Some(7),
-            current_manifest_list: None,
         });
         write_context.commit_writer_schema = false;
         write_context.commit_writer_partition_spec = false;

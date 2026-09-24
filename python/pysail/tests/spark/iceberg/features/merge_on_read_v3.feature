@@ -357,3 +357,110 @@ Feature: Iceberg v3 merge-on-read deletion vectors
     Then query result
       | id | missing |
       | 2  | true    |
+
+  Scenario Outline: V3 MOR preserves native numeric partition types through all row commands
+    Given variable location for temporary directory iceberg_v3_numeric
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_v3_numeric
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_v3_numeric (id INT, p <type>, value INT) USING iceberg PARTITIONED BY (p)
+      LOCATION {{ location.uri }} TBLPROPERTIES (
+        'format-version' = '3', 'write.delete.mode' = 'merge-on-read',
+        'write.update.mode' = 'merge-on-read', 'write.merge.mode' = 'merge-on-read')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_v3_numeric SELECT /*+ COALESCE(1) */ id, CAST(<value> AS <type>), id * 10
+      FROM VALUES (1), (2), (3), (4), (5) AS source(id)
+      """
+    Given statement
+      """
+      DELETE FROM iceberg_v3_numeric WHERE id = 1
+      """
+    Then iceberg deletion vectors delete 1 rows across 1 files
+    Given statement
+      """
+      UPDATE iceberg_v3_numeric SET value = 200 WHERE id = 2
+      """
+    Then iceberg deletion vectors delete 2 rows across 1 files
+    Given statement
+      """
+      MERGE INTO iceberg_v3_numeric t
+      USING (SELECT * FROM VALUES (3, -1), (4, 400), (6, 600) AS s(id, value)) s ON t.id = s.id
+      WHEN MATCHED AND s.value < 0 THEN DELETE
+      WHEN MATCHED THEN UPDATE SET value = s.value
+      WHEN NOT MATCHED THEN INSERT (id, p, value) VALUES (s.id, CAST(<value> AS <type>), s.value)
+      """
+    Then iceberg deletion vectors delete 4 rows across 1 files
+    When query
+      """
+      SELECT id, value FROM iceberg_v3_numeric ORDER BY id
+      """
+    Then query result ordered
+      | id | value |
+      | 2  | 200   |
+      | 4  | 400   |
+      | 5  | 50    |
+      | 6  | 600   |
+    When query
+      """
+      SELECT count(*) AS matches FROM iceberg_v3_numeric WHERE p <=> CAST(<value> AS <type>)
+      """
+    Then query result ordered
+      | matches |
+      | 4       |
+
+    Examples:
+      | type          | value |
+      | BIGINT        | 7     |
+      | DOUBLE        | 0.1   |
+      | DECIMAL(9,2)  | 1.25  |
+      | DECIMAL(38,2) | 1.25  |
+      | DOUBLE        | NULL  |
+
+  Scenario: V3 mixed MERGE accepts unpartitioned tables containing only complex columns
+    Given variable location for temporary directory iceberg_v3_complex_merge
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_v3_complex_merge
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_v3_complex_merge (payload STRUCT<id: INT, value: INT>, items ARRAY<INT>, attrs MAP<STRING, INT>)
+      USING iceberg LOCATION {{ location.uri }}
+      TBLPROPERTIES ('format-version' = '3', 'write.merge.mode' = 'merge-on-read')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_v3_complex_merge SELECT /*+ COALESCE(1) */ * FROM VALUES
+        (named_struct('id', 1, 'value', 10), array(1), map('v', 1)),
+        (named_struct('id', 2, 'value', 20), array(2), map('v', 2))
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_v3_complex_merge t
+      USING (SELECT * FROM VALUES
+        (named_struct('id', 1, 'value', 100), array(2), map('v', 2)),
+        (named_struct('id', 3, 'value', 300), array(6), map('v', 6)),
+        (named_struct('id', 4, 'value', 400), array(8), map('v', 8)),
+        (named_struct('id', 5, 'value', 500), array(10), map('v', 10)) AS source(payload, items, attrs)) s
+      ON t.payload.id = s.payload.id
+      WHEN MATCHED THEN UPDATE SET *
+      WHEN NOT MATCHED THEN INSERT *
+      """
+    Then iceberg deletion vectors delete 1 rows across 1 files
+    When query
+      """
+      SELECT payload.id AS id, payload.value AS value, items[0] AS item, attrs['v'] AS attr
+      FROM iceberg_v3_complex_merge ORDER BY id
+      """
+    Then query result ordered
+      | id | value | item | attr |
+      | 1  | 100   | 2    | 2    |
+      | 2  | 20    | 2    | 2    |
+      | 3  | 300   | 6    | 6    |
+      | 4  | 400   | 8    | 8    |
+      | 5  | 500   | 10   | 10   |

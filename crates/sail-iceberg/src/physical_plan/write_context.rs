@@ -31,7 +31,6 @@ pub struct IcebergBaseWriteContext {
     pub current_schema_id: i32,
     pub last_partition_id: i32,
     pub current_snapshot_id: Option<i64>,
-    pub current_manifest_list: Option<String>,
 }
 
 impl IcebergBaseWriteContext {
@@ -45,9 +44,6 @@ impl IcebergBaseWriteContext {
             current_schema_id: metadata.current_schema_id,
             last_partition_id: metadata.last_partition_id,
             current_snapshot_id: metadata.current_snapshot_id,
-            current_manifest_list: metadata
-                .current_snapshot()
-                .map(|snapshot| snapshot.manifest_list().to_string()),
         }
     }
 
@@ -195,15 +191,6 @@ pub fn prepare_iceberg_write_context(
             if !partition_columns.is_empty() {
                 let current_schema = &schema_outcome.iceberg_schema;
                 let mut builder = PartitionSpec::builder();
-                let next_spec_id = table_metadata
-                    .partition_specs
-                    .iter()
-                    .map(PartitionSpec::spec_id)
-                    .max()
-                    .unwrap_or(-1)
-                    + 1;
-                builder = builder.with_spec_id(next_spec_id);
-                let mut next_partition_id = table_metadata.last_partition_id + 1;
                 for field in partition_columns {
                     let field_id =
                         current_schema
@@ -215,35 +202,9 @@ pub fn prepare_iceberg_write_context(
                                 ))
                             })?;
                     let transform = iceberg_transform_from_partition_field(field);
-                    let partition_id = table_metadata
-                        .partition_specs
-                        .iter()
-                        .flat_map(|spec| spec.fields())
-                        .find(|previous| {
-                            previous.source_id == field_id && previous.transform == transform
-                        })
-                        .map(|previous| previous.field_id)
-                        .unwrap_or_else(|| {
-                            let id = next_partition_id;
-                            next_partition_id += 1;
-                            id
-                        });
-                    builder = builder.add_field_with_id(
-                        field_id,
-                        partition_id,
-                        partition_field_name(field),
-                        transform,
-                    );
+                    builder = builder.add_field(field_id, partition_field_name(field), transform);
                 }
-                let candidate = builder.build();
-                partition_spec = Some(
-                    table_metadata
-                        .partition_specs
-                        .iter()
-                        .find(|previous| previous.is_compatible_with(&candidate))
-                        .cloned()
-                        .unwrap_or(candidate),
-                );
+                partition_spec = Some(builder.build().assign_ids(table_metadata));
             }
         } else {
             let current_schema = table_metadata.current_schema().ok_or_else(|| {

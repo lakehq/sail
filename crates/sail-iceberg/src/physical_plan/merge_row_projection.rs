@@ -12,7 +12,7 @@ use sail_common_datafusion::datasource::{
     RowLevelOperationType, RowLevelWriteMode,
 };
 
-use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergMergeRowProjection {
@@ -30,7 +30,7 @@ impl IcebergMergeRowProjection {
             MERGE_SOURCE_METRIC_COLUMN,
             OPERATION_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
-            MERGE_PARTITION_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
             crate::row_lineage::ROW_ID_COLUMN,
             crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ];
@@ -218,7 +218,7 @@ mod tests {
             Field::new(MERGE_FILE_COLUMN, DataType::Utf8, true),
             Field::new(MERGE_ROW_INDEX_COLUMN, DataType::Int64, true),
             Field::new(MERGE_PARTITION_SPEC_ID_COLUMN, DataType::Int32, true),
-            Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, true),
+            Field::new(MERGE_FILE_METADATA_COLUMN, DataType::Utf8, true),
             Field::new(OPERATION_COLUMN, DataType::Int32, false),
             Field::new(MERGE_SOURCE_METRIC_COLUMN, DataType::Int64, true),
         ]));

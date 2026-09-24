@@ -54,7 +54,8 @@ use crate::physical_plan::manifest_scan_exec::{IcebergManifestScanExec, Manifest
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
-    MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
+    MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
+    RowLevelMetadataColumns,
 };
 use crate::spec::delete_index::DeleteFileRef;
 use crate::spec::transform::Transform;
@@ -623,6 +624,16 @@ impl IcebergScan {
         Ok(partitioned_files)
     }
 
+    fn deletion_vector_snapshot(&self) -> Option<i64> {
+        (self.format_version == crate::spec::FormatVersion::V3)
+            .then(|| {
+                self.snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.snapshot_id())
+            })
+            .flatten()
+    }
+
     fn create_merge_partitioned_files(
         &self,
         store_ctx: &StoreContext,
@@ -634,9 +645,7 @@ impl IcebergScan {
                 Ok((
                     file.file_path.clone(),
                     file.partition_spec_id,
-                    serde_json::to_string(&file.partition).map_err(|error| {
-                        datafusion::common::DataFusionError::External(Box::new(error))
-                    })?,
+                    RowLevelFileMetadata::encode(file, self.deletion_vector_snapshot(), &[])?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -783,7 +792,11 @@ impl IcebergScan {
                     DataType::Int32,
                     false,
                 )),
-                Arc::new(Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    MERGE_FILE_METADATA_COLUMN,
+                    DataType::Utf8,
+                    false,
+                )),
             ])
             .build();
         Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
@@ -1397,9 +1410,11 @@ impl IcebergScan {
                     data_scan,
                     df.file_path.clone(),
                     df.partition_spec_id,
-                    serde_json::to_string(&df.partition).map_err(|error| {
-                        datafusion::common::DataFusionError::External(Box::new(error))
-                    })?,
+                    RowLevelFileMetadata::encode(
+                        &df,
+                        self.deletion_vector_snapshot(),
+                        &positional_deletes,
+                    )?,
                     self.file_column_name.clone(),
                     self.row_index_column_name.clone(),
                     row_lineage,

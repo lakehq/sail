@@ -17,7 +17,7 @@ use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
 
 use crate::row_level_metadata::{
-    MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
+    MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
 };
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct IcebergMergeMetadataExec {
     input: Arc<dyn ExecutionPlan>,
     data_file_path: Option<String>,
     data_file_partition_spec_id: Option<i32>,
-    data_file_partition_json: Option<String>,
+    data_file_metadata_json: Option<String>,
     file_column_name: Option<String>,
     row_index_column_name: Option<String>,
     row_lineage: Option<crate::row_lineage::RowLineage>,
@@ -39,7 +39,7 @@ impl IcebergMergeMetadataExec {
         input: Arc<dyn ExecutionPlan>,
         data_file_path: String,
         data_file_partition_spec_id: i32,
-        data_file_partition_json: String,
+        data_file_metadata_json: String,
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
         row_lineage: Option<crate::row_lineage::RowLineage>,
@@ -48,7 +48,7 @@ impl IcebergMergeMetadataExec {
             input,
             Some(data_file_path),
             Some(data_file_partition_spec_id),
-            Some(data_file_partition_json),
+            Some(data_file_metadata_json),
             file_column_name,
             row_index_column_name,
             row_lineage,
@@ -65,7 +65,7 @@ impl IcebergMergeMetadataExec {
         for metadata_column in [
             file_column_name.as_str(),
             MERGE_PARTITION_SPEC_ID_COLUMN,
-            MERGE_PARTITION_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
         ] {
             if input.schema().field_with_name(metadata_column).is_err() {
                 return Err(DataFusionError::Plan(format!(
@@ -89,7 +89,7 @@ impl IcebergMergeMetadataExec {
         input: Arc<dyn ExecutionPlan>,
         data_file_path: Option<String>,
         data_file_partition_spec_id: Option<i32>,
-        data_file_partition_json: Option<String>,
+        data_file_metadata_json: Option<String>,
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
         row_lineage: Option<crate::row_lineage::RowLineage>,
@@ -123,7 +123,7 @@ impl IcebergMergeMetadataExec {
             input,
             data_file_path,
             data_file_partition_spec_id,
-            data_file_partition_json,
+            data_file_metadata_json,
             file_column_name,
             row_index_column_name,
             row_lineage,
@@ -157,8 +157,8 @@ impl IcebergMergeMetadataExec {
         self.data_file_partition_spec_id
     }
 
-    pub fn data_file_partition_json(&self) -> Option<&str> {
-        self.data_file_partition_json.as_deref()
+    pub fn data_file_metadata_json(&self) -> Option<&str> {
+        self.data_file_metadata_json.as_deref()
     }
 
     pub fn row_index_column_name(&self) -> Option<&str> {
@@ -225,7 +225,7 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
             Arc::clone(&children[0]),
             self.data_file_path.clone(),
             self.data_file_partition_spec_id,
-            self.data_file_partition_json.clone(),
+            self.data_file_metadata_json.clone(),
             self.file_column_name.clone(),
             self.row_index_column_name.clone(),
             self.row_lineage,
@@ -253,7 +253,7 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
         let schema_for_adapter = output_schema.clone();
         let data_file_path = self.data_file_path.clone();
         let data_file_partition_spec_id = self.data_file_partition_spec_id;
-        let data_file_partition_json = self.data_file_partition_json.clone();
+        let data_file_metadata_json = self.data_file_metadata_json.clone();
         let file_column_name = self.file_column_name.clone();
         let include_file = data_file_path.is_some() && file_column_name.is_some();
         let include_row_index = self.row_index_column_name.is_some();
@@ -309,7 +309,7 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                     if include_file {
                         columns.push(Arc::new(StringArray::from(vec![data_file_path.as_deref(); rows])) as ArrayRef);
                         columns.push(Arc::new(Int32Array::from(vec![data_file_partition_spec_id; rows])) as ArrayRef);
-                        columns.push(Arc::new(StringArray::from(vec![data_file_partition_json.as_deref(); rows])) as ArrayRef);
+                        columns.push(Arc::new(StringArray::from(vec![data_file_metadata_json.as_deref(); rows])) as ArrayRef);
                     }
                     let next_offset = i64::try_from(rows).ok().and_then(|rows| row_offset.checked_add(rows))
                         .ok_or_else(|| DataFusionError::Execution("Iceberg row position overflow".to_string()))?;
@@ -370,7 +370,11 @@ mod tests {
                 DataType::Int32,
                 false,
             )),
-            Arc::new(Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, false)),
+            Arc::new(Field::new(
+                MERGE_FILE_METADATA_COLUMN,
+                DataType::Utf8,
+                false,
+            )),
         ]);
         let schema = Arc::new(Schema::new(fields));
         let batch = |paths: Vec<&str>, ids: Vec<Option<i64>>| {

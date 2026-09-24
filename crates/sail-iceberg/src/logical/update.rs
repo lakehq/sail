@@ -51,7 +51,7 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         metadata_columns.extend([
             MERGE_ROW_INDEX_COLUMN,
             crate::row_level_metadata::MERGE_PARTITION_SPEC_ID_COLUMN,
-            crate::row_level_metadata::MERGE_PARTITION_COLUMN,
+            crate::row_level_metadata::MERGE_FILE_METADATA_COLUMN,
         ]);
     }
     let expanded = expand_update(

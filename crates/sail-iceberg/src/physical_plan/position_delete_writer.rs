@@ -15,15 +15,19 @@ use crate::io::StoreContext;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::delete_writer_common;
 use crate::physical_plan::write_context::IcebergBaseWriteContext;
-use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::row_level_metadata::{
+    DeletionVectorTarget, MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN,
+    RowLevelFileMetadata,
+};
 use crate::spec::types::values::Literal;
-use crate::spec::{DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestStatus};
+use crate::spec::{DataContentType, DataFile, FormatVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 struct PositionDeleteTarget {
     partition_spec_id: i32,
-    partition_json: String,
+    metadata_json: String,
     partition: Vec<Option<Literal>>,
+    deletion_vector: Option<DeletionVectorTarget>,
 }
 
 #[derive(Debug)]
@@ -37,7 +41,7 @@ enum PositionDeleteGroupKey {
     File(String),
     Partition {
         partition_spec_id: i32,
-        partition_json: String,
+        metadata_json: String,
     },
 }
 
@@ -127,14 +131,16 @@ impl PositionDeleteAccumulator {
                 ))
             })?;
         let partitions = batch
-            .column_by_name(MERGE_PARTITION_COLUMN)
+            .column_by_name(MERGE_FILE_METADATA_COLUMN)
             .ok_or_else(|| {
-                DataFusionError::Internal(format!("missing column {MERGE_PARTITION_COLUMN}"))
+                DataFusionError::Internal(format!("missing column {MERGE_FILE_METADATA_COLUMN}"))
             })?
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal(format!("{MERGE_PARTITION_COLUMN} must be a Utf8 column"))
+                DataFusionError::Internal(format!(
+                    "{MERGE_FILE_METADATA_COLUMN} must be a Utf8 column"
+                ))
             })?;
 
         for row in 0..batch.num_rows() {
@@ -149,21 +155,21 @@ impl PositionDeleteAccumulator {
 
             let file_path = file_paths.value(row);
             let partition_spec_id = partition_spec_ids.value(row);
-            let partition_json = partitions.value(row);
+            let metadata_json = partitions.value(row);
             let group_key = match self.granularity {
                 PositionDeleteGranularity::File => {
                     PositionDeleteGroupKey::File(file_path.to_string())
                 }
                 PositionDeleteGranularity::Partition => PositionDeleteGroupKey::Partition {
                     partition_spec_id,
-                    partition_json: partition_json.to_string(),
+                    metadata_json: metadata_json.to_string(),
                 },
             };
             let rows = match self.rows_by_group.entry(group_key) {
                 Entry::Occupied(entry) => {
                     let rows = entry.into_mut();
                     if rows.target.partition_spec_id != partition_spec_id
-                        || rows.target.partition_json != partition_json
+                        || rows.target.metadata_json != metadata_json
                     {
                         return Err(DataFusionError::Plan(format!(
                             "inconsistent Iceberg partition metadata for MERGE target file {file_path}"
@@ -176,7 +182,7 @@ impl PositionDeleteAccumulator {
                         base_table_context,
                         file_path,
                         partition_spec_id,
-                        partition_json,
+                        metadata_json,
                     )?,
                     positions_by_file: BTreeMap::new(),
                 }),
@@ -198,7 +204,6 @@ impl PositionDeleteAccumulator {
 
     pub(crate) async fn finish_deletion_vectors(
         self,
-        base: &IcebergBaseWriteContext,
         table_store: &StoreContext,
         data_store: &StoreContext,
         data_url: &Url,
@@ -206,72 +211,18 @@ impl PositionDeleteAccumulator {
         if self.rows_by_group.is_empty() {
             return Ok(vec![]);
         }
-        let manifest_list = base.current_manifest_list.as_ref().ok_or_else(|| {
-            datafusion_common::exec_datafusion_err!(
-                "Iceberg deletion vectors require a pinned snapshot"
-            )
-        })?;
-        let manifests = crate::io::load_manifest_list(table_store, manifest_list).await?;
-        let deletes = crate::io::load_delete_file_index(
-            &base.partition_specs,
-            base.format_version,
-            table_store,
-            &manifests,
-        )
-        .await?;
-        let mut targets = BTreeMap::new();
-        for manifest_file in manifests
-            .entries()
-            .iter()
-            .filter(|file| file.content == ManifestContentType::Data)
-        {
-            let manifest =
-                crate::io::load_manifest(table_store, &manifest_file.manifest_path).await?;
-            for entry in manifest
-                .entries()
-                .iter()
-                .filter(|entry| entry.status != ManifestStatus::Deleted)
-            {
-                if self
-                    .rows_by_group
-                    .contains_key(&PositionDeleteGroupKey::File(
-                        entry.data_file.file_path.clone(),
-                    ))
-                {
-                    let mut file = entry.data_file.clone();
-                    file.partition_spec_id = manifest_file.partition_spec_id;
-                    targets.insert(
-                        file.file_path.clone(),
-                        (
-                            file,
-                            entry
-                                .sequence_number
-                                .unwrap_or(manifest_file.sequence_number),
-                        ),
-                    );
-                }
-            }
-        }
         let mut output = Vec::new();
         for rows in self.rows_by_group.into_values() {
             for (path, positions) in rows.positions_by_file {
-                let (target, sequence) = targets.get(&path).ok_or_else(|| {
+                let target = rows.target.deletion_vector.as_ref().ok_or_else(|| {
                     datafusion_common::exec_datafusion_err!(
-                        "Iceberg deletion vector target is not live in the pinned snapshot: {path}"
+                        "Iceberg deletion vector requires pinned target metadata: {path}"
                     )
                 })?;
-                if target.partition_spec_id != rows.target.partition_spec_id
-                    || target.partition != rows.target.partition
-                {
-                    return datafusion_common::exec_err!(
-                        "Iceberg deletion vector target partition does not match: {path}"
-                    );
-                }
-                let applicable = deletes.for_data_file(target, *sequence);
                 let mut combined = positions;
                 combined |= super::delete_apply_exec::load_deleted_positions(
                     table_store,
-                    &applicable.positional,
+                    &target.positional_deletes,
                     &path,
                 )
                 .await?;
@@ -285,7 +236,12 @@ impl PositionDeleteAccumulator {
                 }
                 output.push(
                     crate::io::deletion_vector::write_deletion_vector(
-                        data_store, data_url, target, combined,
+                        data_store,
+                        data_url,
+                        &path,
+                        rows.target.partition_spec_id,
+                        rows.target.partition.clone(),
+                        combined,
                     )
                     .await?,
                 );
@@ -324,7 +280,7 @@ fn position_delete_target(
     base_table_context: &IcebergBaseWriteContext,
     file_path: &str,
     partition_spec_id: i32,
-    partition_json: &str,
+    metadata_json: &str,
 ) -> Result<PositionDeleteTarget> {
     if !base_table_context
         .partition_specs
@@ -335,15 +291,28 @@ fn position_delete_target(
             "MERGE target file uses unknown Iceberg partition spec {partition_spec_id}: {file_path}"
         )));
     }
-    let partition = serde_json::from_str(partition_json).map_err(|error| {
+    let metadata: RowLevelFileMetadata = serde_json::from_str(metadata_json).map_err(|error| {
         DataFusionError::Plan(format!(
-            "failed to decode Iceberg partition metadata for {file_path}: {error}"
+            "failed to decode Iceberg file metadata for {file_path}: {error}"
         ))
     })?;
+    if base_table_context.format_version == FormatVersion::V3
+        && metadata
+            .deletion_vector
+            .as_ref()
+            .map(|target| target.snapshot_id)
+            != base_table_context.current_snapshot_id
+    {
+        return datafusion_common::exec_err!(
+            "Iceberg deletion vector target snapshot does not match the write snapshot: {file_path}"
+        );
+    }
+
     Ok(PositionDeleteTarget {
         partition_spec_id,
-        partition_json: partition_json.to_string(),
-        partition,
+        metadata_json: metadata_json.to_string(),
+        partition: metadata.partition,
+        deletion_vector: metadata.deletion_vector,
     })
 }
 
@@ -431,4 +400,104 @@ fn position_delete_arrow_schema() -> Schema {
             ),
         ),
     ])
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::spec::delete_index::PositionDeleteFile;
+    use crate::spec::{PartitionSpec, PrimitiveLiteral, Transform};
+
+    #[test]
+    fn dv_writer_needs_only_pinned_file_metadata_and_existing_delete_blobs() {
+        futures::executor::block_on(async {
+            let url = Url::parse("file:///table/data/").expect("URL");
+            let store = StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &url)
+                .expect("store");
+            let partition = vec![Some(Literal::Primitive(PrimitiveLiteral::Double(
+                0.1.into(),
+            )))];
+            let path = "file:///table/data/source.parquet";
+            let previous = crate::io::deletion_vector::write_deletion_vector(
+                &store,
+                &url,
+                path,
+                0,
+                partition.clone(),
+                RoaringTreemap::from_iter([0]),
+            )
+            .await
+            .expect("previous DV");
+            let base = IcebergBaseWriteContext {
+                format_version: FormatVersion::V3,
+                partition_specs: vec![
+                    PartitionSpec::builder()
+                        .add_field(1, "p", Transform::Identity)
+                        .build(),
+                ],
+                default_spec_id: 0,
+                properties: Default::default(),
+                last_column_id: 1,
+                current_schema_id: 0,
+                last_partition_id: 1000,
+                current_snapshot_id: Some(42),
+            };
+            let metadata = RowLevelFileMetadata {
+                partition: partition.clone(),
+                deletion_vector: Some(DeletionVectorTarget {
+                    snapshot_id: 42,
+                    record_count: 4,
+                    positional_deletes: vec![
+                        PositionDeleteFile::try_from(&previous).expect("delete descriptor"),
+                    ],
+                }),
+            };
+            let encoded = serde_json::to_string(&metadata).expect("metadata");
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("file", DataType::Utf8, false),
+                Field::new("pos", DataType::Int64, false),
+                Field::new(MERGE_PARTITION_SPEC_ID_COLUMN, DataType::Int32, false),
+                Field::new(MERGE_FILE_METADATA_COLUMN, DataType::Utf8, false),
+            ]));
+            let batch = ArrowRecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec![path, path])),
+                    Arc::new(Int64Array::from(vec![1, 2])),
+                    Arc::new(Int32Array::from(vec![0, 0])),
+                    Arc::new(StringArray::from(vec![encoded.as_str(), encoded.as_str()])),
+                ],
+            )
+            .expect("batch");
+            let mut accumulator = PositionDeleteAccumulator::try_new(&base).expect("accumulator");
+            accumulator
+                .add_batch(&base, &batch, "file", "pos")
+                .expect("positions");
+            let files = accumulator
+                .finish_deletion_vectors(&store, &store, &url)
+                .await
+                .expect("DV without manifests");
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].partition, partition);
+            let positions = super::super::delete_apply_exec::load_deleted_positions(
+                &store,
+                &[PositionDeleteFile::try_from(&files[0]).expect("descriptor")],
+                path,
+            )
+            .await
+            .expect("read DV");
+            assert_eq!(positions, RoaringTreemap::from_iter([0, 1, 2]));
+
+            let mut changed_base = base;
+            changed_base.current_snapshot_id = Some(43);
+            let mut accumulator =
+                PositionDeleteAccumulator::try_new(&changed_base).expect("accumulator");
+            assert!(
+                accumulator
+                    .add_batch(&changed_base, &batch, "file", "pos")
+                    .is_err()
+            );
+        });
+    }
 }

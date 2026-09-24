@@ -35,7 +35,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::spec::Schema as IcebergSchema;
-use crate::spec::delete_index::DeleteFileRef;
+use crate::spec::delete_index::{DeleteFileRef, PositionDeleteFile};
 
 /// Column name used in Iceberg position-delete files for the target data-file path.
 const POS_DELETE_FILE_PATH_COL: &str = "file_path";
@@ -287,6 +287,9 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let store_ctx = StoreContext::new(base_store, &parsed_table_url)?;
 
+            let positional_deletes = positional_deletes.iter()
+                .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                .collect::<Result<Vec<_>>>()?;
             let deleted_positions =
                 load_deleted_positions(&store_ctx, &positional_deletes, &data_file_path).await?;
 
@@ -324,7 +327,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 /// Load all applicable position-delete rows for the target data file.
 pub(crate) async fn load_deleted_positions(
     store_ctx: &StoreContext,
-    delete_files: &[DeleteFileRef],
+    delete_files: &[PositionDeleteFile],
     data_file_path: &str,
 ) -> Result<RoaringTreemap> {
     if delete_files.is_empty() {
@@ -333,14 +336,24 @@ pub(crate) async fn load_deleted_positions(
 
     let mut deleted_positions = RoaringTreemap::new();
     for delete_file in delete_files {
-        if delete_file.is_deletion_vector() {
-            deleted_positions |=
-                crate::io::deletion_vector::read_deletion_vector(store_ctx, &delete_file.data_file)
-                    .await?;
-            continue;
-        }
-        let (store, path) = store_ctx.resolve(&delete_file.data_file.file_path)?;
-        let file_size = delete_file.data_file.file_size_in_bytes;
+        let (file_path, file_size) = match delete_file {
+            PositionDeleteFile::DeletionVector {
+                path,
+                range,
+                cardinality,
+            } => {
+                deleted_positions |= crate::io::deletion_vector::read_deletion_vector(
+                    store_ctx,
+                    path,
+                    range.clone(),
+                    *cardinality,
+                )
+                .await?;
+                continue;
+            }
+            PositionDeleteFile::Parquet { path, size } => (path, *size),
+        };
+        let (store, path) = store_ctx.resolve(file_path)?;
         let delete_batches = read_parquet_all(store.clone(), &path, file_size).await?;
         for batch in delete_batches {
             let file_paths = batch
@@ -348,7 +361,7 @@ pub(crate) async fn load_deleted_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} missing '{}' column",
-                        delete_file.data_file.file_path, POS_DELETE_FILE_PATH_COL
+                        file_path, POS_DELETE_FILE_PATH_COL
                     ))
                 })?
                 .as_any()
@@ -356,7 +369,7 @@ pub(crate) async fn load_deleted_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} '{}' column is not Utf8",
-                        delete_file.data_file.file_path, POS_DELETE_FILE_PATH_COL
+                        file_path, POS_DELETE_FILE_PATH_COL
                     ))
                 })?
                 .clone();
@@ -365,7 +378,7 @@ pub(crate) async fn load_deleted_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} missing '{}' column",
-                        delete_file.data_file.file_path, POS_DELETE_POS_COL
+                        file_path, POS_DELETE_POS_COL
                     ))
                 })?
                 .as_any()
@@ -373,7 +386,7 @@ pub(crate) async fn load_deleted_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} '{}' column is not Int64",
-                        delete_file.data_file.file_path, POS_DELETE_POS_COL
+                        file_path, POS_DELETE_POS_COL
                     ))
                 })?
                 .clone();
