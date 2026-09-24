@@ -9,6 +9,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from email.utils import format_datetime
 
 import pytest
@@ -119,6 +120,60 @@ def test_string_state_is_literal_and_json_null_instructions_are_preserved(spark,
     question = next(iter(body["questions"].values()))
     assert "instructions" in question
     assert question["instructions"] is None
+
+
+@pytest.mark.parametrize(
+    ("expression", "location"),
+    [
+        ("jev_noul(to_variant_object({context}), 'compare')", "state"),
+        ("jev_noul('text', to_variant_object({context}))", "instructions"),
+        (
+            "jev_noul('text', 'compare', to_variant_object(named_struct('true', {context})))",
+            "criteria",
+        ),
+        (
+            "jev_choice('text', 'compare', to_variant_object(named_struct('a', {context})))",
+            "criteria",
+        ),
+        ("jev_score('text', 'compare', to_variant_object(array({context})))", "criteria"),
+        (
+            "jev_system_one('text', to_variant_object(named_struct("
+            "'q', named_struct('type', 'noul', 'instructions', {context}))))",
+            "instructions",
+        ),
+    ],
+)
+def test_structured_request_numbers_are_preserved(spark, jev, expression, location):
+    wide = "12345678901234567890123456789012345678"
+    fraction = "12345678901234567890.123456789012345678"
+    context = f"named_struct('wide', CAST('{wide}' AS DECIMAL(38,0)), 'fraction', CAST('{fraction}' AS DECIMAL(38,18)))"
+    expected = {"wide": Decimal(wide), "fraction": Decimal(fraction)}
+    original = spark.sql(f"SELECT to_json(to_variant_object({context})) AS j").first().j
+    assert json.loads(original, parse_int=Decimal, parse_float=Decimal) == expected
+
+    spark.sql(f"SELECT {expression.format(context=context)} AS j").collect()
+    assert jev.request_count == 1
+    body = json.loads(jev.requests[0]["encoded"], parse_int=Decimal, parse_float=Decimal)
+    actual = body["state"] if location == "state" else next(iter(body["questions"].values()))[location]
+    if location == "criteria":
+        actual = actual[0] if isinstance(actual, list) else next(iter(actual.values()))
+    assert actual == expected
+
+
+def test_distinct_decimal_states_do_not_batch_together(spark, jev):
+    account = "12345678901234567890123456789012345678"
+    rows = spark.sql(
+        "SELECT jev_noul(to_variant_object(named_struct('account', "
+        f"CAST('{account}' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0)))), 'compare') AS j "
+        "FROM range(0, 2, 1, 1)"
+    ).collect()
+    assert len(rows) == 2
+    assert jev.request_count == 2
+    states = [
+        json.loads(request["encoded"], parse_int=Decimal, parse_float=Decimal)["state"]["account"]
+        for request in jev.requests
+    ]
+    assert sorted(states) == [Decimal(account), Decimal(int(account) + 1)]
 
 
 def test_score_preserves_structured_legend(spark, jev):
@@ -530,6 +585,29 @@ def test_retry_after_http_date_obeys_budget(spark, jev):
     with pytest.raises(Exception, match=r"(?i)(429|retry|budget)"):
         spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '10'))").collect()
     assert jev.request_count == 1
+
+
+def test_retry_after_http_date_uses_time_after_body_read(spark, jev):
+    expected_attempts = 2
+    retry_headers = {}
+
+    def set_retry_date(_body, ordinal):
+        if ordinal == 1:
+            retry_headers["Retry-After"] = format_datetime(
+                datetime.now(timezone.utc) + timedelta(seconds=3), usegmt=True
+            )
+        return 0
+
+    jev.delay = set_retry_date
+    jev.body_delay = lambda _body, ordinal: 3 if ordinal == 1 else 0
+    jev.statuses.append((429, retry_headers))
+    result = (
+        spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('retry_budget_ms', '4500', 'max_retries', '1')) AS j")
+        .first()
+        .j
+    )
+    assert result.noul == EXPECTED_NOUL
+    assert jev.request_count == expected_attempts
 
 
 def test_default_retry_count_is_two(spark, jev):

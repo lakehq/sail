@@ -1,5 +1,6 @@
 //! Bounded, invocation-owned System One requests. No detached tasks or global row cache.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -12,12 +13,12 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
-use super::JevKind;
 use super::contract::{Options, retry_after, validate_request, validate_response};
+use super::{InputValue, JevKind};
 
 pub(crate) struct RequestRow {
-    pub state: Value,
-    pub questions: Map<String, Value>,
+    pub state: InputValue,
+    pub questions: BTreeMap<String, InputValue>,
     pub options: Options,
 }
 
@@ -212,9 +213,9 @@ impl Drop for ActiveAttempt<'_> {
 
 #[derive(Serialize)]
 struct Body<'a> {
-    state: &'a Value,
+    state: &'a InputValue,
     model: &'a str,
-    questions: &'a Map<String, Value>,
+    questions: &'a BTreeMap<String, InputValue>,
 }
 
 /// Check actual bytes including escaping and generated IDs, without allocating an
@@ -240,9 +241,9 @@ impl Write for BodySize {
 }
 
 fn encoded_size(
-    state: &Value,
+    state: &InputValue,
     options: &Options,
-    questions: &Map<String, Value>,
+    questions: &BTreeMap<String, InputValue>,
     limit: usize,
 ) -> Result<usize> {
     let mut out = BodySize { size: 0, limit };
@@ -264,36 +265,6 @@ struct Group {
     rows: Vec<(usize, Vec<(String, String)>)>,
     body: bytes::Bytes,
     _reservation: Reservation,
-}
-
-struct CompareState<'a> {
-    expected: &'a [u8],
-    offset: usize,
-}
-
-impl Write for CompareState<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self
-            .expected
-            .get(self.offset..self.offset.saturating_add(bytes.len()))
-            != Some(bytes)
-        {
-            return Err(std::io::Error::other("different Jev state"));
-        }
-        self.offset += bytes.len();
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn same_state(value: &Value, expected: &[u8]) -> bool {
-    let mut writer = CompareState {
-        expected,
-        offset: 0,
-    };
-    serde_json::to_writer(&mut writer, value).is_ok() && writer.offset == expected.len()
 }
 
 fn build_group<F>(
@@ -318,23 +289,11 @@ where
     };
     let state = first.state;
     let options = first.options;
-    // Structural JSON equality ignores object order and signed zero. Compare the
-    // actual serialization, without allocating another candidate-state buffer.
-    let mut state_size = BodySize {
-        size: 0,
-        limit: limits.hard_bytes,
-    };
-    if !models {
-        serde_json::to_writer(&mut state_size, &state)
-            .map_err(|_| exec_datafusion_err!("Jev request exceeds SAIL_JEV_MAX_REQUEST_BYTES"))?;
-    }
-    let mut state_bytes = Vec::with_capacity(state_size.size);
-    if !models {
-        serde_json::to_writer(&mut state_bytes, &state)
-            .map_err(|_| exec_datafusion_err!("Could not encode Jev state"))?;
+    if !models && state.json.get().len() > limits.hard_bytes {
+        return exec_err!("Jev request exceeds SAIL_JEV_MAX_REQUEST_BYTES");
     }
     let mut candidate = Some(first.questions);
-    let mut questions = Map::new();
+    let mut questions = BTreeMap::new();
     let mut rows = Vec::new();
     let mut body_size = 0;
     while *next < count {
@@ -345,13 +304,18 @@ where
                 *next += 1;
                 continue;
             };
-            if row.options != options || (!models && !same_state(&row.state, &state_bytes)) {
+            if row.options != options || (!models && row.state.json.get() != state.json.get()) {
                 break;
             }
             row.questions
         };
         if !models {
-            validate_request(&state, &row_questions)?;
+            validate_request(
+                &state.parsed,
+                row_questions
+                    .values()
+                    .map(|question| question.parsed.as_ref()),
+            )?;
         }
         if !rows.is_empty()
             && questions.len().saturating_add(row_questions.len()) > limits.target_questions
@@ -394,7 +358,6 @@ where
     }
     // A counting pass includes escaping/IDs without keeping two encoded bodies alive.
     // Allocate the exact measured length so Vec growth cannot exceed the reservation.
-    drop(state_bytes);
     let mut body = Vec::with_capacity(body_size);
     if !models {
         serde_json::to_writer(
@@ -409,7 +372,10 @@ where
     }
     Ok(Some(Group {
         options,
-        questions,
+        questions: questions
+            .into_iter()
+            .map(|(id, question)| (id, Arc::unwrap_or_clone(question.parsed)))
+            .collect(),
         rows,
         body: body.into(),
         _reservation: reservation,
@@ -454,7 +420,7 @@ async fn send(
         .get("x-typesafe-request-id")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let delay = retry_after(response.headers(), SystemTime::now());
+    let retry_headers = response.headers().clone();
     let bytes = response.bytes().await.map_err(|_| AttemptFailure {
         retry: true,
         delay: None,
@@ -474,7 +440,7 @@ async fn send(
             .replace(&*group.options.api_key, "[REDACTED]");
         return Err(AttemptFailure {
             retry: status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error(),
-            delay,
+            delay: retry_after(&retry_headers, SystemTime::now()),
             message: format!(
                 "Jev HTTP {}: {}",
                 status.as_u16(),
@@ -676,11 +642,9 @@ mod tests {
 
     #[test]
     fn batching_compares_serialized_state_not_json_equality() {
-        let negative: Value = serde_json::from_str("[-0.0]").expect("json");
-        let positive: Value = serde_json::from_str("[0.0]").expect("json");
-        assert_eq!(negative, positive);
-        let bytes = serde_json::to_vec(&negative).expect("encode");
-        assert!(same_state(&negative, &bytes));
-        assert!(!same_state(&positive, &bytes));
+        let negative = InputValue::from_json("[-0.0]".to_owned()).expect("json");
+        let positive = InputValue::from_json("[0.0]".to_owned()).expect("json");
+        assert_eq!(negative.parsed, positive.parsed);
+        assert_ne!(negative.json.get(), positive.json.get());
     }
 }

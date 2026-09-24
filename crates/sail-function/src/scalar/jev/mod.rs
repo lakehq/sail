@@ -1,5 +1,6 @@
 //! Built-in Jev functions. Only the kind, never credentials or clients, is serialized.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, ListArray, MapArray, StructArray, new_empty_array};
@@ -16,6 +17,8 @@ use parquet_variant_json::VariantToJson;
 use sail_common_datafusion::variant::{
     VARIANT_VALUE_FIELD_NAME, is_variant_storage_field, variant_metadata_field,
 };
+use serde::Serialize;
+use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Map, Value};
 
 pub(crate) mod contract;
@@ -206,7 +209,7 @@ impl AsyncScalarUDFImpl for Jev {
         let mut parsed_options = None;
         let mut rows = transport::evaluate(self.kind, count, |index| {
             let state = if self.kind == JevKind::Models {
-                Value::Null
+                InputValue::from_value(Value::Null)?
             } else {
                 let Some(state) = inputs[0].get(index)? else {
                     return Ok(None);
@@ -221,7 +224,7 @@ impl AsyncScalarUDFImpl for Jev {
                         .transpose()?
                         .flatten();
                     parsed_options = Some(contract::Options::parse(
-                        value.as_ref(),
+                        value.as_ref().map(|value| value.parsed.as_ref()),
                         self.kind == JevKind::Models,
                     )?);
                 }
@@ -229,22 +232,26 @@ impl AsyncScalarUDFImpl for Jev {
                     .clone()
                     .ok_or_else(|| exec_datafusion_err!("missing Jev options"))?
             } else {
+                let value = inputs[options_index].get(index)?;
                 contract::Options::parse(
-                    inputs[options_index].get(index)?.as_ref(),
+                    value.as_ref().map(|value| value.parsed.as_ref()),
                     self.kind == JevKind::Models,
                 )?
             };
             let questions = match self.kind {
-                JevKind::Models => Map::new(),
+                JevKind::Models => BTreeMap::new(),
                 JevKind::SystemOne => inputs[1]
                     .get(index)?
-                    .and_then(|value| value.as_object().cloned())
                     .ok_or_else(|| {
                         exec_datafusion_err!("jev_system_one questions must be a VARIANT object")
-                    })?,
+                    })?
+                    .object_fields()?,
                 kind => {
-                    let mut question = Map::new();
-                    question.insert("type".to_owned(), kind.name()[4..].into());
+                    let mut question = BTreeMap::new();
+                    question.insert(
+                        "type".to_owned(),
+                        InputValue::from_value(kind.name()[4..].into())?,
+                    );
                     if let Some(instructions) = inputs[1].get(index)? {
                         question.insert("instructions".to_owned(), instructions);
                     }
@@ -253,11 +260,11 @@ impl AsyncScalarUDFImpl for Jev {
                         .map(|input| input.get(index))
                         .transpose()?
                         .flatten()
-                        && (kind != JevKind::Noul || !criteria.is_null())
+                        && (kind != JevKind::Noul || !criteria.parsed.is_null())
                     {
                         question.insert("criteria".to_owned(), criteria);
                     }
-                    Map::from_iter([("result".to_owned(), Value::Object(question))])
+                    BTreeMap::from_iter([("result".to_owned(), InputValue::object(question)?)])
                 }
             };
             Ok(Some(transport::RequestRow {
@@ -298,15 +305,78 @@ impl AsyncScalarUDFImpl for Jev {
     }
 }
 
+/// Keep the original JSON for transport; the parsed view is only for shape validation.
+/// In particular, serde_json::Value cannot represent every VARIANT decimal exactly.
+#[derive(Clone)]
+pub(crate) struct InputValue {
+    parsed: Arc<Value>,
+    json: Arc<RawValue>,
+}
+
+impl InputValue {
+    fn from_json(json: String) -> Result<Self> {
+        let parsed = serde_json::from_str(&json)
+            .map_err(|_| exec_datafusion_err!("Jev received invalid JSON"))?;
+        let json = RawValue::from_string(json)
+            .map_err(|_| exec_datafusion_err!("Jev received invalid JSON"))?;
+        Ok(Self {
+            parsed: Arc::new(parsed),
+            json: Arc::from(json),
+        })
+    }
+
+    fn from_value(value: Value) -> Result<Self> {
+        let json =
+            to_raw_value(&value).map_err(|_| exec_datafusion_err!("Could not encode Jev input"))?;
+        Ok(Self {
+            parsed: Arc::new(value),
+            json: Arc::from(json),
+        })
+    }
+
+    fn object(fields: BTreeMap<String, Self>) -> Result<Self> {
+        let json = to_raw_value(&fields)
+            .map_err(|_| exec_datafusion_err!("Could not encode Jev question"))?;
+        let parsed = fields
+            .into_iter()
+            .map(|(key, value)| (key, Arc::unwrap_or_clone(value.parsed)))
+            .collect();
+        Ok(Self {
+            parsed: Arc::new(Value::Object(parsed)),
+            json: Arc::from(json),
+        })
+    }
+
+    fn object_fields(&self) -> Result<BTreeMap<String, Self>> {
+        let fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(self.json.get())
+            .map_err(|_| {
+                exec_datafusion_err!("jev_system_one questions must be a VARIANT object")
+            })?;
+        fields
+            .into_iter()
+            .map(|(key, value)| Ok((key, Self::from_json(value.get().to_owned())?)))
+            .collect()
+    }
+}
+
+impl Serialize for InputValue {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.json.serialize(serializer)
+    }
+}
+
 enum Input {
-    Scalar(Option<Value>),
+    Scalar(Option<InputValue>),
     Array(ArrayRef, FieldRef),
 }
 
 impl Input {
     fn new(value: &ColumnarValue, field: &FieldRef, count: usize) -> Result<Self> {
         match value {
-            ColumnarValue::Scalar(value) => Ok(Self::Scalar(json_value(
+            ColumnarValue::Scalar(value) => Ok(Self::Scalar(json_input(
                 value.to_array_of_size(1)?.as_ref(),
                 field,
                 0,
@@ -318,24 +388,30 @@ impl Input {
         }
     }
 
-    fn get(&self, index: usize) -> Result<Option<Value>> {
+    fn get(&self, index: usize) -> Result<Option<InputValue>> {
         match self {
             Self::Scalar(value) => Ok(value.clone()),
-            Self::Array(array, field) => json_value(array.as_ref(), field, index),
+            Self::Array(array, field) => json_input(array.as_ref(), field, index),
         }
     }
 }
 
-fn json_value(array: &dyn Array, field: &Field, index: usize) -> Result<Option<Value>> {
+fn json_input(array: &dyn Array, field: &Field, index: usize) -> Result<Option<InputValue>> {
     if array.data_type() == &DataType::Null || array.is_null(index) {
         return Ok(None);
     }
     if is_variant_storage_field(field) {
         let variant = VariantArray::try_new(array)?;
-        let value = variant.value(index).to_json_string()?;
-        return serde_json::from_str(&value)
-            .map(Some)
-            .map_err(|_| exec_datafusion_err!("Jev received an invalid VARIANT"));
+        return InputValue::from_json(variant.value(index).to_json_string()?).map(Some);
+    }
+    json_value(array, field, index)?
+        .map(InputValue::from_value)
+        .transpose()
+}
+
+fn json_value(array: &dyn Array, _field: &Field, index: usize) -> Result<Option<Value>> {
+    if array.data_type() == &DataType::Null || array.is_null(index) {
+        return Ok(None);
     }
     let value = match ScalarValue::try_from_array(array, index)? {
         ScalarValue::Utf8(Some(value))

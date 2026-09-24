@@ -87,6 +87,10 @@ class JevMock:
                     for key, value in headers.items():
                         self.send_header(key, value)
                     self.end_headers()
+                    self.wfile.flush()
+                    body_delay = mock.body_delay(body, ordinal) if callable(mock.body_delay) else mock.body_delay
+                    if body_delay:
+                        time.sleep(body_delay)
                     self.wfile.write(output)
                 except (BrokenPipeError, ConnectionResetError):
                     # Cancellation or an attempt deadline closes the client connection.
@@ -110,6 +114,7 @@ class JevMock:
     def reset(self):
         self.requests = []
         self.statuses = deque()
+        self.body_delay = 0.0
         self.transform = None
         self.error_response = {"detail": "mock HTTP failure"}
         self.active = 0

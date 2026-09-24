@@ -101,16 +101,20 @@ fn content(value: &Value) -> bool {
     matches!(value, Value::String(_) | Value::Object(_) | Value::Array(_))
 }
 
-pub(crate) fn validate_request(state: &Value, questions: &Map<String, Value>) -> Result<()> {
+pub(crate) fn validate_request<'a>(
+    state: &Value,
+    questions: impl IntoIterator<Item = &'a Value>,
+) -> Result<()> {
     if !content(state) {
         return exec_err!(
             "Jev state must be a JSON string, object, or array; JSON null is not SQL NULL"
         );
     }
-    if questions.is_empty() {
+    let mut questions = questions.into_iter().peekable();
+    if questions.peek().is_none() {
         return exec_err!("Jev questions must be a nonempty object");
     }
-    for question in questions.values() {
+    for question in questions {
         let Some(question) = question.as_object() else {
             return exec_err!("Each Jev question must be an object");
         };
