@@ -25,12 +25,6 @@ if TYPE_CHECKING:
 
 _DATABASE = "unity_column_mapping_test"
 
-# The tables here are created with SQL, so their nested fields carry no Spark field
-# metadata, and higher-order functions over arrays of structs work on partitioned tables.
-_UNITY_KNOWN_QUERY_FAILURES = {
-    name: failure for name, failure in _KNOWN_QUERY_FAILURES.items() if name != "higher_order"
-}
-
 
 def _create_table(spark: SparkSession, table: str, *, column_mapping_mode: str, partitioned: bool) -> None:
     columns = ", ".join(f"`{field.name}` {field.dataType.simpleString()}" for field in _SCHEMA.fields)
@@ -71,8 +65,8 @@ def test_unity_column_mapped_table_schema_matches_reference(spark: SparkSession,
 def test_unity_column_mapped_query_matches_reference(
     request, spark: SparkSession, unity_tables: dict, name: str, query: str
 ) -> None:
-    if name in _UNITY_KNOWN_QUERY_FAILURES:
-        reason, partitioned_only = _UNITY_KNOWN_QUERY_FAILURES[name]
+    if name in _KNOWN_QUERY_FAILURES:
+        reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if unity_tables["partitioned"] or not partitioned_only:
             request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
     actual = spark.sql(query.format(t=unity_tables["mapped"])).collect()
