@@ -1,8 +1,5 @@
 Feature: TIME subtraction result parity
 
-  # TODO: the two `@sail-bug` scenarios of this file are a result TYPE and a runtime VALUE, never a
-  #   verdict: the HOUR TO SECOND field range needs PR #2350, and the overflow needs Spark's
-  #   `[DATETIME_OVERFLOW]` on TIME arithmetic, which is its own change.
   # `SubtractTimes` returns `DayTimeIntervalType(HOUR, SECOND)` (`timeExpressions.scala:626`).
   # Sail casts the difference to Arrow `Duration`, which keeps the value and the day-time
   # family but cannot carry the HOUR TO SECOND start/end fields.
@@ -96,16 +93,7 @@ Feature: TIME subtraction result parity
       | 12:00:02.25 |
       | 12:00:03.25 |
 
-  # NOT this PR's work -- the fix belongs with the ANSI/overflow PR. Pinned here because the
-  # `TIME +- interval` arms above turn a hard error into a WRONG VALUE: DataFusion wraps within
-  # the 24-hour clock, Spark raises `[DATETIME_OVERFLOW]` in both ANSI modes
-  # (`DateTimeUtils.scala:1098-1104`, from `timeExpressions.scala:594`). Every direction the wrap
-  # can go is pinned, not just one, so the overflow PR has a complete red target.
-  #
-  # A guard cannot land here: Sail's `typeof` EVALUATES its argument (see the scenario below), so
-  # raising on overflow would also turn red the `typeof(...) IS NOT NULL` rows this same matrix
-  # uses to assert resolution. The guard and those rows have to move together.
-  @sail-bug
+  # Spark rejects overflow in both ANSI modes (DateTimeUtils.scala:1098-1104).
   @spark-4.1
   Scenario Outline: TIME arithmetic that leaves the day overflows: <case>
     Given config spark.sql.timeType.enabled = true

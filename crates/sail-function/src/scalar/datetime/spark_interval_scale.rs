@@ -3,14 +3,17 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, AsArray, IntervalMonthDayNanoArray, PrimitiveArray};
 use datafusion::arrow::compute::try_binary;
 use datafusion::arrow::datatypes::{
-    DataType, Decimal256Type, DurationMicrosecondType, Float64Type, Int64Type,
+    DataType, Decimal256Type, DurationMicrosecondType, Field, FieldRef, Float64Type, Int64Type,
     IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     i256,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use sail_common::spec;
 
 use crate::error::invalid_arg_count_exec_err;
 
@@ -52,6 +55,34 @@ macro_rules! interval_scale_udf {
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
                 Ok($result)
+            }
+
+            fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+                // Scaling returns the full interval qualifier, independently of the input:
+                // intervalExpressions.scala:606,659,746,829 in Spark 4.2.0.
+                let metadata = match $result {
+                    DataType::Interval(IntervalUnit::YearMonth) => {
+                        spec::SparkIntervalMetadata::YearMonth {
+                            start_field: spec::YearMonthIntervalField::Year,
+                            end_field: spec::YearMonthIntervalField::Month,
+                        }
+                    }
+                    DataType::Duration(TimeUnit::Microsecond) => {
+                        spec::SparkIntervalMetadata::DayTime {
+                            start_field: spec::DayTimeIntervalField::Day,
+                            end_field: spec::DayTimeIntervalField::Second,
+                        }
+                    }
+                    other => return plan_err!("unexpected scaled interval type: {other}"),
+                };
+                let metadata = metadata
+                    .to_json()
+                    .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+                Ok(Arc::new(
+                    Field::new(self.name(), $result, true).with_metadata(
+                        [(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata)].into(),
+                    ),
+                ))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

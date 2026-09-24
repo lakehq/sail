@@ -139,7 +139,6 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
     #   so Sail resolves all of them rather than refuse a query Spark answers. `md5('x')` and
     #   `base64('x')` are the same case: their argument takes an implicit cast to BINARY, while
     #   `hex('x')` and `upper(...)` take a STRING as it is and resolve in both engines.
-    @sail-bug
     Scenario Outline: <operand> minus a date is refused with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query

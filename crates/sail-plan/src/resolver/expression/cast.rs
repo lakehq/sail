@@ -13,7 +13,7 @@ use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
@@ -30,6 +30,7 @@ use crate::function::common::is_spark_udt_field;
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -68,6 +69,16 @@ impl PlanResolver<'_> {
                 start_field,
                 end_field,
             } => end_field.or(*start_field),
+            _ => None,
+        };
+        let spark_interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
+                .map(spec::SparkIntervalMetadata::to_json)
+                .transpose()?,
             _ => None,
         };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
@@ -182,6 +193,30 @@ impl PlanResolver<'_> {
                     to,
                 )
             }
+            (DataType::Interval(IntervalUnit::YearMonth), to, is_try) if to.is_integer() => {
+                let interval_metadata = expr_field
+                    .metadata()
+                    .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                    .map(|value| spec::SparkIntervalMetadata::from_json(value))
+                    .transpose()?;
+                let months = ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![expr]);
+                let value = if matches!(
+                    interval_metadata,
+                    Some(spec::SparkIntervalMetadata::YearMonth {
+                        end_field: spec::YearMonthIntervalField::Year,
+                        ..
+                    })
+                ) {
+                    months / lit(12_i32)
+                } else {
+                    months
+                };
+                if is_try {
+                    try_cast(value, to)
+                } else {
+                    cast(value, to)
+                }
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -214,13 +249,16 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8View::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             // TODO: Spark has no cast from a numeric to DATE in either mode (`Cast.scala:223-255` and
             //  `:92-122`), and takes an INTEGRAL to BINARY only in the non-ANSI `canCast`
@@ -264,8 +302,47 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        Ok(match spark_interval_metadata {
+            Some(metadata) => {
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
+            }
+            None => NamedExpr::new(name, expr),
+        })
     }
+}
+
+fn spark_string_cast_arguments(
+    expr: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let mut arguments = vec![expr];
+    if let Some(interval) = interval {
+        // Physical expression serialization does not preserve intermediate field metadata.
+        arguments.push(lit(interval.to_json()?));
+    }
+    Ok(arguments)
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
