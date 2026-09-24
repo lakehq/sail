@@ -206,7 +206,6 @@ Feature: round with an argument coming from a column
   # CASE branch coercion and final expression typing are shared analyzer limitations.
   Rule: Deferred common-type coercion of mixed CASE arguments
 
-    @sail-bug
     Scenario: round of a mixed CASE uses the final string type under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
