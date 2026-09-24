@@ -12,7 +12,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use parquet_variant_compute::{VariantArray, VariantType};
+use parquet_variant_compute::{VariantArray, VariantType, unshred_variant};
 use parquet_variant_json::VariantToJson;
 use sail_common_datafusion::variant::{
     VARIANT_VALUE_FIELD_NAME, is_variant_storage_field, variant_metadata_field,
@@ -405,8 +405,9 @@ fn json_input(array: &dyn Array, field: &Field, index: usize) -> Result<Option<I
         return Ok(None);
     }
     if is_variant_storage_field(field) {
-        let variant = VariantArray::try_new(array)?;
-        return InputValue::from_json(variant.value(index).to_json_string()?).map(Some);
+        let row = array.slice(index, 1);
+        let variant = unshred_variant(&VariantArray::try_new(row.as_ref())?)?;
+        return InputValue::from_json(variant.try_value(0)?.to_json_string()?).map(Some);
     }
     json_value(array, field, index)?
         .map(InputValue::from_value)

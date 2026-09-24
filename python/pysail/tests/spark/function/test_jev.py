@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from email.utils import format_datetime
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from pysail.testing.jev import JevMock
@@ -917,3 +919,78 @@ def test_jev_aggregates_over_empty_input_make_no_requests(spark, jev):
     assert row.a is None
     assert row.b is None
     assert jev.request_count == 0
+
+
+@pytest.mark.parametrize(
+    ("expression", "location"),
+    [
+        ("jev_noul(payload, 'yes?')", "state"),
+        ("jev_noul('text', payload)", "instructions"),
+        ("jev_noul('text', 'yes?', payload)", "criteria"),
+    ],
+)
+def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, expression, location):
+    amount_type = pa.struct(
+        [
+            pa.field("value", pa.binary(), nullable=True),
+            pa.field("typed_value", pa.decimal128(9, 2), nullable=True),
+        ]
+    )
+    description_type = pa.struct([pa.field("amount", amount_type, nullable=True)])
+    description_variant_type = pa.struct(
+        [
+            pa.field("value", pa.binary(), nullable=True),
+            pa.field("typed_value", description_type, nullable=True),
+        ]
+    )
+    typed_value_type = pa.struct([pa.field("true", description_variant_type, nullable=True)])
+    payload_type = pa.struct(
+        [
+            pa.field("metadata", pa.binary(), nullable=False, metadata={"variant": "true"}),
+            pa.field("value", pa.binary(), nullable=True),
+            pa.field("typed_value", typed_value_type, nullable=True),
+        ]
+    )
+    amounts = [Decimal("1.23"), Decimal("4.56")]
+    payload = pa.array(
+        [
+            None
+            if amount is None
+            else {
+                "metadata": b"\x01\x02\x00\x06\x0aamounttrue",
+                "value": None,
+                "typed_value": {
+                    "true": {
+                        "value": None,
+                        "typed_value": {"amount": {"value": None, "typed_value": amount}},
+                    }
+                },
+            }
+            for amount in [amounts[0], None, amounts[1]]
+        ],
+        type=payload_type,
+    )
+    field = pa.field(
+        "payload",
+        payload_type,
+        nullable=True,
+        metadata={"ARROW:extension:name": "arrow.parquet.variant", "ARROW:extension:metadata": "{}"},
+    )
+    path = tmp_path / "shredded_decimal.parquet"
+    pq.write_table(pa.Table.from_arrays([payload], schema=pa.schema([field])), path)
+    frame = spark.read.parquet(str(path))
+    observed = frame.selectExpr("variant_get(payload, '$.true.amount', 'decimal(9, 2)') AS amount").collect()
+    assert [row.amount for row in observed] == [amounts[0], None, amounts[1]]
+    rows = frame.selectExpr(f"({expression}).noul AS probability").collect()
+    middle = None if location == "state" else EXPECTED_NOUL
+    assert [row.probability for row in rows] == [EXPECTED_NOUL, middle, EXPECTED_NOUL]
+
+    actual = []
+    for request in jev.requests:
+        body = json.loads(request["encoded"], parse_float=Decimal)
+        if location == "state":
+            actual.append(body["state"])
+        else:
+            actual.extend(question[location] for question in body["questions"].values() if location in question)
+    assert sorted(value["true"]["amount"] for value in actual) == amounts
+    assert all(set(value) == {"true"} and set(value["true"]) == {"amount"} for value in actual)
