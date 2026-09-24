@@ -119,7 +119,7 @@ Default exponential backoff starts at 500 ms, caps at 5 seconds, and subtracts u
 Valid `retry-after-ms` takes precedence over `Retry-After`; the latter supports numeric seconds and HTTP dates.
 As in the Python SDK, a date without a timezone (the older asctime format) uses the executing worker's local timezone; dates with `GMT` use UTC.
 A valid server delay replaces backoff without the five-second cap, but may exhaust the retry budget.
-This policy follows the pinned Python SDK, not the JavaScript SDK.
+This policy follows the Python SDK, not the JavaScript SDK.
 
 ## Batching and Execution
 
@@ -264,8 +264,7 @@ SELECT jev_models().models;
 
 ## Contract Reference
 
-The implementation pins TypeSafe Python SDK **0.7.1**, commit [`0ffd094c72ed9445223060b24ffd7a56aa781fb4`](https://github.com/typesafe-ai/typesafe-sdk-python/tree/0ffd094c72ed9445223060b24ffd7a56aa781fb4), and an OpenAPI 3.1.0 snapshot for API version 0.2.0 captured on **2026-09-24 UTC**.
-Exact source artifacts, schema bytes, hashes, and attribution are recorded in the repository's `python/pysail/tests/spark/jev/references/manifest.json`.
-Request shapes follow that schema. Missing/null token counts follow the Python SDK's more tolerant response types.
+For the provider contract, see the [TypeSafe API reference](https://docs.typesafe.ai/api) and [Python SDK documentation](https://docs.typesafe.ai/sdk/python).
+Request shapes follow the API schema. Missing/null token counts follow the Python SDK's more tolerant response types.
 Sail additionally validates completeness against requested question IDs, preserves additional mixed-answer fields, and exposes Score map keys as SQL strings.
 The request deadline and worker resource controls above are Sail-specific behavior.

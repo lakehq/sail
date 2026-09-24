@@ -1,4 +1,4 @@
-//! System One's wire contract. See the pinned Python SDK and OpenAPI test fixtures.
+//! System One's wire contract. See https://docs.typesafe.ai/api.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
