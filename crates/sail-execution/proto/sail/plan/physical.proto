@@ -70,7 +70,8 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
-    InputFileMetadataExecNode input_file_metadata = 58;
+    IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
+    InputFileMetadataExecNode input_file_metadata = 59;
   }
 }
 
@@ -158,6 +159,7 @@ message HigherOrderUdf {
     SparkArraySortUdf sort = 6;
     SparkSequenceUdf spark_sequence_lazy = 7;
     ConvertTzUdf convert_tz_lazy = 8;
+    SparkMapFilterUdf map_filter = 9;
   }
 }
 
@@ -168,6 +170,8 @@ message SparkArrayAggregateUdf {
 message SparkArrayExistsUdf {}
 
 message SparkArrayForallUdf {}
+
+message SparkMapFilterUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -237,12 +241,11 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
-    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
-    SparkDateFormatUdf spark_date_format = 36;
-    SparkMapFromArraysUdf spark_map_from_arrays = 37;
-    SparkMapFromEntriesUdf spark_map_from_entries = 38;
-    StrToMapUdf str_to_map = 39;
-    SparkSequenceUdf spark_sequence = 40;
+    SparkDateFormatUdf spark_date_format = 35;
+    SparkMapFromArraysUdf spark_map_from_arrays = 36;
+    SparkMapFromEntriesUdf spark_map_from_entries = 37;
+    StrToMapUdf str_to_map = 38;
+    SparkSequenceUdf spark_sequence = 39;
   }
 }
 
@@ -363,10 +366,6 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
-}
-
-message SparkTryToTimestampUdf {
-  optional string timezone = 1;
 }
 
 message SparkVariantGetUdf {
@@ -1052,6 +1051,7 @@ message IcebergManifestScanExecNode {
   string table_url = 1;
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
+  string pruning_json = 3;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1064,8 +1064,16 @@ message IcebergDiscoveryExecNode {
 message IcebergScanByDataFilesExecNode {
   bytes input = 1;
   string table_url = 2;
-  bytes output_schema = 3;
-  repeated PhysicalProjectionExpr input_file_projection = 4;
+  bytes file_schema = 3;
+  repeated uint64 projection = 4;
+  bool has_projection = 5;
+  optional bytes predicate = 6;
+  optional uint64 limit = 7;
+  repeated PhysicalProjectionExpr input_file_projection = 8;
+}
+
+message IcebergMetadataScanExecNode {
+  bytes input = 1;
 }
 
 message IcebergDeleteApplyExecNode {

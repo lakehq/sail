@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +87,20 @@ def spark_env_var(tmp_path_factory):
     ]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
     os.environ["PYSPARK_SUBMIT_ARGS"] = " ".join(spark_args)
+
+
+@pytest.fixture(autouse=_is_spark_testing())
+def spark_process_timezone():
+    # Upstream Arrow UDF tests change the process timezone without restoring it.
+    timezone = os.environ.get("TZ")
+    try:
+        yield
+    finally:
+        if timezone is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = timezone
+        time.tzset()
 
 
 @pytest.fixture(scope="module", autouse=_is_spark_testing())

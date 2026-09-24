@@ -10,7 +10,6 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 chrono = { workspace = true }
-ryu = { workspace = true }
 datafusion = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-common = { workspace = true }
@@ -21,6 +20,7 @@ arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 either = { workspace = true }
 lexical-core = { workspace = true }
+num-bigint = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

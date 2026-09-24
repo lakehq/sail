@@ -101,6 +101,7 @@ def _append_equality_delete_snapshot(
     *,
     partition: Record | None = None,
     assign_root_ids: bool = True,
+    metrics: dict | None = None,
 ) -> Path:
     table_path = _local_table_path(table.location())
     metadata_dir = table_path / "metadata"
@@ -132,6 +133,7 @@ def _append_equality_delete_snapshot(
         record_count=delete_rows.num_rows,
         file_size_in_bytes=delete_file_path.stat().st_size,
         equality_ids=equality_ids,
+        **(metrics or {}),
     )
 
     manifest_path = metadata_dir / f"manifest-{uuid.uuid4()}.avro"
@@ -362,8 +364,7 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             """
         )
         empty_table_metadata_path = _latest_metadata_path(table_path)
-        with pytest.raises(Exception, match="partitioned tables are not supported"):
-            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
+        spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
         assert _latest_metadata_path(table_path) == empty_table_metadata_path
 
         spark.sql(
@@ -377,8 +378,7 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
         )
         before_metadata_path = _latest_metadata_path(table_path)
 
-        with pytest.raises(Exception, match="partitioned tables are not supported"):
-            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'missing'").collect()
+        spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'missing'").collect()
         assert _latest_metadata_path(table_path) == before_metadata_path
 
         with pytest.raises(Exception, match="partitioned tables are not supported"):
@@ -423,14 +423,19 @@ def test_iceberg_sql_delete_rejects_floating_equality_keys_without_file_side_eff
             )
             """
         )
-        spark.sql("INSERT INTO iceberg_delete_floating_key_reject VALUES (1, 1.25)")
+        spark.sql(
+            "INSERT INTO iceberg_delete_floating_key_reject SELECT /*+ COALESCE(1) */ * FROM VALUES (1, 1.25), (2, 2.5)"
+        )
         before_metadata_path = _latest_metadata_path(table_path)
         before_parquet_files = _parquet_file_paths(table_path)
 
         with pytest.raises(Exception, match=rf"identifier-field-invalid type {column_type.lower()}"):
             spark.sql("DELETE FROM iceberg_delete_floating_key_reject WHERE id = 1").collect()
 
-        assert [row.id for row in spark.sql("SELECT id FROM iceberg_delete_floating_key_reject").collect()] == [1]
+        assert sorted(row.id for row in spark.sql("SELECT id FROM iceberg_delete_floating_key_reject").collect()) == [
+            1,
+            2,
+        ]
         assert _latest_metadata_path(table_path) == before_metadata_path
         assert _parquet_file_paths(table_path) == before_parquet_files
     finally:

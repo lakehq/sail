@@ -2,12 +2,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, StringArray, UInt64Array};
+use datafusion::arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
@@ -24,7 +23,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
 use sail_common_datafusion::input_file::{
@@ -36,10 +35,9 @@ use sail_common_datafusion::schema_evolution::{
 use url::Url;
 
 use crate::io::StoreContext;
-use crate::physical_plan::manifest_scan_exec::{COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES};
-
-/// How many files to accumulate before building a DataSourceExec scan batch.
-const SCAN_CHUNK_FILES: usize = 1024;
+use crate::physical_plan::manifest_scan_exec::{
+    COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_RECORD_COUNT,
+};
 
 /// State machine for the streaming scan-by-data-files loop.
 struct ScanByDataFilesState {
@@ -50,17 +48,18 @@ struct ScanByDataFilesState {
     /// Table URL for object store resolution.
     table_url: Url,
     /// The Arrow schema of the actual user data.
-    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
+    file_schema: SchemaRef,
+    projection: Option<Vec<usize>>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    limit: Option<usize>,
     input_file_projection: Option<ProjectionExprs>,
     /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
-    pending_files: Vec<(String, u64)>,
+    pending_files: Vec<(String, u64, u64, bool)>,
     /// Currently active scan stream (draining Parquet data).
     current_scan: Option<SendableRecordBatchStream>,
-    /// Whether the upstream input has been fully consumed.
-    input_done: bool,
     /// Whether we've emitted at least one (possibly empty) batch.
-    emitted_empty: bool,
+    emitted_batch: bool,
 }
 
 impl ScanByDataFilesState {
@@ -68,26 +67,26 @@ impl ScanByDataFilesState {
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
         table_url: Url,
-        scan_output_schema: SchemaRef,
-        output_schema: SchemaRef,
-        input_file_projection: Option<ProjectionExprs>,
+        plan: &IcebergScanByDataFilesExec,
     ) -> Self {
         Self {
             input,
             context,
             table_url,
-            scan_output_schema,
-            output_schema,
-            input_file_projection,
+            output_schema: plan.output_schema.clone(),
+            file_schema: plan.file_schema.clone(),
+            projection: plan.projection.clone(),
+            predicate: plan.predicate.clone(),
+            limit: plan.limit,
+            input_file_projection: plan.input_file_projection.clone(),
             pending_files: Vec::new(),
             current_scan: None,
-            input_done: false,
-            emitted_empty: false,
+            emitted_batch: false,
         }
     }
 
     /// Extract file paths and sizes from a metadata RecordBatch.
-    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64)>> {
+    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64, u64, bool)>> {
         let path_col = batch
             .column_by_name(COL_FILE_PATH)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -108,10 +107,23 @@ impl ScanByDataFilesState {
                 ))
             })?;
 
+        let rows = batch
+            .column_by_name(COL_RECORD_COUNT)
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
+            .ok_or_else(|| DataFusionError::Internal("Missing Iceberg record count".into()))?;
+        let nan_free = batch
+            .column_by_name(COL_NAN_FREE)
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
+            .ok_or_else(|| DataFusionError::Internal("Missing Iceberg NaN evidence".into()))?;
         let mut files = Vec::with_capacity(path_col.len());
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
-                files.push((path_col.value(i).to_string(), size_col.value(i)));
+                files.push((
+                    path_col.value(i).to_string(),
+                    size_col.value(i),
+                    rows.value(i),
+                    nan_free.value(i),
+                ));
             }
         }
         Ok(files)
@@ -124,6 +136,42 @@ impl ScanByDataFilesState {
         }
 
         let files = std::mem::take(&mut self.pending_files);
+        if self.output_schema.fields().is_empty() {
+            let rows = files
+                .iter()
+                .try_fold(0usize, |rows, (_, _, count, _)| {
+                    usize::try_from(*count)
+                        .ok()
+                        .and_then(|count| rows.checked_add(count))
+                })
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Iceberg record count overflow".into())
+                })?;
+            let rows = self.limit.map_or(rows, |limit| limit.min(rows));
+            let schema = self.output_schema.clone();
+            let batch_size = self.context.session_config().batch_size();
+            let batches = stream::try_unfold(rows, move |remaining| {
+                let schema = schema.clone();
+                async move {
+                    if remaining == 0 {
+                        return Ok(None);
+                    }
+                    let count = remaining.min(batch_size);
+                    let batch = RecordBatch::try_new_with_options(
+                        schema,
+                        vec![],
+                        &datafusion::arrow::record_batch::RecordBatchOptions::new()
+                            .with_row_count(Some(count)),
+                    )?;
+                    Ok::<_, DataFusionError>(Some((batch, remaining - count)))
+                }
+            });
+            self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
+                self.output_schema.clone(),
+                batches,
+            )));
+            return Ok(());
+        }
 
         let object_store = self
             .context
@@ -141,7 +189,7 @@ impl ScanByDataFilesState {
         // exercised in this streaming path. The actual file size from the manifest
         // is accurate and is the only metadata field that matters for scan planning.
         let mut partitioned_files = Vec::with_capacity(files.len());
-        for (raw_path, file_size) in &files {
+        for (raw_path, file_size, _, _) in &files {
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
@@ -168,39 +216,45 @@ impl ScanByDataFilesState {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         // Use session Parquet options for parity with the driver-based scan path.
-        let parquet_options = TableParquetOptions {
-            global: self
-                .context
+        let parquet_options = crate::datasource::parquet::parquet_options(
+            &self.file_schema,
+            files.iter().all(|(_, _, _, nan_free)| *nan_free),
+            self.context
                 .session_config()
                 .options()
                 .execution
                 .parquet
                 .clone(),
-            ..Default::default()
-        };
-        let parquet_source = ParquetSource::new(Arc::clone(&self.scan_output_schema))
+        );
+        let mut parquet_source = ParquetSource::new(Arc::clone(&self.file_schema))
             .with_table_parquet_options(parquet_options);
-        let mut parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-            Arc::new(parquet_source);
-        if let Some(projection) = &self.input_file_projection {
-            let metadata_source = InputFileMetadataSource::try_new(parquet_source)?;
-            parquet_source = metadata_source
-                .try_pushdown_projection(projection)?
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "input file metadata source rejected projection".to_string(),
-                    )
-                })?;
+        if let Some(predicate) = &self.predicate {
+            parquet_source = parquet_source.with_predicate(predicate.clone());
         }
-
-        let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+        let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+            Arc::new(parquet_source);
+        let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
+            .with_projection_indices(self.projection.clone())?
+            .with_limit(self.limit)
             .with_expr_adapter(Some(Arc::new(
                 SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
                     StructFieldMatching::FieldId,
                 ),
             ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
+        if let Some(projection) = &self.input_file_projection {
+            // Metadata expressions reference the projected scan columns, not the file schema.
+            let source = InputFileMetadataSource::try_new_with_projection(
+                Arc::clone(&file_scan_config.file_source),
+                projection.clone(),
+            )?;
+            let statistics = Statistics::new_unknown(source.table_schema().table_schema());
+            file_scan_config = FileScanConfigBuilder::from(file_scan_config)
+                .with_source(Arc::new(source))
+                .with_statistics(statistics)
+                .build();
+        }
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
         let output_schema = Arc::clone(&self.output_schema);
@@ -238,28 +292,59 @@ pub struct IcebergScanByDataFilesExec {
     /// The Arrow schema of the actual user data.
     scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
+    file_schema: SchemaRef,
+    projection: Option<Vec<usize>>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    limit: Option<usize>,
     input_file_projection: Option<ProjectionExprs>,
     /// Cached plan properties.
     cache: Arc<PlanProperties>,
 }
 
 impl IcebergScanByDataFilesExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, table_url: String, output_schema: SchemaRef) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: String,
+        file_schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        limit: Option<usize>,
+    ) -> Result<Self> {
+        let output_schema = match &projection {
+            Some(projection) => Arc::new(file_schema.project(projection)?),
+            None => file_schema.clone(),
+        };
         let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema.clone()),
             Partitioning::UnknownPartitioning(partition_count),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
-        Self {
+        Ok(Self {
             input,
-            table_url: table_url.to_string(),
+            table_url,
             scan_output_schema: Arc::clone(&output_schema),
             output_schema,
+            file_schema,
+            projection,
+            predicate,
+            limit,
             input_file_projection: None,
             cache,
-        }
+        })
+    }
+    pub fn file_schema(&self) -> &SchemaRef {
+        &self.file_schema
+    }
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
+    }
+    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.predicate.as_ref()
+    }
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
     }
 
     pub fn table_url(&self) -> &str {
@@ -292,7 +377,7 @@ impl IcebergScanByDataFilesExec {
             Partitioning::UnknownPartitioning(
                 self.input.output_partitioning().partition_count().max(1),
             ),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Ok(self)
@@ -338,9 +423,11 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         datafusion::physical_plan::apply_expression_roots(
-            self.input_file_projection
-                .iter()
-                .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            self.predicate.iter().chain(
+                self.input_file_projection
+                    .iter()
+                    .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            ),
             f,
         )
     }
@@ -368,7 +455,7 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
             Partitioning::UnknownPartitioning(
                 cloned.input.output_partitioning().partition_count().max(1),
             ),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Ok(Arc::new(cloned))
@@ -410,21 +497,26 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
             Url::parse(&self.table_url).map_err(|e| DataFusionError::External(Box::new(e)))?;
         let output_schema = self.output_schema.clone();
 
-        let state = ScanByDataFilesState::new(
-            input_stream,
-            context,
-            table_url,
-            Arc::clone(&self.scan_output_schema),
-            Arc::clone(&output_schema),
-            self.input_file_projection.clone(),
-        );
+        let state = ScanByDataFilesState::new(input_stream, context, table_url, self);
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {
+                if st.limit == Some(0) {
+                    return Ok(None);
+                }
                 // Phase 1: Drain current scan stream.
                 if let Some(scan) = &mut st.current_scan {
                     match scan.try_next().await? {
-                        Some(batch) => return Ok(Some((batch, st))),
+                        Some(mut batch) => {
+                            if let Some(remaining) = &mut st.limit {
+                                if batch.num_rows() > *remaining {
+                                    batch = batch.slice(0, *remaining);
+                                }
+                                *remaining -= batch.num_rows();
+                            }
+                            st.emitted_batch = true;
+                            return Ok(Some((batch, st)));
+                        }
                         None => {
                             st.current_scan = None;
                             continue;
@@ -432,10 +524,8 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
                     }
                 }
 
-                // Phase 2: If we have enough pending files (or input done), build a scan.
-                if !st.pending_files.is_empty()
-                    && (st.pending_files.len() >= SCAN_CHUNK_FILES || st.input_done)
-                {
+                // Start reading as soon as a manifest supplies file entries.
+                if !st.pending_files.is_empty() {
                     st.build_next_scan().await?;
                     continue;
                 }
@@ -451,15 +541,9 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
                         continue;
                     }
                     None => {
-                        st.input_done = true;
-                        // Build final scan from remaining files.
-                        if !st.pending_files.is_empty() {
-                            st.build_next_scan().await?;
-                            continue;
-                        }
                         // No files at all: emit empty batch.
-                        if !st.emitted_empty {
-                            st.emitted_empty = true;
+                        if !st.emitted_batch {
+                            st.emitted_batch = true;
                             return Ok(Some((
                                 RecordBatch::new_empty(st.output_schema.clone()),
                                 st,

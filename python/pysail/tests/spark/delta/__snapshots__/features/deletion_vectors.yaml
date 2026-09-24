@@ -133,6 +133,9 @@ data:
           Filter: delta_dv_explain.value > Int32(100)
             TableScan: delta_dv_explain projection=[value], partial_filters=[delta_dv_explain.value > Int32(100)]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -209,6 +212,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:

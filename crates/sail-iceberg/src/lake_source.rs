@@ -15,7 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -43,7 +43,7 @@ use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
-use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::scan::IcebergScan;
 use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
@@ -90,8 +90,8 @@ impl DataSource for IcebergLakeSource {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
-        let provider = build_iceberg_provider(ctx, info).await?;
-        Ok(Arc::new(IcebergTableSource::new(provider)))
+        let scan = build_iceberg_scan(ctx, info).await?;
+        Ok(Arc::new(IcebergTableSource::new(scan)))
     }
 
     async fn infer_schema(
@@ -501,7 +501,7 @@ pub(crate) async fn plan_iceberg_write(
         })?;
         let read_options = IcebergReadOptions::resolve(ctx, vec![])?;
         table
-            .to_provider(&read_options)?
+            .new_scan(&read_options)?
             .predicate_overwrite_paths(ctx, &condition.expr)
             .await?
     } else {
@@ -703,33 +703,7 @@ impl IcebergLakeSource {
     // TODO: Add row-level UPDATE and configurable COW/MOR strategy selection.
 }
 
-/// Create an Iceberg table provider for reading.
-pub async fn create_iceberg_provider(
-    ctx: &dyn Session,
-    table_url: Url,
-    options: IcebergReadOptions,
-) -> Result<Arc<dyn TableProvider>> {
-    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None, false).await?)
-}
-
-pub async fn create_iceberg_provider_concrete(
-    ctx: &dyn Session,
-    table_url: Url,
-    options: IcebergReadOptions,
-    metadata_location: Option<String>,
-    catalog_managed_table: bool,
-) -> Result<Arc<IcebergTableProvider>> {
-    let metadata_location =
-        resolve_iceberg_metadata_location(None, metadata_location, catalog_managed_table)?;
-    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
-    let provider = table.to_provider(&options)?;
-    Ok(Arc::new(provider))
-}
-
-async fn build_iceberg_provider(
-    ctx: &dyn Session,
-    info: SourceInfo,
-) -> Result<Arc<IcebergTableProvider>> {
+async fn build_iceberg_scan(ctx: &dyn Session, info: SourceInfo) -> Result<Arc<IcebergScan>> {
     let SourceInfo {
         paths,
         lakehouse_table,
@@ -753,7 +727,7 @@ async fn build_iceberg_provider(
         catalog_managed_table,
     )?;
     let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
-    Ok(Arc::new(table.to_provider(&iceberg_options)?))
+    Ok(Arc::new(table.new_scan(&iceberg_options)?))
 }
 
 fn validate_iceberg_read_lakehouse_context(
