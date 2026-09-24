@@ -17,6 +17,12 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let input_type = value.clone().get_type(function_context.schema)?;
     let (value, input_type) = match input_type {
+        DataType::Decimal128(_, _) if !function_context.plan_config.ansi_mode => (
+            // Preserve decimal values supported by the existing unsigned conversion.
+            // TODO: Support full DECIMAL-to-INT wrapping beyond that range.
+            value.cast_to(&DataType::Int64, function_context.schema)?,
+            DataType::Int32,
+        ),
         DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _) => (
             // TODO: Match Spark's non-ANSI FLOAT/DOUBLE-to-INT saturation;
             //  generic casts currently reject out-of-range values.

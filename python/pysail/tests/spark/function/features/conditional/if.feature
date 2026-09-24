@@ -84,6 +84,74 @@ Feature: if output schema
          |-- result: long (nullable = true)
         """
 
+  Rule: Conditional branches over UNION results
+
+    Scenario Outline: Conditionals preserve widened UNION values: <operator>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, CAST(2 AS FLOAT), v) AS if_result,
+          CASE WHEN id = 0 THEN CAST(2 AS FLOAT) ELSE v END AS case_result,
+          nvl2(nullif(id, 1), CAST(2 AS FLOAT), v) AS nvl2_result
+        FROM (
+          SELECT 0 AS id, 1 AS v
+          <operator>
+          SELECT 1 AS id, CAST(16777217 AS DOUBLE) AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result collected
+        | id | if_result  | case_result | nvl2_result |
+        | 0  | 2.0        | 2.0         | 2.0         |
+        | 1  | 16777217.0 | 16777217.0  | 16777217.0  |
+
+      Examples:
+        | operator  |
+        | UNION ALL |
+        | UNION     |
+
+    Scenario Outline: Conditionals preserve UNION strings: <operator>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, CAST(2 AS BIGINT), v) AS if_result,
+          CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE v END AS case_result
+        FROM (
+          SELECT 0 AS id, 1 AS v
+          <operator>
+          SELECT 1 AS id, 'x' AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result
+        | id | if_result | case_result |
+        | 0  | 2         | 2           |
+        | 1  | x         | x           |
+
+      Examples:
+        | operator  |
+        | UNION ALL |
+        | UNION     |
+
+    @sail-bug
+    Scenario: ANSI conditionals reject invalid numeric strings from UNION inputs
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, if(id = 0, CAST(2 AS BIGINT), v) AS result
+        FROM (
+          SELECT 0 AS id, 1 AS v
+          UNION ALL
+          SELECT 1 AS id, 'x' AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query error CAST_INVALID_INPUT
+
   Rule: Nested numeric and STRING branches
 
     Scenario: IF preserves nested STRING values with ANSI disabled

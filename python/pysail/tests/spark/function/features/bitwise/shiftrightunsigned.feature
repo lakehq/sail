@@ -40,6 +40,30 @@ Feature: shiftrightunsigned output schema
 
   Rule: Implicit casts
 
+    Scenario Outline: shiftrightunsigned preserves supported decimal CASE magnitudes
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 8 ELSE CAST(<value> AS DECIMAL(11,1)) END, 1
+        ) AS result
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result
+        | id | result   |
+        | 0  | 4        |
+        | 1  | <result> |
+
+      Examples:
+        | value        | result     |
+        | 3000000000   | 1500000000 |
+        | -3000000000  | 647483648  |
+        | 4294967295   | 2147483647 |
+        | -4294967295  | 0          |
+        | -4294967296  | 0          |
+        | 3000000000.9 | 1500000000 |
+
     @sail-bug
     Scenario: shiftrightunsigned saturates an out-of-range DOUBLE input with ANSI disabled
       Given config spark.sql.ansi.enabled = false
@@ -121,3 +145,19 @@ Feature: shiftrightunsigned output schema
         | FLOAT   | true      | CAST(-2147483648 AS FLOAT)             |
         | DOUBLE  | false     | CAST(-2147483648 AS DOUBLE)            |
         | DOUBLE  | true      | CAST(-2147483648 AS DOUBLE)            |
+
+    @sail-bug
+    Scenario: shiftrightunsigned wraps decimals beyond the supported unsigned range
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 8 ELSE CAST(4294967296 AS DECIMAL(11,1)) END, 1
+        ) AS result
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | 4      |
+        | 1  | 0      |

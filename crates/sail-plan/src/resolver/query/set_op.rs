@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
+use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, LogicalPlan, LogicalPlanBuilder, Union, WindowFrame, WindowFunctionDefinition, expr,
 };
 use sail_common::spec;
 
@@ -104,12 +107,19 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let mut union =
+                    Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
+                if !state.has_unbound_parameters() {
+                    // Conditional coercion needs the common UNION schema.
+                    // Parameter types remain provisional until values are substituted.
+                    // TODO: Match Spark's ANSI string coercion for UNION inputs.
+                    union.schema = Arc::new(coerce_union_schema(&union.inputs)?);
+                }
+                let plan = LogicalPlan::Union(union);
                 if is_all {
-                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
+                    Ok(plan)
                 } else {
-                    Ok(LogicalPlanBuilder::new(left)
-                        .union_distinct(right)?
-                        .build()?)
+                    Ok(LogicalPlanBuilder::new(plan).distinct()?.build()?)
                 }
             }
             SetOpType::Except => {

@@ -72,8 +72,15 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         // Keep DataFusion's deferred coercion until bound result types are available.
         return Ok(expr_fn::nvl2(tested, if_non_null, if_null));
     }
-    let (if_non_null, if_null) =
-        coerce_branch_values(vec![if_non_null, if_null], &function_context)?.two()?;
+    let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
+    // Preserve NVL2's common result type before exposing a CASE to its callers.
+    let common_type =
+        get_coerce_type_for_case_expression(&argument_types(&branches, &function_context)?, None);
+    let (mut if_non_null, mut if_null) = branches.two()?;
+    if let Some(common_type) = common_type {
+        if_non_null = if_non_null.cast_to(&common_type, function_context.schema)?;
+        if_null = if_null.cast_to(&common_type, function_context.schema)?;
+    }
     // A simple CASE preserves Spark's branch-based nullability for NVL2.
     Ok(expr::Expr::Case(expr::Case {
         expr: Some(Box::new(tested.is_not_null())),

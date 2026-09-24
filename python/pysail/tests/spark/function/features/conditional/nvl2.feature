@@ -47,3 +47,39 @@ Feature: nvl2 output schema
         | 0  | 1      | int         |
         | 1  | 1      | int         |
         | 2  | 0      | int         |
+
+    Scenario Outline: nvl2 exposes its common nonnumeric result type: <case>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(nvl2(NULL, <first_branch>, <second_branch>)) AS result_type
+        """
+      Then query result
+        | result_type   |
+        | <result_type> |
+
+      Examples:
+        | case                  | ansi  | first_branch                       | second_branch                      | result_type   |
+        | DATE and TIMESTAMP_NTZ | false | DATE '2024-01-01'                  | TIMESTAMP_NTZ '2024-02-03 04:05:06' | timestamp_ntz |
+        | DATE and TIMESTAMP_NTZ | true  | DATE '2024-01-01'                  | TIMESTAMP_NTZ '2024-02-03 04:05:06' | timestamp_ntz |
+        | TIMESTAMP_NTZ and LTZ  | false | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
+        | TIMESTAMP_NTZ and LTZ  | true  | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
+        | STRING and BINARY     | true  | 'a'                                | X'62'                              | binary        |
+
+    Scenario: nvl2 declares the common timestamp type in its output schema
+      When query
+        """
+        SELECT nvl2(
+          NULL,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00',
+          TIMESTAMP_LTZ '2024-02-03 04:05:06'
+        ) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-02-03 04:05:06 |
+      And query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
