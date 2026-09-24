@@ -50,16 +50,31 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
         .clone())
 }
 
-// DataFusion's async extraction does not stage dependencies between nested calls.
-// Check the optimized plan, since projection merging can introduce such nesting.
-pub fn validate_jev_async_nesting(
-    plan: &datafusion_expr::LogicalPlan,
-) -> datafusion_common::Result<()> {
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+/// Prepare asynchronous functions in one logical-plan traversal.
+/// The current checks and rewrites apply only to Jev calls.
+pub fn prepare_async_functions(
+    plan: datafusion_expr::LogicalPlan,
+) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
+    use datafusion_common::Column;
+    use datafusion_common::tree_node::{
+        Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    };
+    use datafusion_expr::expr_rewriter::NamePreserver;
+    use datafusion_expr::utils::{conjunction, split_conjunction_owned};
+    use datafusion_expr::{Aggregate, Filter, JoinType, LogicalPlan, Projection};
     use sail_function::scalar::jev::JevKind;
 
-    plan.apply_with_subqueries(|node| {
-        node.apply_expressions(|expr| {
+    let contains_jev = |expr: &Expr| {
+        expr.exists(|expr| {
+            Ok(matches!(expr, Expr::ScalarFunction(function)
+                if function.func.as_async().is_some()
+                    && JevKind::from_name(function.func.name()).is_some()))
+        })
+    };
+    plan.transform_up_with_subqueries(|plan| {
+        // Check each node before rewriting its expressions. Extracting an inner
+        // async call first could hide unsupported nesting from this check.
+        plan.apply_expressions(|expr| {
             expr.apply(|expr| {
                 if let Expr::ScalarFunction(outer) = expr
                     && outer.func.as_async().is_some()
@@ -82,92 +97,130 @@ pub fn validate_jev_async_nesting(
                 Ok(TreeNodeRecursion::Continue)
             })
         })?;
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(())
-}
-
-// Work around a DataFusion 55.1.0 bug in async aggregate planning.
-// Each aggregate starts its async result columns at the same input-column
-// offset. Different aggregates can therefore read the first Jev result,
-// although their HTTP requests return different answers.
-//
-// Move the Jev calls into one projection before aggregation. Replace each
-// call in the aggregates with a reference to its own result column.
-// DataFusion's projection planner assigns these columns correctly.
-// Keep the original input columns, output names and types, and grouping
-// expressions. The extra projection processes record batches.
-//
-// TODO: Remove this workaround when Sail uses a DataFusion version with the
-//  indexing fix and the Jev aggregate regression tests pass without it.
-pub fn project_jev_aggregate_arguments(
-    plan: datafusion_expr::LogicalPlan,
-) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
-    use datafusion_common::Column;
-    use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-    use datafusion_expr::expr_rewriter::NamePreserver;
-    use datafusion_expr::{Aggregate, LogicalPlan, Projection};
-    use sail_function::scalar::jev::JevKind;
-
-    plan.transform_up_with_subqueries(|plan| {
-        let LogicalPlan::Aggregate(mut aggregate) = plan else {
-            return Ok(Transformed::no(plan));
-        };
-        let mut projection = aggregate
-            .input
-            .schema()
-            .columns()
-            .into_iter()
-            .map(Expr::Column)
-            .collect::<Vec<_>>();
-        let input_columns = projection.len();
-        let mut next_alias = 0usize;
-        let expressions = std::mem::take(&mut aggregate.aggr_expr)
-            .into_iter()
-            .map(|expr| {
-                let name = NamePreserver::new_for_projection().save(&expr);
-                let rewritten = expr
-                    .transform_up(|expr| {
-                        if let Expr::ScalarFunction(function) = &expr
-                            && function.func.as_async().is_some()
-                            && JevKind::from_name(function.func.name()).is_some()
-                        {
-                            let name = loop {
-                                let name = format!("__sail_jev_aggregate_{next_alias}");
-                                next_alias += 1;
-                                if !aggregate
-                                    .input
-                                    .schema()
-                                    .has_column_with_unqualified_name(&name)
-                                {
-                                    break name;
-                                }
-                            };
-                            projection.push(expr.alias(name.clone()));
-                            return Ok(Transformed::yes(Expr::Column(Column::from_name(name))));
+        match plan {
+            LogicalPlan::Join(mut join) if join.join_type == JoinType::Inner => {
+                let Some(predicate) = join.filter.take() else {
+                    return Ok(Transformed::no(LogicalPlan::Join(join)));
+                };
+                if !contains_jev(&predicate)? {
+                    join.filter = Some(predicate);
+                    return Ok(Transformed::no(LogicalPlan::Join(join)));
+                }
+                let mut asynchronous = Vec::new();
+                let mut synchronous = Vec::new();
+                for predicate in split_conjunction_owned(predicate) {
+                    if contains_jev(&predicate)? {
+                        asynchronous.push(predicate);
+                    } else {
+                        synchronous.push(predicate);
+                    }
+                }
+                join.filter = conjunction(synchronous);
+                let input = Arc::new(LogicalPlan::Join(join));
+                let Some(predicate) = conjunction(asynchronous) else {
+                    return Ok(Transformed::no(Arc::unwrap_or_clone(input)));
+                };
+                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                    predicate, input,
+                )?)))
+            }
+            LogicalPlan::Sort(mut sort) => {
+                let output = sort
+                    .input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                let mut projection = output.clone();
+                let mut next_alias = 0usize;
+                for order in &mut sort.expr {
+                    if !contains_jev(&order.expr)? {
+                        continue;
+                    }
+                    let name = loop {
+                        let name = format!("__sail_jev_sort_{next_alias}");
+                        next_alias += 1;
+                        if !sort.input.schema().has_column_with_unqualified_name(&name) {
+                            break name;
                         }
-                        Ok(Transformed::no(expr))
+                    };
+                    projection.push(order.expr.clone().alias(name.clone()));
+                    order.expr = Expr::Column(Column::from_name(name));
+                }
+                if projection.len() == output.len() {
+                    return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+                }
+                sort.input = Arc::new(LogicalPlan::Projection(Projection::try_new(
+                    projection, sort.input,
+                )?));
+                Ok(Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                    output,
+                    Arc::new(LogicalPlan::Sort(sort)),
+                )?)))
+            }
+            LogicalPlan::Aggregate(mut aggregate) => {
+                // DataFusion 55.1.0 assigns the same async result-column offset to
+                // different aggregates. Project Jev calls first so each aggregate
+                // reads its own result column.
+                let mut projection = aggregate
+                    .input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                let input_columns = projection.len();
+                let mut next_alias = 0usize;
+                let expressions = std::mem::take(&mut aggregate.aggr_expr)
+                    .into_iter()
+                    .map(|expr| {
+                        let name = NamePreserver::new_for_projection().save(&expr);
+                        let rewritten = expr
+                            .transform_up(|expr| {
+                                if let Expr::ScalarFunction(function) = &expr
+                                    && function.func.as_async().is_some()
+                                    && JevKind::from_name(function.func.name()).is_some()
+                                {
+                                    let name = loop {
+                                        let name = format!("__sail_jev_aggregate_{next_alias}");
+                                        next_alias += 1;
+                                        if !aggregate
+                                            .input
+                                            .schema()
+                                            .has_column_with_unqualified_name(&name)
+                                        {
+                                            break name;
+                                        }
+                                    };
+                                    projection.push(expr.alias(name.clone()));
+                                    return Ok(Transformed::yes(Expr::Column(Column::from_name(name))));
+                                }
+                                Ok(Transformed::no(expr))
+                            })
+                            .data()?;
+                        Ok(name.restore(rewritten))
                     })
-                    .data()?;
-                Ok(name.restore(rewritten))
-            })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-        aggregate.aggr_expr = expressions;
-        if projection.len() == input_columns {
-            return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                aggregate.aggr_expr = expressions;
+                if projection.len() == input_columns {
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+                }
+                let input = Arc::new(LogicalPlan::Projection(Projection::try_new(
+                    projection,
+                    aggregate.input,
+                )?));
+                Ok(Transformed::yes(LogicalPlan::Aggregate(
+                    Aggregate::try_new_with_schema(
+                        input,
+                        aggregate.group_expr,
+                        aggregate.aggr_expr,
+                        aggregate.schema,
+                    )?,
+                )))
+            }
+            plan => Ok(Transformed::no(plan)),
         }
-        let input = Arc::new(LogicalPlan::Projection(Projection::try_new(
-            projection,
-            aggregate.input,
-        )?));
-        Ok(Transformed::yes(LogicalPlan::Aggregate(
-            Aggregate::try_new_with_schema(
-                input,
-                aggregate.group_expr,
-                aggregate.aggr_expr,
-                aggregate.schema,
-            )?,
-        )))
     })
     .data()
 }

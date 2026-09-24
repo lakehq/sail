@@ -593,9 +593,71 @@ def test_surrounding_expressions(spark, query, expected):
     assert [row.x for row in spark.sql(query).collect()] == expected
 
 
-def test_direct_async_nesting_is_diagnosed(spark, jev):
-    with pytest.raises(Exception, match=r"(?i)(nest|async|materializ)"):
-        spark.sql("SELECT jev_noul(CAST(jev_noul('text', 'first?').noul AS STRING), 'second?')").collect()
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT a.id AS a, b.id AS b FROM range(0, 4, 1, 1) a "
+            "JOIN range(0, 4, 1, 1) b ON a.id = b.id "
+            "WHERE jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'yes?').noul > 0.1 "
+            "ORDER BY a, b",
+            [(1, 1), (2, 2), (3, 3)],
+        ),
+        (
+            "SELECT a.id AS a, b.id AS b FROM range(0, 4, 1, 1) a "
+            "CROSS JOIN range(0, 4, 1, 1) b "
+            "WHERE a.id < b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'yes?').noul > 0.01 "
+            "ORDER BY a, b",
+            [(0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+        ),
+        (
+            "SELECT a.id AS a, b.id AS b FROM range(0, 4, 1, 1) a "
+            "JOIN range(0, 4, 1, 1) b ON a.id = b.id "
+            "WHERE jev_noul(CASE WHEN a.id = 0 THEN CAST(NULL AS STRING) "
+            "ELSE concat(CAST(a.id AS STRING), CAST(b.id AS STRING)) END, 'yes?').noul > 0.1 "
+            "ORDER BY a, b",
+            [(1, 1), (2, 2), (3, 3)],
+        ),
+    ],
+)
+def test_jev_where_filters_over_joins(spark, jev, query, expected):
+    assert [tuple(row) for row in spark.sql(query).collect()] == expected
+    assert jev.request_count > 0
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT id FROM range(0, 4, 1, 1) ORDER BY jev_noul(CAST(id AS STRING), 'yes?').noul DESC LIMIT 2",
+            [3, 2],
+        ),
+        (
+            "SELECT id FROM range(0, 4, 1, 1) ORDER BY jev_noul(CAST(id % 2 AS STRING), 'yes?').noul DESC, id DESC",
+            [3, 1, 2, 0],
+        ),
+    ],
+)
+def test_jev_direct_order_by(spark, jev, query, expected):
+    result = spark.sql(query)
+    assert result.columns == ["id"]
+    assert [row.id for row in result.collect()] == expected
+    assert jev.request_count > 0
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT jev_noul(CAST(jev_noul('text', 'first?').noul AS STRING), 'second?')",
+        "SELECT sum(jev_noul(CAST(jev_noul('text', 'first?').noul AS STRING), 'second?').noul) FROM range(0, 2, 1, 1)",
+        "SELECT id FROM range(0, 2, 1, 1) "
+        "ORDER BY jev_noul(CAST(jev_noul(CAST(id AS STRING), 'first?').noul AS STRING), 'second?').noul",
+    ],
+)
+def test_direct_async_nesting_is_diagnosed(spark, jev, query):
+    with pytest.raises(Exception, match="Jev async calls cannot be nested"):
+        spark.sql(query).collect()
     assert jev.request_count == 0
 
 
