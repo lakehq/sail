@@ -126,3 +126,75 @@ Feature: to_time (strict variant)
         | a fraction wider than the pattern         | '10:30:45.1234'      | 'HH:mm:ss.SSS'                  | (?i)CANNOT_PARSE_TIME\|datetime value does not match format        |
         | an unquoted restricted pattern letter     | '10B30'              | 'HHBmm'                         | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
         | a pattern with an unmatched literal quote | '10:30'              | concat('HH', chr(39), 'mm')     | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
+
+  Rule: The first argument must be a STRING, in BOTH the one- and two-argument forms
+    # Measured on Spark JVM 4.2.0 with spark.sql.timeType.enabled=true (the internal gate
+    # whose default is `Utils.isTesting`, so TIME is unreachable in a normal session
+    # unless the conf is set explicitly).
+    #
+    # Spark's ToTime declares the first parameter as STRING only and enforces it at
+    # ANALYSIS time, including in the one-argument form. Sail instead coerces DATE /
+    # TIMESTAMP / TIMESTAMP_NTZ / TIME straight to TIME and returns the time-of-day, so it
+    # ACCEPTS every query below. That makes Sail a superset of Spark here, which is a
+    # divergence rather than a feature: the @sail-only "Two-arg" outline earlier in this
+    # file asserts Sail's behaviour as if it were correct, and because @sail-only is
+    # skipped on the JVM it can never catch this.
+
+    @sail-bug
+    Scenario Outline: One-arg form rejects a non-STRING first argument: <case>
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(<input>) AS result
+        """
+      Then query error The first parameter requires the "STRING" type
+
+      Examples:
+        | case          | input                               |
+        | INT           | 1                                   |
+        | BOOLEAN       | true                                |
+        | BINARY        | X'48656C6C6F'                       |
+        | DATE          | DATE '2024-01-15'                   |
+        | TIMESTAMP     | TIMESTAMP '2024-01-15 12:00:00'     |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-15 12:00:00' |
+        | TIME          | TIME '12:30:00'                     |
+
+    @sail-bug
+    Scenario Outline: try_to_time rejects a non-STRING first argument too: <case>
+      # The try_ variant swallows VALUE errors, not ANALYSIS errors, so the type check
+      # still fires. That is what distinguishes an analysis-time guard from a runtime one.
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT try_to_time(<input>) AS result
+        """
+      Then query error The first parameter requires the "STRING" type
+
+      Examples:
+        | case      | input                           |
+        | INT       | 1                               |
+        | DATE      | DATE '2024-01-15'               |
+        | TIMESTAMP | TIMESTAMP '2024-01-15 12:00:00' |
+        | TIME      | TIME '12:30:00'                 |
+
+  Rule: An unparseable value names the format it tried
+    # Spark's CANNOT_PARSE_TIME message quotes the format, and for the one-argument form
+    # that format is the literal 'HH:mm:ss.SSSSSS'. Asserting that substring is what
+    # distinguishes Spark's message from Sail's own wording ("cannot parse '...' as time
+    # with default formats"), which a `.*` assertion would let through.
+
+    @sail-bug
+    Scenario Outline: Unparseable input: <case>
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(<input>) AS result
+        """
+      Then query error cannot be parsed to a TIME value because it does not match to the datetime format
+
+      Examples:
+        | case             | input           |
+        | garbage          | 'foo'           |
+        | empty string     | ''              |
+        | whitespace only  | '   '           |
+        | trailing garbage | '2024-01-15xyz' |

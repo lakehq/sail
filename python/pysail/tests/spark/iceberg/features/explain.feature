@@ -129,6 +129,35 @@ Feature: Iceberg Query Optimization
         """
       Then query plan matches snapshot
 
+    Scenario: Exact and residual aggregates share Iceberg file selection
+      Given statement template
+        """
+        CREATE TABLE agg_table (id INT, value INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO agg_table VALUES (1, 10), (2, NULL), (3, 30)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(value) AS total FROM agg_table
+        """
+      Then query result
+        | rows | minimum | total |
+        | 3    | 1       | 40    |
+      When query
+        """
+        EXPLAIN SELECT COUNT(*), COUNT(value), MIN(id), MAX(CAST(id AS BIGINT)) FROM agg_table
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(value) AS total FROM agg_table
+        """
+      Then query plan matches snapshot
+
   Rule: Verify filter pushdown for complex predicates
     Background:
       Given variable location for temporary directory iceberg_explain_filter
