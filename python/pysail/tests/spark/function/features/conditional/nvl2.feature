@@ -31,6 +31,41 @@ Feature: nvl2 output schema
          |-- result: integer (nullable = true)
         """
 
+    Scenario: nvl2 preserves non-nullability when legacy temporal branches become strings
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT nvl2(NULL, DATE '2024-01-01', '2024-02-03') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-02-03 |
+      And query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: nvl2 preserves nullable temporal branches when converting them to strings
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT nvl2(id, d, '2024-02-03') AS result
+        FROM VALUES
+          (1, CAST(NULL AS DATE)),
+          (CAST(NULL AS INT), DATE '2024-01-01')
+        AS t(id, d)
+        """
+      Then query result
+        | result     |
+        | NULL       |
+        | 2024-02-03 |
+      And query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
   Rule: Result type
 
     Scenario: nvl2 is typed by its result arguments when the tested argument is a widened CASE

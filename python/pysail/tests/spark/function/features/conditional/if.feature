@@ -152,6 +152,23 @@ Feature: if output schema
         """
       Then query error CAST_INVALID_INPUT
 
+    @sail-bug
+    Scenario: ANSI UNION exposes its numeric common type to typeof
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(v) AS result_type
+        FROM (
+          SELECT CAST(8 AS BIGINT) AS v
+          UNION ALL
+          SELECT '4' AS v
+        ) AS q
+        """
+      Then query result
+        | result_type |
+        | bigint      |
+        | bigint      |
+
   Rule: Nested numeric and STRING branches
 
     Scenario: IF preserves nested STRING values with ANSI disabled
