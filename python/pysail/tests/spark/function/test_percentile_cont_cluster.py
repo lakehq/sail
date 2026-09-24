@@ -15,8 +15,8 @@ def remote():
 def test_percentile_cont_float_case_in_cluster(spark):
     spark.conf.set("spark.sql.ansi.enabled", "false")
     df = spark.sql(
-        "SELECT percentile_cont(0.5) WITHIN GROUP "
-        "(ORDER BY CASE WHEN id = 0 THEN 1 ELSE CAST(2.5 AS FLOAT) END) AS result "
-        "FROM range(3)"
+        "SELECT percentile_cont(0.625) WITHIN GROUP "
+        "(ORDER BY CASE WHEN id = 0 THEN 1 ELSE CAST(id AS FLOAT) END) AS result "
+        "FROM range(0, 4, 1, 4)"
     )
-    assert df.collect() == [(2.5,)]
+    assert df.collect() == [(1.875,)]

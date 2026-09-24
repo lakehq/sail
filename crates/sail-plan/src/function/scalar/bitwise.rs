@@ -40,8 +40,9 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         ))),
     }?;
 
+    // Keep the integer sign test correct if DataFusion unwraps a decimal-to-integer cast.
     let unsigned = when(
-        value.clone().lt(lit(0)),
+        value.clone().lt_eq(lit(-1)),
         lit(max_const) - (abs(cast(value.clone(), DataType::Int64)) - lit(1)),
     )
     .otherwise(value.clone())?;

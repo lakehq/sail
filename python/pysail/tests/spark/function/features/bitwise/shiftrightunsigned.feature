@@ -64,6 +64,33 @@ Feature: shiftrightunsigned output schema
         | -4294967296  | 0          |
         | 3000000000.9 | 1500000000 |
 
+    Scenario Outline: shiftrightunsigned truncates negative decimal fractions before checking their sign with ANSI <ansi_mode>
+      Given config spark.sql.ansi.enabled = <ansi_mode>
+      When query
+        """
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 1 ELSE value END, 1
+        ) AS result
+        FROM VALUES
+          (0, CAST(0 AS DECIMAL(12,2))),
+          (1, CAST(-0.5 AS DECIMAL(12,2))),
+          (2, CAST(-1.5 AS DECIMAL(12,2))),
+          (3, CAST(NULL AS DECIMAL(12,2)))
+        AS t(id, value)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 0  | 0          |
+        | 1  | 0          |
+        | 2  | 2147483647 |
+        | 3  | NULL       |
+
+      Examples:
+        | ansi_mode |
+        | false     |
+        | true      |
+
     @sail-bug
     Scenario: shiftrightunsigned saturates an out-of-range DOUBLE input with ANSI disabled
       Given config spark.sql.ansi.enabled = false
