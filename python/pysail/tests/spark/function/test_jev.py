@@ -449,6 +449,7 @@ def test_permanent_status_is_not_retried(spark, jev, status):
         b'{"errors":[{"message":"provider rejection marker: mock-default-key"}]}',
         b'{"detail":[],"message":"provider rejection marker: mock-default-key"}',
         b'{"detail":[],"errors":[{"message":"provider rejection marker: mock-default-key"}]}',
+        b'{"context":"' + b"x" * 600 + b'","message":"provider rejection marker: mock-default-key"}',
     ],
 )
 def test_http_errors_keep_provider_diagnostics(spark, jev, body):

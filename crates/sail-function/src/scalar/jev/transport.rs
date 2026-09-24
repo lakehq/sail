@@ -437,7 +437,20 @@ async fn send(
     })?;
     if !status.is_success() {
         let detail = serde_json::from_slice::<Value>(&bytes)
-            .map(|body| body.to_string())
+            .map(|body| {
+                ["detail", "message", "error"]
+                    .into_iter()
+                    .filter_map(|name| body.get(name))
+                    .find(|value| match value {
+                        Value::Null => false,
+                        Value::String(value) => !value.is_empty(),
+                        Value::Array(value) => !value.is_empty(),
+                        Value::Object(value) => !value.is_empty(),
+                        _ => true,
+                    })
+                    .unwrap_or(&body)
+                    .to_string()
+            })
             .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
         // Redact the JSON-escaped spelling too (keys may contain quotes/backslashes).
         let quoted_key = Value::String(group.options.api_key.to_string()).to_string();
