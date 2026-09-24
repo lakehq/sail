@@ -664,12 +664,10 @@ fn can_cast_field_with_schema_evolution(
             validate_struct_compatibility_with_variant(from_fields, to_fields, matching)?;
             Ok(true)
         }
-        (DataType::List(from_elem), DataType::List(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
-        }
-        (DataType::LargeList(from_elem), DataType::LargeList(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
-        }
+        (
+            DataType::List(from_elem) | DataType::LargeList(from_elem),
+            DataType::List(to_elem) | DataType::LargeList(to_elem),
+        ) => can_cast_field_with_schema_evolution(from_elem, to_elem, matching),
         (
             DataType::FixedSizeList(from_elem, from_len),
             DataType::FixedSizeList(to_elem, to_len),
@@ -1097,6 +1095,22 @@ fn cast_array_with_schema_evolution_inner(
         return cast_array_recursively(&scaled, target_field.data_type());
     }
 
+    // Convert only offsets here so nested values retain schema-evolution field matching.
+    let offset_cast = match (source.data_type(), target_field.data_type()) {
+        (DataType::LargeList(element), DataType::List(_)) => Some(cast_with_options(
+            source,
+            &DataType::List(Arc::clone(element)),
+            cast_options,
+        )?),
+        (DataType::List(element), DataType::LargeList(_)) => Some(cast_with_options(
+            source,
+            &DataType::LargeList(Arc::clone(element)),
+            cast_options,
+        )?),
+        _ => None,
+    };
+    let source = offset_cast.as_ref().unwrap_or(source);
+
     match target_field.data_type() {
         DataType::Struct(target_fields) => cast_struct_array_with_schema_evolution(
             source,
@@ -1334,7 +1348,7 @@ mod tests {
         BinaryViewArray, Int64Array, StringArray, TimestampMicrosecondArray,
         TimestampMillisecondArray,
     };
-    use datafusion::arrow::buffer::OffsetBuffer;
+    use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
     use datafusion::arrow::datatypes::TimeUnit;
     use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
 
@@ -1641,6 +1655,137 @@ mod tests {
             10,
         );
         Ok(())
+    }
+
+    #[test]
+    fn list_offset_width_cast_preserves_field_ids_and_slices() -> Result<()> {
+        let source_fields = vec![
+            field_with_id("old_a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("old_b", PARQUET_FIELD_ID_META_KEY, 2),
+        ];
+        let values: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![0, 10, 20, 30])),
+            Arc::new(Int64Array::from(vec![0, 100, 200, 300])),
+        ];
+        let source_values = Arc::new(StructArray::new(
+            source_fields.clone().into(),
+            values.clone(),
+            None,
+        ));
+        let source_element = Arc::new(Field::new(
+            "element",
+            DataType::Struct(source_fields.into()),
+            true,
+        ));
+        let target_fields = vec![
+            field_with_id("renamed_b", PARQUET_FIELD_ID_META_KEY, 2),
+            field_with_id("renamed_a", PARQUET_FIELD_ID_META_KEY, 1),
+        ];
+        let target_values = Arc::new(StructArray::new(
+            target_fields.clone().into(),
+            vec![values[1].clone(), values[0].clone()],
+            None,
+        ));
+        let target_element = Arc::new(Field::new(
+            "element",
+            DataType::Struct(target_fields.into()),
+            true,
+        ));
+        let offsets = OffsetBuffer::new(vec![0_i32, 1, 3, 3, 3, 4].into());
+        let nulls = Some(NullBuffer::from(vec![true, true, true, false, true]));
+        let source: ArrayRef = Arc::new(
+            ListArray::new(
+                source_element.clone(),
+                offsets.clone(),
+                source_values,
+                nulls.clone(),
+            )
+            .slice(1, 4),
+        );
+        let expected: ArrayRef = Arc::new(
+            ListArray::new(target_element.clone(), offsets, target_values, nulls).slice(1, 4),
+        );
+
+        for target_is_large in [false, true] {
+            let (source, expected) = if target_is_large {
+                (
+                    source.clone(),
+                    cast_with_options(
+                        &expected,
+                        &DataType::LargeList(target_element.clone()),
+                        &DEFAULT_CAST_OPTIONS,
+                    )?,
+                )
+            } else {
+                (
+                    cast_with_options(
+                        &source,
+                        &DataType::LargeList(source_element.clone()),
+                        &DEFAULT_CAST_OPTIONS,
+                    )?,
+                    expected.clone(),
+                )
+            };
+            let target = Field::new("items", expected.data_type().clone(), true);
+            assert!(can_cast_field_with_schema_evolution(
+                &Field::new("items", source.data_type().clone(), true),
+                &target,
+                StructFieldMatching::FieldId,
+            )?);
+            let actual = cast_array_with_schema_evolution(
+                &source,
+                &target,
+                &DEFAULT_CAST_OPTIONS,
+                StructFieldMatching::FieldId,
+            )?;
+            assert_eq!(actual.to_data(), expected.to_data());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn list_offset_width_cast_checks_element_nullability() -> Result<()> {
+        let optional = Arc::new(Field::new("element", DataType::Int64, true));
+        let required = Arc::new(Field::new("element", DataType::Int64, false));
+        for (source, target) in [
+            (
+                DataType::List(optional.clone()),
+                DataType::LargeList(required.clone()),
+            ),
+            (DataType::LargeList(optional), DataType::List(required)),
+        ] {
+            assert!(!can_cast_field_with_schema_evolution(
+                &Field::new("items", source, true),
+                &Field::new("items", target, true),
+                StructFieldMatching::FieldId,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn list_offset_width_cast_rejects_overflow() {
+        let length = i64::from(i32::MAX) + 1;
+        let element = Arc::new(Field::new("element", DataType::Null, true));
+        let source: ArrayRef = Arc::new(LargeListArray::new(
+            element.clone(),
+            OffsetBuffer::new(vec![0, length].into()),
+            Arc::new(datafusion::arrow::array::NullArray::new(length as usize)),
+            None,
+        ));
+        let error = cast_array_with_schema_evolution(
+            &source,
+            &Field::new("items", DataType::List(element), true),
+            &DEFAULT_CAST_OPTIONS,
+            StructFieldMatching::FieldId,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            DataFusionError::ArrowError(error, _)
+                if matches!(*error, datafusion::arrow::error::ArrowError::ComputeError(ref message)
+                    if message.starts_with("Offset overflow"))
+        ));
     }
 
     #[test]
