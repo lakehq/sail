@@ -1,8 +1,8 @@
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 
 
-@pytest.mark.parametrize("operand,resolved", [("coalesce", True), ("md5", False), ("concat", True)])
+@pytest.mark.parametrize(("operand", "resolved"), [("coalesce", True), ("md5", False), ("concat", True)])
 def test_dataframe_string_minus_date_resolves_before_sql_string_promotion(spark, operand, resolved):
     # Spark Connect resolves these DataFrame expressions before datetime rewriting.
     # The equivalent SQL operands require coercion and are rejected instead.

@@ -268,10 +268,10 @@ impl ScalarUDFImpl for SparkNegative {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if let [argument] = args.args.as_slice() {
-            if let Some(result) = negate_decimal(argument)? {
-                return Ok(result);
-            }
+        if let [argument] = args.args.as_slice()
+            && let Some(result) = negate_decimal(argument)?
+        {
+            return Ok(result);
         }
         let config_options = if self.ansi_mode {
             Arc::clone(&ANSI_CONFIG)
