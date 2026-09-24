@@ -11,7 +11,7 @@ from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table.sorting import NullOrder, SortDirection, SortField, SortOrder
 from pyiceberg.transforms import BucketTransform, DayTransform, IdentityTransform
-from pyiceberg.types import UUIDType, FixedType, LongType, NestedField, TimestampType
+from pyiceberg.types import FixedType, LongType, NestedField, TimestampType, UUIDType
 
 from pysail.testing.spark.steps.iceberg import _current_deletion_vectors, _current_snapshot, _find_latest_metadata
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
