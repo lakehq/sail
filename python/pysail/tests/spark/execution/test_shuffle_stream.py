@@ -36,6 +36,14 @@ def test_shuffle_finishes_when_join_leaves_probe_partitions_unread(spark, partit
     assert rows == ([Row(id=0)] if join_type == "left_semi" else [])
 
 
+@pytest.mark.timeout(15)
+def test_hash_join_preserves_global_build_limit(spark):
+    build = spark.range(16, numPartitions=4).limit(3)
+    probe = spark.range(16, numPartitions=4)
+
+    assert len(build.join(probe, "id", "left").collect()) == 3  # noqa: PLR2004
+
+
 @pytest.mark.timeout(30)
 def test_shuffle_preserves_rows_across_multiple_batches(spark):
     rows = [Row(id=i, payload="shuffle" * 100 if i % 3 else None) for i in range(2048)]
