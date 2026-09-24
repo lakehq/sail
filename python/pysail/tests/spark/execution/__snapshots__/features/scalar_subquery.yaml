@@ -196,6 +196,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -296,6 +299,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -374,6 +380,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -794,6 +803,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -872,6 +884,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -1305,6 +1320,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -1383,6 +1401,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -1899,6 +1920,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -2011,6 +2035,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -2089,6 +2116,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -2631,6 +2661,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -2709,6 +2742,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -3189,6 +3225,9 @@ data:
           Projection: range.id AS #0
             TableScan: range projection=[id]
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -3267,6 +3306,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -3624,6 +3666,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -3702,6 +3747,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -4057,6 +4105,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -4135,6 +4186,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -4553,6 +4607,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -4631,6 +4688,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -5044,6 +5104,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -5122,6 +5185,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -5455,6 +5521,9 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -5533,6 +5602,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -5935,6 +6007,9 @@ data:
             Projection: column1 AS #2, column2 AS #3
               Values: (Utf8("a"), Int32(2)), (Utf8("b"), Int32(1)), (Utf8("c"), Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -6013,6 +6088,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -6402,6 +6480,9 @@ data:
                         Values: (Int32(1)), (Int32(2))
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -6480,6 +6561,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -6866,6 +6950,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(1))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -6944,6 +7031,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -7306,6 +7396,9 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -7384,6 +7477,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -7763,6 +7859,9 @@ data:
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(4))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -7841,6 +7940,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -8240,6 +8342,9 @@ data:
             Projection: column1 AS #3
               Values: (Int32(11)), (Int32(12)), (Int32(13))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -8318,6 +8423,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -8767,6 +8875,9 @@ data:
               Projection: column1 AS #3
                 Values: (Int32(11)), (Int32(12)), (Int32(13))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -8845,6 +8956,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -9233,6 +9347,9 @@ data:
               Projection: column1 AS #2, column2 AS #3
                 Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -9311,6 +9428,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -9705,6 +9825,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -9783,6 +9906,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -10116,6 +10242,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -10194,6 +10323,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -10528,6 +10660,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(1)), (Int32(2)), (Int32(3))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -10606,6 +10741,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -10971,6 +11109,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(3)), (Int32(1)), (Int32(2))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -11049,6 +11190,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -11427,6 +11571,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(1)), (Int32(2)), (Int32(3)), (Int32(4))
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
@@ -11505,6 +11652,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
