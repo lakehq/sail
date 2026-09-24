@@ -38,6 +38,18 @@ def test_sql_timestamp_string_parameters(spark):
     ).collect() == [(True,)]
 
 
+@pytest.mark.parametrize(
+    ("query", "args"),
+    [
+        ("SELECT round(:p, 1) AS r", {"p": "1.25"}),
+        ("SELECT round(?, 1) AS r", ["1.25"]),
+    ],
+    ids=["named", "positional"],
+)
+def test_round_of_string_parameter(spark, query, args):
+    assert spark.sql(query, args=args).collect() == [(1.3,)]
+
+
 def test_keyword_as_explicit_column_alias(spark):
     # Keywords are not reserved in Spark and can be used as column aliases
     # when the `AS` keyword is explicit.
