@@ -1,7 +1,7 @@
 use arrow::array::{Float64Array, Int64Array, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use parquet_variant_compute::VariantArrayBuilder;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16};
+use parquet_variant_compute::VariantArrayBuilder;
 
 use super::*;
 use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
@@ -101,7 +101,11 @@ pub(super) fn array(kind: JevKind, rows: &[Option<ResponseRow>]) -> Result<Array
         })
         .collect::<Result<Vec<_>>>()?;
     let nulls = NullBuffer::from(rows.iter().map(Option::is_some).collect::<Vec<_>>());
-    Ok(Arc::new(StructArray::try_new(fields, columns, Some(nulls))?))
+    Ok(Arc::new(StructArray::try_new(
+        fields,
+        columns,
+        Some(nulls),
+    )?))
 }
 
 fn variant_map(field: &Field, rows: &[Option<ResponseRow>]) -> Result<ArrayRef> {
@@ -130,7 +134,9 @@ fn variant_map(field: &Field, rows: &[Option<ResponseRow>]) -> Result<ArrayRef> 
         fields.clone(),
         vec![
             Arc::new(StringArray::from(keys)),
-            Arc::new(convert_variant_binaryview_to_binary(builder.build().into())?),
+            Arc::new(convert_variant_binaryview_to_binary(
+                builder.build().into(),
+            )?),
         ],
         None,
     )?;
@@ -138,7 +144,9 @@ fn variant_map(field: &Field, rows: &[Option<ResponseRow>]) -> Result<ArrayRef> 
         entry_field.clone(),
         OffsetBuffer::new(offsets.into()),
         entries,
-        Some(NullBuffer::from(rows.iter().map(Option::is_some).collect::<Vec<_>>())),
+        Some(NullBuffer::from(
+            rows.iter().map(Option::is_some).collect::<Vec<_>>(),
+        )),
         *sorted,
     )?))
 }
@@ -148,7 +156,8 @@ fn append_variant(raw: &RawValue, builder: &mut impl VariantBuilderExt) -> Resul
     let invalid = |_| exec_datafusion_err!("Invalid Jev response JSON");
     match json.as_bytes().first() {
         Some(b'{') => {
-            let values: BTreeMap<String, &RawValue> = serde_json::from_str(json).map_err(invalid)?;
+            let values: BTreeMap<String, &RawValue> =
+                serde_json::from_str(json).map_err(invalid)?;
             let mut object = builder.try_new_object()?;
             for (key, value) in values {
                 append_variant(value, &mut ObjectFieldBuilder::new(&key, &mut object))?;
@@ -203,7 +212,11 @@ fn variant_decimal(json: &str) -> Option<VariantDecimal16> {
     let significant = digits.trim_start_matches('0');
     let coefficient = significant.trim_end_matches('0');
     if coefficient.is_empty() {
-        return if negative { None } else { VariantDecimal16::try_new(0, 0).ok() };
+        return if negative {
+            None
+        } else {
+            VariantDecimal16::try_new(0, 0).ok()
+        };
     }
     let trailing_zeros = significant.len() - coefficient.len();
     let scale = i64::try_from(fraction.len())
