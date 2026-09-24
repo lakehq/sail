@@ -1415,6 +1415,9 @@ def _union_cases():
 
 @pytest.mark.parametrize(("ansi", "left", "right", "cell"), _union_cases())
 def test_a_union_of_two_types(spark, ansi, left, right, cell):
+    # The session pins ANSI mode on, so it is restored rather than unset: the session outlives
+    # the test and unsetting it would leave the rest of the module on the engine default.
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     try:
         spark.conf.set("spark.sql.ansi.enabled", ansi)
         tagged = spark.sql(f"SELECT {_UNION_TYPES[left]} AS a").withMetadata("a", {"side": "L"})
@@ -1426,7 +1429,7 @@ def test_a_union_of_two_types(spark, ansi, left, right, cell):
         else:
             assert result.schema["a"].metadata == ({"side": "L"} if cell == "L" else {})
     finally:
-        spark.conf.unset("spark.sql.ansi.enabled")
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
 _INCOMPATIBLE = "can only be performed on tables with compatible column types."
@@ -1555,6 +1558,7 @@ def _set_operation_check_cases():
 
 @pytest.mark.parametrize(("ansi", "op", "left", "right", "expected"), _set_operation_check_cases())
 def test_a_set_operation_checks_that_its_columns_are_compatible(spark, ansi, op, left, right, expected):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     try:
         spark.conf.set("spark.sql.ansi.enabled", ansi)
         result = getattr(spark.sql(f"SELECT {left}"), op)(spark.sql(f"SELECT {right}"))
@@ -1565,7 +1569,7 @@ def test_a_set_operation_checks_that_its_columns_are_compatible(spark, ansi, op,
             with pytest.raises(Exception, match=re.escape(expected)):
                 _ = result.schema
     finally:
-        spark.conf.unset("spark.sql.ansi.enabled")
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
 _MISSING_GROUP_BY = (
@@ -1862,33 +1866,65 @@ def test_a_set_operation_of_a_decimal_and_an_integral_keeps_the_metadata_it_does
     finally:
         spark.conf.unset("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
 
-
 # A struct whose field names repeat is read by position: the client cannot turn one into a
 # dictionary, so the rows are read off what `show` prints. Measured on the Spark JVM.
+_REPEATED_FIELD_VALUES = "(SELECT named_struct('a', CAST(id AS INT), 'a', CAST(id + 1 AS INT)) AS s FROM range(1))"
+
+# Spark casts a struct strictly by position, so the names of the target fields never choose the
+# source field (`Cast.castStruct` zips the two field lists, and `castStructCode` does the same for
+# the generated code). The last case is the one that tells position from name apart: the target
+# names are the source names in the other order, and the values do NOT follow them. The cases that
+# convert a leaf under a repeated name used to lose the second field, since DataFusion picks the
+# source child of a struct cast with `column_by_name`, and a union reaches that cast as soon as its
+# inputs are widened.
 _REPEATED_FIELD_NAMES = [
+    (f"SELECT s AS x FROM {_REPEATED_FIELD_VALUES}", ["{0, 1}"]),
+    (
+        f"SELECT CAST(s AS STRUCT<a: INT, a: INT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        ["{0, 1}"],
+    ),
+    (
+        f"SELECT CAST(s AS STRUCT<a: BIGINT, a: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        ["{0, 1}"],
+    ),
+    (
+        f"SELECT CAST(s AS STRUCT<p: BIGINT, q: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        ["{0, 1}"],
+    ),
     (
         "SELECT CAST(named_struct('a', 1, 'a', 2) AS STRUCT<a: BIGINT, a: BIGINT>) AS x",
         ["{1, 2}"],
     ),
     (
+        "SELECT CAST(named_struct('a', 1, 'a', 2) AS STRUCT<p: BIGINT, q: BIGINT>) AS x",
+        ["{1, 2}"],
+    ),
+    (
+        "SELECT CAST(named_struct('s', named_struct('a', 1, 'a', 2)) AS STRUCT<s: STRUCT<a: BIGINT, a: BIGINT>>) AS x",
+        ["{{1, 2}}"],
+    ),
+    (
+        "SELECT CAST(array(named_struct('a', 1, 'a', 2)) AS ARRAY<STRUCT<a: BIGINT, a: BIGINT>>) AS x",
+        ["[{1, 2}]"],
+    ),
+    (
         "SELECT named_struct('a', 1, 'a', 2) AS x UNION ALL SELECT named_struct('a', 3L, 'a', 4L) AS x",
         ["{1, 2}", "{3, 4}"],
+    ),
+    (
+        "SELECT CAST(named_struct('a', 1, 'b', 'z') AS STRUCT<b: STRING, a: STRING>) AS x",
+        ["{1, z}"],
     ),
 ]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 @pytest.mark.parametrize(("query", "rows"), _REPEATED_FIELD_NAMES)
 def test_a_cast_of_a_struct_reads_each_field_by_position(spark, query, rows):
-    # TODO: the cast matches the fields of a struct by name, so a name the struct holds twice
-    #   reads the first field twice and the value of the second one is lost. Spark casts by
-    #   position (`Cast.castStruct`). The same queries give the same wrong rows on `main`, and
-    #   the union reaches the cast only once its inputs are widened.
     printed = spark.sql(query)._show_string(truncate=False)  # noqa: SLF001
 
-    assert sorted(line.strip("| ") for line in printed.splitlines() if line.startswith("|{")) == rows
-
-
+    assert sorted(
+        line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))
+    ) == rows
 def _field(name, data_type, nullable):
     return {"metadata": {}, "name": name, "nullable": nullable, "type": data_type}
 
@@ -2039,6 +2075,7 @@ def test_a_set_operation_keeps_the_metadata_of_a_container_it_does_not_cast(spar
 
 def test_a_set_operation_keeps_the_metadata_of_a_struct_that_is_not_cast_without_ansi(spark):
     # Without ANSI mode a string field wins over an integer one, so the first input is not cast.
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     try:
         spark.conf.set("spark.sql.ansi.enabled", "false")
         left = spark.sql("SELECT named_struct('x', CAST(NULL AS STRING)) AS a").withMetadata("a", {"side": "L"})
@@ -2046,7 +2083,7 @@ def test_a_set_operation_keeps_the_metadata_of_a_struct_that_is_not_cast_without
         result._cached_schema = None  # noqa: SLF001
         assert result.schema["a"].metadata == {"side": "L"}
     finally:
-        spark.conf.unset("spark.sql.ansi.enabled")
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
 @pytest.mark.parametrize("by_name", [False, True])

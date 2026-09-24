@@ -455,6 +455,30 @@ impl PlanResolver<'_> {
                         && self.match_field(info, field_name.as_ref(), plan_id)
                 })
                 .collect::<Vec<_>>();
+            // Two outputs of one attribute are a single candidate, so selecting a column twice
+            // does not make its name ambiguous (`candidates.distinct` in `AttributeSeq.resolve`).
+            // The first of them is kept, as `distinct` does.
+            //
+            // Two outputs of one attribute are two DIFFERENT fields that lead to the same one.
+            // Two candidates that are the very same field are something else: one plan read
+            // twice, which is what a CTE joined with itself gives, and those are two attributes
+            // however equal their identifiers are, so they stay two candidates.
+            let matched = if matched.len() > 1 {
+                let mut kept: Vec<(&str, &str)> = Vec::with_capacity(matched.len());
+                let mut distinct = Vec::with_capacity(matched.len());
+                for (qualifier, field) in matched.iter().copied() {
+                    let id = field.name().as_str();
+                    let root = state.get_field_root(id)?;
+                    if kept.iter().any(|(x, y)| *y == root && *x != id) {
+                        continue;
+                    }
+                    kept.push((id, root));
+                    distinct.push((qualifier, field));
+                }
+                distinct
+            } else {
+                matched
+            };
             let [(qualifier, field)] = matched.as_slice() else {
                 if matched.is_empty() {
                     continue;
@@ -598,12 +622,11 @@ impl PlanResolver<'_> {
     ///
     /// A name that matches more than one of them is an ambiguous reference when the aggregate has
     /// already been built and the name reads its output, which is what a `HAVING` does. While the
-    /// grouping expressions are still being resolved there is no output to be ambiguous about:
-    /// Spark keeps the first match there (`ResolveReferencesInAggregate.resolveGroupByAlias` uses
-    /// `find`) and reports the query later on its own condition.
-    ///
-    /// TODO: keep the first match for the grouping instead of rejecting it, which needs the
-    /// condition Spark reports afterwards. See `test_a_repeated_alias_in_a_group_by`.
+    /// grouping expressions are still being resolved there is no output to be ambiguous about, so
+    /// the first match is kept (`ResolveReferencesInAggregate.resolveGroupByAlias` uses `find`)
+    /// and the query is reported later on its own condition, if any: an alias is only reached
+    /// once the name has failed against the columns of the input, which is why the caller tries
+    /// this after `resolve_field_or_nested_field`.
     fn resolve_aggregate_field(
         &self,
         name: &spec::ObjectName,
@@ -613,7 +636,7 @@ impl PlanResolver<'_> {
         let [name] = name.parts() else {
             return Ok(None);
         };
-        let mut candidates = expressions
+        let candidates = expressions
             .iter()
             .filter_map(|expr| {
                 let NamedExpr {
@@ -630,21 +653,15 @@ impl PlanResolver<'_> {
                 }
             })
             .collect::<Vec<_>>();
-        if candidates.len() > 1 {
-            if ambiguity_is_a_reference {
-                let references = vec![vec![name.as_ref().to_string()]; candidates.len()];
-                return Err(ambiguous_attribute_error(
-                    &spec::ObjectName::bare(name.as_ref()),
-                    None,
-                    references,
-                ));
-            }
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous aggregate expression: `{}`",
-                name.as_ref()
-            )));
+        if candidates.len() > 1 && ambiguity_is_a_reference {
+            let references = vec![vec![name.as_ref().to_string()]; candidates.len()];
+            return Err(ambiguous_attribute_error(
+                &spec::ObjectName::bare(name.as_ref()),
+                None,
+                references,
+            ));
         }
-        Ok(candidates.pop())
+        Ok(candidates.into_iter().next())
     }
 
     /// Resolves a column given by name, the way `Dataset.resolve` does for the names that
@@ -866,7 +883,7 @@ impl PlanResolver<'_> {
                         DataType::List(_) => DataType::List(item),
                         DataType::LargeList(_) => DataType::LargeList(item),
                         DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
-                        _ => unreachable!("list data type matched above"),
+                        _ => return Err(PlanError::internal("list data type matched above")),
                     };
                     self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }

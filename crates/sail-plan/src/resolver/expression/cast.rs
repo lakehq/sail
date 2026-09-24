@@ -1,7 +1,7 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
@@ -318,6 +318,27 @@ impl PlanResolver<'_> {
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
+            (from, to, _)
+                if struct_repeats_a_field_name(&to) && struct_arity_aligns(&from, &to) =>
+            {
+                // A struct that names two fields the same cannot be cast by name, so the fields
+                // are named by their position for the conversion and renamed to what the target
+                // asks for afterwards. Both renames are metadata only, so only the middle cast
+                // converts a value, and it pairs the fields in order as Spark does.
+                let positional_from = build_positional_names_type(&from);
+                let positional_to = build_positional_names_type(&to);
+                let renamed =
+                    ScalarUDF::new_from_impl(SparkStructRename::new(positional_from.clone()))
+                        .call(vec![expr]);
+                let converted = if positional_from == positional_to {
+                    renamed
+                } else if is_try {
+                    try_cast(renamed, positional_to)
+                } else {
+                    cast(renamed, positional_to)
+                };
+                ScalarUDF::new_from_impl(SparkStructRename::new(to)).call(vec![converted])
+            }
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
                 // Pre-rename the source struct fields positionally so the cast
                 // becomes a no-op or a valid name-matched one (see
@@ -352,6 +373,110 @@ fn spark_string_cast_arguments(
         arguments.push(lit(interval.to_json()?));
     }
     Ok(arguments)
+}
+
+/// Returns true where a struct at any level of the type names two of its fields the same.
+/// DataFusion picks the source child of a struct cast with `column_by_name`
+/// (`datafusion_common::nested_struct::cast_struct_column`), which answers with the first field of
+/// that name, so a cast that converts a leaf would read one field twice and lose the value of the
+/// other. Spark pairs the fields by position instead (`Cast.castStruct`).
+fn struct_repeats_a_field_name(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields
+                .iter()
+                .enumerate()
+                .any(|(i, x)| fields.iter().take(i).any(|y| y.name() == x.name()))
+                || fields
+                    .iter()
+                    .any(|x| struct_repeats_a_field_name(x.data_type()))
+        }
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            struct_repeats_a_field_name(field.data_type())
+        }
+        DataType::Map(field, _) => struct_repeats_a_field_name(field.data_type()),
+        _ => false,
+    }
+}
+
+/// Returns true where both types hold the same containers with the same number of struct fields at
+/// every level, which is what pairing the fields by position needs.
+fn struct_arity_aligns(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (DataType::Struct(a), DataType::Struct(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(x, y)| struct_arity_aligns(x.data_type(), y.data_type()))
+        }
+        (DataType::List(a), DataType::List(b))
+        | (DataType::LargeList(a), DataType::LargeList(b)) => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        (DataType::FixedSizeList(a, sa), DataType::FixedSizeList(b, sb)) if sa == sb => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        (DataType::Map(a, sa), DataType::Map(b, sb)) if sa == sb => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        // A container on one side and something else on the other never align, so the names are
+        // left as they are: renaming them would reach a cast that cannot be done anyway, and the
+        // positional names would be what the failure names.
+        (from, to) if is_nested(from) || is_nested(to) => false,
+        _ => true,
+    }
+}
+
+fn is_nested(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
+    )
+}
+
+/// The same type with every struct field named after its position. Applied to both sides of a cast
+/// it names the fields unambiguously and pairs them in order, which is the conversion Spark does.
+/// The names are rewritten in full, so they cannot collide with one another.
+fn build_positional_names_type(data_type: &DataType) -> DataType {
+    let renamed_field = |field: &FieldRef| {
+        Arc::new(
+            Field::new(
+                field.name(),
+                build_positional_names_type(field.data_type()),
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone()),
+        )
+    };
+    match data_type {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    Arc::new(
+                        Field::new(
+                            format!("col{}", i + 1),
+                            build_positional_names_type(field.data_type()),
+                            field.is_nullable(),
+                        )
+                        .with_metadata(field.metadata().clone()),
+                    )
+                })
+                .collect::<Fields>(),
+        ),
+        DataType::List(field) => DataType::List(renamed_field(field)),
+        DataType::LargeList(field) => DataType::LargeList(renamed_field(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(renamed_field(field), *size)
+        }
+        DataType::Map(field, sorted) => DataType::Map(renamed_field(field), *sorted),
+        _ => data_type.clone(),
+    }
 }
 
 /// Returns true if the cast from `from` to `to` involves a Struct

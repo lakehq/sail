@@ -2,6 +2,7 @@ import json
 import re
 
 import pytest
+from _pytest.mark.structures import ParameterSet
 from pyspark.sql import functions as sf
 from pyspark.sql.types import (
     ArrayType,
@@ -14,9 +15,11 @@ from pyspark.sql.types import (
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 # The values were measured on Spark 4.2, and the coercion rules and messages of set operations
-# differ across minor versions; `COLLATE` and VARIANT need Spark 4 as well.
+# differ across minor versions, so an older JVM oracle answers a different question. Sail answers
+# the same one whatever the client, so only the oracle is skipped: skipping the client as well
+# would drop the whole table from three of the four jobs that run it.
 pytestmark = pytest.mark.skipif(
-    pyspark_version() < (4, 2),
+    is_jvm_spark() and pyspark_version() < (4, 2),
     reason="expected values measured on Spark 4.2",
 )
 
@@ -175,6 +178,20 @@ def _build_and_collect(spark, tmp, name, args, kwargs):
 
 def _bug(*values):
     return pytest.param(*values, marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True))
+
+
+# The leaves whose type the client itself has to know to read the answer back: measured against a
+# 3.5.9 client, where these four fail with "Unsupported data type" and every other leaf passes.
+_NEEDS_SPARK_4_2_CLIENT = {"B26-cal-cal", "B28-time-time", "I08-unionAll-variant", "I13-variant-str/ansi"}
+
+
+def _leaf(entry):
+    """Adds the client gate to a leaf, keeping whatever marks the leaf already carries."""
+    values = entry.values if isinstance(entry, ParameterSet) else tuple(entry)
+    marks = list(entry.marks) if isinstance(entry, ParameterSet) else []
+    if values[0] in _NEEDS_SPARK_4_2_CLIENT:
+        marks.append(pytest.mark.skipif(pyspark_version() < (4, 2), reason="the client reads this type from 4.2"))
+    return pytest.param(*values, marks=marks) if marks else entry
 
 
 # Left out as UNREACHABLE: B29-time3-time6, C-str-time/ansi
@@ -2642,6 +2659,12 @@ _MATRIX = [
 ]
 
 
+def _row(row):
+    """Renders a row the same way whatever the client: PySpark 3.5 reads a binary value as a
+    `bytearray` and 4.x as `bytes`, which is how it prints the value and not what it is."""
+    return repr(tuple(bytes(value) if isinstance(value, bytearray) else value for value in row))
+
+
 @pytest.fixture
 def configured(spark):
     keys = ["spark.sql.ansi.enabled", "spark.sql.caseSensitive", "spark.sql.session.timeZone"]
@@ -2652,7 +2675,9 @@ def configured(spark):
 
 @pytest.mark.parametrize("local_timezone", ["UTC"], indirect=True)
 @pytest.mark.parametrize(
-    ("leaf", "shape", "ansi", "case_sensitive", "expected"), _MATRIX, ids=lambda x: x if isinstance(x, str) else ""
+    ("leaf", "shape", "ansi", "case_sensitive", "expected"),
+    [_leaf(entry) for entry in _MATRIX],
+    ids=lambda x: x if isinstance(x, str) else "",
 )
 def test_set_operation_branch(configured, local_timezone, tmp_path, leaf, shape, ansi, case_sensitive, expected):  # noqa: ARG001
     spark = configured
@@ -2669,4 +2694,4 @@ def test_set_operation_branch(configured, local_timezone, tmp_path, leaf, shape,
     df = _BUILDERS[name](spark, tmp_path, *args, **kwargs)
     assert df.schema.jsonValue()["fields"] == json.loads(expected["schema"])
     if "rows" in expected:
-        assert sorted(repr(tuple(r)) for r in df.collect()) == expected["rows"]
+        assert sorted(_row(r) for r in df.collect()) == expected["rows"]

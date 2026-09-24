@@ -227,6 +227,10 @@ Feature: Set operations (INTERSECT, EXCEPT)
 
     @sail-bug
     Scenario: a value that cannot be cast to the reconciled type is rejected
+      # The query IS rejected, and only the condition differs: the cast fails with DataFusion's
+      # own message rather than with `CAST_INVALID_INPUT` (the TODO on `cast_to_spark_type` in
+      # `resolver/expression/cast.rs`). On `main` the query is not rejected at all and answers
+      # `1` and `x` under a schema that says the column is an integer.
       When query
         """
         SELECT 1 AS a UNION ALL SELECT 'x' AS a
@@ -519,6 +523,13 @@ Feature: Set operations (INTERSECT, EXCEPT)
     Scenario: a value that does not fit the wider decimal is NULL without ANSI mode
       # TODO: Sail raises where Spark reads the value as NULL, since a cast that overflows is an
       #   error in Sail whatever the mode. The same query fails on `main` too.
+      #
+      #   This is not the widening of a set operation: the cast the union inserts fails the same
+      #   way when it is written by hand, so the fix belongs to the cast and not here. Measured
+      #   without ANSI mode, where Spark reads an overflow as NULL for a decimal and WRAPS it for
+      #   an integral, and Sail raises for both:
+      #     SELECT CAST(CAST(9999999999999999999 AS DECIMAL(38,0)) AS DECIMAL(38,20))  -- NULL
+      #     SELECT CAST(99999 AS TINYINT)                                              -- -97
       Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
       And config spark.sql.ansi.enabled = false
       When query
@@ -534,8 +545,8 @@ Feature: Set operations (INTERSECT, EXCEPT)
 
     @sail-bug
     Scenario: an integral value that does not fit the wider decimal is NULL as well
-      # TODO: the same gap as above, reached by widening an integral type into a decimal whose
-      #   digits are all fraction.
+      # TODO: the same gap as above, in the cast rather than in the widening, reached here by
+      #   widening an integral type into a decimal whose digits are all fraction.
       Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
       And config spark.sql.ansi.enabled = false
       When query
@@ -574,7 +585,11 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | days and hours  | '1' DAY         | '1 2' DAY TO HOUR | interval day to hour |
         | hours and minutes | '1' HOUR      | '2' MINUTE      | interval hour to minute |
 
+    @spark-4
     Scenario: two intervals that span the same fields are left alone
+      # The tag is for the client, not for the engine: an interval that spans one field is written
+      # `interval year to year` by PySpark 3.5 and `interval year` from 4.0 on, and the scenarios
+      # around this one all span two fields, which both write the same way.
       When query
         """
         SELECT INTERVAL '1' YEAR AS a
@@ -612,4 +627,41 @@ Feature: Set operations (INTERSECT, EXCEPT)
         root
          |-- a: struct (nullable = false)
          |    |-- i: interval year to month (nullable = false)
+        """
+
+  Rule: A variant read as another type can hold NULL
+
+    @spark-4
+    Scenario: a variant and a string widen to a string that can be NULL
+      # Reading a variant as another type can make a NULL, so what holds it can
+      # (`Cast.forceNullable`, whose variant arm comes before the one for a string).
+      # The tag is on the scenario rather than on the rule, since only this one needs a variant
+      # and `parse_json` arrived in Spark 4.0.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT array(parse_json('1')) AS a
+        UNION ALL
+        SELECT array('x') AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: array (nullable = false)
+         |    |-- element: string (containsNull = true)
+        """
+
+    Scenario: two strings widen to one that cannot
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT array('1') AS a
+        UNION ALL
+        SELECT array('x') AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: array (nullable = false)
+         |    |-- element: string (containsNull = false)
         """

@@ -103,20 +103,39 @@ impl PlanResolver<'_> {
         let mut names = Self::get_field_names(input.schema(), state)?;
         // Each rename is applied to the output of the previous one. A name that matches no
         // column is ignored.
+        let mut renamed = vec![false; names.len()];
         for (from, to) in rename_columns_map {
             let (from, to) = (from.as_ref(), to.as_ref());
-            for name in names.iter_mut() {
+            for (name, renamed) in names.iter_mut().zip(renamed.iter_mut()) {
                 if self.match_identifier(name, from) {
                     *name = to.to_string();
+                    *renamed = true;
                 }
             }
         }
         let expr = columns
-            .into_iter()
+            .iter()
             .zip(names)
-            .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column)))
+            .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column.clone())))
             .collect::<Vec<_>>();
         let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        // A column a rename matched becomes an alias, which is an attribute of its own and has no
+        // qualifier; every other column is passed on as it was and keeps the one it had
+        // (`UnresolvedStarWithColumnsRenames.expandStar`). A rename that matches the name the
+        // column already has still builds the alias, so what decides this is whether the name was
+        // matched and not whether it changed.
+        let expr = expr
+            .into_iter()
+            .zip(columns)
+            .zip(renamed)
+            .map(|((e, column), renamed)| match e {
+                Expr::Alias(e) if !renamed => Expr::Alias(datafusion_expr::expr::Alias {
+                    relation: column.relation,
+                    ..e
+                }),
+                e => e,
+            })
+            .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),

@@ -509,6 +509,9 @@ fn cast_force_nullable(from: &DataType, to: &DataType) -> bool {
         return false;
     }
     match (from, to) {
+        // A variant holds any value, so reading it as another type can make a NULL. The arm comes
+        // before the ones for a string, as it does in Spark.
+        (f, _) if is_marked_variant_storage_type(f) => true,
         (f, t) if is_string(f) => !(is_string(t) || matches!(t, Binary)),
         (_, t) if is_string(t) => false,
         (Timestamp(_, Some(_)), Int8 | Int16 | Int32) => true,

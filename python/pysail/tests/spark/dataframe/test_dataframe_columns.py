@@ -25,6 +25,7 @@ in the client, so it never reaches the engine and says nothing about parity.
 # ruff: noqa: RUF001
 
 import datetime
+import re
 
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
@@ -374,14 +375,6 @@ def test_an_added_column_carries_no_qualifier(spark):
         _ = df.withColumn("c", lit(1)).select("x.c").collect()
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
-    # Renaming one column does not take the qualifier away from the others.
-    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
-
-    assert df.withColumnRenamed("a", "z").select("x.b").columns == ["b"]
-
-
 @pytest.mark.parametrize(
     ("expression", "data_type", "nullable", "inner"),
     [
@@ -397,13 +390,14 @@ def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
             marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
         ),
         ("map('k', 1)", "map<string,int>", False, None),
-        pytest.param(
-            "CASE WHEN a > 1 THEN 'big' ELSE 'small' END",
-            "string",
-            False,
-            None,
-            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-        ),
+        # A case is NULL where it falls through to no branch, so the `ELSE` is what makes it not
+        # nullable, and the condition never counts (`CaseWhen.nullable`).
+        ("CASE WHEN a > 1 THEN 'big' ELSE 'small' END", "string", False, None),
+        ("CASE WHEN a > 1 THEN 'big' END", "string", True, None),
+        ("CASE WHEN a > 1 THEN 'big' ELSE NULL END", "string", True, None),
+        ("CASE WHEN b = 'x' THEN 1 ELSE 2 END", "int", False, None),
+        ("IF(a > 1, 'big', 'small')", "string", False, None),
+        ("COALESCE(a, 0)", "int", False, None),
         # The containers, whose inner flag `simpleString()` hides as well.
         ("array(1, 2)", "array<int>", False, False),
         ("named_struct('n', 1)", "struct<n:int>", False, False),
@@ -830,7 +824,6 @@ def test_a_sort_by_a_replaced_column_reads_the_original(spark):
     assert [tuple(row) for row in replaced.orderBy(col("a").asc()).collect()] == [(-3,), (-2,), (-1,)]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_filter_by_a_replaced_column_reads_the_original(spark):
     # `Filter` is a `UnaryNode` like `Sort`, so the same reference resolves there too. Keeping the
     # row where the original `a` is 2 keeps the row whose replacement is -2, which is the answer
@@ -878,7 +871,6 @@ def test_with_columns_reads_the_keys_of_both_sides(spark):
     assert [tuple(row) for row in df.collect()] == [(1, 11, 22, 1, 1)]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_filter_by_a_renamed_column_reads_it_under_its_old_name(spark):
     # The same rule for a rename, where the values survive and only the name is gone.
     df = spark.sql("SELECT * FROM VALUES (1), (2), (3) AS t(a)")
@@ -2020,3 +2012,464 @@ def test_a_case_pair_the_jdk_does_not_know_is_not_folded(spark):
         assert df.withColumnRenamed(_VITHKUQI_SMALL_A, "z").columns == [_VITHKUQI_CAPITAL_A]
     finally:
         _unconfigure(spark)
+
+
+# An input that already names two columns the same. `UnresolvedStarWithColumns.expandStar` maps over
+# EVERY expanded column, so a name that matches both replaces both rather than being ambiguous, and
+# `drop` and the renames filter the same way. What the repeated name does to an expression that
+# READS it depends on whether the two columns are one attribute or two: `AttributeSeq.resolve` calls
+# `candidates.distinct` before it looks for an ambiguity, and two projections of one attribute are
+# equal there, so only genuinely different attributes are ambiguous. Measured on the Spark JVM.
+
+
+def _repeated(spark):
+    """One attribute projected twice, so `a` names two columns that are the same attribute."""
+    return spark.sql("SELECT a, a, b FROM VALUES (1, 'x') AS t(a, b)")
+
+
+def _repeated_by_join(spark):
+    """Two columns named `a` that are different attributes, one from each side of a join."""
+    left = spark.sql("SELECT * FROM VALUES (1, 'x') AS t(a, b)")
+    right = spark.sql("SELECT * FROM VALUES (1, 'y') AS t(a, c)")
+    return left.join(right, left.a == right.a)
+
+
+# (case, columns, rows)
+_REPEATED_INPUT_RESULTS = [
+    ("replace_both", ["a", "a", "b"], [(9, 9, "x")]),
+    ("add_a_new_name", ["a", "a", "b", "z"], [(1, 1, "x", 9)]),
+    ("with_columns", ["a", "a", "b", "z"], [(9, 9, "x", 8)]),
+    ("drop", ["b"], [("x",)]),
+    ("rename", ["z", "z", "b"], [(1, 1, "x")]),
+    ("rename_onto_an_existing_name", ["a", "a", "a"], [(1, 1, "x")]),
+    ("join_replace_both", ["a", "b", "a", "c"], [(9, "x", 9, "y")]),
+    ("join_drop", ["b", "c"], [("x", "y")]),
+    ("join_rename", ["z", "b", "z", "c"], [(1, "x", 1, "y")]),
+]
+
+
+def _repeated_input_cases(spark):
+    return {
+        # Every column the name matches is replaced, so both `a` take the new value.
+        "replace_both": lambda: _repeated(spark).withColumn("a", lit(9)),
+        # A name that matches nothing is appended and the repeated pair is left alone.
+        "add_a_new_name": lambda: _repeated(spark).withColumn("z", lit(9)),
+        "with_columns": lambda: _repeated(spark).withColumns({"a": lit(9), "z": lit(8)}),
+        # `drop` and the renames compare the name the same way, over every column.
+        "drop": lambda: _repeated(spark).drop("a"),
+        "rename": lambda: _repeated(spark).withColumnRenamed("a", "z"),
+        # A rename is not checked for duplicates, so this leaves three columns named `a`.
+        "rename_onto_an_existing_name": lambda: _repeated(spark).withColumnRenamed("b", "a"),
+        # The same three shapes where the two columns are different attributes.
+        "join_replace_both": lambda: _repeated_by_join(spark).withColumn("a", lit(9)),
+        "join_drop": lambda: _repeated_by_join(spark).drop("a"),
+        "join_rename": lambda: _repeated_by_join(spark).withColumnRenamed("a", "z"),
+    }
+
+
+@pytest.mark.parametrize("case_sensitive", ["false", "true"])
+@pytest.mark.parametrize(("case", "columns", "rows"), _REPEATED_INPUT_RESULTS)
+def test_a_repeated_input_name_is_replaced_dropped_and_renamed_everywhere(
+    spark, case, case_sensitive, columns, rows
+):
+    _configure(spark, case_sensitive)
+    try:
+        result = _repeated_input_cases(spark)[case]()
+
+        assert result.columns == columns
+        assert [tuple(row) for row in result.collect()] == rows
+    finally:
+        _unconfigure(spark)
+
+
+@pytest.mark.parametrize(
+    ("case_sensitive", "columns", "rows"),
+    [
+        # The resolver matches the capital, so both columns are replaced under the new name.
+        ("false", ["A", "A", "b"], [(9, 9, "x")]),
+        # It does not, so neither is replaced and the capital is appended instead.
+        ("true", ["a", "a", "b", "A"], [(1, 1, "x", 9)]),
+    ],
+)
+def test_a_repeated_input_name_is_replaced_by_the_case_the_resolver_matches(
+    spark, case_sensitive, columns, rows
+):
+    _configure(spark, case_sensitive)
+    try:
+        result = _repeated(spark).withColumn("A", lit(9))
+
+        assert result.columns == columns
+        assert [tuple(row) for row in result.collect()] == rows
+    finally:
+        _unconfigure(spark)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda df: df.withColumn("a", col("a") + 1), id="with-column"),
+        pytest.param(lambda df: df.select(col("a") + 1), id="select"),
+    ],
+)
+def test_a_name_that_two_columns_of_one_attribute_carry_is_ambiguous_by_join_only(spark, operation):
+    _configure(spark, "false")
+    try:
+        # Two different attributes of the same name are ambiguous, however the name is read.
+        with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE]")):
+            operation(_repeated_by_join(spark)).collect()
+    finally:
+        _unconfigure(spark)
+
+
+# An expression that reads the name answers it, because the two columns are one candidate. The
+# last case is `withMetadata`, which is `withColumn(name, col(name), metadata)` and so reads the
+# name as well.
+_ONE_ATTRIBUTE_TWICE = [
+    ("with_column", ["a", "a", "b"], [(2, 2, "x")]),
+    ("select", ["(a + 1)"], [(2,)]),
+    ("with_metadata", ["a", "a", "b"], [(1, 1, "x")]),
+]
+
+
+@pytest.mark.parametrize(("case", "columns", "rows"), _ONE_ATTRIBUTE_TWICE)
+def test_an_expression_reads_a_name_two_columns_of_one_attribute_carry(spark, case, columns, rows):
+    _configure(spark, "false")
+    try:
+        df = _repeated(spark)
+        result = {
+            "with_column": lambda: df.withColumn("a", col("a") + 1),
+            "select": lambda: df.select(col("a") + 1),
+            "with_metadata": lambda: df.withMetadata("a", {"k": "v"}),
+        }[case]()
+
+        assert result.columns == columns
+        assert [tuple(row) for row in result.collect()] == rows
+    finally:
+        _unconfigure(spark)
+
+
+def test_with_metadata_on_a_name_two_attributes_carry(spark):
+    _configure(spark, "false")
+    try:
+        # What is asserted is that the name is refused as ambiguous. Spark reports the plain
+        # condition here while Sail reports the one for a column of a DataFrame, because
+        # `withMetadata` is `withColumn(name, col(name), metadata)` and the column it builds
+        # carries a plan ID. The pattern therefore admits both spellings and nothing else, rather
+        # than freezing a condition that is not the one Spark raises.
+        with pytest.raises(Exception, match=r"\[AMBIGUOUS(_COLUMN)?_REFERENCE\]"):
+            _repeated_by_join(spark).withMetadata("a", {"k": "v"}).collect()
+    finally:
+        _unconfigure(spark)
+
+
+# The rule has to hold however the two outputs of one attribute were made, not only for the one
+# projection that made them here: through a chain of projections, through the operators that pass
+# their input on, and for more than two of them. A rename is the discriminating negative, since it
+# gives the column a new attribute and the name really is ambiguous afterwards. Measured on the
+# Spark JVM.
+_ONE_ATTRIBUTE_SHAPES = [
+    ("select_twice", ["a", "a", "b"], [(2, 2, "x")]),
+    ("three_outputs", ["a", "a", "a"], [(2, 2, 2)]),
+    ("chained_projections", ["a", "a"], [(2, 2)]),
+    ("through_a_sort", ["a", "a", "b"], [(2, 2, "x")]),
+    ("through_a_limit", ["a", "a", "b"], [(2, 2, "x")]),
+    ("through_an_alias", ["a", "a", "b"], [(2, 2, "x")]),
+    ("after_a_group_by", ["a", "a"], [(2, 2)]),
+]
+
+
+def _one_attribute_shapes(spark):
+    source = spark.sql("SELECT * FROM VALUES (1, 'x') AS t(a, b)")
+    read = lambda df: df.withColumn("a", col("a") + 1)  # noqa: E731
+
+    return {
+        "select_twice": lambda: read(source.select("a", "a", "b")),
+        "three_outputs": lambda: read(source.select("a", "a", "a")),
+        "chained_projections": lambda: read(source.select("a", "a", "b").select("a", "a")),
+        "through_a_sort": lambda: read(source.select("a", "a", "b").sort("b")),
+        "through_a_limit": lambda: read(source.select("a", "a", "b").limit(5)),
+        "through_an_alias": lambda: read(source.select("a", "a", "b").alias("q")),
+        "after_a_group_by": lambda: read(source.groupBy("a").count().select("a", "a")),
+    }
+
+
+@pytest.mark.parametrize(("case", "columns", "rows"), _ONE_ATTRIBUTE_SHAPES)
+def test_one_attribute_under_several_outputs_however_it_was_made(spark, case, columns, rows):
+    _configure(spark, "false")
+    try:
+        result = _one_attribute_shapes(spark)[case]()
+
+        assert result.columns == columns
+        assert [tuple(row) for row in result.collect()] == rows
+    finally:
+        _unconfigure(spark)
+
+
+def test_a_rename_onto_an_existing_name_makes_the_name_ambiguous(spark):
+    _configure(spark, "false")
+    try:
+        # The rename gives `b` an attribute of its own, so the two columns named `a` are two
+        # attributes and reading the name is ambiguous, unlike selecting one column twice.
+        renamed = spark.sql("SELECT * FROM VALUES (1, 'x') AS t(a, b)").withColumnRenamed("b", "a")
+
+        with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE]")):
+            renamed.withColumn("a", col("a") + 1).collect()
+    finally:
+        _unconfigure(spark)
+
+
+# A `Filter` is a `UnaryNode`, so its condition reaches an attribute the projection under it
+# dropped: the attribute is pulled up for the condition and projected away again
+# (`ResolveMissingReferences`). These are the shapes around that pull-up. Measured on the Spark JVM.
+_PULLED_UP_FILTER = [
+    ("reads_a_column_the_projection_kept_too", ["A", "b"], [(-_SELECTED, "y")]),
+    ("two_filters_each_pulling_up", ["A", "b"], [(-_SELECTED, "y")]),
+    ("a_star_after_the_filter", ["A", "b"], [(-_SELECTED, "y")]),
+    ("over_an_aggregate", ["a", "count"], [(_SELECTED, 1)]),
+]
+
+
+def _pulled_up_filter_cases(spark):
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y'), (3, 'z') AS t(a, b)")
+    replaced = df.withColumn("A", -col("a"))
+
+    return {
+        # The condition names one column the projection dropped and one it kept.
+        "reads_a_column_the_projection_kept_too": lambda: replaced.filter(
+            (df["a"] == _SELECTED) & (col("b") == "y")
+        ),
+        "two_filters_each_pulling_up": lambda: replaced.filter(df["a"] >= _SELECTED).filter(
+            df["a"] <= _SELECTED
+        ),
+        # The column the condition needed must not reach the output, under a star either.
+        "a_star_after_the_filter": lambda: replaced.filter(df["a"] == _SELECTED).select("*"),
+        # An aggregate under the filter instead of a projection.
+        "over_an_aggregate": lambda: df.groupBy("a").count().filter(df["a"] == _SELECTED),
+    }
+
+
+@pytest.mark.parametrize(("case", "columns", "rows"), _PULLED_UP_FILTER)
+def test_a_filter_pulls_up_the_column_its_condition_needs(spark, case, columns, rows):
+    result = _pulled_up_filter_cases(spark)[case]()
+
+    assert result.columns == columns
+    assert [tuple(row) for row in result.collect()] == rows
+
+
+_PULL_UP_DEPTH = [
+    "another_projection_in_between",
+    "a_limit_in_between",
+    "a_sort_in_between",
+    "a_filter_in_between",
+    "a_drop_duplicates_in_between",
+    "three_operators_deep",
+]
+
+
+def _pull_up_depth_cases(spark):
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y'), (3, 'z') AS t(a, b)")
+    replaced = df.withColumn("A", -col("a"))
+
+    return {
+        # The operators an attribute is carried through, each of which outputs what it reads.
+        "another_projection_in_between": lambda: replaced.select("A", "b").filter(df["a"] == _SELECTED),
+        "a_limit_in_between": lambda: replaced.limit(3).filter(df["a"] == _SELECTED),
+        "a_sort_in_between": lambda: replaced.sort("b").filter(df["a"] == _SELECTED),
+        "a_filter_in_between": lambda: replaced.filter(col("b") != "q").filter(df["a"] == _SELECTED),
+        # `dropDuplicates` states the columns it reads, so one more column does not change which
+        # rows survive and the attribute can cross it.
+        "a_drop_duplicates_in_between": lambda: replaced.dropDuplicates(["A"]).filter(df["a"] == _SELECTED),
+        "three_operators_deep": lambda: replaced.select("A", "b").limit(3).filter(df["a"] == _SELECTED),
+    }
+
+
+@pytest.mark.parametrize("case", _PULL_UP_DEPTH)
+def test_a_filter_pulls_a_column_through_the_operators_that_output_what_they_read(spark, case):
+    result = _pull_up_depth_cases(spark)[case]()
+
+    assert result.columns[0] == "A"
+    assert [tuple(row)[0] for row in result.collect()] == [-_SELECTED]
+
+
+def test_a_filter_over_an_aggregate_reads_a_grouping_key_the_projection_dropped(spark):
+    # The key is still an output of the aggregate, so carrying it through the projection above it
+    # is all this takes. An attribute the aggregate does not output is a different case, refused
+    # by both engines below.
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y'), (3, 'z') AS t(a, b)")
+    result = df.groupBy("a").count().select("count").filter(df["a"] == _SELECTED)
+
+    assert [tuple(row) for row in result.collect()] == [(1,)]
+
+
+def _pull_up_refused_cases(spark):
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y'), (3, 'z') AS t(a, b)")
+    replaced = df.withColumn("A", -col("a"))
+
+    return {
+        # `A` names the replacement in the output and the dropped column below it, so the whole
+        # condition cannot be resolved against the two of them at once.
+        "the_condition_also_names_the_replacement": lambda: replaced.filter(
+            (df["a"] == _SELECTED) & (col("A") == -_SELECTED)
+        ),
+        # A distinct reads every column it outputs, so one more column changes which rows survive.
+        "a_distinct_in_between": lambda: replaced.select("A").distinct().filter(df["a"] == _SELECTED),
+        # The two Spark refuses as well: a column would escape the qualifier of an alias, and an
+        # attribute the aggregate does not output is not there to be carried.
+        "a_subquery_alias_in_between": lambda: replaced.alias("q").filter(df["a"] == _SELECTED),
+        "an_attribute_the_aggregate_does_not_output": lambda: (
+            df.groupBy("a").count().select("count").filter(df["b"] == "y")
+        ),
+    }
+
+
+# Where Sail stops and Spark does not. Each is refused rather than answered with the wrong rows,
+# which is the trade a wider pull-up must never make.
+@pytest.mark.parametrize(
+    ("case", "rows"),
+    [
+        pytest.param(
+            "the_condition_also_names_the_replacement",
+            [-_SELECTED],
+            marks=pytest.mark.xfail(
+                not is_jvm_spark(),
+                reason="Sail resolves the whole condition at once, so a name the output also "
+                "carries cannot be read below at the same time",
+                strict=True,
+            ),
+        ),
+        pytest.param(
+            "a_distinct_in_between",
+            [-_SELECTED],
+            marks=pytest.mark.xfail(
+                not is_jvm_spark(),
+                reason="Sail builds one node for `SELECT DISTINCT`, which Spark refuses to carry "
+                "a column through, and for `DataFrame.distinct`, which it allows",
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_a_filter_that_the_pull_up_does_not_reach(spark, case, rows):
+    result = _pull_up_refused_cases(spark)[case]()
+
+    assert [tuple(row)[0] for row in result.collect()] == rows
+
+
+@_SPARK_4
+@pytest.mark.parametrize(
+    "case", ["a_subquery_alias_in_between", "an_attribute_the_aggregate_does_not_output"]
+)
+def test_a_filter_that_neither_engine_resolves(spark, case):
+    with pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
+        _pull_up_refused_cases(spark)[case]().collect()
+
+
+def test_a_filter_by_a_column_that_exists_nowhere_reports_the_output(spark):
+    # The fallback must not change which failure is reported: a name that no schema has is still
+    # an unresolved column, named against the output rather than against the wider input.
+    df = spark.sql("SELECT * FROM VALUES (1, 'x') AS t(a, b)")
+
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
+        df.withColumn("A", -col("a")).filter(col("nope") == _SELECTED).collect()
+
+
+# What a rename does to the qualifier. `UnresolvedStarWithColumnsRenames.expandStar` builds an
+# `Alias` for a column the resolver matched and passes every other column on as it is, so the
+# matched one becomes an attribute of its own and loses the qualifier while the others keep theirs.
+# A rename that matches the name the column already has still builds the alias, which is what tells
+# "the resolver matched it" apart from "its name changed". Measured on the Spark JVM.
+_RENAME_QUALIFIER = [
+    ("untouched_column", "x.b", ["b"]),
+    ("untouched_by_a_rename_of_nothing", "x.b", ["b"]),
+    ("untouched_by_a_rename_to_itself", "x.b", ["b"]),
+    ("untouched_by_a_rename_differing_in_case", "x.b", ["b"]),
+    ("untouched_by_two_renames", "x.b", ["b"]),
+    ("qualified_star", "x.*", ["b"]),
+]
+
+
+def _rename_qualifier_cases(spark):
+    def aliased():
+        return spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
+
+    return {
+        "untouched_column": lambda: aliased().withColumnRenamed("a", "z"),
+        "untouched_by_a_rename_of_nothing": lambda: aliased().withColumnRenamed("nope", "z"),
+        "untouched_by_a_rename_to_itself": lambda: aliased().withColumnRenamed("a", "a"),
+        "untouched_by_a_rename_differing_in_case": lambda: aliased().withColumnRenamed("A", "z"),
+        "untouched_by_two_renames": lambda: aliased().withColumnsRenamed({"a": "z"}),
+        "qualified_star": lambda: aliased().withColumnRenamed("a", "z"),
+    }
+
+
+@pytest.mark.parametrize(("case", "reference", "columns"), _RENAME_QUALIFIER)
+def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_match(spark, case, reference, columns):
+    result = _rename_qualifier_cases(spark)[case]().select(reference)
+
+    assert result.columns == columns
+
+
+@pytest.mark.parametrize(
+    ("case", "reference"),
+    [
+        # The renamed column is a new attribute, so the qualifier no longer reaches it.
+        ("untouched_column", "x.z"),
+        # The name did not change and the qualifier still went, because the resolver matched it.
+        ("untouched_by_a_rename_to_itself", "x.a"),
+    ],
+)
+def test_a_rename_takes_the_qualifier_from_the_column_it_matched(spark, case, reference):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
+        _rename_qualifier_cases(spark)[case]().select(reference).collect()
+
+
+# What tells one attribute read twice from two attributes that lead to the same field. Spark
+# compares attributes by their identity (`candidates.distinct` in `AttributeSeq.resolve`), and two
+# things give a NEW identity that the field alone does not show: reading one plan twice, which is
+# what a CTE joined with itself does, and renaming a column, which Spark builds as an `Alias`
+# (`UnresolvedStarWithColumnsRenames.expandStar`). Each case below answers on Spark and is refused
+# by it, and each of them is a query a narrower notion of identity would answer with the rows of
+# whichever column came first. Measured on the Spark JVM.
+_TWO_ATTRIBUTES = [
+    # One plan read twice: the two sides hand out the same fields, and they are still two columns.
+    ("WITH t AS (SELECT 1 AS a) SELECT a FROM t x CROSS JOIN t y"),
+    ("WITH t AS (SELECT 1 AS a) SELECT a + 1 FROM t x CROSS JOIN t y"),
+    ("WITH t AS (SELECT 1 AS a, 2 AS b) SELECT a FROM t x CROSS JOIN t y"),
+    # A rename gives the column an attribute of its own, so the copy and the rename are two.
+    ("SELECT x FROM (SELECT a AS x, a AS x FROM VALUES (1) AS t(a))"),
+]
+
+
+@pytest.mark.parametrize("query", _TWO_ATTRIBUTES)
+def test_two_attributes_that_lead_to_one_field_are_still_ambiguous(spark, query):
+    with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE]")):
+        spark.sql(query).collect()
+
+
+def test_a_rename_gives_the_column_an_attribute_of_its_own(spark):
+    # `toDF` renames every column, so the two outputs of the one attribute below become two
+    # attributes and the name is ambiguous again -- unlike the same frame without the rename,
+    # which the test above this one pins as resolvable.
+    repeated = spark.sql("SELECT a, a FROM VALUES (1) AS t(a)")
+
+    assert [tuple(row) for row in repeated.select(col("a") + 1).collect()] == [(2,)]
+    with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE]")):
+        repeated.toDF("a", "A").select("a").collect()
+
+
+def test_a_qualified_name_still_reads_one_side_of_a_plan_read_twice(spark):
+    # The control for the four above: the qualifier says which side, so the name resolves.
+    result = spark.sql("WITH t AS (SELECT 1 AS a) SELECT x.a FROM t x CROSS JOIN t y")
+
+    assert [tuple(row) for row in result.collect()] == [(1,)]
+
+
+def test_a_struct_field_keeps_the_metadata_its_alias_was_given(spark):
+    # A field of a struct reports the metadata of a `NamedExpression` (`CreateNamedStruct`), and an
+    # alias that was given metadata reports that metadata whatever it reads (`Alias.metadata`), so
+    # there is nothing for the struct to hide.
+    annotated = col("a").cast("bigint").alias("z", metadata={"m": "z"})
+    result = spark.sql("SELECT 1 AS a").select(F.struct(annotated).alias("st"))
+
+    assert result.schema["st"].dataType["z"].metadata == {"m": "z"}
+    assert [tuple(row[0]) for row in result.collect()] == [(1,)]

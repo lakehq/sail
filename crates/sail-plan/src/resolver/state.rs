@@ -21,6 +21,10 @@ pub(super) struct FieldInfo {
     /// A hidden field is helpful for filtering or sorting plans using columns
     /// of its child plans (e.g. a key column of the left/right plans in an outer join).
     hidden: bool,
+    /// The field this one is another output of, where it only passes a column on. Selecting one
+    /// column twice gives two fields that lead to the same one, and Spark sees a single attribute
+    /// there. `None` for a field that computes a value, which is an attribute of its own.
+    root: Option<String>,
 }
 
 impl FieldInfo {
@@ -34,6 +38,10 @@ impl FieldInfo {
 
     pub fn is_hidden(&self) -> bool {
         self.hidden
+    }
+
+    pub fn root(&self) -> Option<&str> {
+        self.root.as_deref()
     }
 
     pub fn has_plan_id(&self, plan_id: Option<i64>) -> bool {
@@ -129,6 +137,7 @@ impl PlanResolverState {
             plan_ids: HashSet::new(),
             name: name.into(),
             hidden,
+            root: None,
         };
         self.fields.insert(field_id.clone(), info);
         field_id
@@ -188,6 +197,24 @@ impl PlanResolverState {
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
         field_info.plan_ids.insert(plan_id);
         Ok(())
+    }
+
+    /// Records that a field only passes `source` on, so that the two are one attribute rather
+    /// than two fields that happen to share a name. The root is resolved as it is stored, so a
+    /// column passed on through several projections still leads to the field that computed it.
+    pub fn register_root_for_field(&mut self, field_id: &str, source: &str) -> PlanResult<()> {
+        let root = self.get_field_root(source)?.to_string();
+        let field_info = self
+            .fields
+            .get_mut(field_id)
+            .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
+        field_info.root = Some(root);
+        Ok(())
+    }
+
+    /// The field an output is an attribute of: itself, unless it only passes another one on.
+    pub fn get_field_root<'a>(&'a self, field_id: &'a str) -> PlanResult<&'a str> {
+        Ok(self.get_field_info(field_id)?.root().unwrap_or(field_id))
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {

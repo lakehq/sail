@@ -231,7 +231,7 @@ impl PlanResolver<'_> {
     }
 
     /// The metadata that hides what an expression carries, since Spark reports none for it.
-    pub(in crate::resolver) fn empty_spark_metadata() -> Option<FieldMetadata> {
+    pub(crate) fn empty_spark_metadata() -> Option<FieldMetadata> {
         Some(FieldMetadata::from(HashMap::from([(
             spec::SPARK_METADATA_JSON_KEY.to_string(),
             "{}".to_string(),
@@ -241,9 +241,12 @@ impl PlanResolver<'_> {
     /// Whether an alias of the expression reports the metadata of what is below it. Spark
     /// inherits it from a named expression -- an attribute or another alias -- and from a struct
     /// field, and reports no metadata for anything else (`Alias.metadata`).
-    pub(in crate::resolver) fn inherits_metadata(expr: &Expr) -> bool {
+    pub(crate) fn inherits_metadata(expr: &Expr) -> bool {
         match expr {
             Expr::Column(_) | Expr::OuterReferenceColumn(..) => true,
+            // An alias that was given metadata reports that metadata whatever it reads, so there
+            // is nothing to hide; one without reports what its child does (`Alias.metadata`).
+            Expr::Alias(alias) if alias.metadata.is_some() => true,
             Expr::Alias(alias) => Self::inherits_metadata(&alias.expr),
             Expr::ScalarFunction(ScalarFunction { func, .. }) => func.name() == "get_field",
             _ => false,
@@ -251,7 +254,7 @@ impl PlanResolver<'_> {
     }
 
     /// Whether the expression carries Spark metadata that an alias of it would report.
-    pub(in crate::resolver) fn has_spark_metadata(expr: &Expr, schema: &DFSchemaRef) -> bool {
+    pub(crate) fn has_spark_metadata(expr: &Expr, schema: &DFSchemaRef) -> bool {
         expr.metadata(schema).is_ok_and(|metadata| {
             metadata
                 .inner()
@@ -285,15 +288,26 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                let plan_ids = if let Expr::Column(Column { name: field_id, .. }) = &expr {
+                // A projection that only passes a column on gives another output of the same
+                // attribute, which is what selecting one column twice does, so the source is kept
+                // along with the plan IDs. Giving it another name does not: Spark builds an
+                // `Alias` there, which is an attribute of its own with an identity of its own
+                // (`UnresolvedStarWithColumnsRenames.expandStar`), so only a name that stays the
+                // same leads back to the field it reads.
+                let source = if let Expr::Column(Column { name: field_id, .. }) = &expr {
                     let info = state.get_field_info(field_id)?;
-                    info.plan_ids()
+                    Some((field_id.clone(), info.plan_ids(), info.name() == name))
                 } else {
-                    vec![]
+                    None
                 };
                 let field_id = state.register_field_name(name);
-                for plan_id in plan_ids {
-                    state.register_plan_id_for_field(&field_id, plan_id)?;
+                if let Some((source, plan_ids, same_name)) = source {
+                    for plan_id in plan_ids {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                    }
+                    if same_name {
+                        state.register_root_for_field(&field_id, &source)?;
+                    }
                 }
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
