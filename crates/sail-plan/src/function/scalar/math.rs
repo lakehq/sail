@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
@@ -17,8 +17,8 @@ use sail_function::scalar::datetime::spark_interval_scale::{
     SparkDivideCalendarInterval, SparkDivideDtInterval, SparkDivideYmInterval,
     SparkMultiplyCalendarInterval, SparkMultiplyDtInterval, SparkMultiplyYmInterval,
 };
-use sail_function::scalar::datetime::spark_time_add_interval::SparkTimeAddDtInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_to_local_time::SparkToLocalTime;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -42,11 +42,214 @@ use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
+use crate::coercion::{SAIL_DATE_DIFFERENCE_METADATA_KEY, spark_interval_metadata_for_expression};
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, is_spark_udt_field,
     spark_field_type_name, spark_type_name,
 };
+
+/// DAY-only intervals preserve DATE; finer day-time intervals promote it to TIMESTAMP
+/// (BinaryArithmeticWithDatetimeResolver.scala:68-71,106-111).
+fn shift_date_by_interval(
+    date: Expr,
+    interval: Expr,
+    subtract: bool,
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<Expr> {
+    use sail_common::spec::{DayTimeIntervalField, SparkIntervalMetadata};
+    let day_only = matches!(
+        spark_interval_metadata_for_expression(&interval, context.schema)?,
+        Some(SparkIntervalMetadata::DayTime {
+            start_field: DayTimeIntervalField::Day,
+            end_field: DayTimeIntervalField::Day,
+        })
+    );
+    let date = if day_only {
+        date
+    } else {
+        cast(
+            date,
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::clone(&context.plan_config.session_timezone)),
+            ),
+        )
+    };
+    let interval = cast(interval, DataType::Interval(IntervalUnit::MonthDayNano));
+    Ok(if subtract {
+        date - interval
+    } else {
+        date + interval
+    })
+}
+
+/// `DecimalPrecision` turns a fixed decimal paired with FLOAT or DOUBLE into DOUBLE before a
+/// binary arithmetic operator is evaluated (`DecimalPrecision.scala:45-47`).
+fn promote_decimal_fractional_operands(
+    left: Expr,
+    right: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<(Expr, Expr)> {
+    let is_decimal = |data_type: &DataType| {
+        matches!(
+            data_type,
+            DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+        )
+    };
+    let is_spark_fractional =
+        |data_type: &DataType| matches!(data_type, DataType::Float32 | DataType::Float64);
+    let left_type = left.get_type(schema)?;
+    let right_type = right.get_type(schema)?;
+    if (is_decimal(&left_type) && is_spark_fractional(&right_type))
+        || (is_spark_fractional(&left_type) && is_decimal(&right_type))
+    {
+        Ok((
+            cast(left, DataType::Float64),
+            cast(right, DataType::Float64),
+        ))
+    } else {
+        Ok((left, right))
+    }
+}
+
+/// Reconcile Arrow's decimal-division type rule with Spark's while retaining Arrow's vectorized
+/// division kernel. Arrow fixes the result scale at `s1 + 4`; Spark's `Divide` instead uses
+/// `max(6, s1 + p2 + 1)` (`arithmetic.scala:830-855`). Arrow truncates its decimal quotient,
+/// while Spark's `Decimal.$div` rounds it HALF_UP at the result scale. Keep one extra fractional
+/// digit in the vectorized Arrow division, then round and cast the public result below.
+///
+/// When Spark's precision exceeds 38, its `DecimalType.adjustPrecisionScale` reduces the scale.
+/// In that case a DECIMAL256 intermediate preserves the quotient's required digits before a final
+/// DECIMAL128 cast exposes Spark's public result type.
+fn spark_decimal_division_operands(
+    dividend: Expr,
+    divisor: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<(Expr, Expr, Option<DataType>)> {
+    fn integral_decimal_parts(data_type: &DataType) -> Option<(u8, i8)> {
+        match data_type {
+            DataType::Int8 => Some((3, 0)),
+            DataType::Int16 => Some((5, 0)),
+            DataType::Int32 => Some((10, 0)),
+            DataType::Int64 => Some((20, 0)),
+            _ => None,
+        }
+    }
+
+    fn decimal_parts(data_type: &DataType) -> Option<(u8, i8)> {
+        match data_type {
+            DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+            data_type => integral_decimal_parts(data_type),
+        }
+    }
+
+    let dividend_type = dividend.get_type(schema)?;
+    let divisor_type = divisor.get_type(schema)?;
+    if !matches!(dividend_type, DataType::Decimal128(_, _))
+        && !matches!(divisor_type, DataType::Decimal128(_, _))
+    {
+        return Ok((dividend, divisor, None));
+    }
+    let (p1, s1) = match decimal_parts(&dividend_type) {
+        Some(parts) => parts,
+        None => return Ok((dividend, divisor, None)),
+    };
+    let (p2, s2) = match decimal_parts(&divisor_type) {
+        Some(parts) => parts,
+        None => return Ok((dividend, divisor, None)),
+    };
+
+    let raw_scale = (i16::from(s1) + i16::from(p2) + 1).max(6);
+    let integer_digits = i16::from(p1) - i16::from(s1) + i16::from(s2);
+    let raw_precision = integer_digits + raw_scale;
+    let result_scale = if raw_precision <= 38 {
+        raw_scale
+    } else {
+        (38 - integer_digits).max(raw_scale.min(6))
+    };
+    // Arrow's quotient has `left_scale + 4` fractional digits. Retaining one digit beyond
+    // Spark's result scale gives `round(..., result_scale)` the information needed for HALF_UP.
+    let left_scale = result_scale - 3;
+    let left_precision = i16::from(p1) - i16::from(s1) + left_scale;
+    if left_scale < 0 || left_precision < 0 {
+        return Ok((dividend, divisor, None));
+    }
+    let result_type = DataType::Decimal128(raw_precision.min(38) as u8, result_scale as i8);
+    // The extra rounding digit makes a nominal precision-38 result need a Decimal256
+    // intermediate even though Spark exposes Decimal128(38, _).
+    if raw_precision < 38 && left_precision <= 38 {
+        return Ok((
+            cast(
+                dividend,
+                DataType::Decimal128(left_precision as u8, left_scale as i8),
+            ),
+            cast(divisor, DataType::Decimal128(p2, s2)),
+            Some(result_type),
+        ));
+    }
+
+    Ok((
+        cast(
+            dividend,
+            DataType::Decimal256(left_precision as u8, left_scale as i8),
+        ),
+        cast(divisor, DataType::Decimal256(p2, s2)),
+        Some(result_type),
+    ))
+}
+
+/// Spark's `SubtractTimestamps` compares the local clock readings rather than instants
+/// (`DateTimeUtils.subtractTimestamps`). DataFusion stores zoned timestamps as instants, so
+/// remove the zone after converting both operands to the local clock selected by the left type.
+/// `SubtractTimestamps.zoneIdInEval` makes the same choice in Spark.
+fn subtract_timestamps_in_local_time(left: Expr, right: Expr) -> Expr {
+    let to_local_time = |timestamp| ScalarUDF::from(SparkToLocalTime::new()).call(vec![timestamp]);
+    cast(
+        to_local_time(left) - to_local_time(right),
+        DataType::Duration(TimeUnit::Microsecond),
+    )
+}
+
+/// Enforce Spark's half-open time range in the plan (DateTimeUtils.scala:1098-1104).
+/// Decimal intermediates keep interval scaling and addition from overflowing before the guard.
+/// Numeric arithmetic also avoids DataFusion's unsupported TIME interval-bound propagation.
+fn shift_time_by_interval(time: Expr, interval: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    let result_type = match time.get_type(schema)? {
+        DataType::Time64(TimeUnit::Nanosecond) => DataType::Time64(TimeUnit::Nanosecond),
+        _ => DataType::Time64(TimeUnit::Microsecond),
+    };
+    let null = time.clone().is_null().or(interval.clone().is_null());
+    let nanos = cast(
+        cast(time, DataType::Time64(TimeUnit::Nanosecond)),
+        DataType::Int64,
+    );
+    let micros = cast(interval, DataType::Int64);
+    let shifted = cast(nanos, DataType::Decimal128(38, 0))
+        + cast(micros, DataType::Decimal128(38, 0)) * lit(1000_i64);
+    let in_range = shifted
+        .clone()
+        .gt_eq(lit(0_i64))
+        .and(shifted.clone().lt(lit(86_400_000_000_000_i64)));
+    let result = cast(
+        cast(
+            cast(shifted, DataType::Int64),
+            DataType::Time64(TimeUnit::Nanosecond),
+        ),
+        result_type.clone(),
+    );
+    let error = ScalarUDF::from(RaiseError::new()).call(vec![lit(
+        "[DATETIME_OVERFLOW] Datetime operation overflow: time plus interval is outside [00:00, 24:00). SQLSTATE: 22008",
+    )]);
+    Ok(
+        when(null, cast(lit(ScalarValue::Null), result_type.clone()))
+            .when(in_range, result)
+            .otherwise(cast(error, result_type))?,
+    )
+}
 
 /// A string shifted by an interval is read as a TIMESTAMP, shifted, and written back as a string:
 /// `Cast(TimestampAddInterval(l, r), l.dataType)` for `+`, and the same with the interval negated
@@ -135,6 +338,11 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ) {
             return Err(error);
         }
+        if let Some(error) =
+            rejects_resolved_calendar_null("+", &left, &right, function_context.schema)
+        {
+            return Err(error);
+        }
         if let Some(error) = rejects_udt_operand("+", &left, &right, function_context.schema) {
             return Err(error);
         }
@@ -148,12 +356,16 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         {
             return Err(error);
         }
+        let (left, right) =
+            materialize_date_difference_interval(left, right, function_context.schema)?;
         let (left, right) = promote_string_operands(
             left,
             right,
             function_context.schema,
             function_context.plan_config.ansi_mode,
         );
+        let (left, right) =
+            promote_decimal_fractional_operands(left, right, function_context.schema)?;
         let (left, right) = cast_untyped_null_beside_datetime(
             left,
             right,
@@ -173,7 +385,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.plan_config.ansi_mode,
             )
         {
-            return Err(arithmetic_operand_error("+", left_type, right_type));
+            return Err(arithmetic_operand_error(
+                "+",
+                &left,
+                &right,
+                function_context.schema,
+            ));
         }
         Ok(match (left_type, right_type) {
             (
@@ -225,10 +442,10 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.plan_config.ansi_mode,
             )?,
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                shift_date_by_interval(left, right, false, &function_context)?
             }
             (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
-                cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+                shift_date_by_interval(right, left, false, &function_context)?
             }
             // A Spark day-time interval reaches `+` as Arrow `Duration`, but DataFusion's
             // `time +- interval` rule matches only `Interval(_)`. Spell it the way that rule
@@ -237,12 +454,11 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // dying one layer down. The `TIME - TIME` arm in `spark_minus` produces exactly such
             // a `Duration`, so without this the two halves contradict each other.
             (Ok(DataType::Time32(_) | DataType::Time64(_)), Ok(DataType::Duration(_))) => {
-                // A UDF, not DataFusion's `time + interval`: that `BinaryExpr` panics in interval
-                // bound propagation when the TIME's bounds are known (a CTE column).
-                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![left, right])
+                // Use numeric arithmetic: DataFusion cannot propagate TIME interval bounds.
+                shift_time_by_interval(left, right, function_context.schema)?
             }
             (Ok(DataType::Duration(_)), Ok(DataType::Time32(_) | DataType::Time64(_))) => {
-                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![right, left])
+                shift_time_by_interval(right, left, function_context.schema)?
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
@@ -303,6 +519,11 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ) {
             return Err(error);
         }
+        if let Some(error) =
+            rejects_resolved_calendar_null("-", &left, &right, function_context.schema)
+        {
+            return Err(error);
+        }
         if let Some(error) = rejects_udt_operand("-", &left, &right, function_context.schema) {
             return Err(error);
         }
@@ -316,12 +537,16 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         {
             return Err(error);
         }
+        let (left, right) =
+            materialize_date_difference_interval(left, right, function_context.schema)?;
         let (left, right) = promote_string_operands(
             left,
             right,
             function_context.schema,
             function_context.plan_config.ansi_mode,
         );
+        let (left, right) =
+            promote_decimal_fractional_operands(left, right, function_context.schema)?;
         let (left, right) = cast_untyped_null_beside_datetime(
             left,
             right,
@@ -346,7 +571,12 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.plan_config.ansi_mode,
             )
         {
-            return Err(arithmetic_operand_error("-", left_type, right_type));
+            return Err(arithmetic_operand_error(
+                "-",
+                &left,
+                &right,
+                function_context.schema,
+            ));
         }
         Ok(match (left_type, right_type) {
             (
@@ -368,23 +598,39 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // DataFusion coerces a `Time64` pair to `Interval(MonthDayNano)` -- the CALENDAR
             // interval, which combines with nothing day-time. Cast to `Duration` to restore the
             // class Spark gives it.
-            // TODO: `Duration` keeps the value and the day-time family but not Spark's
-            // `HOUR TO SECOND` start/end fields; `arithmetic_time_subtraction.feature` pins it.
             (
                 Ok(DataType::Time32(_) | DataType::Time64(_)),
                 Ok(DataType::Time32(_) | DataType::Time64(_)),
-            ) => cast(left - right, DataType::Duration(TimeUnit::Microsecond)),
+            ) => {
+                use sail_common::spec::{
+                    DayTimeIntervalField, SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata,
+                };
+                let metadata = SparkIntervalMetadata::DayTime {
+                    start_field: DayTimeIntervalField::Hour,
+                    end_field: DayTimeIntervalField::Second,
+                }
+                .to_json()?;
+                let field = Field::new("", DataType::Duration(TimeUnit::Microsecond), true)
+                    .with_metadata(
+                        [(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata)].into(),
+                    );
+                Expr::Cast(expr::Cast::new_from_field(
+                    Box::new(left - right),
+                    Arc::new(field),
+                ))
+            }
             // The `-` half of the arms above: `TimeAddInterval` with a negated interval
             // (`BinaryArithmeticWithDatetimeResolver.scala:133-134`). `interval - time` is absent
             // on purpose: Spark has no such arm and `rejects_subtract` rejects the pair first.
             (Ok(DataType::Time32(_) | DataType::Time64(_)), Ok(DataType::Duration(_))) => {
-                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![
+                shift_time_by_interval(
                     left,
                     ScalarUDF::from(NegateDuration::new()).call(vec![right]),
-                ])
+                    function_context.schema,
+                )?
             }
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                shift_date_by_interval(left, right, true, &function_context)?
             }
             // `SubtractTimestamps` takes the pair whenever EITHER side is a timestamp, and that
             // arm comes before the `SubtractDates` one
@@ -395,34 +641,44 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // `Duration(Nanosecond)`, which has no Spark type at all.
             // A zoned column may carry a zone of its own (a Parquet file written elsewhere), so
             // the DATE is read in the session zone, not in the column's.
-            (Ok(DataType::Date32), Ok(DataType::Timestamp(unit, zone))) => cast(
-                cast(
-                    left,
-                    DataType::Timestamp(
-                        unit,
-                        zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
-                    ),
-                ) - right,
-                DataType::Duration(TimeUnit::Microsecond),
-            ),
-            (Ok(DataType::Timestamp(unit, zone)), Ok(DataType::Date32)) => cast(
-                left - cast(
-                    right,
-                    DataType::Timestamp(
-                        unit,
-                        zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
-                    ),
-                ),
-                DataType::Duration(TimeUnit::Microsecond),
-            ),
-            // TODO: `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`).
-            //  Sail's only day-time spelling is `Duration`, which carries no field range, and its
-            //  consumers read a `Duration` by seconds: `CAST(date - date AS INT)` answered 1209600
-            //  where Spark casts by the end field (`IntervalUtils.scala:921-928`) and answers 14, and
-            //  `hash`, `to_json`, `try_sum` and `try_avg` refused it. Until the interval keeps its
-            //  fields (PR #2350), the difference stays the day count, typed INT -- the offset
-            //  `DateAdd` takes, so `DATE + (date - date)` still resolves.
+            (Ok(DataType::Timestamp(_, _)), Ok(DataType::Timestamp(_, _))) => {
+                subtract_timestamps_in_local_time(left, right)
+            }
+            (Ok(DataType::Date32), Ok(DataType::Timestamp(unit, zone))) => {
+                let session_timestamp = DataType::Timestamp(
+                    unit,
+                    zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
+                );
+                subtract_timestamps_in_local_time(
+                    cast(left, session_timestamp.clone()),
+                    // `DateTimeOperationsTypeCoercion` first casts DATE to the timestamp type,
+                    // then `SubtractTimestamps` evaluates both instants with that left-hand zone.
+                    // A Parquet timestamp can carry a different zone, so convert its type too.
+                    cast(right, session_timestamp),
+                )
+            }
+            (Ok(DataType::Timestamp(unit, zone)), Ok(DataType::Date32)) => {
+                let session_timestamp = DataType::Timestamp(
+                    unit,
+                    zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
+                );
+                subtract_timestamps_in_local_time(
+                    // Arrow preserves a Parquet column's writer zone, whereas Spark's logical
+                    // TimestampType is evaluated in the session zone. Normalize the column too
+                    // before `SparkToLocalTime`, otherwise this direction uses a different clock
+                    // from `DATE - TIMESTAMP`.
+                    cast(left, session_timestamp.clone()),
+                    cast(right, session_timestamp),
+                )
+            }
             (Ok(DataType::Date32), Ok(DataType::Date32)) => {
+                // TODO: `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`).
+                //  Sail's only day-time spelling is `Duration`, which carries no field range, and its
+                //  consumers read a `Duration` by seconds: `CAST(date - date AS INT)` answered 1209600
+                //  where Spark casts by the end field (`IntervalUtils.scala:921-928`) and answers 14, and
+                //  `hash`, `to_json`, `try_sum` and `try_avg` refused it. Until the interval keeps its
+                //  fields (PR #2350), the difference stays the day count, typed INT -- the offset
+                //  `DateAdd` takes, so `DATE + (date - date)` still resolves.
                 mark_date_difference(cast(left, DataType::Int32) - cast(right, DataType::Int32))
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
@@ -475,6 +731,7 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context.schema,
         function_context.plan_config.ansi_mode,
     );
+    let (left, right) = promote_decimal_fractional_operands(left, right, function_context.schema)?;
     let (left_type, right_type) = (
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
@@ -486,7 +743,12 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
             function_context.plan_config.ansi_mode,
         )
     {
-        return Err(arithmetic_operand_error("*", left_type, right_type));
+        return Err(arithmetic_operand_error(
+            "*",
+            &left,
+            &right,
+            function_context.schema,
+        ));
     }
     let ansi_mode = function_context.plan_config.ansi_mode;
     let is_interval = |data_type: &Result<DataType, _>| {
@@ -621,7 +883,10 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context.schema,
         function_context.plan_config.ansi_mode,
     );
-
+    let (dividend, divisor) =
+        promote_decimal_fractional_operands(dividend, divisor, function_context.schema)?;
+    let (dividend, divisor, decimal_result_type) =
+        spark_decimal_division_operands(dividend, divisor, function_context.schema)?;
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
@@ -638,7 +903,12 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 ansi_mode,
             ))
     {
-        return Err(arithmetic_operand_error("/", dividend_type, divisor_type));
+        return Err(arithmetic_operand_error(
+            "/",
+            &dividend,
+            &divisor,
+            function_context.schema,
+        ));
     }
     let divisor = match (&dividend_type, &divisor_type) {
         (
@@ -710,7 +980,25 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 
-    Ok(div_expr)
+    Ok(match decimal_result_type {
+        Some(data_type) => {
+            let scale = match &data_type {
+                DataType::Decimal128(_, scale) => *scale,
+                // `spark_decimal_division_operands` is the sole producer and always supplies a
+                // Decimal128 public result type.
+                _ => {
+                    return Err(PlanError::internal(
+                        "decimal division result type must be DECIMAL",
+                    ));
+                }
+            };
+            cast(
+                expr_fn::round(vec![div_expr, lit(i32::from(scale))]),
+                data_type,
+            )
+        }
+        None => div_expr,
+    })
 }
 
 /// Returns the integral part of the division of dividend by divisor.
@@ -943,6 +1231,19 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context.schema,
         function_context.plan_config.ansi_mode,
     );
+    let (dividend, divisor) =
+        promote_decimal_fractional_operands(dividend, divisor, function_context.schema)?;
+    let dividend_type = dividend.get_type(function_context.schema)?;
+
+    // Remainder expects NumericType, whose default concrete type is DOUBLE.
+    // TypeCoercionHelper.scala:571-578 replaces untyped NULL inputs with typed
+    // NULL literals. Keep that type so a surrounding DATE +/- expression rejects
+    // the floating-point offset instead of accepting it as an INT.
+    if dividend_type == DataType::Null
+        && divisor.get_type(function_context.schema)? == DataType::Null
+    {
+        return Ok(lit(ScalarValue::Float64(None)));
+    }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let divisor_type = divisor.get_type(function_context.schema);
@@ -958,7 +1259,12 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ) || rejects_as_divide_divisor(&dividend_type)
             || rejects_as_divide_divisor(divisor_type))
     {
-        return Err(arithmetic_operand_error("%", &dividend_type, divisor_type));
+        return Err(arithmetic_operand_error(
+            "%",
+            &dividend,
+            &divisor,
+            function_context.schema,
+        ));
     }
     // NOT short-circuited at plan time: Spark raises the division by zero only when the division is
     // EVALUATED (`DivModLike.eval`), so `if(false, 1 / 0, NULL)` answers there and refusing the
@@ -966,7 +1272,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // rows that reach it, which is where Spark raises too.
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
-    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
+    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
     let divisor = make_safe_divisor(
         divisor,
         &effective_divisor_type,
@@ -974,11 +1280,19 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         "Remainder by zero",
     );
 
-    Ok(Expr::BinaryExpr(BinaryExpr {
+    let modulo = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(dividend),
         op: Operator::Modulo,
         right: Box::new(divisor),
-    }))
+    });
+    // Spark's `Remainder` preserves BYTE and SHORT when both inputs have that exact type
+    // (`arithmetic.scala:1003-1005`). DataFusion evaluates these two widths as INT32; the
+    // remainder is always representable in either input width, so restore Spark's result type.
+    match (dividend_type, divisor_type) {
+        (DataType::Int8, Ok(DataType::Int8)) => Ok(cast(modulo, DataType::Int8)),
+        (DataType::Int16, Ok(DataType::Int16)) => Ok(cast(modulo, DataType::Int16)),
+        _ => Ok(modulo),
+    }
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1021,9 +1335,19 @@ fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    // `Pmod` is a `BinaryArithmetic` in Spark (`arithmetic.scala:1046-1061`), so
+    // `DecimalPrecision` applies the same DECIMAL + FLOAT/DOUBLE -> DOUBLE rule as
+    // it does to `%`. Passing the DECIMAL through makes DataFusion attempt to cast
+    // Infinity to Decimal128 instead of returning Spark's IEEE result.
+    let (left, right) = promote_decimal_fractional_operands(left, right, function_context.schema)?;
+    let ansi_mode = function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkPmod::new(ansi_mode));
-    Ok(udf.call(input.arguments))
+    Ok(udf.call(vec![left, right]))
 }
 
 /// Negate a numeric literal at planning time so a constant operand stays a
@@ -1097,7 +1421,15 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
     match arg.get_type(schema) {
         // DataFusion's `Negative` doesn't support Duration types, so route those
         // to the dedicated UDF.
-        Ok(DataType::Duration(_)) => ScalarUDF::from(NegateDuration::new()).call(vec![arg]),
+        Ok(DataType::Duration(_)) => {
+            // UnaryMinus retains the operand's interval range, including through projections.
+            let field = arg.to_field(schema).ok().map(|(_, field)| field);
+            let negated = ScalarUDF::from(NegateDuration::new()).call(vec![arg]);
+            match field {
+                Some(field) => Expr::Cast(expr::Cast::new_from_field(Box::new(negated), field)),
+                None => negated,
+            }
+        }
         // Spark's unary minus coerces strings to DOUBLE before negating. The
         // cast honors ANSI mode: an invalid string is NULL under ANSI off and
         // errors under ANSI on. (Without this, the `SparkNegative` signature
@@ -1827,6 +2159,81 @@ fn rejects_as_divide_divisor(data_type: &DataType) -> bool {
         || matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
 }
 
+/// A resolved calendar interval prevents the literal NULL/interval coercion shortcut.
+/// Spark's datetime rewrite casts its TIMESTAMP result back to the NULL operand's
+/// VOID type (BinaryArithmeticWithDatetimeResolver.scala:93-98,135-137), which
+/// Cast.scala:180,319 rejects. Calendar interval - NULL has no such rewrite.
+/// A fully specified literal `make_interval` remains unresolved during that Catalyst pass, but a
+/// projected expression, an explicit interval cast, a short `make_interval`, or the fully literal
+/// `make_interval` shape whose seconds input is widened is resolved before it reaches the binary
+/// arithmetic resolver. A cast in an earlier field leaves `make_interval` unresolved for that pass.
+fn rejects_resolved_calendar_null(
+    op: &str,
+    left: &Expr,
+    right: &Expr,
+    schema: &DFSchemaRef,
+) -> Option<PlanError> {
+    fn is_untyped_null(expr: &Expr) -> bool {
+        matches!(expr, Expr::Literal(ScalarValue::Null, _))
+    }
+
+    fn is_explicit_calendar_cast(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Cast(cast) if cast.field.data_type() == &DataType::Interval(IntervalUnit::MonthDayNano)
+        ) || matches!(expr, Expr::ScalarFunction(function) if function.func.name() == "spark_calendar_interval")
+    }
+
+    fn is_column(expr: &Expr) -> bool {
+        match expr {
+            Expr::Alias(alias) => is_column(&alias.expr),
+            Expr::Column(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_resolved_calendar_interval(expr: &Expr) -> bool {
+        match expr {
+            Expr::Alias(alias) => is_resolved_calendar_interval(&alias.expr),
+            Expr::Column(_) => true,
+            Expr::Cast(_) | Expr::TryCast(_) => true,
+            Expr::ScalarFunction(function) if function.func.name() == "coalesce" => {
+                function.args.iter().any(is_resolved_calendar_interval)
+            }
+            Expr::ScalarFunction(function) if function.func.name() == "make_interval" => {
+                function.args.len() < 7
+                    || (function.args[..6]
+                        .iter()
+                        .all(|argument| matches!(argument, Expr::Literal(_, _)))
+                        && matches!(function.args.get(6), Some(Expr::Cast(cast)) if matches!(cast.field.data_type(), DataType::Decimal128(18, 6))))
+            }
+            _ => false,
+        }
+    }
+
+    let explicit_cast_rejected =
+        (op == "+" && is_explicit_calendar_cast(left) && is_untyped_null(right))
+            || (is_untyped_null(left) && is_explicit_calendar_cast(right));
+    if explicit_cast_rejected {
+        return Some(PlanError::analysis(
+            "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve arithmetic: cannot cast \"TIMESTAMP\" to \"VOID\". SQLSTATE: 42K09",
+        ));
+    }
+
+    let (left_type, right_type) = (left.get_type(schema).ok()?, right.get_type(schema).ok()?);
+    let calendar = DataType::Interval(IntervalUnit::MonthDayNano);
+    let rejected = (left_type == DataType::Null
+        && right_type == calendar
+        && (is_column(left) || is_resolved_calendar_interval(right)))
+        || (op == "+"
+            && left_type == calendar
+            && right_type == DataType::Null
+            && (is_column(right) || is_resolved_calendar_interval(left)));
+    rejected.then(|| PlanError::analysis(
+        "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve arithmetic: cannot cast \"TIMESTAMP\" to \"VOID\". SQLSTATE: 42K09"
+    ))
+}
+
 /// Spark rejects a UDT operand for every arithmetic operator: a UDT is none of the input types
 /// the five operators accept (`Expression.scala:840-857`), whatever it is stored as. Sail keeps
 /// UDT identity in the field metadata rather than in the `DataType`, so this is the one operand
@@ -2344,14 +2751,8 @@ fn rejects_unary_operand(op: &str, arg: &Expr, schema: &DFSchemaRef) -> Option<P
 /// `BINARY_OP_WRONG_TYPE` or `UNEXPECTED_INPUT_TYPE` -- always with SQLSTATE `42K09`, plus the
 /// rewritten expression text and query context. Emit them once Sail has structured analysis
 /// errors; `arithmetic_error_metadata.feature` pins the gap.
-/// Sail-internal field metadata that marks the INT day count `date - date` is typed with as what
-/// Spark types it: `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`). The `SAIL::`
-/// prefix keeps it off the wire (`sail-spark-connect/src/schema.rs`).
-const SAIL_DATE_DIFFERENCE_METADATA_KEY: &str = "SAIL::spark::date_difference";
-
-/// Wraps the day count in a cast to its own type whose target field carries the marker. Only the
-/// target field of this very cast is trusted: DataFusion hands the source metadata on through a
-/// type-only cast, so a user's `CAST(d1 - d2 AS INT)` inherits it, and Spark accepts that INT.
+/// Wraps the day count with its temporary INTERVAL DAY identity. The target
+/// field preserves it through projections; explicit user conversions clear it.
 fn mark_date_difference(day_count: Expr) -> Expr {
     let field = Field::new("", DataType::Int32, true).with_metadata(
         [(
@@ -2366,15 +2767,65 @@ fn mark_date_difference(day_count: Expr) -> Expr {
     ))
 }
 
-fn is_date_difference(expr: &Expr) -> bool {
+/// Spark's `SubtractDates` returns `DayTimeIntervalType(DAY)`
+/// (`datetimeExpressions.scala:3615-3618`). Store the physical microsecond value with its DAY
+/// range in field metadata so Spark Connect restores the declared interval type.
+fn is_date_difference(expr: &Expr, schema: &DFSchemaRef) -> bool {
     match expr {
-        Expr::Alias(alias) => is_date_difference(&alias.expr),
+        Expr::Alias(alias) => is_date_difference(&alias.expr, schema),
         Expr::Cast(cast) => cast
             .field
             .metadata()
-            .contains_key(SAIL_DATE_DIFFERENCE_METADATA_KEY),
+            .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+            .is_some_and(|value| value == "true"),
+        Expr::Column(_) => expr.to_field(schema).is_ok_and(|(_, field)| {
+            field
+                .metadata()
+                .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+                .is_some_and(|value| value == "true")
+        }),
         _ => false,
     }
+}
+
+/// `SubtractDates` stores its physical result in microseconds, but Sail keeps the day count as an
+/// INT until a consumer needs interval arithmetic. Materialize the interval only at that boundary:
+/// numeric casts and `DATE + difference` must continue to consume the original day count.
+fn materialize_date_difference_interval(
+    left: Expr,
+    right: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<(Expr, Expr)> {
+    let left_is_difference = is_date_difference(&left, schema);
+    let right_is_difference = is_date_difference(&right, schema);
+    let left_type = left.get_type(schema)?;
+    let right_type = right.get_type(schema)?;
+    let interval_partner = |data_type: &DataType| {
+        matches!(
+            data_type,
+            DataType::Duration(TimeUnit::Microsecond)
+                | DataType::Timestamp(_, _)
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+        )
+    };
+    let as_interval = |day_count: Expr| {
+        cast(
+            cast(day_count, DataType::Int64) * lit(86_400_000_000_i64),
+            DataType::Duration(TimeUnit::Microsecond),
+        )
+    };
+    let left = if left_is_difference && (interval_partner(&right_type) || right_is_difference) {
+        as_interval(left)
+    } else {
+        left
+    };
+    let right = if right_is_difference && (interval_partner(&left_type) || left_is_difference) {
+        as_interval(right)
+    } else {
+        right
+    };
+    Ok((left, right))
 }
 
 /// Refuses an arithmetic whose operand is a date difference when Spark, which types it as an
@@ -2390,7 +2841,10 @@ fn rejects_date_difference_operand(
     right: &Expr,
     function_context: &FunctionContextInput,
 ) -> Option<PlanError> {
-    let (left_is, right_is) = (is_date_difference(left), is_date_difference(right));
+    let (left_is, right_is) = (
+        is_date_difference(left, function_context.schema),
+        is_date_difference(right, function_context.schema),
+    );
     if !left_is && !right_is {
         return None;
     }
@@ -2418,10 +2872,53 @@ fn rejects_date_difference_operand(
     }
 }
 
-fn arithmetic_operand_error(op: &str, left: &DataType, right: &DataType) -> PlanError {
+fn arithmetic_operand_error(
+    op: &str,
+    left: &Expr,
+    right: &Expr,
+    schema: &DFSchemaRef,
+) -> PlanError {
+    // Semantic types such as GEOMETRY live on the field, not on its binary storage type.
+    let name = |operand: &Expr| {
+        named_struct_type_name(operand, schema).unwrap_or_else(|| match operand.to_field(schema) {
+            Ok((_, field)) => spark_field_type_name(&field),
+            Err(_) => operand.get_type(schema).map_or_else(
+                |_| "UNKNOWN".to_string(),
+                |data_type| spark_type_name(&data_type),
+            ),
+        })
+    };
     PlanError::analysis(format!(
         "cannot resolve arithmetic '{op}' with operand types {} and {}",
-        spark_type_name(left),
-        spark_type_name(right)
+        name(left),
+        name(right)
     ))
+}
+
+/// Spark's `CreateNamedStruct` preserves the nullability of each value expression when rendering
+/// a type in an analysis error (complexTypeCreator.scala:465-477). DataFusion's UDF schema marks
+/// every named-struct child nullable, so derive that diagnostic type directly without changing the
+/// physical `named_struct` expression used by execution.
+fn named_struct_type_name(operand: &Expr, schema: &DFSchemaRef) -> Option<String> {
+    let Expr::ScalarFunction(function) = operand else {
+        return None;
+    };
+    if function.func.name() != "named_struct"
+        || function.args.is_empty()
+        || !function.args.len().is_multiple_of(2)
+    {
+        return None;
+    }
+    let mut fields = Vec::with_capacity(function.args.len() / 2);
+    for pair in function.args.chunks_exact(2) {
+        let [Expr::Literal(ScalarValue::Utf8(Some(name)), _), value] = pair else {
+            return None;
+        };
+        let (_, source) = value.to_field(schema).ok()?;
+        fields.push(
+            Field::new(name, source.data_type().clone(), source.is_nullable())
+                .with_metadata(source.metadata().clone()),
+        );
+    }
+    Some(spark_type_name(&DataType::Struct(Fields::from(fields))))
 }

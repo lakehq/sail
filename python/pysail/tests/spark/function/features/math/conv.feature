@@ -16,7 +16,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 2 from a column holding two different values
       When query
         """
@@ -28,7 +28,7 @@ Feature: conv with an argument coming from a column
         | 256    |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 2 from a column
       When query
         """
@@ -40,7 +40,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 3 from a column
       When query
         """

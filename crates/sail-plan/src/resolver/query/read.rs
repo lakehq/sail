@@ -330,6 +330,7 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         if is_built_in_generator_function(&canonical_function_name) {
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare(function_name),
                 arguments,
                 named_arguments,

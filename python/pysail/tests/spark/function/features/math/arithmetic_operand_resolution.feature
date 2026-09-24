@@ -2339,7 +2339,6 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     #  Sail answers an INT day count, because an Arrow `Duration` carries no field range and a
     #  `Duration` is read by seconds downstream (`CAST(date - date AS INT)` would answer 1209600).
     #  Carrying the range needs the interval metadata work of PR #2350.
-    @sail-bug
     Scenario: a difference of two dates has Spark's declared field range
       When query
         """
@@ -2416,12 +2415,9 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | null - timestamp     | NULL - TIMESTAMP'2024-01-15 01:02:03'     | interval day to second |
         | timestamp_ntz - null | TIMESTAMP_NTZ'2024-01-15 01:02:03' - NULL | interval day to second |
 
-    # What is left is not about the NULL at all: `date - date` is `INTERVAL DAY` and
-    # `time - time` is `INTERVAL HOUR TO SECOND`, and Sail spells every day-time interval
-    # `DAY TO SECOND` because an Arrow `Duration` carries no declared field range. Same root as
-    # `date - date` itself; it goes with PR #2350.
-    # TODO: the type NAME of the pair, not the verdict; the interval ranges need PR #2350.
-    @sail-bug
+    # TODO: DATE subtraction still returns an integer day count rather than INTERVAL DAY.
+    # Its NULL variants share that gap. TIME/NULL now retains HOUR TO SECOND and is tested
+    # separately below without xfail.
     Scenario Outline: an untyped NULL beside a <case> is typed <type>, which Sail does not spell
       Given config spark.sql.timeType.enabled = true
       When query
@@ -2436,8 +2432,6 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | case        | expression              | type                    |
         | date - null | DATE'2024-01-15' - NULL | interval day            |
         | null - date | NULL - DATE'2024-01-15' | interval day            |
-        | time - null | TIME '01:02:03' - NULL  | interval hour to second |
-        | null - time | NULL - TIME '01:02:03'  | interval hour to second |
 
   Rule: an untyped NULL beside a calendar interval
 
@@ -2470,9 +2464,24 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, 0) * 2                   |
         | false | NULL - coalesce(make_interval(0, 1, 0, 1, 0, 0, 0), NULL)       |
 
-    # TODO: Spark refuses these, since the interval operand is already resolved; see above.
-    @sail-bug
     Scenario Outline: <expression> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS v FROM (SELECT make_interval(0, 1, 0, 1, 0, 0, 0) AS c)
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  | expression                                                       |
+        | true  | coalesce(c, c) + NULL                                            |
+        | false | CAST('1 day' AS INTERVAL) + NULL                                 |
+        | true  | NULL - CAST('1 day' AS INTERVAL)                                 |
+        | false | make_interval(0, 1) + NULL                                       |
+        | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
+        | false | NULL - make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
+
+    Scenario Outline: a projected calendar interval beside NULL is refused: <expression>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
@@ -2485,12 +2494,6 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | false | c + NULL                                                         |
         | true  | NULL + c                                                         |
         | false | NULL - c                                                         |
-        | true  | coalesce(c, c) + NULL                                            |
-        | false | CAST('1 day' AS INTERVAL) + NULL                                 |
-        | true  | NULL - CAST('1 day' AS INTERVAL)                                 |
-        | false | make_interval(0, 1) + NULL                                       |
-        | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
-        | false | NULL - make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
 
   Rule: a DATE minus a TIMESTAMP is subtracted as two timestamps
 
@@ -2524,3 +2527,20 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | date - ntz   | America/New_York | DATE'2024-01-15' - TIMESTAMP_NTZ'2024-01-15 06:00:00' | interval day to second | INTERVAL '-0 06:00:00' DAY TO SECOND |
         | ntz - date   | UTC              | TIMESTAMP_NTZ'2024-01-15 06:00:00' - DATE'2024-01-15' | interval day to second | INTERVAL '0 06:00:00' DAY TO SECOND  |
         | ntz - date   | America/New_York | TIMESTAMP_NTZ'2024-01-15 06:00:00' - DATE'2024-01-15' | interval day to second | INTERVAL '0 06:00:00' DAY TO SECOND  |
+
+  Rule: NULL promoted to TIME retains the subtraction range
+
+    Scenario Outline: a TIME difference with NULL retains HOUR TO SECOND: <case>
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t |
+        | <type> |
+
+      Examples:
+        | case | expression | type |
+        | time - null | TIME '01:02:03' - NULL  | interval hour to second |
+        | null - time | NULL - TIME '01:02:03'  | interval hour to second |

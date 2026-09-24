@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
@@ -10,6 +11,7 @@ use sail_common::spec;
 
 use crate::coercion::spark_wider_numeric_type;
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::spark_type_name;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -33,7 +35,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => {
-                let (left, right) = self.widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right, "INTERSECT")?;
                 Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
             }
             SetOpType::Union => {
@@ -108,7 +110,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let (left, right) = self.widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right, "UNION")?;
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -118,7 +120,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
-                let (left, right) = self.widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right, "EXCEPT")?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 
@@ -233,11 +235,24 @@ impl PlanResolver<'_> {
         &self,
         left: LogicalPlan,
         right: LogicalPlan,
+        operator: &str,
     ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
         let left_fields = left.schema().fields();
         let right_fields = right.schema().fields();
         if left_fields.len() != right_fields.len() {
             return Ok((left, right));
+        }
+        for (index, (left_field, right_field)) in
+            left_fields.iter().zip(right_fields.iter()).enumerate()
+        {
+            if set_operation_has_no_common_type(left_field.data_type(), right_field.data_type()) {
+                return Err(PlanError::analysis(format!(
+                    "[INCOMPATIBLE_COLUMN_TYPE] {operator} can only be performed on tables with compatible column types. The {} column of the second table is \"{}\" type which is not compatible with \"{}\" at the same column of the first table.",
+                    ordinal(index + 1),
+                    spark_type_name(right_field.data_type()),
+                    spark_type_name(left_field.data_type()),
+                )));
+            }
         }
         let common = left_fields
             .iter()
@@ -271,5 +286,28 @@ impl PlanResolver<'_> {
             Ok(project(plan, columns)?)
         };
         Ok((project_widened(left)?, project_widened(right)?))
+    }
+}
+
+/// The `WidenSetOperationTypes` leaf where Spark finds no common type and leaves the set operation
+/// unresolved. `CheckAnalysis` then raises `INCOMPATIBLE_COLUMN_TYPE` (TypeCoercionBase.scala:
+/// 190-222; CheckAnalysis.scala:840-854). Keep this deliberately to pairs that have no string,
+/// numeric, temporal, or NULL promotion: the remaining type-coercion leaves stay with DataFusion.
+fn set_operation_has_no_common_type(left: &DataType, right: &DataType) -> bool {
+    if left == right || left.is_null() || right.is_null() {
+        return false;
+    }
+    let is_date = |data_type: &DataType| matches!(data_type, DataType::Date32 | DataType::Date64);
+    (is_date(left) && right.is_numeric())
+        || (left.is_numeric() && is_date(right))
+        || (left.is_nested() != right.is_nested())
+}
+
+fn ordinal(number: usize) -> &'static str {
+    match number {
+        1 => "first",
+        2 => "second",
+        3 => "third",
+        _ => "nth",
     }
 }

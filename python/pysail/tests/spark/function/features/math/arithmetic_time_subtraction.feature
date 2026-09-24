@@ -1,9 +1,8 @@
 Feature: TIME subtraction result parity
 
   # `SubtractTimes` returns `DayTimeIntervalType(HOUR, SECOND)` (`timeExpressions.scala:626`).
-  # Sail casts the difference to Arrow `Duration`, which keeps the value and the day-time
-  # family but cannot carry the HOUR TO SECOND start/end fields.
-  @sail-bug
+  # Sail keeps the microsecond Duration and carries HOUR TO SECOND in field metadata,
+  # including through projections and unary negation. Scaling returns DAY TO SECOND.
   @spark-4.1
   Scenario: TIME subtraction preserves Spark's HOUR TO SECOND interval subtype
     Given config spark.sql.ansi.enabled = true
@@ -24,6 +23,21 @@ Feature: TIME subtraction result parity
     Then query result
       | result_type             | result                                     |
       | interval hour to second | INTERVAL '-00:00:01.249999' HOUR TO SECOND |
+
+  @function(nullability)
+  @spark-4.1
+  Scenario: TIME subtraction keeps Spark's schema
+    Given config spark.sql.ansi.enabled = true
+    And config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT TIME'12:00:00.000001' - TIME'12:00:01.250' AS result
+      """
+    Then query schema
+      """
+      root
+       |-- result: interval hour to second (nullable = false)
+      """
 
   # A TIME difference is a day-time interval, so Spark feeds it straight back into
   # `TimeAddInterval` (`BinaryArithmeticWithDatetimeResolver.scala:87,133`). Sail spells that
@@ -167,3 +181,63 @@ Feature: TIME subtraction result parity
       | minus              | true  | c - INTERVAL '1' MINUTE | 00:59:00 |
       | the interval first | true  | INTERVAL '1' HOUR + c   | 02:00:00 |
 
+
+  @spark-4.1
+  Scenario Outline: TIME difference keeps its declared range with ANSI <ansi>: <query>
+    Given config spark.sql.ansi.enabled = <ansi>
+    And config spark.sql.timeType.enabled = true
+    When query
+      """
+      <query>
+      """
+    Then query result
+      | t | v |
+      | <type> | <value> |
+
+    Examples:
+      | ansi | query | type | value |
+      | false | SELECT typeof(TIME'12:00:00.000001' - TIME'12:00:01.250') AS t, CAST(TIME'12:00:00.000001' - TIME'12:00:01.250' AS STRING) AS v | interval hour to second | INTERVAL '-00:00:01.249999' HOUR TO SECOND |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'12:00:00.000001' - TIME'12:00:01.250' AS d) | interval hour to second | INTERVAL '-00:00:01.249999' HOUR TO SECOND |
+      | false | SELECT typeof(TIME'01:00:00' - NULL) AS t, CAST(TIME'01:00:00' - NULL AS STRING) AS v | interval hour to second | NULL |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'01:00:00' - NULL AS d) | interval hour to second | NULL |
+      | false | SELECT typeof(NULL - TIME'01:00:00') AS t, CAST(NULL - TIME'01:00:00' AS STRING) AS v | interval hour to second | NULL |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT NULL - TIME'01:00:00' AS d) | interval hour to second | NULL |
+      | false | SELECT typeof(TIME'01:00:00' - TIME'01:00:00') AS t, CAST(TIME'01:00:00' - TIME'01:00:00' AS STRING) AS v | interval hour to second | INTERVAL '00:00:00' HOUR TO SECOND |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'01:00:00' - TIME'01:00:00' AS d) | interval hour to second | INTERVAL '00:00:00' HOUR TO SECOND |
+      | false | SELECT typeof((TIME'06:00:00' - TIME'01:00:00') * 2) AS t, CAST((TIME'06:00:00' - TIME'01:00:00') * 2 AS STRING) AS v | interval day to second | INTERVAL '0 10:00:00' DAY TO SECOND |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT (TIME'06:00:00' - TIME'01:00:00') * 2 AS d) | interval day to second | INTERVAL '0 10:00:00' DAY TO SECOND |
+      | false | SELECT typeof(-(TIME'06:00:00' - TIME'01:00:00')) AS t, CAST(-(TIME'06:00:00' - TIME'01:00:00') AS STRING) AS v | interval hour to second | INTERVAL '-05:00:00' HOUR TO SECOND |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT -(TIME'06:00:00' - TIME'01:00:00') AS d) | interval hour to second | INTERVAL '-05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(TIME'12:00:00.000001' - TIME'12:00:01.250') AS t, CAST(TIME'12:00:00.000001' - TIME'12:00:01.250' AS STRING) AS v | interval hour to second | INTERVAL '-00:00:01.249999' HOUR TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'12:00:00.000001' - TIME'12:00:01.250' AS d) | interval hour to second | INTERVAL '-00:00:01.249999' HOUR TO SECOND |
+      | true | SELECT typeof('06:00:00' - TIME'01:00:00') AS t, CAST('06:00:00' - TIME'01:00:00' AS STRING) AS v | interval hour to second | INTERVAL '05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT '06:00:00' - TIME'01:00:00' AS d) | interval hour to second | INTERVAL '05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(TIME'06:00:00' - '01:00:00') AS t, CAST(TIME'06:00:00' - '01:00:00' AS STRING) AS v | interval hour to second | INTERVAL '05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'06:00:00' - '01:00:00' AS d) | interval hour to second | INTERVAL '05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(TIME'01:00:00' - NULL) AS t, CAST(TIME'01:00:00' - NULL AS STRING) AS v | interval hour to second | NULL |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'01:00:00' - NULL AS d) | interval hour to second | NULL |
+      | true | SELECT typeof(NULL - TIME'01:00:00') AS t, CAST(NULL - TIME'01:00:00' AS STRING) AS v | interval hour to second | NULL |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT NULL - TIME'01:00:00' AS d) | interval hour to second | NULL |
+      | true | SELECT typeof(TIME'01:00:00' - TIME'01:00:00') AS t, CAST(TIME'01:00:00' - TIME'01:00:00' AS STRING) AS v | interval hour to second | INTERVAL '00:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'01:00:00' - TIME'01:00:00' AS d) | interval hour to second | INTERVAL '00:00:00' HOUR TO SECOND |
+      | true | SELECT typeof((TIME'06:00:00' - TIME'01:00:00') * 2) AS t, CAST((TIME'06:00:00' - TIME'01:00:00') * 2 AS STRING) AS v | interval day to second | INTERVAL '0 10:00:00' DAY TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT (TIME'06:00:00' - TIME'01:00:00') * 2 AS d) | interval day to second | INTERVAL '0 10:00:00' DAY TO SECOND |
+      | true | SELECT typeof(-(TIME'06:00:00' - TIME'01:00:00')) AS t, CAST(-(TIME'06:00:00' - TIME'01:00:00') AS STRING) AS v | interval hour to second | INTERVAL '-05:00:00' HOUR TO SECOND |
+      | true | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT -(TIME'06:00:00' - TIME'01:00:00') AS d) | interval hour to second | INTERVAL '-05:00:00' HOUR TO SECOND |
+
+  @spark-4.1
+  Scenario Outline: TIME difference rejects with ANSI <ansi>: <query>
+    Given config spark.sql.ansi.enabled = <ansi>
+    And config spark.sql.timeType.enabled = true
+    When query
+      """
+      <query>
+      """
+    Then query error (?i)cannot resolve
+
+    Examples:
+      | ansi | query |
+      | false | SELECT typeof('06:00:00' - TIME'01:00:00') AS t, CAST('06:00:00' - TIME'01:00:00' AS STRING) AS v |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT '06:00:00' - TIME'01:00:00' AS d) |
+      | false | SELECT typeof(TIME'06:00:00' - '01:00:00') AS t, CAST(TIME'06:00:00' - '01:00:00' AS STRING) AS v |
+      | false | SELECT typeof(d) AS t, CAST(d AS STRING) AS v FROM (SELECT TIME'06:00:00' - '01:00:00' AS d) |

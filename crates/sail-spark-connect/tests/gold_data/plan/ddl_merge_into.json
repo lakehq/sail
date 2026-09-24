@@ -58,6 +58,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -100,6 +101,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -141,6 +143,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -201,6 +204,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -277,6 +281,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -318,6 +323,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -488,6 +494,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -530,6 +537,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -571,6 +579,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -631,6 +640,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -707,6 +717,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -748,6 +759,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -835,6 +847,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -877,6 +890,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -918,6 +932,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -959,6 +974,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1030,6 +1046,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -1072,6 +1089,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1113,6 +1131,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1164,6 +1183,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1231,6 +1251,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1272,6 +1293,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1353,6 +1375,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -1395,6 +1418,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1436,6 +1460,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1496,6 +1521,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1572,6 +1598,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1613,6 +1640,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1700,6 +1728,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -1742,6 +1771,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1783,6 +1813,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1840,6 +1871,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1897,6 +1929,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -1970,6 +2003,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2043,6 +2077,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2084,6 +2119,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2141,6 +2177,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2228,6 +2265,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -2379,6 +2417,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -2421,6 +2460,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2494,6 +2534,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2618,6 +2659,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -2660,6 +2702,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2726,6 +2769,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2802,6 +2846,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -2918,6 +2963,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -2960,6 +3006,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -3026,6 +3073,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -3209,6 +3257,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],
@@ -3251,6 +3300,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],
@@ -3336,6 +3386,7 @@
                     "condition": {
                       "expr": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             "=="
                           ],

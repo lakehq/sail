@@ -77,6 +77,7 @@ impl PlanResolver<'_> {
         };
         let (window, function_name, argument_display_names, is_distinct) = match window_function {
             spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: _,
                 function_name,
                 arguments,
                 named_arguments,

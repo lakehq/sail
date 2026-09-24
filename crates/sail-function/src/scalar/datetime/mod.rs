@@ -17,6 +17,7 @@ pub mod spark_time_add_interval;
 pub mod spark_time_diff;
 pub mod spark_time_trunc;
 pub mod spark_timestamp;
+pub mod spark_to_local_time;
 pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;
 pub mod spark_year;

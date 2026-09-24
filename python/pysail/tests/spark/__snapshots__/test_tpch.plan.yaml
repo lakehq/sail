@@ -205,44 +205,45 @@ data:
     ProjectionExec: expr=[#63@0 as o_year, #64@1 as mkt_share]
       SortPreservingMergeExec: [#63@0 ASC]
         SortExec: expr=[#63@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#60@0 as #63, sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 / CASE WHEN sum(all_nations.#61)@2 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(all_nations.#61)@2 END as #64]
-            AggregateExec: mode=FinalPartitioned, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
-              RepartitionExec: partitioning=Hash([#60@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
-                  ProjectionExec: expr=[date_part(year, #36@0) as #60, #21@1 * (1 - #22@2) as #61, #54@3 as #62]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#57@0, #51@3)], projection=[#36@3, #21@1, #22@2, #54@5]
-                      ProjectionExec: expr=[_0@0 as #57]
-                        FilterExec: _1@1 = MIDDLE EAST, projection=[_0@0]
-                          DataSourceExec: partitions=1, partition_sizes=[1]
-                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#12@2, #53@0)], projection=[#21@0, #22@1, #36@3, #51@4, #54@6]
-                          CoalescePartitionsExec
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#49@0, #44@4)], projection=[#21@2, #22@3, #12@4, #36@5, #51@1]
-                              ProjectionExec: expr=[_0@0 as #49, _2@1 as #51]
-                                DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#33@3, #41@0)], projection=[#21@0, #22@1, #12@2, #36@4, #44@6]
-                                  CoalescePartitionsExec
-                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #32@0)], projection=[#21@1, #22@2, #12@3, #33@5, #36@6]
-                                      CoalescePartitionsExec
-                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#9@0, #18@1)], projection=[#16@2, #21@4, #22@5, #12@1]
-                                          ProjectionExec: expr=[_0@0 as #9, _3@1 as #12]
-                                            DataSourceExec: partitions=1, partition_sizes=[1]
-                                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #17@1)], projection=[#16@1, #18@3, #21@4, #22@5]
-                                              ProjectionExec: expr=[_0@0 as #0]
-                                                FilterExec: _4@1 = LARGE PLATED STEEL, projection=[_0@0]
-                                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                                              ProjectionExec: expr=[_0@0 as #16, _1@1 as #17, _2@2 as #18, _5@3 as #21, _6@4 as #22]
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                        ProjectionExec: expr=[_0@0 as #32, _1@1 as #33, _4@2 as #36]
-                                          FilterExec: _4@2 >= 1995-01-01 AND _4@2 <= 1996-12-31
-                                            DataSourceExec: partitions=1, partition_sizes=[1]
-                                  ProjectionExec: expr=[_0@0 as #41, _3@1 as #44]
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                          ProjectionExec: expr=[_0@0 as #53, _1@1 as #54]
+          ProjectionExec: expr=[#60@1 as #63, CAST(round(CAST(sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@2 AS Decimal256(31, 4)) / CASE WHEN __common_expr_1@0 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal256(31, 4)) ELSE __common_expr_1@0 END, 7) AS Decimal128(38, 7)) as #64]
+            ProjectionExec: expr=[CAST(sum(all_nations.#61)@2 AS Decimal256(31, 4)) as __common_expr_1, #60@0 as #60, sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)]
+              AggregateExec: mode=FinalPartitioned, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
+                RepartitionExec: partitioning=Hash([#60@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
+                    ProjectionExec: expr=[date_part(year, #36@0) as #60, #21@1 * (1 - #22@2) as #61, #54@3 as #62]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#57@0, #51@3)], projection=[#36@3, #21@1, #22@2, #54@5]
+                        ProjectionExec: expr=[_0@0 as #57]
+                          FilterExec: _1@1 = MIDDLE EAST, projection=[_0@0]
                             DataSourceExec: partitions=1, partition_sizes=[1]
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#12@2, #53@0)], projection=[#21@0, #22@1, #36@3, #51@4, #54@6]
+                            CoalescePartitionsExec
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#49@0, #44@4)], projection=[#21@2, #22@3, #12@4, #36@5, #51@1]
+                                ProjectionExec: expr=[_0@0 as #49, _2@1 as #51]
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#33@3, #41@0)], projection=[#21@0, #22@1, #12@2, #36@4, #44@6]
+                                    CoalescePartitionsExec
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #32@0)], projection=[#21@1, #22@2, #12@3, #33@5, #36@6]
+                                        CoalescePartitionsExec
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#9@0, #18@1)], projection=[#16@2, #21@4, #22@5, #12@1]
+                                            ProjectionExec: expr=[_0@0 as #9, _3@1 as #12]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #17@1)], projection=[#16@1, #18@3, #21@4, #22@5]
+                                                ProjectionExec: expr=[_0@0 as #0]
+                                                  FilterExec: _4@1 = LARGE PLATED STEEL, projection=[_0@0]
+                                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                                ProjectionExec: expr=[_0@0 as #16, _1@1 as #17, _2@2 as #18, _5@3 as #21, _6@4 as #22]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                          ProjectionExec: expr=[_0@0 as #32, _1@1 as #33, _4@2 as #36]
+                                            FilterExec: _4@2 >= 1995-01-01 AND _4@2 <= 1996-12-31
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                    ProjectionExec: expr=[_0@0 as #41, _3@1 as #44]
+                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[_0@0 as #53, _1@1 as #54]
+                              DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[09]"
 data:
@@ -389,18 +390,19 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#25@0 as promo_revenue]
-      ProjectionExec: expr=[100.00 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 / CASE WHEN sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 END as #25]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
-          CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
-              ProjectionExec: expr=[#5@0 * (1 - #6@1) as __common_expr_1, #20@2 as #20]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #1@0)], projection=[#5@3, #6@4, #20@1]
-                  ProjectionExec: expr=[_0@0 as #16, _4@1 as #20]
-                    DataSourceExec: partitions=1, partition_sizes=[1]
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    ProjectionExec: expr=[_1@0 as #1, _5@1 as #5, _6@2 as #6]
-                      FilterExec: _10@3 >= 1995-02-01 AND _10@3 < 1995-03-01, projection=[_1@0, _5@1, _6@2]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CAST(round(CAST(100.00 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@1 AS Decimal256(34, 3)) / CASE WHEN __common_expr_1@0 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal256(31, 4)) ELSE __common_expr_1@0 END, 6) AS Decimal128(38, 6)) as #25]
+        ProjectionExec: expr=[CAST(sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 AS Decimal256(31, 4)) as __common_expr_1, sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_2 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_2) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_2 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_2) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+                ProjectionExec: expr=[#5@0 * (1 - #6@1) as __common_expr_2, #20@2 as #20]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #1@0)], projection=[#5@3, #6@4, #20@1]
+                    ProjectionExec: expr=[_0@0 as #16, _4@1 as #20]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      ProjectionExec: expr=[_1@0 as #1, _5@1 as #5, _6@2 as #6]
+                        FilterExec: _10@3 >= 1995-02-01 AND _10@3 < 1995-03-01, projection=[_1@0, _5@1, _6@2]
+                          DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[15]"
 data:
@@ -485,7 +487,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#42@0 as avg_yearly]
-      ProjectionExec: expr=[sum(lineitem.#5)@0 / 7.0 as #42]
+      ProjectionExec: expr=[CAST(round(CAST(sum(lineitem.#5)@0 AS Decimal128(18, 3)) / 7.0, 6) AS Decimal128(22, 6)) as #42]
         AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#5)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5)]

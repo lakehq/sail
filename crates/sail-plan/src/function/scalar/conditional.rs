@@ -23,7 +23,7 @@ use crate::function::common::{
 /// to `findWiderCommonType`, which pairs struct fields through the resolver and gives up when a name
 /// does not match or the counts differ (`TypeCoercionHelper.scala:164-176`); Spark then raises
 /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` instead of keeping the first branch's struct.
-fn rejects_struct_branches(
+fn rejects_incompatible_branches(
     name: &str,
     branch_values: &[expr::Expr],
     function_context: &FunctionContextInput<'_>,
@@ -40,7 +40,23 @@ fn rejects_struct_branches(
                 .iter()
                 .map(move |right| (left, right))
         })
-        .find(|(left, right)| struct_pair_spark_refuses(left, right))
+        .find(|(left, right)| {
+            if left.is_null() || right.is_null() {
+                return false;
+            }
+            // A scalar cannot share a common type with a container. NULL is the exception.
+            if left.is_nested() != right.is_nested() {
+                return true;
+            }
+            // Neither common-type rule unifies numeric and datetime types. Legacy CASE
+            // can nevertheless promote both through a third STRING branch, because
+            // TypeCoercion.findWiderCommonType processes strings first (TypeCoercion.scala:180).
+            let numeric_datetime = (left.is_numeric() && is_temporal_type(right))
+                || (right.is_numeric() && is_temporal_type(left));
+            let legacy_string_promotion =
+                !function_context.plan_config.ansi_mode && data_types.iter().any(is_string_type);
+            struct_pair_spark_refuses(left, right) || (numeric_datetime && !legacy_string_promotion)
+        })
         .map(|(left, right)| {
             PlanError::analysis(format!(
                 "cannot resolve '{name}' with branch types {} and {}",
@@ -71,11 +87,14 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
-    if let Some(error) = rejects_struct_branches("case", &branch_values, &function_context) {
+    if let Some(error) = rejects_incompatible_branches("case", &branch_values, &function_context) {
         return Err(error);
     }
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
-    let branch_values = widen_numeric_values(branch_values, &function_context)?;
+    let branch_values = widen_container_values(
+        widen_numeric_values(branch_values, &function_context)?,
+        &function_context,
+    )?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -94,15 +113,18 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
-    if let Some(error) = rejects_struct_branches(
+    if let Some(error) = rejects_incompatible_branches(
         "if",
         &[then_expr.clone(), else_expr.clone()],
         &function_context,
     ) {
         return Err(error);
     }
-    let (then_expr, else_expr) = widen_numeric_values(
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?,
+    let (then_expr, else_expr) = widen_container_values(
+        widen_numeric_values(
+            coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?,
+            &function_context,
+        )?,
         &function_context,
     )?
     .two()?;
@@ -178,10 +200,17 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 };
                 cast(expr, common.clone())
             };
-            return Ok(expr_fn::coalesce(vec![
-                to_common(left, left_type),
-                to_common(right, right_type),
-            ]));
+            let left_is_non_nullable = left
+                .to_field(schema)
+                .is_ok_and(|(_, field)| !field.is_nullable());
+            let left = to_common(left, left_type);
+            // A non-nullable first argument means Coalesce never reaches the second one. This is
+            // observable in ANSI mode, where eagerly casting `array('a')` to `ARRAY<BIGINT>` would
+            // raise even though Spark returns the first array, and in the result nullability.
+            if left_is_non_nullable {
+                return Ok(left);
+            }
+            return Ok(expr_fn::coalesce(vec![left, to_common(right, right_type)]));
         }
         let widens = match (&left_type, &right_type) {
             (Some(left_type), Some(right_type)) => coalesce_widens_leaves(left_type, right_type),
@@ -285,6 +314,54 @@ fn coalesce_widens_leaves(left: &DataType, right: &DataType) -> bool {
                 )
         }
     }
+}
+
+/// `CaseWhenCoercion` and `IfTypeCoercion` use `findWiderCommonType`, which recurses through
+/// containers after the scalar type rules (`TypeCoercionHelper.scala:137-178,521-531`). DataFusion
+/// preserves the first branch's nested leaf instead, so cast every container branch to the common
+/// recursive type before building the CASE expression.
+fn widen_container_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = arguments
+        .iter()
+        .map(|argument| argument.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types.iter().any(DataType::is_nested) {
+        return Ok(arguments);
+    }
+    let Some(common) =
+        data_types
+            .iter()
+            .skip(1)
+            .fold(data_types.first().cloned(), |current, data_type| {
+                current.and_then(|current| {
+                    spark_wider_type(&current, data_type, function_context.plan_config.ansi_mode)
+                })
+            })
+    else {
+        return Ok(arguments);
+    };
+    Ok(arguments
+        .into_iter()
+        .zip(data_types)
+        .map(|(argument, data_type)| {
+            if data_type == common {
+                argument
+            } else {
+                let argument = if needs_struct_field_rename(&data_type, &common) {
+                    ScalarUDF::new_from_impl(SparkStructRename::new(build_rename_target_type(
+                        &data_type, &common,
+                    )))
+                    .call(vec![argument])
+                } else {
+                    argument
+                };
+                cast(argument, common.clone())
+            }
+        })
+        .collect())
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

@@ -20,6 +20,9 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_substring::{
+    SparkBinaryOverlay, SparkBinarySubstring,
+};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
@@ -108,6 +111,17 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, position) = arguments
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
+    if matches!(string.get_type(function_context.schema)?, DataType::Binary) {
+        let arguments = match length_opt {
+            Some(length) => vec![
+                string,
+                cast(position, DataType::Int64),
+                cast(length, DataType::Int64),
+            ],
+            None => vec![string, cast(position, DataType::Int64)],
+        };
+        return Ok(ScalarUDF::from(SparkBinarySubstring::new()).call(arguments));
+    }
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
     // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
     // For negative positions, Spark counts from the end of the string.
@@ -140,21 +154,60 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(cast(substr_res, DataType::Utf8))
 }
 
+fn left(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, length) = arguments.two()?;
+    if matches!(value.get_type(function_context.schema)?, DataType::Binary) {
+        return Ok(ScalarUDF::from(SparkBinarySubstring::new()).call(vec![
+            value,
+            lit(1_i64),
+            cast(length, DataType::Int64),
+        ]));
+    }
+    Ok(expr_fn::left(value, length))
+}
+
 // TODO: Spark keeps a BINARY `substr`/`substring`/`left`/`overlay` a BINARY cut by bytes
 //  (`stringExpressions.scala:1000-1010,2301-2313,2408`). Sail reads the input as a STRING instead
 //  because most of its string functions do not take a BINARY yet, and a BINARY result broke every
 //  one of them downstream (`trim(substr(b, 2))`, `hex(substr(b, 2))` over Parquet, ...).
-fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    if args.len() == 4
+fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    if arguments.len() == 4
         && matches!(
-            args[3],
+            arguments[3],
             expr::Expr::Literal(ScalarValue::Int64(Some(-1)), _)
                 | expr::Expr::Literal(ScalarValue::Int32(Some(-1)), _)
         )
     {
-        args.pop();
+        arguments.pop();
     }
-    Ok(expr_fn::overlay(args))
+    if matches!(
+        arguments
+            .first()
+            .map(|arg| arg.get_type(function_context.schema)),
+        Some(Ok(DataType::Binary))
+    ) {
+        let arguments = arguments
+            .into_iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if index >= 2 {
+                    cast(arg, DataType::Int64)
+                } else {
+                    arg
+                }
+            })
+            .collect();
+        return Ok(ScalarUDF::from(SparkBinaryOverlay::new()).call(arguments));
+    }
+    Ok(expr_fn::overlay(arguments))
 }
 
 fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -430,7 +483,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
-        ("left", F::binary(expr_fn::left)),
+        ("left", F::custom(left)),
         ("len", F::custom(length)),
         ("length", F::custom(length)),
         ("levenshtein", F::udf(Levenshtein::new())),
@@ -442,7 +495,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::custom(octet_length)),
-        ("overlay", F::var_arg(overlay)),
+        ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),
         ("printf", F::udf(FormatStringFunc::new())),
         ("quote", F::udf(SparkQuote::new())),

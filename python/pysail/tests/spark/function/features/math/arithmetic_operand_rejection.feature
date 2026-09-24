@@ -6743,16 +6743,10 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
 
 
     # Spark names the field range a year-month interval was declared with
-    # TODO: the scenarios of this Rule pin the TYPE NAME the reject message prints, not the
-    #   verdict. The interval ranges need PR #2350; GEOMETRY, GEOGRAPHY and a STRUCT's field
-    #   nullability need `spark_type_name` to receive the `Field` instead of the `DataType`.
+    # TODO: the STRUCT field nullability below remains a named_struct gap. Interval ranges and
+    # geospatial names are read from field metadata.
     # (`YearMonthIntervalType.scala:50-59`): `INTERVAL YEAR`, `INTERVAL MONTH` or
-    # `INTERVAL YEAR TO MONTH`. Sail drops `start_field`/`end_field` when the type becomes Arrow
-    # (`resolver/data_type.rs`), so every one of them is named `INTERVAL YEAR TO MONTH`. The
-    # metadata that would carry the range arrives with PR #2350, so this is
-    # pinned rather than fixed here. Day-time intervals cannot diverge in this message: Spark
-    # rewrites `x + <day-time>` through the datetime resolver and never names the interval type.
-    @sail-bug
+    # `INTERVAL YEAR TO MONTH`. Sail stores the bounds as field metadata and reads them here.
     Scenario: a year-only INTERVAL operand keeps its field range in the type name
       When query
         """
@@ -6760,7 +6754,6 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
         """
       Then query error (?i:cannot resolve).*INTERVAL YEAR(?! TO)
 
-    @sail-bug
     Scenario: a month-only INTERVAL operand keeps its field range in the type name
       When query
         """
@@ -6776,12 +6769,8 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
       Then query error (?i:cannot resolve).*INTERVAL YEAR TO MONTH
 
 
-    # TODO: the type NAME the reject message prints, not the verdict: `spark_type_name` receives a
-    #   `DataType` and the semantic name lives on the `Field`.
-    # Sail stores GEOMETRY/GEOGRAPHY as Arrow `Binary` and keeps the extension metadata on
-    # the `Field`, while `spark_type_name` only receives a `DataType` -- the semantic name is
-    # not recoverable at that signature. Spark names the type and its SRID.
-    @sail-bug
+    # The error reads GeoArrow field metadata rather than naming the Binary storage.
+    # GeometryType.scala:54-60 and GeographyType.scala:56-62 include the SRID.
     @spark-4.2
     Scenario: a GEOMETRY operand is named GEOMETRY with its SRID
       When query
@@ -6790,7 +6779,6 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve.*GEOMETRY\(0\)
 
-    @sail-bug
     @spark-4.2
     Scenario: a GEOGRAPHY operand is named GEOGRAPHY with its SRID
       When query
@@ -6802,7 +6790,6 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
     # Spark reports the field as NOT NULL because `named_struct` gives it a non-nullable
     # field; Sail declares it nullable. The divergence is in `named_struct`, not in the namer.
     # TODO: it belongs to `named_struct`'s nullability, not to the reject message.
-    @sail-bug
     Scenario: a STRUCT operand carries its field nullability
       When query
         """
@@ -6836,13 +6823,10 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
 
   Rule: an untyped NULL column beside a calendar interval
 
-    # TODO: the only pair in the 7398-cell COLUMN matrix where Spark itself parts from the literal
-    #  form: as literals `NULL + make_interval(...)` resolves (the resolver casts the NULL,
-    #  `BinaryArithmeticWithDatetimeResolver.scala:93`), but a VOID column cannot be cast to the
-    #  TIMESTAMP that arm needs, so Spark answers `CAST_WITHOUT_SUGGESTION`. Sail casts the column
-    #  and answers, on `main` too. It is an accept-more, and closing it needs the VOID column to be
-    #  refused where Spark refuses it, which is a CAST rule rather than an arithmetic one.
-    @sail-bug
+    # With a resolved column, the datetime rewrite casts its TIMESTAMP result back to
+    # VOID (BinaryArithmeticWithDatetimeResolver.scala:93-98,135-137). Cast.scala:180,319
+    # refuses that conversion in both ANSI modes. Interval - NULL remains legal.
+    # Literal NULL beside make_interval has a different resolution order and stays legal.
     Scenario Outline: an untyped NULL column <case> a calendar interval column is refused with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -6860,3 +6844,147 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
         | minus  | true  | n - i      |
         | after  | false | i + n      |
         | after  | true  | i + n      |
+
+    Scenario Outline: calendar interval refuses the implicit TIMESTAMP to VOID conversion: case <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        <query>
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | ansi | query |
+        | 4 | false | SELECT (NULL + i) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 5 | false | SELECT (i + NULL) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 6 | false | SELECT (NULL - i) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 8 | false | SELECT (n + make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 9 | false | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) + n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 10 | false | SELECT (n - make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 4 | true | SELECT (NULL + i) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 5 | true | SELECT (i + NULL) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 6 | true | SELECT (NULL - i) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 8 | true | SELECT (n + make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 9 | true | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) + n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 10 | true | SELECT (n - make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+
+    Scenario Outline: calendar interval preserves legal NULL arithmetic: case <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | case | ansi | query |
+        | 3 | false | SELECT (i - n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 7 | false | SELECT (i - NULL) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 11 | false | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) - n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 12 | false | SELECT (NULL + make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result |
+        | 13 | false | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) + NULL) IS NULL AS result |
+        | 14 | false | SELECT (NULL - make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result |
+        | 15 | false | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) - NULL) IS NULL AS result |
+        | 3 | true | SELECT (i - n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 7 | true | SELECT (i - NULL) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 11 | true | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) - n) IS NULL AS result FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i) |
+        | 12 | true | SELECT (NULL + make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result |
+        | 13 | true | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) + NULL) IS NULL AS result |
+        | 14 | true | SELECT (NULL - make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result |
+        | 15 | true | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) - NULL) IS NULL AS result |
+
+  Rule: arithmetic errors retain geospatial field metadata
+
+    @spark-4.2
+    Scenario Outline: geospatial operand error with ANSI <ansi>: <query>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        <query>
+        """
+      Then query error (?i)cannot resolve.*<type>
+
+      Examples:
+        | ansi | query | type |
+        | false | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) + 1 | GEOMETRY[(]0[)] |
+        | false | SELECT g + 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 + st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 + g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) - 1 | GEOMETRY[(]0[)] |
+        | false | SELECT g - 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 - st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 - g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) * 1 | GEOMETRY[(]0[)] |
+        | false | SELECT g * 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 * st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 * g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) / 1 | GEOMETRY[(]0[)] |
+        | false | SELECT g / 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 / st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 / g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) % 1 | GEOMETRY[(]0[)] |
+        | false | SELECT g % 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 % st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | false | SELECT 1 % g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | false | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) + 1 | GEOGRAPHY[(]4326[)] |
+        | false | SELECT g + 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 + st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 + g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) - 1 | GEOGRAPHY[(]4326[)] |
+        | false | SELECT g - 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 - st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 - g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) * 1 | GEOGRAPHY[(]4326[)] |
+        | false | SELECT g * 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 * st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 * g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) / 1 | GEOGRAPHY[(]4326[)] |
+        | false | SELECT g / 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 / st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 / g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) % 1 | GEOGRAPHY[(]4326[)] |
+        | false | SELECT g % 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 % st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | false | SELECT 1 % g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) + 1 | GEOMETRY[(]0[)] |
+        | true | SELECT g + 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 + st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 + g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) - 1 | GEOMETRY[(]0[)] |
+        | true | SELECT g - 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 - st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 - g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) * 1 | GEOMETRY[(]0[)] |
+        | true | SELECT g * 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 * st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 * g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) / 1 | GEOMETRY[(]0[)] |
+        | true | SELECT g / 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 / st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 / g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) % 1 | GEOMETRY[(]0[)] |
+        | true | SELECT g % 1 FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 % st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOMETRY[(]0[)] |
+        | true | SELECT 1 % g FROM (SELECT st_geomfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOMETRY[(]0[)] |
+        | true | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) + 1 | GEOGRAPHY[(]4326[)] |
+        | true | SELECT g + 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 + st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 + g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) - 1 | GEOGRAPHY[(]4326[)] |
+        | true | SELECT g - 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 - st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 - g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) * 1 | GEOGRAPHY[(]4326[)] |
+        | true | SELECT g * 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 * st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 * g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) / 1 | GEOGRAPHY[(]4326[)] |
+        | true | SELECT g / 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 / st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 / g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) % 1 | GEOGRAPHY[(]4326[)] |
+        | true | SELECT g % 1 FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 % st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) | GEOGRAPHY[(]4326[)] |
+        | true | SELECT 1 % g FROM (SELECT st_geogfromwkb(unhex('0101000000000000000000F03F000000000000F03F')) AS g) | GEOGRAPHY[(]4326[)] |

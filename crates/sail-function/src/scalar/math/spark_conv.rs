@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StringArray, as_primitive_array};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{
@@ -54,8 +54,19 @@ impl ScalarUDFImpl for SparkConv {
             return Err(invalid_arg_count_exec_err("spark_conv", (3, 3), args.len()));
         };
 
-        if matches!(num, ColumnarValue::Array(_)) {
-            return invoke_vectorized(num, from_base, to_base);
+        let len = [num, from_base, to_base]
+            .iter()
+            .find_map(|argument| match argument {
+                ColumnarValue::Array(array) => Some(array.len()),
+                ColumnarValue::Scalar(_) => None,
+            });
+        if let Some(len) = len {
+            let arrays = [num, from_base, to_base].map(|argument| match argument {
+                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
+                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len),
+            });
+            let [num, from_base, to_base] = arrays;
+            return invoke_vectorized(num?, from_base?, to_base?);
         }
 
         let num_str = match num {
@@ -129,93 +140,74 @@ impl ScalarUDFImpl for SparkConv {
 }
 
 fn invoke_vectorized(
-    num: &ColumnarValue,
-    from_base: &ColumnarValue,
-    to_base: &ColumnarValue,
+    num: ArrayRef,
+    from_base: ArrayRef,
+    to_base: ArrayRef,
 ) -> Result<ColumnarValue> {
-    let from: i32 = match from_base {
-        ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v,
-        _ => {
-            return Err(unsupported_data_types_exec_err(
-                "spark_conv",
-                "(..., Int32, Int32)",
-                &[num.data_type(), from_base.data_type(), to_base.data_type()],
-            ));
-        }
-    };
-
-    let to: i32 = match to_base {
-        ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v,
-        _ => {
-            return Err(unsupported_data_types_exec_err(
-                "spark_conv",
-                "(..., Int32, Int32)",
-                &[num.data_type(), from_base.data_type(), to_base.data_type()],
-            ));
-        }
-    };
-
-    let array: &ArrayRef = match num {
-        ColumnarValue::Array(array) => array,
-        _ => {
-            return exec_err!("Expected array input for `num` in spark_conv");
-        }
-    };
-
-    let len: usize = array.len();
-
-    if !(2..=36).contains(&from) || !(2..=36).contains(&to) {
-        return Ok(ColumnarValue::Array(Arc::new(StringArray::from_iter(
-            std::iter::repeat_n(None::<String>, len),
-        ))));
-    }
-    let result: StringArray = match array.data_type() {
+    let from = as_primitive_array::<Int32Type>(&from_base);
+    let to = as_primitive_array::<Int32Type>(&to_base);
+    let result: StringArray = match num.data_type() {
         DataType::Utf8 => {
-            let strings = as_generic_string_array::<i32>(array)?;
+            let strings = as_generic_string_array::<i32>(&num)?;
             strings
                 .iter()
-                .map(|opt| {
-                    opt.and_then(|s| {
-                        i64::from_str_radix(s, from as u32)
-                            .ok()
-                            .map(|n| to_radix_string(n, to as u32))
-                    })
-                })
+                .zip(from.iter())
+                .zip(to.iter())
+                .map(|((number, from), to)| convert(number, from, to))
                 .collect()
         }
         DataType::LargeUtf8 => {
-            let strings = as_generic_string_array::<i64>(array)?;
+            let strings = as_generic_string_array::<i64>(&num)?;
             strings
                 .iter()
-                .map(|opt| {
-                    opt.and_then(|s| {
-                        i64::from_str_radix(s, from as u32)
-                            .ok()
-                            .map(|n| to_radix_string(n, to as u32))
-                    })
-                })
+                .zip(from.iter())
+                .zip(to.iter())
+                .map(|((number, from), to)| convert(number, from, to))
+                .collect()
+        }
+        DataType::Utf8View => {
+            let strings = as_string_view_array(&num)?;
+            strings
+                .iter()
+                .zip(from.iter())
+                .zip(to.iter())
+                .map(|((number, from), to)| convert(number, from, to))
                 .collect()
         }
         DataType::Int32 => {
-            let ints = as_primitive_array::<Int32Type>(array);
+            let ints = as_primitive_array::<Int32Type>(&num);
             ints.iter()
-                .map(|opt| opt.map(|v| to_radix_string(v as i64, to as u32)))
+                .zip(from.iter())
+                .zip(to.iter())
+                .map(|((number, from), to)| {
+                    convert(number.map(|number| number.to_string()).as_deref(), from, to)
+                })
                 .collect()
         }
         _ => {
             return Err(unsupported_data_types_exec_err(
                 "spark_conv",
-                "(Utf8 | LargeUtf8 | Int32, Int32, Int32)",
+                "(Utf8 | Utf8View | LargeUtf8 | Int32, Int32, Int32)",
                 &[
-                    array.data_type().clone(),
-                    from_base.data_type(),
-                    to_base.data_type(),
+                    num.data_type().clone(),
+                    from_base.data_type().clone(),
+                    to_base.data_type().clone(),
                 ],
             ));
         }
     };
 
     Ok(ColumnarValue::Array(Arc::new(result)))
+}
+
+fn convert(number: Option<&str>, from: Option<i32>, to: Option<i32>) -> Option<String> {
+    let (number, from, to) = (number?, from?, to?);
+    if !(2..=36).contains(&from) || !(2..=36).contains(&to) {
+        return None;
+    }
+    i64::from_str_radix(number, from as u32)
+        .ok()
+        .map(|number| to_radix_string(number, to as u32))
 }
 
 fn to_radix_string(mut n: i64, radix: u32) -> String {

@@ -76,11 +76,8 @@ Feature: the common type of the branches of a CASE or an IF
 
   Rule: branches with no common type are refused
 
-    # TODO: `CaseWhenCoercion` finds no wider type for an INT beside a DATE or an ARRAY, so Spark
-    #  refuses with `DATA_DIFF_TYPES` (`TypeCoercion.scala`). Sail resolves the expression and types
-    #  it by its first branch. The numeric widening this PR added does not reach these pairs, which
-    #  have no numeric common type; they need the rest of `findWiderCommonType`.
-    @sail-bug
+    # CaseWhenCoercion and IfCoercion leave incompatible branches unchanged;
+    # conditionalExpressions.scala:83,224 rejects them even when one branch is unreachable.
     Scenario Outline: <case> is refused
       When query
         """
@@ -117,11 +114,7 @@ Feature: the common type of the branches of a CASE or an IF
         | an IF of lists of such structs      | false | if(true, array(named_struct('a', 1)), array(named_struct('b', 2L)))            |
         | an IF of a struct and an int        | false | if(true, named_struct('a', 1), 2)                                              |
 
-    # TODO: Spark widens the branches leaf by leaf, so two structs whose names match take the wider
-    #  leaf: `if(true, named_struct('a', 1), named_struct('a', 2L))` is `struct<a:bigint>` there and
-    #  `struct<a:int>` here, the first-branch typing this file fixes for the numeric branches.
-    #  Closing it means widening containers across the branches, as `nvl` already does.
-    @sail-bug
+    # Spark widens branches recursively, including matching struct leaves.
     Scenario Outline: <case> keeps the wider leaf
       When query
         """
@@ -150,3 +143,57 @@ Feature: the common type of the branches of a CASE or an IF
         | an IF of structs with equal names | if(true, named_struct('a', 1), named_struct('a', 2L))                   |
         | structs differing only by case    | if(true, named_struct('a', 1), named_struct('A', 2L))                   |
         | a struct beside a NULL            | if(true, named_struct('a', 1), NULL)                                    |
+
+  Rule: conditional analysis rejects incompatible branches
+
+    Scenario Outline: conditional analysis rejects incompatible branches with ANSI <ansi>: <expression>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (<expression>) IS NOT NULL AS accepted
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi | expression |
+        | true | if(true,1,DATE'2024-01-01') |
+        | true | CASE WHEN false THEN 1 ELSE DATE'2024-01-01' END |
+        | true | if(true,DATE'2024-01-01',1) |
+        | true | CASE WHEN false THEN DATE'2024-01-01' ELSE 1 END |
+        | true | if(true,1,array(1)) |
+        | true | CASE WHEN false THEN 1 ELSE array(1) END |
+        | true | if(true,array(1),1) |
+        | true | CASE WHEN false THEN array(1) ELSE 1 END |
+        | true | CASE WHEN true THEN 1 WHEN false THEN DATE'2024-01-01' ELSE 'x' END |
+        | false | if(true,1,DATE'2024-01-01') |
+        | false | CASE WHEN false THEN 1 ELSE DATE'2024-01-01' END |
+        | false | if(true,DATE'2024-01-01',1) |
+        | false | CASE WHEN false THEN DATE'2024-01-01' ELSE 1 END |
+        | false | if(true,1,array(1)) |
+        | false | CASE WHEN false THEN 1 ELSE array(1) END |
+        | false | if(true,array(1),1) |
+        | false | CASE WHEN false THEN array(1) ELSE 1 END |
+
+  Rule: conditional analysis accepts compatible branches
+
+    Scenario Outline: conditional analysis accepts compatible branches with ANSI <ansi>: <expression>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (<expression>) IS NOT NULL AS accepted
+        """
+      Then query result
+        | accepted |
+        | true     |
+
+      Examples:
+        | ansi | expression |
+        | true | if(true,1,NULL) |
+        | true | if(true,array(1),NULL) |
+        | true | if(true,DATE'2024-01-01',NULL) |
+        | true | if(true,1,2L) |
+        | false | if(true,1,NULL) |
+        | false | if(true,array(1),NULL) |
+        | false | if(true,DATE'2024-01-01',NULL) |
+        | false | if(true,1,2L) |
+        | false | CASE WHEN true THEN 1 WHEN false THEN DATE'2024-01-01' ELSE 'x' END |

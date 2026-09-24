@@ -259,16 +259,52 @@ Feature: unary + and - operand types vs Spark 4.2.0
         | v |
         | 7 |
 
-    # TODO: the same rule holds for GROUP BY (`TryExtractOrdinal.scala:30-34`): a BIGINT literal is a
-    #  constant, so `x` is neither grouped nor aggregated and Spark refuses with
-    #  `MISSING_AGGREGATION`. Sail reads `1L` as the first column and groups by it.
-    @sail-bug
-    Scenario: GROUP BY a BIGINT literal groups by a constant, not by a position
+    # Only INT literals are ordinals (TryExtractOrdinal.scala:30-34 and
+    # literals.scala:338-342). Other integral literals are constant grouping keys.
+    # This test pins rejection; exact error wording is a separate parity concern.
+    Scenario Outline: GROUP BY a non-INT literal rejects an ungrouped column: <literal>
       When query
         """
-        SELECT x, count(*) AS c FROM VALUES (1), (2) AS t(x) GROUP BY 1L
+        SELECT x, count(*) AS c FROM VALUES (1), (2) AS t(x) GROUP BY <literal>
         """
-      Then query error (?i)non-aggregating
+      Then query error (?s).+
+
+      Examples:
+        | literal |
+        | 1L      |
+        | 0L      |
+        | -1L     |
+        | 3L      |
+        | 1Y      |
+        | 1S      |
+
+    Scenario Outline: GROUP BY a non-INT literal accepts an aggregate: <literal>
+      When query
+        """
+        SELECT count(*) AS c FROM VALUES (1), (2) AS t(x) GROUP BY <literal>
+        """
+      Then query result
+        | c |
+        | 2 |
+
+      Examples:
+        | literal |
+        | 1L      |
+        | 0L      |
+        | -1L     |
+        | 3L      |
+        | 1Y      |
+        | 1S      |
+
+    Scenario: GROUP BY an INT literal still selects the projection
+      When query
+        """
+        SELECT x, count(*) AS c FROM VALUES (1), (2) AS t(x) GROUP BY 1
+        """
+      Then query result
+        | x | c |
+        | 1 | 1 |
+        | 2 | 1 |
 
     Scenario Outline: ORDER BY <position> sorts by a constant, not by a position
       When query

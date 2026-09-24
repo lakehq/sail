@@ -85,6 +85,7 @@ impl TryFrom<Vec<WindowModifier>> for WindowModifiers {
 }
 fn negated(expr: spec::Expr) -> spec::Expr {
     spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+        is_sql_operator: false,
         function_name: spec::ObjectName::bare("not"),
         arguments: vec![expr],
         named_arguments: vec![],
@@ -305,6 +306,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         }
         Expr::UnaryOperator(op, expr) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare(from_ast_unary_operator(op)?),
                 arguments: vec![from_ast_expression(*expr)?],
                 named_arguments: vec![],
@@ -319,6 +321,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::BinaryOperator(left, op, right) => {
             let op = from_ast_binary_operator(op)?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: true,
                 function_name: spec::ObjectName::bare(op),
                 arguments: vec![from_ast_expression(*left)?, from_ast_expression(*right)?],
                 named_arguments: vec![],
@@ -468,6 +471,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 }))
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("like"),
                 arguments,
                 named_arguments: vec![],
@@ -494,6 +498,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 }));
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("ilike"),
                 arguments,
                 named_arguments: vec![],
@@ -514,6 +519,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("rlike"),
                 arguments: vec![expr, pattern],
                 named_arguments: vec![],
@@ -534,6 +540,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("regexp"),
                 arguments: vec![expr, pattern],
                 named_arguments: vec![],
@@ -776,6 +783,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("struct"),
                 arguments,
                 named_arguments: vec![],
@@ -793,6 +801,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("struct"),
                 arguments,
                 named_arguments: vec![],
@@ -826,6 +835,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     let condition = from_ast_expression(condition)?;
                     let condition = if let Some(ref operand) = operand {
                         spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                            is_sql_operator: false,
                             function_name: spec::ObjectName::bare("=="),
                             arguments: vec![operand.clone(), condition],
                             named_arguments: vec![],
@@ -848,6 +858,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(result)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("when"),
                 arguments,
                 named_arguments: vec![],
@@ -873,6 +884,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("extract"),
                 arguments: vec![
                     spec::Expr::Literal(spec::Literal::Utf8 {
@@ -898,6 +910,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("substring"),
                 arguments,
                 named_arguments: vec![],
@@ -928,6 +941,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 ),
             };
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare(name),
                 arguments,
                 named_arguments: vec![],
@@ -949,6 +963,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("overlay"),
                 arguments,
                 named_arguments: vec![],
@@ -962,6 +977,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::Position(_, _, what, _, e, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("strpos"),
                 arguments: vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
                 named_arguments: vec![],
@@ -975,6 +991,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentUser(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_user"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -988,6 +1005,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentTimestamp(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_timestamp"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -1001,6 +1019,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentDate(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_date"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -1098,6 +1117,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 })
                 .transpose()?;
             let function = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name,
                 arguments,
                 named_arguments,
@@ -1213,6 +1233,7 @@ fn from_ast_quantified_pattern(
         })
         .collect::<SqlResult<Vec<_>>>()?;
     Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+        is_sql_operator: false,
         function_name: spec::ObjectName::bare(quantifier),
         arguments,
         named_arguments: vec![],

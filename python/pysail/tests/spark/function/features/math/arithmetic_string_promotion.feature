@@ -104,12 +104,9 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | ts - str     | true | TIMESTAMP'2024-01-15 06:00:00' - '2024-01-15 00:00:00'     | interval day to second | INTERVAL '0 06:00:00' DAY TO SECOND |
         | str - ts_ntz | true | '2024-01-15 06:00:00' - TIMESTAMP_NTZ'2024-01-15 00:00:00' | interval day to second | INTERVAL '0 06:00:00' DAY TO SECOND |
 
-    # The class matches; the declared field range does not -- Sail spells every day-time interval
-    # DAY TO SECOND, because an Arrow `Duration` carries no fields. Same root as `date - date`
-    # itself, and it goes with PR #2350.
-    # TODO: the promoted datetime keeps Spark's field range only once an interval carries it
-    #   (PR #2350); the verdict is already Spark's.
-    @sail-bug
+    # TODO: DATE subtraction still returns an integer day count rather than INTERVAL DAY.
+    # These remaining DATE cases need the interval representation work; their accept/reject
+    # verdict already matches Spark. TIME cases are covered separately below without xfail.
     Scenario Outline: a string as a datetime keeps Spark's field range: <case> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       And config spark.sql.timeType.enabled = true
@@ -126,19 +123,14 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | str - date | false | '2024-01-15' - DATE'2024-01-01' | interval day            |
         | str - date | true  | '2024-01-15' - DATE'2024-01-01' | interval day            |
         | date - str | true  | DATE'2024-01-15' - '2024-01-01' | interval day            |
-        | str - time | true  | '06:00:00' - TIME'01:00:00'     | interval hour to second |
-        | time - str | true  | TIME'06:00:00' - '01:00:00'     | interval hour to second |
 
-  Rule: with ANSI off a string operand of any shape is read as a DATE beside one
+  Rule: SQL string subtraction follows datetime resolution and input coercion ordering
 
-    # Spark reads `string - date` through `SubtractDates` with an implicit cast of the string to a DATE
-    # (`BinaryArithmeticWithDatetimeResolver.scala:142`), whatever expression the string comes from.
-    # TODO: when that expression still has its own arguments to cast (`coalesce(NULL, '...')`,
-    #   `concat('...', 16)`), the SQL analyzer promotes it to DOUBLE first and refuses the pair, while
-    #   the DataFrame API and `element_at` resolve it -- a rule-ordering accident Sail does not model,
-    #   so Sail resolves all of them rather than refuse a query Spark answers. `md5('x')` and
-    #   `base64('x')` are the same case: their argument takes an implicit cast to BINARY, while
-    #   `hex('x')` and `upper(...)` take a STRING as it is and resolve in both engines.
+    # BinaryArithmeticWithDatetimeResolver.scala:142 selects SubtractDates only once the
+    # immediate operands resolve. If the string expression needs input coercion first,
+    # StringPromotionTypeCoercion.scala:49-51 casts it to DOUBLE and analysis rejects it.
+    # DataFrame expressions resolve differently; test_string_date_arithmetic.py protects
+    # their accepted behavior. All expected outcomes were measured with Spark Connect.
     Scenario Outline: <operand> minus a date is refused with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -162,6 +154,8 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | least(NULL, '2024-01-16')                         |
         | greatest('2024-01-16', NULL)                      |
         | concat('2024-01-', 16)                            |
+        | coalesce(NULL, upper('2024-01-16'))               |
+        | coalesce(NULL, coalesce(NULL, '2024-01-16'))       |
 
     Scenario Outline: <operand> minus a date resolves with ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -316,3 +310,21 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | ym / str       | INTERVAL '1' MONTH / 'x'                 |
         | calendar * str | make_interval(0, 1, 0, 1, 0, 0, 0) * 'x' |
         | calendar / str | make_interval(0, 1, 0, 1, 0, 0, 0) / 'x' |
+
+  Rule: string promotion to TIME retains the subtraction range
+
+    Scenario Outline: a promoted TIME difference retains HOUR TO SECOND: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t |
+        | <type> |
+
+      Examples:
+        | case | ansi | expression | type |
+        | str - time | true  | '06:00:00' - TIME'01:00:00'     | interval hour to second |
+        | time - str | true  | TIME'06:00:00' - '01:00:00'     | interval hour to second |

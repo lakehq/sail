@@ -231,12 +231,8 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve
 
-    # TODO: Sail's inner type is DATE where Spark's is TIMESTAMP, so the outer `+` sees a different
-    #  operand in each engine and only Spark refuses the INT. `date + DT` is a TIMESTAMP unless the
-    #  interval is DAY (`BinaryArithmeticWithDatetimeResolver.scala:68-69`), and Sail spells both
-    #  intervals as `Duration`, so it cannot tell them apart until an interval carries its field
-    #  range (PR #2350). 25 cells of the derived-operand lens share this root.
-    @sail-bug
+    # BinaryArithmeticWithDatetimeResolver.scala:68-71 keeps DATE only for DAY-only
+    # intervals; HOUR promotes to TIMESTAMP, whose addition with INT is rejected.
     Scenario: a shifted date plus an INT is refused
       When query
         """
@@ -244,12 +240,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve
 
-    # TODO: same root, and on `main` this one passes -- but only because `main` refused every
-    #  `'2' - DATE`, which Spark answers through `SubtractDates`; the branch answers it, so the
-    #  shifted date (a DATE in Sail, a TIMESTAMP in Spark) now reaches that arm. It cannot be refused
-    #  by shape: Sail spells `INTERVAL '2' DAY` and `INTERVAL '25' HOUR` alike (`Duration`), and with
-    #  a DAY interval the inner value is a DATE and Spark answers. It closes with PR #2350.
-    @sail-bug
+    # With ANSI off, STRING minus the promoted TIMESTAMP must be rejected too.
     Scenario: a string minus a shifted date is refused with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -268,7 +259,6 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     #  difference (or `NULL - date`) plus or minus a DAY/HOUR/DAY TO SECOND interval, a TIMESTAMP,
     #  a TIMESTAMP_NTZ or a TIME, on either side and in both ANSI modes, is refused where Spark
     #  answers (42 cells measured by the derived-operand lens of the arithmetic branch map).
-    @sail-bug
     Scenario Outline: <case> resolves
       When query
         """
@@ -285,12 +275,8 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
 
   Rule: the remainder of two untyped NULLs is a DOUBLE offset
 
-    # TODO: `%` gives `BinaryOperator`'s `ExpectsInputTypes` two untyped NULLs, and the conversion
-    #  makes them the default concrete type of NUMERIC, a DOUBLE (`TypeCoercionHelper.scala:571`), so
-    #  Spark refuses it as a date offset -- `DateAdd` takes INT, SMALLINT or TINYINT
-    #  (`datetimeExpressions.scala:324`). Sail makes the pair an INT with ANSI off, so the shift
-    #  resolves; with ANSI on it already refuses it. Already so on `main`.
-    @sail-bug
+    # Remainder's untyped NULL operands become DOUBLE NULLs through
+    # TypeCoercionHelper.scala:571-578. DateAdd accepts only integral offsets.
     Scenario Outline: a date shifted by the remainder of two untyped NULLs is refused: <case>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -359,18 +345,57 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         | false | (DATE'2024-01-15' - DATE'2024-01-01') / 2                                 |
         | true  | -(DATE'2024-01-15' - DATE'2024-01-01')                                    |
 
-    # TODO: the identity rides on the cast that builds the difference, so it is only read where
-    #  that cast is the operand. A difference projected by a subquery reaches the operator as a
-    #  column, and a column may also be a user's `CAST(d1 - d2 AS INT)` (which DataFusion's type-only
-    #  cast hands the same metadata), which Spark does accept; refusing columns would refuse that
-    #  too. The whole gap closes once the difference is typed as an interval (PR #2350).
-    @sail-bug
-    Scenario: a date difference projected by a subquery is refused as an operand
+    # SubtractDates retains INTERVAL DAY through projections. An ordinary INT
+    # (including datediff) must not inherit the identity from a same-named join column.
+    Scenario Outline: projected date difference operands with ANSI <ansi> and caseSensitive <sensitive>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      Given config spark.sql.caseSensitive = <sensitive>
       When query
         """
-        SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)
+        <query>
         """
       Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi | sensitive | case | query |
+        | false | false | one projection | SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) |
+        | false | false | two projections | SELECT x - '2' AS result FROM (SELECT x FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)) |
+        | false | false | left join operand | SELECT a.x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) a CROSS JOIN (SELECT 8 AS x) b |
+        | false | false | right join operand | SELECT b.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b |
+        | false | true | one projection | SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) |
+        | false | true | two projections | SELECT x - '2' AS result FROM (SELECT x FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)) |
+        | false | true | left join operand | SELECT a.x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) a CROSS JOIN (SELECT 8 AS x) b |
+        | false | true | right join operand | SELECT b.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b |
+        | true | false | one projection | SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) |
+        | true | false | two projections | SELECT x - '2' AS result FROM (SELECT x FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)) |
+        | true | false | left join operand | SELECT a.x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) a CROSS JOIN (SELECT 8 AS x) b |
+        | true | false | right join operand | SELECT b.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b |
+        | true | true | one projection | SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) |
+        | true | true | two projections | SELECT x - '2' AS result FROM (SELECT x FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)) |
+        | true | true | left join operand | SELECT a.x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) a CROSS JOIN (SELECT 8 AS x) b |
+        | true | true | right join operand | SELECT b.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b |
+
+    Scenario Outline: projected integer controls with ANSI <ansi> and caseSensitive <sensitive>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      Given config spark.sql.caseSensitive = <sensitive>
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result |
+        | <value> |
+
+      Examples:
+        | ansi | sensitive | case | query | value |
+        | false | false | integer join control | SELECT a.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b | 6.0 |
+        | false | false | datediff control | SELECT x - '2' AS result FROM (SELECT datediff(DATE'2024-01-15', DATE'2024-01-01') AS x) | 12.0 |
+        | false | true | integer join control | SELECT a.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b | 6.0 |
+        | false | true | datediff control | SELECT x - '2' AS result FROM (SELECT datediff(DATE'2024-01-15', DATE'2024-01-01') AS x) | 12.0 |
+        | true | false | integer join control | SELECT a.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b | 6 |
+        | true | false | datediff control | SELECT x - '2' AS result FROM (SELECT datediff(DATE'2024-01-15', DATE'2024-01-01') AS x) | 12 |
+        | true | true | integer join control | SELECT a.x - '2' AS result FROM (SELECT 8 AS x) a CROSS JOIN (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x) b | 6 |
+        | true | true | datediff control | SELECT x - '2' AS result FROM (SELECT datediff(DATE'2024-01-15', DATE'2024-01-01') AS x) | 12 |
 
   Rule: a date difference keeps the day count its consumers read
 
@@ -401,26 +426,36 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     #  an interval. Sail keeps the difference an INT day count until an interval carries its field
     #  range (PR #2350): as a `Duration` it was read by seconds and `CAST(date - date AS INT)`
     #  answered 1209600. Each row below was refused on `main` too.
-    @sail-bug
-    Scenario Outline: a date difference <case>
+    Scenario: a date difference compares with an interval
       When query
         """
-        SELECT <expression> AS result
+        SELECT (DATE'2024-01-15' - DATE'2024-01-01') < INTERVAL '15' DAY AS result
         """
       Then query result
         | result  |
-        | <value> |
+        | true    |
 
-      Examples:
-        | case                        | expression                                                                     | value |
-        | compares with an interval   | (DATE'2024-01-15' - DATE'2024-01-01') < INTERVAL '15' DAY                      | true  |
-        | extracts its days           | extract(DAY FROM DATE'2024-01-15' - DATE'2024-01-01')                          | 14    |
-        | subtracts an hour           | (DATE'2024-01-15' - DATE'2024-01-01') - INTERVAL '1' HOUR IS NOT NULL          | true  |
+    Scenario: a date difference extracts its days
+      When query
+        """
+        SELECT extract(DAY FROM DATE'2024-01-15' - DATE'2024-01-01') AS result
+        """
+      Then query result
+        | result |
+        | 14     |
+
+    Scenario: a date difference subtracts a finer interval
+      When query
+        """
+        SELECT (DATE'2024-01-15' - DATE'2024-01-01') - INTERVAL '1' HOUR IS NOT NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
 
     # TODO: a day-time interval cast to a number is read by its end field in Spark
     #  (`IntervalUtils.scala:921-928`); a `Duration` carries no field, so Sail reads seconds. Already so
     #  on `main`.
-    @sail-bug
     Scenario: a DAY interval cast to INT is its day count
       When query
         """
@@ -430,3 +465,163 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         | result |
         | 14     |
 
+
+  Rule: null remainder rejects nonintegral date offsets
+
+    Scenario Outline: null remainder rejects nonintegral date offsets with ANSI <ansi>: <sql>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        <sql>
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi | sql |
+        | false | SELECT DATE'2024-01-15' + (NULL % NULL) AS result |
+        | false | SELECT (NULL % NULL) + DATE'2024-01-15' AS result |
+        | false | SELECT DATE'2024-01-15' - (NULL % NULL) AS result |
+        | true | SELECT DATE'2024-01-15' + (NULL % NULL) AS result |
+        | true | SELECT (NULL % NULL) + DATE'2024-01-15' AS result |
+        | true | SELECT DATE'2024-01-15' - (NULL % NULL) AS result |
+
+  Rule: null remainder preserves valid arithmetic
+
+    Scenario Outline: null remainder preserves valid arithmetic with ANSI <ansi>: <sql>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        <sql>
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | ansi | sql |
+        | false | SELECT NULL % NULL AS result |
+        | false | SELECT (a % b) + 1 AS result FROM (SELECT NULL AS a, NULL AS b) |
+        | false | SELECT DATE'2024-01-15' + (CAST(NULL AS INT) % NULL) AS result |
+        | true | SELECT NULL % NULL AS result |
+        | true | SELECT (a % b) + 1 AS result FROM (SELECT NULL AS a, NULL AS b) |
+        | true | SELECT DATE'2024-01-15' + (CAST(NULL AS INT) % NULL) AS result |
+
+  Rule: arithmetic must not make an invalid numeric to TIME cast executable
+
+    # Cast.scala:92-180,223-318 has no numeric-to-TIME conversion. Enabling TIME
+    # arithmetic must not turn this rejection on main into an accepted query.
+    Scenario Outline: a numeric cast to TIME is refused inside addition with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT CAST(1L AS TIME) + INTERVAL '1' HOUR AS result
+        """
+      Then query error (?i)cannot resolve|DATATYPE_MISMATCH
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+  Rule: date shifts preserve DAY and promote finer intervals
+
+    Scenario: date shift type and value from JVM case 2
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' + INTERVAL '2' DAY) AS t, CAST(DATE'2024-01-15' + INTERVAL '2' DAY AS STRING) AS v
+        """
+      Then query result
+        |t   |v         |
+        |date|2024-01-17|
+
+    Scenario: date shift type and value from JVM case 3
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' + INTERVAL '25' HOUR) AS t, CAST(DATE'2024-01-15' + INTERVAL '25' HOUR AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-16 01:00:00|
+
+    Scenario: date shift type and value from JVM case 4
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(INTERVAL '25' HOUR + DATE'2024-01-15') AS t, CAST(INTERVAL '25' HOUR + DATE'2024-01-15' AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-16 01:00:00|
+
+    Scenario: date shift type and value from JVM case 5
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' - INTERVAL '25' HOUR) AS t, CAST(DATE'2024-01-15' - INTERVAL '25' HOUR AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-13 23:00:00|
+
+    Scenario: date shift type and value from JVM case 6
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' - INTERVAL '2' DAY) AS t, CAST(DATE'2024-01-15' - INTERVAL '2' DAY AS STRING) AS v
+        """
+      Then query result
+        |t   |v         |
+        |date|2024-01-13|
+
+    Scenario: date shift type and value from JVM case 9
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' + INTERVAL '2' DAY) AS t, CAST(DATE'2024-01-15' + INTERVAL '2' DAY AS STRING) AS v
+        """
+      Then query result
+        |t   |v         |
+        |date|2024-01-17|
+
+    Scenario: date shift type and value from JVM case 10
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' + INTERVAL '25' HOUR) AS t, CAST(DATE'2024-01-15' + INTERVAL '25' HOUR AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-16 01:00:00|
+
+    Scenario: date shift type and value from JVM case 11
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(INTERVAL '25' HOUR + DATE'2024-01-15') AS t, CAST(INTERVAL '25' HOUR + DATE'2024-01-15' AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-16 01:00:00|
+
+    Scenario: date shift type and value from JVM case 12
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' - INTERVAL '25' HOUR) AS t, CAST(DATE'2024-01-15' - INTERVAL '25' HOUR AS STRING) AS v
+        """
+      Then query result
+        |t        |v                  |
+        |timestamp|2024-01-13 23:00:00|
+
+    Scenario: date shift type and value from JVM case 13
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' - INTERVAL '2' DAY) AS t, CAST(DATE'2024-01-15' - INTERVAL '2' DAY AS STRING) AS v
+        """
+      Then query result
+        |t   |v         |
+        |date|2024-01-13|

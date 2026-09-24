@@ -182,6 +182,7 @@ use sail_function::scalar::datetime::spark_time_add_interval::SparkTimeAddDtInte
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_to_local_time::SparkToLocalTime;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -229,6 +230,7 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_cast_integral_to_binary::SparkCastIntegralToBinary;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -238,6 +240,9 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_substring::{
+    SparkBinaryOverlay, SparkBinarySubstring,
+};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
@@ -3202,6 +3207,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_string_to_int32" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
             }
+            "spark_cast_integral_to_binary" => {
+                Ok(Arc::new(ScalarUDF::from(SparkCastIntegralToBinary::new())))
+            }
+            "spark_binary_substring" => Ok(Arc::new(ScalarUDF::from(SparkBinarySubstring::new()))),
+            "spark_binary_overlay" => Ok(Arc::new(ScalarUDF::from(SparkBinaryOverlay::new()))),
+            "spark_to_local_time" => Ok(Arc::new(ScalarUDF::from(SparkToLocalTime::new()))),
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -3417,6 +3428,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
+            || node_inner.is::<SparkCastIntegralToBinary>()
+            || node_inner.is::<SparkBinarySubstring>()
+            || node_inner.is::<SparkBinaryOverlay>()
+            || node_inner.is::<SparkToLocalTime>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
@@ -6379,6 +6394,46 @@ mod tests {
 
         downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
         assert_eq!(decoded.name(), "spark_cast_string_to_int32");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_cast_integral_to_binary_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkCastIntegralToBinary::new()))?;
+
+        downcast_udf::<SparkCastIntegralToBinary>(&decoded, "SparkCastIntegralToBinary")?;
+        assert_eq!(decoded.name(), "spark_cast_integral_to_binary");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_binary_substring_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkBinarySubstring::new()))?;
+
+        downcast_udf::<SparkBinarySubstring>(&decoded, "SparkBinarySubstring")?;
+        assert_eq!(decoded.name(), "spark_binary_substring");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_binary_overlay_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkBinaryOverlay::new()))?;
+
+        downcast_udf::<SparkBinaryOverlay>(&decoded, "SparkBinaryOverlay")?;
+        assert_eq!(decoded.name(), "spark_binary_overlay");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_to_local_time_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToLocalTime::new()))?;
+
+        downcast_udf::<SparkToLocalTime>(&decoded, "SparkToLocalTime")?;
+        assert_eq!(decoded.name(), "spark_to_local_time");
 
         Ok(())
     }

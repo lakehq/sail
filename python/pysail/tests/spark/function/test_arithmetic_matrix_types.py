@@ -30,7 +30,7 @@ BATCH = 40
 ERROR = "<error>"
 # Cells both engines answer with a different type. This must go DOWN, never up: a cell that
 # answers with the wrong type is worse than one that refuses.
-DIVERGENT_TYPES = 153
+DIVERGENT_TYPES = 53
 
 # The same 24-token alphabet the two matrix feature files use.
 OPERANDS = {

@@ -17,6 +17,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
+use sail_function::scalar::spark_cast_integral_to_binary::SparkCastIntegralToBinary;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -24,9 +25,11 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
-use crate::coercion::{build_rename_target_type, needs_struct_field_rename};
+use crate::coercion::{
+    SAIL_DATE_DIFFERENCE_METADATA_KEY, build_rename_target_type, needs_struct_field_rename,
+};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::is_spark_udt_field;
+use crate::function::common::{is_spark_udt_field, spark_type_name};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -86,6 +89,71 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_field = expr.to_field(schema)?.1;
         let expr_type = expr_field.data_type().clone();
+        // `dayTimeIntervalToLong` reads an ANSI interval in units of its END field
+        // (`IntervalUtils.scala:921-928`): an INTERVAL DAY is therefore a count of days,
+        // while DAY TO SECOND is a count of seconds. Arrow stores both as microseconds, so keep
+        // the declared field alongside the physical type for the reverse cast too.
+        let source_day_time_interval_field = expr_field
+            .metadata()
+            .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+            .map(|value| spec::SparkIntervalMetadata::from_json(value))
+            .transpose()?
+            .and_then(|metadata| match metadata {
+                spec::SparkIntervalMetadata::DayTime { end_field, .. } => Some(end_field),
+                spec::SparkIntervalMetadata::YearMonth { .. } => None,
+            });
+        // Cast.scala:92-180, 223-318: numeric-to-DATE is never legal. Numeric-to-BINARY
+        // is legal only for integral input in legacy CAST; TRY_CAST uses canAnsiCast.
+        // Check before building an Arrow cast, which permits additional storage conversions.
+        if expr_type.is_numeric() {
+            let source = spark_type_name(&expr_type);
+            // Spark has no numeric-to-TIME cast in any evaluation mode. Arrow's
+            // integer storage conversion must not make TIME arithmetic accept it.
+            if matches!(cast_to_type, DataType::Time32(_) | DataType::Time64(_)) {
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve cast: cannot cast \"{source}\" to \"TIME\". SQLSTATE: 42K09"
+                )));
+            }
+            if matches!(cast_to_type, DataType::Date32 | DataType::Date64) {
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION] cannot resolve cast: cannot cast \"{source}\" to \"DATE\". To convert values from \"{source}\" to \"DATE\", use the function `DATE_FROM_UNIX_DATE` instead. SQLSTATE: 42K09"
+                )));
+            }
+            if cast_to_type.is_binary()
+                && (self.config.ansi_mode || is_try || !expr_type.is_integer())
+            {
+                let subclass = if self.config.ansi_mode && !is_try && expr_type.is_integer() {
+                    "CAST_WITH_CONF_SUGGESTION"
+                } else {
+                    "CAST_WITHOUT_SUGGESTION"
+                };
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.{subclass}] cannot resolve cast: cannot cast \"{source}\" to \"BINARY\". SQLSTATE: 42K09"
+                )));
+            }
+        }
+        if (cast_to_type.is_binary()
+            && matches!(
+                expr_type,
+                DataType::Boolean | DataType::Date32 | DataType::Date64
+            ))
+            || ((is_try || self.config.ansi_mode)
+                && matches!(expr_type, DataType::Date32 | DataType::Date64)
+                && (cast_to_type.is_numeric() || cast_to_type == DataType::Boolean))
+        {
+            let source = spark_type_name(&expr_type);
+            let target = spark_type_name(&cast_to_type);
+            let subclass = if cast_to_type.is_numeric() {
+                "CAST_WITH_FUNC_SUGGESTION"
+            } else if self.config.ansi_mode && !is_try && cast_to_type == DataType::Boolean {
+                "CAST_WITH_CONF_SUGGESTION"
+            } else {
+                "CAST_WITHOUT_SUGGESTION"
+            };
+            return Err(PlanError::analysis(format!(
+                "[DATATYPE_MISMATCH.{subclass}] cannot resolve cast: cannot cast \"{source}\" to \"{target}\". SQLSTATE: 42K09"
+            )));
+        }
         let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -127,6 +195,11 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64, to, false)
+                if to.is_binary() && !self.config.ansi_mode =>
+            {
+                ScalarUDF::new_from_impl(SparkCastIntegralToBinary::new()).call(vec![expr])
+            }
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
@@ -186,10 +259,11 @@ impl PlanResolver<'_> {
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
             {
+                let divisor = source_day_time_interval_field
+                    .map(|field| day_time_field_to_microseconds(field.into()))
+                    .unwrap_or_else(|| time_unit_to_multiplier(&time_unit));
                 cast(
-                    lit(1.0)
-                        .div(lit(time_unit_to_multiplier(&time_unit)))
-                        .mul(cast(expr, DataType::Int64)),
+                    lit(1.0).div(lit(divisor)).mul(cast(expr, DataType::Int64)),
                     to,
                 )
             }
@@ -301,6 +375,32 @@ impl PlanResolver<'_> {
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
+        };
+        // An explicit conversion consumes the date-difference identity. Otherwise a
+        // type-only Arrow cast inherits it and a later projection mistakes the INT
+        // result for an interval when checking arithmetic operands.
+        let expr = if expr_field
+            .metadata()
+            .contains_key(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+        {
+            let field = expr.to_field(schema)?.1;
+            let mut metadata = field.metadata().clone();
+            metadata.insert(
+                SAIL_DATE_DIFFERENCE_METADATA_KEY.to_string(),
+                "false".to_string(),
+            );
+            let field = Arc::new(field.as_ref().clone().with_metadata(metadata));
+            match expr {
+                expr::Expr::Cast(cast) => {
+                    expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                }
+                expr::Expr::TryCast(cast) => {
+                    expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                }
+                expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+            }
+        } else {
+            expr
         };
         Ok(match spark_interval_metadata {
             Some(metadata) => {

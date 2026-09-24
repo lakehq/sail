@@ -11,7 +11,11 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_catalog::utils::quote_name_if_needed;
-use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
+use sail_common::geoarrow::extension::GeoArrowWkbType;
+use sail_common::spec::{
+    SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
+    SparkIntervalMetadata,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant_storage_field};
 use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
@@ -555,9 +559,66 @@ pub(crate) fn spark_field_type_name(field: &Field) -> String {
         format!("UDT(\"{}\")", spark_type_name(field.data_type()))
     } else if is_variant_storage_field(field) {
         "VARIANT".to_string()
+    } else if let Some(name) = spark_interval_type_name(field) {
+        name
+    } else if let Some(name) = spark_geospatial_type_name(field) {
+        name
     } else {
         spark_type_name(field.data_type())
     }
+}
+
+/// Arrow stores a year-month interval without its declared bounds. Spark keeps those bounds in
+/// `YearMonthIntervalType.typeName` (YearMonthIntervalType.scala:50-59), and Sail retains them in
+/// field metadata for literals, casts, and projections.
+fn spark_interval_type_name(field: &Field) -> Option<String> {
+    if !matches!(
+        field.data_type(),
+        DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        return None;
+    }
+    let metadata = field
+        .metadata()
+        .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
+        .and_then(|value| SparkIntervalMetadata::from_json(value).ok())?;
+    match metadata {
+        SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } if start_field == end_field => Some(format!("INTERVAL {start_field:?}").to_uppercase()),
+        SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } => Some(format!("INTERVAL {start_field:?} TO {end_field:?}").to_uppercase()),
+        SparkIntervalMetadata::DayTime { .. } => None,
+    }
+}
+
+/// Match the CRS mapping used by the Spark Connect schema encoder. GeometryType.scala:54-60
+/// and GeographyType.scala:56-62 include the SRID (or ANY for mixed SRIDs) in the type name.
+fn spark_geospatial_type_name(field: &Field) -> Option<String> {
+    let extension = field.try_extension_type::<GeoArrowWkbType>().ok()?;
+    let srid = match extension
+        .metadata
+        .crs
+        .as_ref()
+        .map(|crs| crs.authority_code())
+    {
+        None => "ANY",
+        Some(crs) => match crs.as_str() {
+            "SRID:0" => "0",
+            "OGC:CRS84" => "4326",
+            "EPSG:3857" => "3857",
+            _ => return None,
+        },
+    };
+    let kind = if extension.metadata.edges.is_some() {
+        "GEOGRAPHY"
+    } else {
+        "GEOMETRY"
+    };
+    Some(format!("{kind}({srid})"))
 }
 
 /// The comment on a struct field, read the way Spark's `StructField.getComment` reads it. A SQL

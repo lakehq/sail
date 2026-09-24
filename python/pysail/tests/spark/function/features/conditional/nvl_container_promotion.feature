@@ -22,9 +22,7 @@ Feature: nvl over containers whose leaves need a promotion
         | a date and a string list | false | nvl    | array(DATE'2024-01-01')               | array('2024-01-02')                   |
         | a date and a string list | true  | ifnull | array(DATE'2024-01-01')               | array('2024-01-02')                   |
 
-    # TODO: neither `coalesce` nor DataFusion's `nvl` types two maps whose values need a promotion
-    #  (`Cannot automatically convert Map to Utf8View`), on `main` as well; Spark widens the values.
-    @sail-bug
+    # Spark widens map values recursively, just as it widens list elements and struct fields.
     Scenario Outline: nvl of <case> is answered with ANSI <ansi> despite the map values
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -60,9 +58,7 @@ Feature: nvl over containers whose leaves need a promotion
         | structs differing only by case | false | nvl    | named_struct('a', 1)        | named_struct('A', 2)         |
         | structs differing only by case | true  | ifnull | named_struct('a', 1)        | named_struct('A', 2)         |
 
-    # TODO: `coalesce` cannot widen these leaves inside a container, so `nvl` keeps DataFusion's
-    #  STRING for them: the type is not Spark's and a STRING is an arithmetic operand.
-    @sail-bug
+    # The promoted container remains an ARRAY, which arithmetic refuses as Spark does.
     Scenario: nvl of an int and a string list is an ARRAY, refused as an arithmetic operand
       When query
         """

@@ -286,7 +286,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
     # TODO: `WidenSetOperationTypes` finds no wider type for an INT beside a DATE or an ARRAY, so
     #  Spark refuses with `INCOMPATIBLE_COLUMN_TYPE` (`TypeCoercionBase.scala:190-222`). Sail keeps
     #  the left input's type; the numeric widening this PR added does not reach these pairs.
-    @sail-bug
     Scenario Outline: a UNION of <case> is refused
       When query
         """

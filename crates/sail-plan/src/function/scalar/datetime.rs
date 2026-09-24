@@ -39,6 +39,7 @@ use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
 use super::lambda::lambda_with_fresh_parameter;
+use crate::coercion::SAIL_DATE_DIFFERENCE_METADATA_KEY;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -993,8 +994,29 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
     }
 }
 
-fn date_part(part: Expr, date: Expr) -> Expr {
-    ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
+fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (part, date) = arguments.two()?;
+    // `DATE - DATE` remains an INT day count until a consumer requires Spark's INTERVAL DAY
+    // semantics. `extract` is such a consumer: materializing only here keeps numeric casts,
+    // hashing and aggregate inputs on their established day-count representation.
+    let field = date.to_field(function_context.schema)?.1;
+    let date = if field
+        .metadata()
+        .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+        .is_some_and(|value| value == "true")
+    {
+        cast(
+            cast(date, DataType::Int64) * lit(86_400_000_000_i64),
+            DataType::Duration(TimeUnit::Microsecond),
+        )
+    } else {
+        date
+    };
+    Ok(ScalarUDF::from(SparkDatePart::new()).call(vec![part, date]))
 }
 
 fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1295,7 +1317,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
-        ("date_part", F::binary(date_part)),
+        ("date_part", F::custom(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
@@ -1303,7 +1325,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("date_trunc", F::custom(date_trunc)),
         ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
-        ("datepart", F::binary(date_part)),
+        ("datepart", F::custom(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
@@ -1312,7 +1334,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| integer_part(arg, "DOW") + lit(1)),
         ),
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
-        ("extract", F::binary(date_part)),
+        ("extract", F::custom(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::custom(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),

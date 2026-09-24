@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::type_coercion::binary::type_union_resolution;
+use datafusion_expr::{ExprSchemable, expr};
+use sail_common::spec;
 
 /// The type Spark widens a pair of NUMERIC types to, for the places that pick one type for several
 /// branches: `CASE`, `IF`, and the set operations.
@@ -127,10 +131,41 @@ pub(crate) fn spark_wider_type(
             Some(DataType::Struct(fields))
         }
         (left, right) if left.is_nested() || right.is_nested() => None,
-        // Only a NUMERIC leaf pair is widened here. A string beside a number is Spark's string
-        // promotion, and casting the string side to the number would raise on a value that is not
-        // one (`nvl(array(1), array('a'))` answers in Spark); that pair keeps the route it had.
-        (left, right) => spark_wider_numeric_type(left, right, ansi_mode),
+        (left, right) => spark_wider_string_type(left, right, ansi_mode)
+            .or_else(|| spark_wider_numeric_type(left, right, ansi_mode)),
+    }
+}
+
+/// Spark applies its STRING promotion before returning from `findWiderTypeForTwo`, including when
+/// that call came recursively from an ARRAY, MAP, or STRUCT. Legacy coercion promotes the atomic
+/// peer to STRING; ANSI promotes the STRING to BIGINT, DOUBLE, or the temporal peer
+/// (`TypeCoercion.scala:105-122`; `AnsiStringPromotionTypeCoercion.scala:92-106).
+fn spark_wider_string_type(left: &DataType, right: &DataType, ansi_mode: bool) -> Option<DataType> {
+    let (string, other) = if left.is_string() {
+        (left, right)
+    } else if right.is_string() {
+        (right, left)
+    } else {
+        return None;
+    };
+    if !ansi_mode {
+        return matches!(
+            other,
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+        )
+        .then(|| string.clone())
+        .or_else(|| other.is_numeric().then(|| string.clone()));
+    }
+    match other {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+            Some(DataType::Int64)
+        }
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+            Some(DataType::Int64)
+        }
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => Some(DataType::Float64),
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => Some(other.clone()),
+        _ => None,
     }
 }
 
@@ -261,3 +296,61 @@ pub(crate) fn struct_pair_spark_refuses(left: &DataType, right: &DataType) -> bo
         _ => false,
     }
 }
+
+pub(crate) fn spark_interval_metadata_for_expression(
+    expression: &expr::Expr,
+    schema: &DFSchemaRef,
+) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
+    let field = expression.to_field(schema.as_ref())?.1;
+    if !matches!(
+        field.data_type(),
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        return Ok(None);
+    }
+
+    let interval_type = field.data_type().clone();
+    let mut combined = None::<spec::SparkIntervalMetadata>;
+    expression.apply(|candidate| {
+        // Interval scaling returns the default DAY TO SECOND range. Its input range
+        // must not leak into a later string conversion (MultiplyDTInterval/DivideDTInterval).
+        if let expr::Expr::ScalarFunction(function) = candidate
+            && matches!(
+                function.func.name(),
+                "spark_multiply_dt_interval" | "spark_divide_dt_interval"
+            )
+        {
+            let default = spec::SparkIntervalMetadata::DayTime {
+                start_field: spec::DayTimeIntervalField::Day,
+                end_field: spec::DayTimeIntervalField::Second,
+            };
+            combined = Some(match combined {
+                Some(current) => current.wider(default).unwrap_or(default),
+                None => default,
+            });
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        let field = candidate.to_field(schema.as_ref())?.1;
+        if field.data_type() != &interval_type {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        let Some(value) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
+        let candidate = spec::SparkIntervalMetadata::from_json(value)
+            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+        combined = Some(match combined {
+            None => candidate,
+            Some(current) => current.wider(candidate).ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(
+                    "incompatible Spark interval metadata in expression".to_string(),
+                )
+            })?,
+        });
+        Ok(TreeNodeRecursion::Jump)
+    })?;
+    Ok(combined)
+}
+
+/// Temporary identity of DATE - DATE while its physical value remains an INT day count.
+pub(crate) const SAIL_DATE_DIFFERENCE_METADATA_KEY: &str = "SAIL::spark::date_difference";

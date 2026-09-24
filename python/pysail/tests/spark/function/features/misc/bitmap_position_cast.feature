@@ -40,7 +40,6 @@ Feature: bitmap position functions never raise with ANSI off
 
     # TODO: Spark's non-ANSI cast saturates a DOUBLE past a BIGINT, reads NaN as 0 and wraps a
     #  DECIMAL (`Cast.scala:886-905`); Sail's `try_cast` reads them as NULL.
-    @sail-bug
     Scenario: bitmap_bit_position of a DOUBLE past a BIGINT reads it saturated with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -50,3 +49,28 @@ Feature: bitmap position functions never raise with ANSI off
       Then query result
         | result |
         | 32766  |
+
+    Scenario Outline: bitmap positions saturate floating-point inputs with ANSI off: <type>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bitmap_bit_position(CAST(v AS <type>)) AS position,
+               bitmap_bucket_number(CAST(v AS <type>)) AS bucket
+        FROM VALUES ('NaN'), ('Infinity'), ('-Infinity'), ('1E30'), ('-1E30'),
+                    ('1.9'), ('-1.9'), (CAST(NULL AS STRING)) AS t(v)
+        """
+      Then query result
+        | position | bucket           |
+        | 0        | 0                |
+        | 32766    | 281474976710656  |
+        | 0        | -281474976710656 |
+        | 32766    | 281474976710656  |
+        | 0        | -281474976710656 |
+        | 0        | 1                |
+        | 1        | 0                |
+        | NULL     | NULL             |
+
+      Examples:
+        | type   |
+        | DOUBLE |
+        | FLOAT  |

@@ -95,14 +95,8 @@ Feature: abs comprehensive tests
         | CAST(0 AS DECIMAL(10,2))      | 0.00   |
         | CAST(-0.001 AS DECIMAL(10,3)) | 0.001  |
 
-    @sail-bug
-    # Tagged @sail-bug purely for Spark-compat tracking — Sail's behaviour here
-    # is arguably MORE correct mathematically. Divergence lives in CAST, not abs:
-    # JVM applies half-up rounding during CAST to DECIMAL(38,0) and rounds 37
-    # nines up to 10^37; Sail preserves precision and returns 37 nines. Whether
-    # to "fix" this (align with Spark) or keep Sail's precise behaviour is a
-    # policy call. Out of scope for `abs` either way — fix path is the decimal
-    # CAST kernel (arrow-rs `cast_decimal` semantics or a Sail-side override).
+    # Decimal.abs negates a negative expanded decimal through Scala BigDecimal's
+    # DECIMAL128 context (`Decimal.scala:543-551`), so 37 nines round to 10^37.
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -112,9 +106,8 @@ Feature: abs comprehensive tests
         | result                                 |
         | 10000000000000000000000000000000000000 |
 
-    @sail-bug
-    # Same root cause as the scenario above (CAST rounding) — JVM rounds
-    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines.
+    # The same DECIMAL128 rounding turns 38 nines into 10^38, which does not
+    # fit DECIMAL(38,0) and raises regardless of ANSI mode.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
@@ -614,7 +607,6 @@ Feature: abs comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -626,7 +618,6 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """

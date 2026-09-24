@@ -515,7 +515,6 @@ Feature: map_filter with lambda
 
   Rule: Null-typed operands are coerced before arithmetic evaluation
 
-    @sail-bug
     Scenario Outline: Discard literal division in a null-typed <case>
       When query
         """

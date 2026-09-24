@@ -125,6 +125,30 @@ Feature: CAST expressions
         | value |
         | 100   |
 
+  Rule: Legacy STRING to INTERVAL casts
+
+    # Spark's legacy `INTERVAL` target is CalendarIntervalType. Sail resolves this through
+    # `SparkCalendarInterval`; keep the conversion contract separate from arithmetic's decision
+    # to reject a resolved interval beside an untyped NULL.
+    Scenario: casting a string to INTERVAL has the legacy interval type
+      When query
+        """
+        SELECT typeof(CAST('1 day' AS INTERVAL)) AS result
+        """
+      Then query result
+        | result   |
+        | interval |
+
+    # Spark 4.2.0 JVM in UTC renders the CalendarInterval as `1 days`.
+    Scenario: casting a string to INTERVAL materializes the legacy interval value
+      When query
+        """
+        SELECT CAST('1 day' AS INTERVAL) AS result
+        """
+      Then query result
+        | result |
+        | 1 days |
+
   Rule: ANSI and TRY casts stay strict
 
     Scenario Outline: ANSI CAST rejects <case>
@@ -208,11 +232,7 @@ Feature: CAST expressions
 
   Rule: Spark refuses a numeric cast to DATE, and to BINARY unless it is a plain integral CAST
 
-    # TODO: `canCast` has no arm from a numeric to DATE (`Cast.scala:223-255`) and neither has
-    #  `canAnsiCast` (`:92-122`), so Spark refuses it whatever the mode and the spelling. Sail casts
-    #  the underlying integer and answers. That ACCEPT-more gap is left open on purpose: refusing it
-    #  broke existing users of the cast (the ClickBench fixture reads `cast("int").cast("date")`).
-    @sail-bug
+    # Cast.scala:92-180,223-318 rejects numeric-to-DATE in every mode.
     Scenario Outline: a numeric cast to DATE is refused: <expression> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -230,10 +250,7 @@ Feature: CAST expressions
         | -1::DATE             | false |
         | CAST(-1L AS DATE)    | false |
 
-    # TODO: `canCast` takes an integral to BINARY (`Cast.scala:234`) but `canAnsiCast` does not, and
-    #  `TRY_CAST` is governed by `canAnsiCast` in both modes, so only a plain `CAST` of an INTEGRAL
-    #  with ANSI off is accepted. Sail accepts the rest too; left open for the same reason as DATE.
-    @sail-bug
+    # Only legacy CAST permits integral-to-BINARY; TRY_CAST uses canAnsiCast.
     Scenario Outline: a numeric cast to BINARY is refused: <expression> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -250,7 +267,7 @@ Feature: CAST expressions
         | TRY_CAST(-1 AS BINARY) | true  |
         | -1::BINARY             | true  |
 
-    # A fractional to BINARY is refused by both engines, Spark at analysis and Sail when it runs.
+    # Fractional-to-BINARY is rejected during analysis in both modes.
     Scenario Outline: a fractional cast to BINARY is refused: <expression>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -279,11 +296,9 @@ Feature: CAST expressions
         | CAST(-1 AS BINARY) | FFFFFFFF |
         | -1::BINARY         | FFFFFFFF |
 
-    # TODO: `Cast.castToBinary` writes the integer BIG-endian (`Cast.scala`, `NumberConverter`),
-    #  and Sail writes Arrow's native little-endian order, so only a symmetric value agrees.
-    #  Pre-existing: `main` answers `01000000` for `CAST(1 AS BINARY)` too.
-    @sail-bug
-    Scenario Outline: an integral CAST to BINARY keeps Spark's byte order: <expression>
+    # `Cast.castToBinary` delegates integer encoding to `NumberConverter.toBinary`, which writes
+    # fixed-width two's-complement bytes in big-endian order.
+    Scenario Outline: an integral CAST to BINARY keeps Spark's byte order: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -294,9 +309,62 @@ Feature: CAST expressions
         | <result> |
 
       Examples:
-        | expression         | result           |
-        | CAST(1 AS BINARY)  | 00000001         |
-        | CAST(1L AS BINARY) | 0000000000000001 |
+        | case                 | expression                          | result           |
+        | a tinyint            | CAST(2 AS TINYINT)::BINARY          | 02               |
+        | a negative tinyint   | CAST(-2 AS TINYINT)::BINARY         | FE               |
+        | a smallint           | CAST(258 AS SMALLINT)::BINARY       | 0102             |
+        | a negative smallint  | CAST(-258 AS SMALLINT)::BINARY      | FEFE             |
+        | an int               | CAST(16909060 AS BINARY)            | 01020304         |
+        | a negative int       | CAST(-16909060 AS BINARY)           | FEFDFCFC         |
+        | a bigint             | CAST(72623859790382856L AS BINARY)  | 0102030405060708 |
+        | a negative bigint    | CAST(-72623859790382856L AS BINARY) | FEFDFCFBFAF9F8F8 |
+
+    Scenario: a nullable integral column to BINARY keeps each big-endian value
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT hex(CAST(value AS BINARY)) AS result
+        FROM VALUES (16909060), (-16909060), (CAST(NULL AS INT)) AS t(value)
+        """
+      Then query result
+        | result   |
+        | 01020304 |
+        | FEFDFCFC |
+        | NULL     |
+
+    @function(nullability)
+    Scenario: an integral CAST to BINARY keeps Spark's type and literal nullability
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(16909060 AS BINARY) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = false)
+        """
+      When query
+        """
+        SELECT typeof(CAST(16909060 AS BINARY)) AS result
+        """
+      Then query result
+        | result |
+        | binary |
+
+    @function(nullability)
+    Scenario: a nullable integral column keeps BINARY nullable
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(value AS BINARY) AS result
+        FROM VALUES (16909060), (CAST(NULL AS INT)) AS t(value)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
 
     Scenario: a string to BINARY is not touched by the guard
       When query
@@ -309,9 +377,7 @@ Feature: CAST expressions
 
   Rule: casts Spark has no arm for are refused
 
-    # TODO: `canCast` has no arm from a BOOLEAN or a DATE to BINARY (`Cast.scala:223-255`), so Spark
-    #  refuses both in either mode. Sail casts the underlying value and answers.
-    @sail-bug
+    # Cast.scala rejects BOOLEAN and DATE inputs to BINARY in either mode.
     Scenario Outline: a cast of <case> to BINARY is refused with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -326,10 +392,7 @@ Feature: CAST expressions
         | a boolean | true  | CAST(true AS BINARY)             |
         | a date    | true  | CAST(DATE'2024-01-01' AS BINARY) |
 
-    # TODO: `canCast` takes a DATE to a number or a BOOLEAN (`Cast.scala:269`) but `canAnsiCast`
-    #  does not (`:92-122`), and `TRY_CAST` is governed by `canAnsiCast` in both modes, so Spark
-    #  refuses it at analysis. Sail answers NULL.
-    @sail-bug
+    # TRY_CAST uses canAnsiCast, which rejects DATE-to-number and DATE-to-BOOLEAN.
     Scenario Outline: TRY_CAST of a DATE to <case> is refused with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
