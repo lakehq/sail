@@ -1,6 +1,6 @@
 ---
 title: Jev / AI Functions
-rank: 6
+rank: 7
 ---
 
 # Jev / AI Functions
