@@ -206,3 +206,19 @@ Feature: shiftrightunsigned output schema
         | kind   | value | shift | result |
         | INT    | 8     | 32    | 8      |
         | BIGINT | -1    | -1    | 1      |
+
+    @sail-bug
+    Scenario Outline: shiftrightunsigned preserves the sign bit when shifting <kind> by zero
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT shiftrightunsigned(CAST(-1 AS <kind>), 0) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+      Examples:
+        | kind   |
+        | INT    |
+        | BIGINT |
