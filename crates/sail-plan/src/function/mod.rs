@@ -50,8 +50,8 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
         .clone())
 }
 
-/// Prepare asynchronous functions in one logical-plan traversal.
-/// The current checks and rewrites apply only to Jev calls.
+// Prepare asynchronous functions for physical planning.
+// The current checks and rewrites apply only to Jev calls.
 pub fn prepare_async_functions(
     plan: datafusion_expr::LogicalPlan,
 ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
@@ -71,6 +71,20 @@ pub fn prepare_async_functions(
                     && JevKind::from_name(function.func.name()).is_some()))
         })
     };
+    // This scan avoids plan transformation for queries without async Jev calls,
+    // at the cost of another scan when they are present.
+    let has_jev = plan.apply_with_subqueries(|node| {
+        node.apply_expressions(|expr| {
+            Ok(if contains_jev(expr)? {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+    })? == TreeNodeRecursion::Stop;
+    if !has_jev {
+        return Ok(plan);
+    }
     plan.transform_up_with_subqueries(|plan| {
         // Check each node before rewriting its expressions. Extracting an inner
         // async call first could hide unsupported nesting from this check.

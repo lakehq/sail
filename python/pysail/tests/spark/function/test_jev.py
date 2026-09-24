@@ -883,6 +883,11 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
             "round(avg(jev_noul('20', 'second?').noul), 2) AS b FROM range(0, 4, 1, 1)",
             [{"a": 0.4, "b": 0.2}],
         ),
+        (
+            "SELECT (SELECT round(sum(jev_noul(CAST(id AS STRING), 'first?').noul) + "
+            "sum(jev_noul(CAST(id + 10 AS STRING), 'second?').noul), 2) FROM range(0, 4, 1, 1)) AS a",
+            [{"a": 0.52}],
+        ),
     ],
 )
 @pytest.mark.usefixtures("jev")
