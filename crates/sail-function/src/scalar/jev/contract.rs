@@ -300,37 +300,55 @@ pub(crate) fn retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Durati
                 return None;
             }
             None if name == "retry-after" => {
-                let date = chrono::DateTime::parse_from_rfc2822(raw)
-                    .ok()
-                    .map(|d| d.timestamp())
-                    .or_else(|| {
-                        let mut parsed = chrono::format::Parsed::new();
-                        chrono::format::parse(
-                            &mut parsed,
-                            raw,
-                            chrono::format::StrftimeItems::new("%A, %d-%b-%y %H:%M:%S GMT"),
-                        )
-                        .ok()?;
-                        // email.utils uses 1969..2068 for two-digit years; chrono's
-                        // default window starts at 1970. Python also ignores weekdays.
-                        if let Some(year) = parsed.year_mod_100 {
-                            parsed.year_div_100 = Some(if year >= 69 { 19 } else { 20 });
-                        }
-                        parsed.weekday = None;
-                        parsed
-                            .to_naive_datetime_with_offset(0)
-                            .ok()
-                            .map(|d| d.and_utc().timestamp())
-                    })
-                    .or_else(|| {
-                        // Python parsedate_to_datetime returns a naive datetime for
-                        // asctime values, whose timestamp uses the worker's timezone.
-                        chrono::NaiveDateTime::parse_from_str(raw, "%a %b %e %H:%M:%S %Y")
-                            .ok()?
-                            .and_local_timezone(chrono::Local)
-                            .earliest()
-                            .map(|d| d.timestamp())
-                    });
+                let mut parsed = chrono::format::Parsed::new();
+                let date = chrono::format::parse(
+                    &mut parsed,
+                    raw,
+                    [chrono::format::Item::Fixed(chrono::format::Fixed::RFC2822)].iter(),
+                )
+                .ok()
+                .and_then(|()| {
+                    // Python ignores a weekday that conflicts with the calendar date.
+                    parsed.weekday = None;
+                    parsed.to_datetime().ok().map(|d| d.timestamp())
+                })
+                .or_else(|| {
+                    let mut parsed = chrono::format::Parsed::new();
+                    chrono::format::parse(
+                        &mut parsed,
+                        raw,
+                        chrono::format::StrftimeItems::new("%A, %d-%b-%y %H:%M:%S GMT"),
+                    )
+                    .ok()?;
+                    // email.utils uses 1969..2068 for two-digit years; chrono's
+                    // default window starts at 1970. Python also ignores weekdays.
+                    if let Some(year) = parsed.year_mod_100 {
+                        parsed.year_div_100 = Some(if year >= 69 { 19 } else { 20 });
+                    }
+                    parsed.weekday = None;
+                    parsed
+                        .to_naive_datetime_with_offset(0)
+                        .ok()
+                        .map(|d| d.and_utc().timestamp())
+                })
+                .or_else(|| {
+                    // Python parsedate_to_datetime returns a naive datetime for
+                    // asctime values, whose timestamp uses the worker's timezone.
+                    let mut parsed = chrono::format::Parsed::new();
+                    chrono::format::parse(
+                        &mut parsed,
+                        raw,
+                        chrono::format::StrftimeItems::new("%a %b %e %H:%M:%S %Y"),
+                    )
+                    .ok()?;
+                    parsed.weekday = None;
+                    parsed
+                        .to_naive_datetime_with_offset(0)
+                        .ok()?
+                        .and_local_timezone(chrono::Local)
+                        .earliest()
+                        .map(|d| d.timestamp())
+                });
                 if let Some(timestamp) = date {
                     let seconds = timestamp as f64
                         - now
@@ -476,6 +494,44 @@ mod tests {
             retry_after(&headers, SystemTime::UNIX_EPOCH),
             Some(Duration::from_secs(5)),
         );
+    }
+
+    #[test]
+    fn retry_headers_ignore_inconsistent_weekdays() {
+        for raw in [
+            "Mon, 01 Jan 1970 00:00:05 GMT",
+            "Monday, 01-Jan-70 00:00:05 GMT",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", raw.parse().expect("header"));
+            assert_eq!(
+                retry_after(&headers, SystemTime::UNIX_EPOCH),
+                Some(Duration::from_secs(5)),
+                "{raw}"
+            );
+        }
+        let local_date = chrono::DateTime::<chrono::Local>::from(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(5),
+        )
+        .format("%a %b %e %H:%M:%S %Y")
+        .to_string();
+        let wrong_weekday = if local_date.starts_with("Mon") {
+            "Tue"
+        } else {
+            "Mon"
+        };
+        let raw = format!("{wrong_weekday}{}", &local_date[3..]);
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", raw.parse().expect("header"));
+        assert_eq!(
+            retry_after(&headers, SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(5)),
+        );
+        headers.insert(
+            "retry-after",
+            "Mon, 30 Feb 1970 00:00:05 GMT".parse().expect("header"),
+        );
+        assert_eq!(retry_after(&headers, SystemTime::UNIX_EPOCH), None);
     }
 
     #[test]
