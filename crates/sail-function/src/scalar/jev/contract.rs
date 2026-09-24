@@ -55,7 +55,9 @@ impl Options {
             return exec_err!("jev_models does not accept the model option");
         }
         let api_key = env_default("TYPESAFE_API_KEY", "");
-        let api_key = api_key.trim();
+        let api_key = api_key
+            .trim()
+            .trim_matches(|c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}'));
         if api_key.is_empty() || !api_key.bytes().all(|x| (b'!'..=b'~').contains(&x)) {
             return exec_err!(
                 "Jev requires a nonempty API key containing printable ASCII without whitespace; set TYPESAFE_API_KEY"
@@ -273,8 +275,8 @@ pub(crate) fn validate_response(
     Ok(())
 }
 
-/// Python's parse_retry_after: milliseconds first, empty numeric headers mean zero,
-/// invalid milliseconds fall through, and HTTP-date values are clamped at zero.
+// Python's parse_retry_after: milliseconds first, empty numeric headers mean zero,
+// invalid milliseconds fall through, and HTTP-date values are clamped at zero.
 pub(crate) fn retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     for (name, multiplier) in [("retry-after-ms", 1.0), ("retry-after", 1000.0)] {
         let Some(raw) = headers.get(name).and_then(|v| v.to_str().ok()) else {

@@ -309,8 +309,8 @@ impl AsyncScalarUDFImpl for Jev {
     }
 }
 
-/// Keep the original JSON for transport; the parsed view is only for shape validation.
-/// In particular, serde_json::Value cannot represent every VARIANT decimal exactly.
+// Keep the original JSON for transport; the parsed view is only for shape validation.
+// In particular, serde_json::Value cannot represent every VARIANT decimal exactly.
 #[derive(Clone)]
 pub(crate) struct InputValue {
     parsed: Arc<Value>,

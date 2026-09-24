@@ -227,8 +227,8 @@ struct Body<'a> {
     questions: &'a BTreeMap<String, InputValue>,
 }
 
-/// Check actual bytes including escaping and generated IDs, without allocating an
-/// oversized encoded payload just to discover that it exceeds the hard limit.
+// Check actual bytes including escaping and generated IDs, without allocating an
+// oversized encoded payload just to discover that it exceeds the hard limit.
 struct BodySize {
     size: usize,
     limit: usize,
@@ -554,9 +554,9 @@ async fn execute(
             JevKind::SystemOne => mapping
                 .iter()
                 .map(|(original, wire)| {
-                    let answer = raw_answers.get(wire).ok_or_else(|| {
-                        exec_datafusion_err!("Invalid Jev response at answers")
-                    })?;
+                    let answer = raw_answers
+                        .get(wire)
+                        .ok_or_else(|| exec_datafusion_err!("Invalid Jev response at answers"))?;
                     Ok((original.clone(), (*answer).to_owned()))
                 })
                 .collect::<Result<_>>()?,
@@ -568,9 +568,9 @@ async fn execute(
                 let fields: BTreeMap<String, &serde_json::value::RawValue> =
                     serde_json::from_str(answer.get())
                         .map_err(|_| exec_datafusion_err!("Invalid Jev response at answers"))?;
-                let legend = fields
-                    .get("legend")
-                    .ok_or_else(|| exec_datafusion_err!("Invalid Jev response at answers.legend"))?;
+                let legend = fields.get("legend").ok_or_else(|| {
+                    exec_datafusion_err!("Invalid Jev response at answers.legend")
+                })?;
                 serde_json::from_str(legend.get())
                     .map_err(|_| exec_datafusion_err!("Invalid Jev response at answers.legend"))?
             }
@@ -586,7 +586,13 @@ async fn execute(
         {
             answer.remove("legend");
         }
-        outputs.push((*row, ResponseRow { value: output, variants }));
+        outputs.push((
+            *row,
+            ResponseRow {
+                value: output,
+                variants,
+            },
+        ));
     }
     Ok(outputs)
 }

@@ -415,8 +415,9 @@ def test_environment_api_key_is_required_and_validated(spark, jev, monkeypatch, 
     assert jev.request_count == 0
 
 
-def test_environment_api_key_is_trimmed(spark, jev, monkeypatch):
-    monkeypatch.setenv("TYPESAFE_API_KEY", "  mock-trimmed-key  ")
+@pytest.mark.parametrize("padding", ["  ", "\t\r\n", "\x1c", "\x1d", "\x1e", "\x1f"])
+def test_environment_api_key_is_trimmed(spark, jev, monkeypatch, padding):
+    monkeypatch.setenv("TYPESAFE_API_KEY", f"{padding}mock-trimmed-key{padding}")
     assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL
     assert jev.requests[0]["authorization"] == "Bearer mock-trimmed-key"
 
@@ -764,3 +765,68 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
     assert sorted([row.a.noul, row.b.noul]) == probabilities == [0.1, 0.2]
     assert {row.a.request_id, row.b.request_id} == {"mock-1", "mock-2"}
     assert row.a.batch_id != row.b.batch_id
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT round(sum(jev_noul(CAST(id AS STRING), 'first?').noul), 2) AS a, "
+            "round(sum(jev_noul(CAST(id + 10 AS STRING), 'second?').noul), 2) AS b "
+            "FROM range(0, 4, 1, 1)",
+            [{"a": 0.06, "b": 0.46}],
+        ),
+        (
+            "WITH judged AS (SELECT id, jev_noul(CAST(id AS STRING), 'first?').noul AS a, "
+            "jev_noul(CAST(id + 10 AS STRING), 'second?').noul AS b FROM range(0, 4, 1, 2)) "
+            "SELECT id % 2 AS group_id, round(sum(a), 2) AS a, round(avg(b), 2) AS b, sum(id) AS c "
+            "FROM judged GROUP BY id % 2 HAVING b > 0.1 ORDER BY group_id",
+            [{"group_id": 0, "a": 0.02, "b": 0.11, "c": 2},
+             {"group_id": 1, "a": 0.04, "b": 0.12, "c": 4}],
+        ),
+        (
+            "SELECT round(sum(jev_noul(CAST(id AS STRING), 'first?').noul) "
+            "FILTER (WHERE id < 2), 2) AS a, "
+            "round(sum(jev_noul(CAST(id + 10 AS STRING), 'second?').noul) "
+            "FILTER (WHERE id >= 2), 2) AS b FROM range(0, 4, 1, 1)",
+            [{"a": 0.01, "b": 0.25}],
+        ),
+        (
+            "SELECT round(sum(DISTINCT jev_noul(CAST(id % 2 AS STRING), 'first?').noul), 2) AS a, "
+            "round(sum(DISTINCT jev_noul(CAST(id % 2 + 10 AS STRING), 'second?').noul), 2) AS b "
+            "FROM range(0, 4, 1, 1)",
+            [{"a": 0.01, "b": 0.21}],
+        ),
+        (
+            "WITH judged AS (SELECT id, jev_noul(CAST(id AS STRING), 'first?').noul AS a, "
+            "jev_noul(CAST(id + 10 AS STRING), 'second?').noul AS b FROM range(0, 4, 1, 2)) "
+            "SELECT id % 2 AS group_id, round(sum(a), 2) AS a, round(sum(b), 2) AS b "
+            "FROM judged GROUP BY GROUPING SETS ((id % 2), ()) ORDER BY group_id NULLS LAST",
+            [{"group_id": 0, "a": 0.02, "b": 0.22}, {"group_id": 1, "a": 0.04, "b": 0.24},
+             {"group_id": None, "a": 0.06, "b": 0.46}],
+        ),
+        (
+            "SELECT round(sum(jev_noul(CASE WHEN id % 2 = 0 THEN NULL "
+            "ELSE CAST(id AS STRING) END, 'first?').noul), 2) AS a, "
+            "round(avg(jev_noul('20', 'second?').noul), 2) AS b FROM range(0, 4, 1, 1)",
+            [{"a": 0.04, "b": 0.2}],
+        ),
+        (
+            "SELECT round(sum(jev_noul('10', 'first?').noul), 2) AS a, "
+            "round(avg(jev_noul('20', 'second?').noul), 2) AS b FROM range(0, 4, 1, 1)",
+            [{"a": 0.4, "b": 0.2}],
+        ),
+    ],
+)
+def test_jev_aggregate_arguments_keep_their_own_result_columns(spark, jev, query, expected):
+    assert [row.asDict() for row in spark.sql(query).collect()] == expected
+
+
+def test_jev_aggregates_over_empty_input_make_no_requests(spark, jev):
+    row = spark.sql(
+        "SELECT sum(jev_noul('10', 'first?').noul) AS a, "
+        "avg(jev_noul('20', 'second?').noul) AS b FROM range(0)"
+    ).first()
+    assert row.a is None
+    assert row.b is None
+    assert jev.request_count == 0
