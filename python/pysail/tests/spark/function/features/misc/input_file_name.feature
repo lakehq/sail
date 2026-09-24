@@ -37,6 +37,44 @@ Feature: input_file_name
         | 1  | 2        | 2         | 2          |
         | 2  | 3        | 3         | 3          |
 
+  Rule: LIMIT
+
+    @sail-bug
+    Scenario Outline: Input file metadata is materialized before LIMIT
+      Given variable location for temporary directory input_file_metadata_limit
+      Given statement template
+        """
+        INSERT OVERWRITE DIRECTORY {{ location.sql }} USING parquet
+        SELECT id FROM range(4)
+        """
+      When query template
+        """
+        SELECT <expression> AS has_file_metadata
+        FROM parquet.`{{ location.string }}`
+        """
+      Then query result collected
+        | has_file_metadata |
+        | true              |
+        | true              |
+        | true              |
+        | true              |
+      When query template
+        """
+        SELECT <expression> AS has_file_metadata
+        FROM parquet.`{{ location.string }}`
+        LIMIT 2
+        """
+      Then query result collected
+        | has_file_metadata |
+        | true              |
+        | true              |
+
+      Examples:
+        | expression                   |
+        | length(input_file_name()) > 0 |
+        | input_file_block_start() >= 0 |
+        | input_file_block_length() > 0 |
+
   Rule: SQL grouping
 
     Scenario: Input file metadata is materialized for SQL grouping
