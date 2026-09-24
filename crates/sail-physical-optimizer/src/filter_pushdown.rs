@@ -28,6 +28,8 @@ impl PhysicalOptimizerRule for PostFilterPushdown {
         })? {
             // A NULL-only partition can reset DataFusion's shared MIN bound to NULL.
             // Omitting that bound from a multi-aggregate filter can prune unread minima.
+            // TODO: When upgrading to DataFusion 56, verify whether this issue is fixed before
+            // removing the workaround: https://github.com/apache/datafusion/issues/25147
             config.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
         }
         FilterPushdown::new_post_optimization().optimize(plan, &config)
