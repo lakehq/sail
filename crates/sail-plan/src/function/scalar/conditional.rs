@@ -104,28 +104,34 @@ fn argument_types(
 }
 
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
-/// Preserves existing string/numeric coercion with ANSI disabled.
+/// Preserves DataFusion's existing nested and legacy string/numeric coercion.
 // TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
 //  common type as well.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
+    if function_context.has_unbound_parameters {
+        // TODO: Apply Spark numeric branch coercion after parameters are bound.
+        // Their provisional types can also hide behind projected columns.
+        return Ok(arguments);
+    }
     let data_types = argument_types(&arguments, function_context)?;
     let ansi_mode = function_context.plan_config.ansi_mode;
     let common_type = data_types.iter().try_fold(DataType::Null, |left, right| {
         wider_numeric_type(&left, right, ansi_mode)
     });
     let common_type = common_type.or_else(|| {
-        if !ansi_mode
+        if (!ansi_mode
             && data_types.iter().any(is_string_type)
             && data_types.iter().any(is_numeric_type)
             && data_types
                 .iter()
-                .all(|t| t.is_null() || is_numeric_type(t) || is_string_type(t))
+                .all(|t| t.is_null() || is_numeric_type(t) || is_string_type(t)))
+            || data_types.iter().all(|t| t.is_null() || t.is_nested())
         {
-            // Preserve DataFusion's existing legacy coercion before an enclosing
-            // numeric CASE/IF mistakes this expression's first branch for its type.
+            // Preserve DataFusion's existing coercion for nested types and legacy
+            // string/numeric branches before an enclosing numeric CASE/IF uses their type.
             get_coerce_type_for_case_expression(&data_types, None)
         } else {
             None
@@ -140,8 +146,6 @@ fn coerce_numeric_values(
         .map(|(arg, data_type)| {
             if data_type.is_null() {
                 // NULL values are coerced to the common type by DataFusion.
-                // TODO: Parameter markers are typed NULL until they are bound,
-                //  so they are not taken into account for the common type.
                 Ok(arg)
             } else {
                 // Like DataFusion's type coercion, this keeps values of the common type unchanged

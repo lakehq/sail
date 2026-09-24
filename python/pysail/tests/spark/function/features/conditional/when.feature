@@ -190,8 +190,8 @@ Feature: when output schema
 
   Rule: Spark-compatible coercion for non-numeric branches
 
-    # TODO: Sail still types these CASE expressions by the first branch.
-    #  Coerce non-numeric branches to Spark's wider common type as well.
+    # TODO: Coerce these non-numeric branches to Spark's wider common type.
+    #  Existing DataFusion coercion does not cover Spark's nested ANSI string rules.
     @sail-bug
     Scenario Outline: CASE widens non-numeric branches to the Spark common type: <case>
       Given config spark.sql.ansi.enabled = true
@@ -207,8 +207,19 @@ Feature: when output schema
       Examples:
         | case                         | first_branch                        | second_branch                   | result_type   |
         | INT then STRING              | 1                                   | '2'                             | bigint        |
-        | ARRAY INT then ARRAY BIGINT  | array(1)                            | array(CAST(2 AS BIGINT))        | array<bigint> |
+        | ARRAY INT then ARRAY STRING  | array(1)                            | array('2')                      | array<bigint> |
         | TIMESTAMP_NTZ then TIMESTAMP | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP '2024-01-01 00:00:00' | timestamp     |
+
+    Scenario: CASE declares the existing common type of nested integral branches
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(CASE WHEN id = 0 THEN array(1) ELSE array(CAST(2 AS BIGINT)) END) AS result_type
+        FROM VALUES (0) AS t(id)
+        """
+      Then query result
+        | result_type   |
+        | array<bigint> |
 
     Scenario: CASE over a CASE with INT and STRING branches keeps STRING values with ANSI disabled
       Given config spark.sql.ansi.enabled = false

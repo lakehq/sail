@@ -373,6 +373,8 @@ fn percentile_cont(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Get the percentile value from arguments
     let percentile = input.arguments.one()?;
 
+    // FIXME: Ungrouped percentile_cont over FLOAT-derived range input can return
+    //  NULL in local-cluster mode; fix partial-aggregate handling separately.
     // Combine: [column, percentile] as DataFusion expects
     let args = vec![column, percentile];
 
@@ -1136,6 +1138,7 @@ mod tests {
                 plan_config: &plan_config,
                 session_context: &session_context,
                 schema: &schema,
+                has_unbound_parameters: false,
             },
         })?;
 

@@ -101,6 +101,36 @@ Feature: if output schema
         | 1  | 1      |
         | 2  | x      |
 
+  Rule: Numeric branches extracted from nested CASE values
+
+    Scenario Outline: IF preserves values extracted from nested CASE branches: <case>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, CAST(2 AS BIGINT), (CASE WHEN id = 1 THEN <first_branch> ELSE <second_branch> END)<access>) AS direct_result,
+          if(id = 0, CAST(2 AS BIGINT), v<access>) AS projected_result,
+          typeof(if(id = 0, CAST(2 AS BIGINT), (CASE WHEN id = 1 THEN <first_branch> ELSE <second_branch> END)<access>)) AS direct_type,
+          typeof(if(id = 0, CAST(2 AS BIGINT), v<access>)) AS projected_type
+        FROM (
+          SELECT id, CASE WHEN id = 1 THEN <first_branch> ELSE <second_branch> END AS v
+          FROM VALUES (0), (1), (2) AS t(id)
+        ) AS q
+        """
+      Then query result
+        | id | direct_result | projected_result | direct_type | projected_type |
+        | 0  | 2.0           | 2.0              | double      | double         |
+        | 1  | 1.0           | 1.0              | double      | double         |
+        | 2  | 1.5           | 1.5              | double      | double         |
+
+      Examples:
+        | case   | ansi  | first_branch         | second_branch                         | access |
+        | ARRAY  | true  | array(1)             | array(CAST(1.5 AS DOUBLE))             | [0]    |
+        | ARRAY  | false | array(1)             | array(CAST(1.5 AS DOUBLE))             | [0]    |
+        | STRUCT | true  | named_struct('a', 1) | named_struct('a', CAST(1.5 AS DOUBLE)) | .a     |
+        | STRUCT | false | named_struct('a', 1) | named_struct('a', CAST(1.5 AS DOUBLE)) | .a     |
+
   @function(nullability)
   Rule: Output schema
 

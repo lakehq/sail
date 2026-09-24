@@ -34,6 +34,7 @@ pub struct FunctionContextInput<'a> {
     pub plan_config: &'a Arc<PlanConfig>,
     pub session_context: &'a SessionContext,
     pub schema: &'a DFSchemaRef,
+    pub has_unbound_parameters: bool,
 }
 
 pub struct ScalarFunctionInput<'a> {

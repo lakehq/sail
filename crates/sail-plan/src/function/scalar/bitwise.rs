@@ -16,8 +16,14 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (value, shift) = arguments.two()?;
 
     let input_type = value.clone().get_type(function_context.schema)?;
+    let (value, input_type) = match input_type {
+        DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _) => (
+            value.cast_to(&DataType::Int32, function_context.schema)?,
+            DataType::Int32,
+        ),
+        input_type => (value, input_type),
+    };
 
-    // FIXME: Spark implicitly casts other numeric values (e.g. DECIMAL or DOUBLE) to INT.
     let (unsigned_type, max_const) = match input_type.clone() {
         DataType::Int32 => Ok((DataType::UInt32, u32::MAX as u64)),
         DataType::Int64 => Ok((DataType::UInt64, u64::MAX)),

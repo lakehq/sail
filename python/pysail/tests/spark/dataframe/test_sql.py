@@ -16,6 +16,50 @@ def test_sql_positional_parameters(spark):
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
 
 
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize(
+    ("query", "value", "expected"),
+    [
+        pytest.param(
+            "SELECT CASE WHEN id = 0 THEN {marker} WHEN id = 1 THEN 16777217 ELSE CAST(2 AS FLOAT) END AS v "
+            "FROM range(3) ORDER BY id",
+            1.25,
+            [(1.25,), (16777217.0,), (2.0,)],
+            id="case",
+        ),
+        pytest.param(
+            "SELECT CASE WHEN id = 0 THEN v ELSE CAST(2 AS FLOAT) END AS v "
+            "FROM (SELECT id, {marker} + 1 AS v FROM range(2)) AS q ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (2.0,)],
+            id="case-through-projection",
+        ),
+        pytest.param(
+            "SELECT IF(id = 0, {marker} + 1, CAST(2 AS FLOAT)) AS v FROM range(2) ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (2.0,)],
+            id="if",
+        ),
+        pytest.param(
+            "SELECT nvl2(id, {marker} + 1, CAST(2 AS FLOAT)) AS v FROM range(2) ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (16777217.0,)],
+            id="nvl2",
+        ),
+    ],
+)
+def test_sql_conditional_preserves_parameter_branch_precision(spark, marker, named, query, value, expected):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        args = {"value": value} if named else [value]
+        df = spark.sql(query.format(marker=marker), args=args)
+        assert df.dtypes == [("v", "double")]
+        assert df.collect() == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_sql_case_widens_parameter_marker_branch(spark):
     df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])

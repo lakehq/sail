@@ -7,7 +7,7 @@ Feature: percentile_cont output type
       When query
         """
         SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY CASE WHEN id = 0 THEN 1 ELSE CAST(2.5 AS FLOAT) END) AS result
-        FROM range(3)
+        FROM VALUES (0), (1), (2) AS t(id)
         """
       Then query result
         | result |

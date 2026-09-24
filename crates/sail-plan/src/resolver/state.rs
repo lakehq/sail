@@ -294,6 +294,11 @@ impl PlanResolverState {
         &mut self.config
     }
 
+    /// Whether query parameters will be substituted after plan resolution.
+    pub fn has_unbound_parameters(&self) -> bool {
+        !self.param_values.is_empty() || !self.positional_param_values.is_empty()
+    }
+
     /// Returns the named parameter value for the given name, if any.
     pub fn get_param_value(&self, name: &str) -> Option<&ScalarValue> {
         self.param_values.get(name)
