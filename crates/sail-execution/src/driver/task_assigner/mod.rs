@@ -9,6 +9,7 @@ pub use options::TaskAssignerOptions;
 
 use crate::driver::task_assigner::state::{DriverResource, WorkerResource};
 use crate::id::{TaskKey, WorkerId};
+use crate::profiling::ProfileHandle;
 use crate::task::scheduling::{TaskAssignment, TaskRegion};
 
 /// Manages task queuing and assignment across the driver and worker slots.
@@ -27,6 +28,7 @@ pub struct TaskAssigner {
     task_assignments: IndexMap<TaskKey, TaskAssignment>,
     /// Pending task regions waiting to be assigned to available driver or worker slots.
     task_queue: VecDeque<TaskRegion>,
+    pub(crate) profile: Option<ProfileHandle>,
 }
 
 impl TaskAssigner {
@@ -37,6 +39,7 @@ impl TaskAssigner {
             workers: IndexMap::new(),
             task_assignments: IndexMap::new(),
             task_queue: VecDeque::new(),
+            profile: None,
         }
     }
 }

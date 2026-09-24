@@ -43,6 +43,7 @@ pub enum TaskRunnerPlacement {
 
 pub struct TaskRunnerComponents {
     pub session_id: String,
+    pub profile: Option<crate::profiling::ProfileHandle>,
     pub extensions: TaskRunnerExtensions,
     pub placement: TaskRunnerPlacement,
 }

@@ -4,6 +4,7 @@ mod id;
 mod job_graph;
 pub mod job_runner;
 mod plan;
+mod profiling;
 mod proto;
 mod rpc;
 mod shuffle;

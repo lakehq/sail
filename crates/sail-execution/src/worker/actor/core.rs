@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use fastrace::Span;
 use fastrace::future::FutureExt;
-use log::info;
+use log::{error, info};
 use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 use sail_telemetry::metrics::set_metric_sender;
 
 use crate::driver::DriverClientSet;
+use crate::profiling::ProfileHandle;
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
 use crate::stream::celeborn::{CelebornStreamManager, RemoteLifecycleManager};
@@ -52,17 +53,21 @@ impl Actor for WorkerActor {
             server: ServerMonitor::new(),
             driver_client_set,
             task_runner: None,
-            system_info_log: None,
+            system_info_profile: None,
+            profile: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
-        self.system_info_log = Some(crate::system_info::start_system_info_log(
-            "worker",
-            self.options.worker_id.to_string(),
-        ));
+        self.profile =
+            ProfileHandle::start(&self.options.session_id, "worker", self.options.worker_id);
+        if let Some(profile) = &self.profile {
+            self.system_info_profile = Some(crate::system_info::start_system_info_profile(
+                profile.clone(),
+            ));
+        }
         let worker = ctx.handle().clone();
-        let local_streams = LocalStreamManager::new((&self.options).into());
+        let local_streams = LocalStreamManager::new((&self.options).into(), self.profile.clone());
         let storage_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Storage {
                 path,
@@ -90,7 +95,7 @@ impl Actor for WorkerActor {
                         *compression,
                     ),
                 ));
-                Some(CelebornStreamManager::new(client))
+                Some(CelebornStreamManager::new(client, self.profile.clone()))
             }
             ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
@@ -98,6 +103,7 @@ impl Actor for WorkerActor {
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
                 session_id: self.options.session_id.clone(),
+                profile: self.profile.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -128,6 +134,7 @@ impl Actor for WorkerActor {
                     task_context,
                     addr,
                     self.options.shuffle_backend.flight_compression(),
+                    self.profile.clone(),
                 )
                 .in_span(span),
             )
@@ -149,7 +156,7 @@ impl Actor for WorkerActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
-        if let Some(handle) = self.system_info_log.take() {
+        if let Some(handle) = self.system_info_profile.take() {
             handle.abort();
         }
         if let Some(task_runner) = self.task_runner.take() {
@@ -159,6 +166,11 @@ impl Actor for WorkerActor {
         }
         self.server.stop().await;
         ctx.children_mut().join().await;
+        if let Some(profile) = self.profile.take()
+            && let Err(error) = profile.finish().await
+        {
+            error!("failed to write worker profile: {error}");
+        }
         info!("worker {} server has stopped", self.options.worker_id);
     }
 }

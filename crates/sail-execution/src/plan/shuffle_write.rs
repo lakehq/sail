@@ -21,7 +21,8 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
-use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::id::TaskKey;
+use crate::profiling::{ProfileEvent, ProfileHandle};
 use crate::stream::writer::{TaskStreamWriteState, TaskStreamWriter};
 
 enum ShufflePartitioner {
@@ -113,6 +114,7 @@ pub struct ShuffleWriteExec {
     partitioning: ShufflePartitioning,
     properties: Arc<PlanProperties>,
     writer: Arc<dyn TaskStreamWriter>,
+    profile: Option<ProfileHandle>,
 }
 
 impl ShuffleWriteExec {
@@ -121,6 +123,7 @@ impl ShuffleWriteExec {
         key: TaskKey,
         writer: Arc<dyn TaskStreamWriter>,
         partitioning: ShufflePartitioning,
+        profile: Option<ProfileHandle>,
     ) -> Self {
         let partitioning = partitioning.normalize();
         let properties = Arc::new(PlanProperties::new(
@@ -142,6 +145,7 @@ impl ShuffleWriteExec {
             partitioning,
             properties,
             writer,
+            profile,
         }
     }
 }
@@ -199,6 +203,7 @@ impl ExecutionPlan for ShuffleWriteExec {
                 self.key.clone(),
                 Arc::clone(&self.writer),
                 self.partitioning.clone(),
+                self.profile.clone(),
             ))),
         }
     }
@@ -220,6 +225,7 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let key = self.key.clone();
         let writer = self.writer.clone();
+        let profile = self.profile.clone();
         let stream = self.plan.execute(partition, context)?;
         // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
@@ -259,7 +265,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let output = futures::stream::once(async move {
-            shuffle_write(writer, stream, key, channels, partitioner).await?;
+            shuffle_write(writer, stream, key, channels, partitioner, profile).await?;
             Ok(empty)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -275,15 +281,13 @@ async fn shuffle_write(
     key: TaskKey,
     channels: usize,
     mut partitioner: ShufflePartitioner,
+    profile: Option<ProfileHandle>,
 ) -> Result<()> {
-    let started = Instant::now();
-    log::info!(
-        "{} shuffle write channels={channels} opening sink",
-        TaskKeyDisplay(&key)
-    );
-    let open_started = Instant::now();
+    let profiling = profile.is_some();
+    let started = profiling.then(Instant::now);
+    let open_started = profiling.then(Instant::now);
     let mut sink = writer.open(key.partition).await?;
-    let open_duration = open_started.elapsed();
+    let open_duration = open_started.map_or(Duration::ZERO, |instant| instant.elapsed());
     let mut input_wait = Duration::ZERO;
     let mut partition_duration = Duration::ZERO;
     let mut sink_write_duration = Duration::ZERO;
@@ -292,28 +296,36 @@ async fn shuffle_write(
     let mut bytes = 0u64;
     let result = async {
         loop {
-            let poll_started = Instant::now();
+            let poll_started = profiling.then(Instant::now);
             let next = stream.next().await;
-            input_wait += poll_started.elapsed();
+            if let Some(poll_started) = poll_started {
+                input_wait += poll_started.elapsed();
+            }
             let Some(batch) = next else { break };
             let batch = batch?;
-            batches += 1;
-            rows += batch.num_rows() as u64;
-            bytes += batch.get_array_memory_size() as u64;
+            if profiling {
+                batches += 1;
+                rows += batch.num_rows() as u64;
+                bytes += batch.get_array_memory_size() as u64;
+            }
             if batch.num_rows() == 0 {
                 continue;
             }
             let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
-            let partition_started = Instant::now();
+            let partition_started = profiling.then(Instant::now);
             let partition_result = partitioner.partition(batch, |p, batch| {
                 partitions[p] = Some(batch);
                 Ok(())
             });
-            partition_duration += partition_started.elapsed();
+            if let Some(partition_started) = partition_started {
+                partition_duration += partition_started.elapsed();
+            }
             partition_result?;
-            let write_started = Instant::now();
+            let write_started = profiling.then(Instant::now);
             let write_result = sink.write(partitions).await;
-            sink_write_duration += write_started.elapsed();
+            if let Some(write_started) = write_started {
+                sink_write_duration += write_started.elapsed();
+            }
             if write_result? == TaskStreamWriteState::Closed {
                 return Ok::<_, datafusion::error::DataFusionError>(false);
             }
@@ -326,7 +338,7 @@ async fn shuffle_write(
         Ok(false) => "early stop",
         Err(_) => "error",
     };
-    let finalize_started = Instant::now();
+    let finalize_started = profiling.then(Instant::now);
     let result = match result {
         Ok(true) => sink.commit().await,
         Ok(false) => {
@@ -338,12 +350,26 @@ async fn shuffle_write(
             Err(error)
         }
     };
-    let finalize_duration = finalize_started.elapsed();
-    log::info!(
-        "{} shuffle write channels={channels} batches={batches} rows={rows} input_array_bytes={bytes} elapsed={:?} open={open_duration:?} input_wait={input_wait:?} partition={partition_duration:?} sink_write={sink_write_duration:?} finalize={finalize_duration:?} outcome={outcome} result={:?}",
-        TaskKeyDisplay(&key),
-        started.elapsed(),
-        result.as_ref().map(|_| ())
-    );
+    let finalize_duration = finalize_started.map_or(Duration::ZERO, |instant| instant.elapsed());
+    if let Some(profile) = profile {
+        profile.record(ProfileEvent::ShuffleWrite {
+            job_id: key.job_id.into(),
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+            channels,
+            batches,
+            rows,
+            input_array_bytes: bytes,
+            elapsed_us: started.map_or(0, |instant| instant.elapsed().as_micros()),
+            open_us: open_duration.as_micros(),
+            input_wait_us: input_wait.as_micros(),
+            partition_us: partition_duration.as_micros(),
+            sink_write_us: sink_write_duration.as_micros(),
+            finalize_us: finalize_duration.as_micros(),
+            outcome: outcome.to_string(),
+            success: result.is_ok(),
+        });
+    }
     result
 }

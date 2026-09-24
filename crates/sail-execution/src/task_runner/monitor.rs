@@ -5,7 +5,6 @@ use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::StreamExt;
-use log::info;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -15,6 +14,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::profiling::{ProfileEvent, ProfileHandle, now_us};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 pub struct TaskMonitor {
@@ -22,6 +22,7 @@ pub struct TaskMonitor {
     key: TaskKey,
     stream: SendableRecordBatchStream,
     signal: oneshot::Receiver<()>,
+    profile: Option<ProfileHandle>,
 }
 
 impl TaskMonitor {
@@ -30,12 +31,14 @@ impl TaskMonitor {
         key: TaskKey,
         stream: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
+        profile: Option<ProfileHandle>,
     ) -> Self {
         Self {
             handle,
             key,
             stream,
             signal,
+            profile,
         }
     }
 
@@ -45,20 +48,30 @@ impl TaskMonitor {
             key,
             stream,
             signal,
+            profile,
         } = self;
-        let started = Instant::now();
-        info!("{} execution started", TaskKeyDisplay(&key));
+        let started = profile.as_ref().map(|_| Instant::now());
+        let started_at = profile.as_ref().map(|_| now_us());
         let _ = handle.send(Self::running(key.clone())).await;
         let message = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
-        if let TaskRunnerMessage::ReportTaskStatus { status, .. } = &message {
-            info!(
-                "{} execution finished after {:?} with {status:?}",
-                TaskKeyDisplay(&key),
-                started.elapsed()
-            );
+        if let TaskRunnerMessage::ReportTaskStatus { status, .. } = &message
+            && let (Some(profile), Some(started_at), Some(started)) =
+                (&profile, started_at, started)
+        {
+            profile.record_batch([
+                (started_at, ProfileEvent::task_started(&key)),
+                (
+                    now_us(),
+                    ProfileEvent::task_finished(
+                        &key,
+                        format!("{status:?}"),
+                        started.elapsed().as_micros(),
+                    ),
+                ),
+            ]);
         }
         let _ = handle.send(message).await;
     }

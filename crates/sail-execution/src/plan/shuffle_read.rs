@@ -11,7 +11,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
 
-use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::id::TaskKey;
+use crate::profiling::{ProfileEvent, ProfileHandle};
 use crate::stream::reader::TaskStreamReader;
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ pub struct ShuffleReadExec {
     reader: Arc<dyn TaskStreamReader>,
     key: TaskKey,
     input_stage: usize,
+    profile: Option<ProfileHandle>,
 }
 
 impl ShuffleReadExec {
@@ -28,19 +30,25 @@ impl ShuffleReadExec {
         properties: Arc<PlanProperties>,
         key: TaskKey,
         input_stage: usize,
+        profile: Option<ProfileHandle>,
     ) -> Self {
         Self {
             properties,
             reader,
             key,
             input_stage,
+            profile,
         }
     }
 
     fn profile_read(&self, stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
+        if self.profile.is_none() {
+            return stream;
+        }
         let schema = stream.schema();
         let key = self.key.clone();
         let input_stage = self.input_stage;
+        let handle = self.profile.clone();
         let profile = ShuffleReadProfile {
             stream,
             poll_wait: Duration::ZERO,
@@ -50,6 +58,7 @@ impl ShuffleReadExec {
         };
         let output = futures::stream::unfold(profile, move |mut profile| {
             let key = key.clone();
+            let handle = handle.clone();
             async move {
                 let started = Instant::now();
                 let next = profile.stream.next().await;
@@ -62,25 +71,11 @@ impl ShuffleReadExec {
                         Some((Ok(batch), profile))
                     }
                     Some(Err(error)) => {
-                        log::info!(
-                            "{} shuffle read input_stage={input_stage} batches={} rows={} array_bytes={} poll_wait={:?} outcome=error",
-                            TaskKeyDisplay(&key),
-                            profile.batches,
-                            profile.rows,
-                            profile.array_bytes,
-                            profile.poll_wait
-                        );
+                        record_shuffle_read(handle.as_ref(), &key, input_stage, &profile, false);
                         Some((Err(error), profile))
                     }
                     None => {
-                        log::info!(
-                            "{} shuffle read input_stage={input_stage} batches={} rows={} array_bytes={} poll_wait={:?} outcome=complete",
-                            TaskKeyDisplay(&key),
-                            profile.batches,
-                            profile.rows,
-                            profile.array_bytes,
-                            profile.poll_wait
-                        );
+                        record_shuffle_read(handle.as_ref(), &key, input_stage, &profile, true);
                         None
                     }
                 }
@@ -96,6 +91,29 @@ struct ShuffleReadProfile {
     batches: u64,
     rows: u64,
     array_bytes: u64,
+}
+
+fn record_shuffle_read(
+    handle: Option<&ProfileHandle>,
+    key: &TaskKey,
+    input_stage: usize,
+    profile: &ShuffleReadProfile,
+    success: bool,
+) {
+    if let Some(handle) = handle {
+        handle.record(ProfileEvent::ShuffleRead {
+            job_id: key.job_id.into(),
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+            input_stage,
+            batches: profile.batches,
+            rows: profile.rows,
+            array_bytes: profile.array_bytes,
+            poll_wait_us: profile.poll_wait.as_micros(),
+            success,
+        });
+    }
 }
 
 impl DisplayAs for ShuffleReadExec {

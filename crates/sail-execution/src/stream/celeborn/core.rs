@@ -11,6 +11,7 @@ use futures::{StreamExt, TryStreamExt};
 use sail_celeborn::shuffle::ShuffleClient;
 
 use crate::id::{JobId, TaskKey};
+use crate::profiling::ProfileHandle;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{
@@ -20,11 +21,12 @@ use crate::stream::writer::{
 #[derive(Clone)]
 pub(crate) struct CelebornStreamManager {
     client: ShuffleClient,
+    profile: Option<ProfileHandle>,
 }
 
 impl CelebornStreamManager {
-    pub(crate) fn new(client: ShuffleClient) -> Self {
-        Self { client }
+    pub(crate) fn new(client: ShuffleClient, profile: Option<ProfileHandle>) -> Self {
+        Self { client, profile }
     }
 
     pub(crate) async fn stop(&self) {
@@ -37,7 +39,11 @@ impl CelebornStreamManager {
         stage: Option<usize>,
         unregister: bool,
     ) -> Result<()> {
-        log::info!("Celeborn cleanup job={job_id} stage={stage:?} unregister={unregister}");
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("celeborn_cleanup", || {
+                format!("job={job_id} stage={stage:?} unregister={unregister}")
+            });
+        }
         let shuffle_ids = self
             .client
             .get_job_shuffle_ids(job_id.into())
@@ -67,8 +73,12 @@ impl CelebornStreamManager {
         channels: usize,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
-        let started = std::time::Instant::now();
-        log::info!("Celeborn create stream {key:?} mappers={mappers} channels={channels}");
+        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("celeborn_stream_create", || {
+                format!("{key:?} mappers={mappers} channels={channels}")
+            });
+        }
         // A Celeborn shuffle spans every map task and reduce channel in one producer stage.
         let shuffle_id = self
             .client
@@ -106,10 +116,14 @@ impl CelebornStreamManager {
                 }) as Box<dyn TaskStreamChannelSink>))
             })
             .collect::<Result<Vec<_>>>()?;
-        log::info!(
-            "Celeborn stream {key:?} ready shuffle_id={shuffle_id} after {:?}",
-            started.elapsed()
-        );
+        if let (Some(profile), Some(started)) = (&self.profile, started) {
+            profile.diagnostic("celeborn_stream_ready", || {
+                format!(
+                    "{key:?} shuffle_id={shuffle_id} duration_us={}",
+                    started.elapsed().as_micros()
+                )
+            });
+        }
         Ok(Box::new(CelebornTaskStreamSink {
             channels: MultiChannelTaskStreamSink { sinks },
             client: self.client.clone(),
@@ -128,8 +142,12 @@ impl CelebornStreamManager {
         channels: Vec<usize>,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
-        let started = std::time::Instant::now();
-        log::info!("Celeborn fetch job={job_id} stage={stage} channels={channels:?}");
+        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("celeborn_fetch", || {
+                format!("job={job_id} stage={stage} channels={channels:?}")
+            });
+        }
         let shuffle_id = self
             .client
             .get_shuffle_id(job_id.into(), stage as u64)
@@ -173,10 +191,14 @@ impl CelebornStreamManager {
                 ) as TaskStreamSource
             })
             .collect::<Vec<TaskStreamSource>>();
-        log::info!(
-            "Celeborn fetch job={job_id} stage={stage} streams opened after {:?}",
-            started.elapsed()
-        );
+        if let (Some(profile), Some(started)) = (&self.profile, started) {
+            profile.diagnostic("celeborn_fetch_opened", || {
+                format!(
+                    "job={job_id} stage={stage} duration_us={}",
+                    started.elapsed().as_micros()
+                )
+            });
+        }
         Ok(Box::pin(futures::stream::select_all(streams)))
     }
 }

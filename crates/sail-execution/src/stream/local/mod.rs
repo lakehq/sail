@@ -10,11 +10,13 @@ use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
 
 use crate::id::TaskStreamKey;
+use crate::profiling::ProfileHandle;
 use crate::stream::error::TaskStreamResult;
 
 pub struct LocalStreamManager {
     options: LocalStreamManagerOptions,
     streams: HashMap<TaskStreamKey, LocalStreamState>,
+    profile: Option<ProfileHandle>,
 }
 
 pub enum LocalStreamState {

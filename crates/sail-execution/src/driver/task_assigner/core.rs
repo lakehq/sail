@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use indexmap::IndexSet;
-use log::{error, info, warn};
+use log::{error, warn};
 
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
@@ -108,11 +108,15 @@ impl TaskAssigner {
             )));
         }
         self.task_queue.push_back(region.clone());
-        info!(
-            "enqueued task region with {} task sets; queue length {}",
-            region.tasks.len(),
-            self.task_queue.len()
-        );
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("task_region_enqueued", || {
+                format!(
+                    "{} task sets; queue length {}",
+                    region.tasks.len(),
+                    self.task_queue.len()
+                )
+            });
+        }
         Ok(())
     }
 
@@ -128,10 +132,11 @@ impl TaskAssigner {
             match assigner.try_assign_task_region(region) {
                 Ok(x) => assignments.extend(x),
                 Err(region) => {
-                    info!(
-                        "task region waiting for worker slots: {} task sets",
-                        region.tasks.len()
-                    );
+                    if let Some(profile) = &self.profile {
+                        profile.diagnostic("task_region_waiting", || {
+                            format!("{} task sets waiting for worker slots", region.tasks.len())
+                        });
+                    }
                     // The region cannot be successfully assigned as a whole
                     // due to insufficient worker task slots.
                     // Put the region back to the queue and try again later.

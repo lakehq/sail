@@ -213,10 +213,16 @@ impl DriverActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        info!("driver received ExecuteJob");
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("execute_job_received", || {
+                "driver received ExecuteJob".into()
+            });
+        }
         let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
-            info!("job {job_id} accepted; scheduling tasks");
+            if let Some(profile) = &self.profile {
+                profile.diagnostic("job_accepted", || format!("job {job_id} accepted"));
+            }
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
             self.reconcile_worker_demands(ctx);
@@ -231,7 +237,11 @@ impl DriverActor {
         job_id: JobId,
         outcome: JobOutputOutcome,
     ) -> ActorAction {
-        info!("job {job_id} cleaning up with outcome {outcome:?}");
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("job_cleanup", || {
+                format!("job {job_id} outcome {outcome:?}")
+            });
+        }
         self.clean_up_job(ctx, job_id, outcome);
         self.run_tasks(ctx);
         self.reconcile_worker_demands(ctx);
@@ -254,15 +264,19 @@ impl DriverActor {
                 .is_some_and(|s| sequence <= *s)
             {
                 // The task status update is outdated, so we skip the remaining logic.
-                debug!("{} sequence {sequence} is stale", TaskKeyDisplay(&key));
+                warn!("{} sequence {sequence} is stale", TaskKeyDisplay(&key));
                 return ActorAction::Continue;
             }
             self.task_sequences.insert(key.clone(), sequence);
         }
-        info!(
-            "{} reported status {status:?} sequence={sequence:?}",
-            TaskKeyDisplay(&key)
-        );
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("task_status_reported", || {
+                format!(
+                    "{} status {status:?} sequence={sequence:?}",
+                    TaskKeyDisplay(&key)
+                )
+            });
+        }
         match status {
             TaskStatus::Running => {
                 self.job_scheduler
@@ -350,10 +364,11 @@ impl DriverActor {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        info!(
-            "driver fetching local stream {}",
-            TaskStreamKeyDisplay(&key)
-        );
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("driver_fetch_local_stream", || {
+                TaskStreamKeyDisplay(&key).to_string()
+            });
+        }
         let Some(task_runner) = self.task_runner.clone() else {
             let _ = result.send(Err(ExecutionError::InternalError(
                 "task runner is not started".to_string(),
@@ -380,10 +395,11 @@ impl DriverActor {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        info!(
-            "driver fetching stream {} from worker {worker_id}",
-            TaskStreamKeyDisplay(&key)
-        );
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("driver_fetch_worker_stream", || {
+                format!("{} from worker {worker_id}", TaskStreamKeyDisplay(&key))
+            });
+        }
         let _ = result.send(
             self.worker_pool
                 .fetch_task_stream(ctx, worker_id, &key, schema),
@@ -421,11 +437,14 @@ impl DriverActor {
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
-        match &action {
-            JobAction::CleanUpJob { job_id, stage, .. } => {
-                info!("job action: CleanUpJob job={job_id} stage={stage:?}");
-            }
-            _ => info!("job action: {action:?}"),
+        debug!("job action: {action:?}");
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("job_action", || match &action {
+                JobAction::CleanUpJob { job_id, stage, .. } => {
+                    format!("CleanUpJob job={job_id} stage={stage:?}")
+                }
+                _ => format!("{action:?}"),
+            });
         }
         match action {
             JobAction::ScheduleTaskRegion { region } => {
@@ -626,18 +645,22 @@ impl DriverActor {
     /// scheduling snapshot; batches additionally preserve region and worker boundaries.
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
-        info!("assigning {} task sets", assignments.len());
-        for assignment in &assignments {
-            info!(
-                "task set assignment {:?}: {:?}",
-                assignment.assignment,
-                assignment
-                    .set
-                    .entries
-                    .iter()
-                    .map(|entry| &entry.key)
-                    .collect::<Vec<_>>()
-            );
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("task_sets_assigning", || assignments.len().to_string());
+            for assignment in &assignments {
+                profile.diagnostic("task_set_assignment", || {
+                    format!(
+                        "{:?}: {:?}",
+                        assignment.assignment,
+                        assignment
+                            .set
+                            .entries
+                            .iter()
+                            .map(|entry| &entry.key)
+                            .collect::<Vec<_>>()
+                    )
+                });
+            }
         }
         self.task_assigner.track_streams(&assignments);
         let mut batches = indexmap::IndexMap::<_, Vec<TaskKey>>::new();
@@ -667,7 +690,8 @@ impl DriverActor {
         for ((job_id, _, stage, worker_id), keys) in batches {
             let Some(first) = keys.first() else { continue };
             let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
-                let started = Instant::now();
+                let started = (self.profile.is_some() || log::log_enabled!(log::Level::Debug))
+                    .then(Instant::now);
                 let result = self
                     .job_scheduler
                     .get_task_definition(first, &self.task_assigner)
@@ -678,10 +702,20 @@ impl DriverActor {
                             CommonErrorCause::new::<PyErrExtractor>(&error),
                         )
                     });
-                info!(
-                    "job {job_id} stage {stage} definition construction {:?}",
-                    started.elapsed()
-                );
+                if let Some(started) = started {
+                    debug!(
+                        "job {job_id} stage {stage} definition construction {:?}",
+                        started.elapsed()
+                    );
+                    if let Some(profile) = &self.profile {
+                        profile.record(crate::profiling::ProfileEvent::TaskDefinition {
+                            job_id: job_id.into(),
+                            stage,
+                            duration_us: started.elapsed().as_micros(),
+                            success: result.is_ok(),
+                        });
+                    }
+                }
                 result
             });
             let (definition, context) = match definition {
@@ -711,17 +745,22 @@ impl DriverActor {
                 })
                 .collect::<Vec<_>>();
             if let Some(worker_id) = worker_id {
-                info!(
-                    "dispatching job {job_id} stage {stage} batch of {} tasks to worker {worker_id}",
-                    tasks.len()
-                );
+                if let Some(profile) = &self.profile {
+                    profile.diagnostic("task_batch_dispatch_worker", || {
+                        format!(
+                            "job {job_id} stage {stage} tasks={} worker {worker_id}",
+                            tasks.len()
+                        )
+                    });
+                }
                 self.worker_pool
                     .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
             } else {
-                info!(
-                    "dispatching job {job_id} stage {stage} batch of {} tasks to driver",
-                    tasks.len()
-                );
+                if let Some(profile) = &self.profile {
+                    profile.diagnostic("task_batch_dispatch_driver", || {
+                        format!("job {job_id} stage {stage} tasks={}", tasks.len())
+                    });
+                }
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
                 ctx.spawn(async move {

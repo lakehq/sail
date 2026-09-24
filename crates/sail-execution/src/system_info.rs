@@ -1,11 +1,12 @@
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
 use tokio::task::JoinHandle;
+
+use crate::profiling::{ProfileEvent, ProfileHandle};
 
 /// Sample this process and the host's network interfaces once per second.
 /// Network counters include traffic from other processes on the same host.
-pub(crate) fn start_system_info_log(role: &'static str, id: String) -> JoinHandle<()> {
+pub(crate) fn start_system_info_profile(profile: ProfileHandle) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut previous = None;
@@ -19,13 +20,16 @@ pub(crate) fn start_system_info_log(role: &'static str, id: String) -> JoinHandl
                     });
                     let network_tx_delta_bytes =
                         previous.map(|(_, _, tx)| host_network_tx_bytes.saturating_sub(tx));
-                    info!(
-                        "system info role={role} id={id} pid={} process_cpu_percent={cpu_percent:?} process_rss_bytes={rss_bytes} host_network_tx_bytes={host_network_tx_bytes} host_network_tx_delta_bytes={network_tx_delta_bytes:?}",
-                        std::process::id(),
-                    );
+                    profile.record(ProfileEvent::SystemSample {
+                        pid: std::process::id(),
+                        process_cpu_percent: cpu_percent,
+                        process_rss_bytes: rss_bytes,
+                        host_network_tx_bytes,
+                        host_network_tx_delta_bytes: network_tx_delta_bytes,
+                    });
                     previous = Some((now, cpu_seconds, host_network_tx_bytes));
                 }
-                Err(error) => warn!("failed to sample system info role={role} id={id}: {error}"),
+                Err(error) => profile.diagnostic("system_sample_error", || error.to_string()),
             }
         }
     })

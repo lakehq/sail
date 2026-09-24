@@ -10,6 +10,7 @@ use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::worker_pool::state::WorkerDescriptor;
 use crate::id::{IdGenerator, WorkerId};
+use crate::profiling::ProfileHandle;
 use crate::worker_manager::WorkerManager;
 
 pub struct WorkerPool {
@@ -18,6 +19,7 @@ pub struct WorkerPool {
     workers: IndexMap<WorkerId, WorkerDescriptor>,
     worker_id_generator: IdGenerator<WorkerId>,
     event_reporter: SystemEventReporter,
+    pub(crate) profile: Option<ProfileHandle>,
 }
 
 impl WorkerPool {
@@ -32,6 +34,7 @@ impl WorkerPool {
             workers: IndexMap::new(),
             worker_id_generator: IdGenerator::new(),
             event_reporter,
+            profile: None,
         }
     }
 }

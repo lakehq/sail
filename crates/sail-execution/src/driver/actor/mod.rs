@@ -17,6 +17,7 @@ use crate::driver::task_assigner::TaskAssigner;
 use crate::driver::worker_pool::WorkerPool;
 use crate::driver::worker_scaler::WorkerScaler;
 use crate::id::TaskKey;
+use crate::profiling::ProfileHandle;
 use crate::task_runner::TaskRunnerActor;
 
 #[derive(Default)]
@@ -38,5 +39,6 @@ pub struct DriverActor {
     task_sequences: HashMap<TaskKey, u64>,
     /// An optional channel to signal that the driver has stopped.
     shutdown_notifier: Option<oneshot::Sender<()>>,
-    system_info_log: Option<JoinHandle<()>>,
+    system_info_profile: Option<JoinHandle<()>>,
+    profile: Option<ProfileHandle>,
 }
