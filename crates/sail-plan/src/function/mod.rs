@@ -194,6 +194,39 @@ pub fn prepare_async_functions(
                     .collect::<Vec<_>>();
                 let input_columns = projection.len();
                 let mut next_alias = 0usize;
+                let mut group_columns: HashMap<Expr, String> = HashMap::new();
+                let mut project_group = |expr: Expr| -> datafusion_common::Result<Expr> {
+                    if !contains_async(&expr)? {
+                        return Ok(expr);
+                    }
+                    let saved_name = NamePreserver::new_for_projection().save(&expr);
+                    let name = if let Some(name) = group_columns.get(&expr) {
+                        name.clone()
+                    } else {
+                        let name = loop {
+                            let name = format!("__sail_async_group_{next_alias}");
+                            next_alias += 1;
+                            if !aggregate.input.schema().has_column_with_unqualified_name(&name) {
+                                break name;
+                            }
+                        };
+                        projection.push(expr.clone().alias(name.clone()));
+                        group_columns.insert(expr, name.clone());
+                        name
+                    };
+                    Ok(saved_name.restore(Expr::Column(Column::from_name(name))))
+                };
+                aggregate.group_expr = std::mem::take(&mut aggregate.group_expr)
+                    .into_iter()
+                    .map(|expr| {
+                        if matches!(&expr, Expr::GroupingSet(_)) {
+                            expr.map_children(|expr| project_group(expr).map(Transformed::yes))
+                                .data()
+                        } else {
+                            project_group(expr)
+                        }
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
                 let expressions = std::mem::take(&mut aggregate.aggr_expr)
                     .into_iter()
                     .map(|expr| {
