@@ -42,42 +42,41 @@ impl ShuffleReadExec {
     }
 
     fn profile_read(&self, stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
-        if self.profile.is_none() {
+        let Some(handle) = self.profile.clone() else {
             return stream;
-        }
+        };
         let schema = stream.schema();
-        let key = self.key.clone();
-        let input_stage = self.input_stage;
-        let handle = self.profile.clone();
         let profile = ShuffleReadProfile {
             stream,
+            handle,
+            key: self.key.clone(),
+            input_stage: self.input_stage,
             poll_wait: Duration::ZERO,
             batches: 0,
             rows: 0,
-            array_bytes: 0,
+            failed: false,
         };
-        let output = futures::stream::unfold(profile, move |mut profile| {
-            let key = key.clone();
-            let handle = handle.clone();
-            async move {
-                let started = Instant::now();
-                let next = profile.stream.next().await;
-                profile.poll_wait += started.elapsed();
-                match next {
-                    Some(Ok(batch)) => {
-                        profile.batches += 1;
-                        profile.rows += batch.num_rows() as u64;
-                        profile.array_bytes += batch.get_array_memory_size() as u64;
-                        Some((Ok(batch), profile))
-                    }
-                    Some(Err(error)) => {
-                        record_shuffle_read(handle.as_ref(), &key, input_stage, &profile, false);
-                        Some((Err(error), profile))
-                    }
-                    None => {
-                        record_shuffle_read(handle.as_ref(), &key, input_stage, &profile, true);
-                        None
-                    }
+        let output = futures::stream::unfold(profile, |mut profile| async move {
+            if profile.failed {
+                return None;
+            }
+            let started = Instant::now();
+            let next = profile.stream.next().await;
+            profile.poll_wait += started.elapsed();
+            match next {
+                Some(Ok(batch)) => {
+                    profile.batches += 1;
+                    profile.rows += batch.num_rows() as u64;
+                    Some((Ok(batch), profile))
+                }
+                Some(Err(error)) => {
+                    profile.failed = true;
+                    record_shuffle_read(&profile, false);
+                    Some((Err(error), profile))
+                }
+                None => {
+                    record_shuffle_read(&profile, true);
+                    None
                 }
             }
         });
@@ -87,33 +86,27 @@ impl ShuffleReadExec {
 
 struct ShuffleReadProfile {
     stream: SendableRecordBatchStream,
+    handle: ProfileHandle,
+    key: TaskKey,
+    input_stage: usize,
     poll_wait: Duration,
     batches: u64,
     rows: u64,
-    array_bytes: u64,
+    failed: bool,
 }
 
-fn record_shuffle_read(
-    handle: Option<&ProfileHandle>,
-    key: &TaskKey,
-    input_stage: usize,
-    profile: &ShuffleReadProfile,
-    success: bool,
-) {
-    if let Some(handle) = handle {
-        handle.record(ProfileEvent::ShuffleRead {
-            job_id: key.job_id.into(),
-            stage: key.stage,
-            partition: key.partition,
-            attempt: key.attempt,
-            input_stage,
-            batches: profile.batches,
-            rows: profile.rows,
-            array_bytes: profile.array_bytes,
-            poll_wait_us: profile.poll_wait.as_micros(),
-            success,
-        });
-    }
+fn record_shuffle_read(profile: &ShuffleReadProfile, success: bool) {
+    profile.handle.record(ProfileEvent::ShuffleRead {
+        job_id: profile.key.job_id.into(),
+        stage: profile.key.stage,
+        partition: profile.key.partition,
+        attempt: profile.key.attempt,
+        input_stage: profile.input_stage,
+        batches: profile.batches,
+        rows: profile.rows,
+        poll_wait_us: profile.poll_wait.as_micros(),
+        success,
+    });
 }
 
 impl DisplayAs for ShuffleReadExec {

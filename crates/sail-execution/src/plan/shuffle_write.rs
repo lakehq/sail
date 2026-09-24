@@ -286,71 +286,85 @@ async fn shuffle_write(
     let profiling = profile.is_some();
     let started = profiling.then(Instant::now);
     let open_started = profiling.then(Instant::now);
-    let mut sink = writer.open(key.partition).await?;
+    let sink = writer.open(key.partition).await;
     let open_duration = open_started.map_or(Duration::ZERO, |instant| instant.elapsed());
     let mut input_wait = Duration::ZERO;
     let mut partition_duration = Duration::ZERO;
     let mut sink_write_duration = Duration::ZERO;
     let mut batches = 0u64;
     let mut rows = 0u64;
-    let mut bytes = 0u64;
-    let result = async {
-        loop {
-            let poll_started = profiling.then(Instant::now);
-            let next = stream.next().await;
-            if let Some(poll_started) = poll_started {
-                input_wait += poll_started.elapsed();
+    let (result, outcome, finalize_duration) = match sink {
+        Ok(mut sink) => {
+            let result = async {
+                loop {
+                    let poll_started = profiling.then(Instant::now);
+                    let next = stream.next().await;
+                    if let Some(poll_started) = poll_started {
+                        input_wait += poll_started.elapsed();
+                    }
+                    let Some(batch) = next else { break };
+                    let batch = batch?;
+                    if profiling {
+                        batches += 1;
+                        rows += batch.num_rows() as u64;
+                    }
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+                    let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
+                    let partition_started = profiling.then(Instant::now);
+                    let partition_result = partitioner.partition(batch, |p, batch| {
+                        partitions[p] = Some(batch);
+                        Ok(())
+                    });
+                    if let Some(partition_started) = partition_started {
+                        partition_duration += partition_started.elapsed();
+                    }
+                    partition_result?;
+                    let write_started = profiling.then(Instant::now);
+                    let write_result = sink.write(partitions).await;
+                    if let Some(write_started) = write_started {
+                        sink_write_duration += write_started.elapsed();
+                    }
+                    if write_result? == TaskStreamWriteState::Closed {
+                        return Ok::<_, datafusion::error::DataFusionError>(false);
+                    }
+                }
+                Ok(true)
             }
-            let Some(batch) = next else { break };
-            let batch = batch?;
-            if profiling {
-                batches += 1;
-                rows += batch.num_rows() as u64;
-                bytes += batch.get_array_memory_size() as u64;
-            }
-            if batch.num_rows() == 0 {
-                continue;
-            }
-            let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
-            let partition_started = profiling.then(Instant::now);
-            let partition_result = partitioner.partition(batch, |p, batch| {
-                partitions[p] = Some(batch);
-                Ok(())
-            });
-            if let Some(partition_started) = partition_started {
-                partition_duration += partition_started.elapsed();
-            }
-            partition_result?;
-            let write_started = profiling.then(Instant::now);
-            let write_result = sink.write(partitions).await;
-            if let Some(write_started) = write_started {
-                sink_write_duration += write_started.elapsed();
-            }
-            if write_result? == TaskStreamWriteState::Closed {
-                return Ok::<_, datafusion::error::DataFusionError>(false);
-            }
+            .await;
+            let finalize_started = profiling.then(Instant::now);
+            let (result, outcome) = match result {
+                Ok(true) => {
+                    let result = sink.commit().await;
+                    let outcome = if result.is_ok() {
+                        "commit"
+                    } else {
+                        "commit_error"
+                    };
+                    (result, outcome)
+                }
+                Ok(false) => {
+                    // TODO: model successful early-stop separately from error-triggered aborts
+                    let result = sink.abort().await;
+                    let outcome = if result.is_ok() {
+                        "early_stop"
+                    } else {
+                        "abort_error"
+                    };
+                    (result, outcome)
+                }
+                Err(error) => {
+                    let _ = sink.abort().await;
+                    (Err(error), "error")
+                }
+            };
+            let finalize_duration =
+                finalize_started.map_or(Duration::ZERO, |instant| instant.elapsed());
+            (result, outcome, finalize_duration)
         }
-        Ok(true)
-    }
-    .await;
-    let outcome = match &result {
-        Ok(true) => "commit",
-        Ok(false) => "early stop",
-        Err(_) => "error",
+        Err(error) => (Err(error), "open_error", Duration::ZERO),
     };
-    let finalize_started = profiling.then(Instant::now);
-    let result = match result {
-        Ok(true) => sink.commit().await,
-        Ok(false) => {
-            // TODO: model successful early-stop separately from error-triggered aborts
-            sink.abort().await
-        }
-        Err(error) => {
-            let _ = sink.abort().await;
-            Err(error)
-        }
-    };
-    let finalize_duration = finalize_started.map_or(Duration::ZERO, |instant| instant.elapsed());
     if let Some(profile) = profile {
         profile.record(ProfileEvent::ShuffleWrite {
             job_id: key.job_id.into(),
@@ -360,7 +374,6 @@ async fn shuffle_write(
             channels,
             batches,
             rows,
-            input_array_bytes: bytes,
             elapsed_us: started.map_or(0, |instant| instant.elapsed().as_micros()),
             open_us: open_duration.as_micros(),
             input_wait_us: input_wait.as_micros(),

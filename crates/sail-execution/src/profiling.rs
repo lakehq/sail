@@ -7,12 +7,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::error::DataFusionError;
+use datafusion::physical_plan::metrics::MetricValue;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{Attribute, ObjectStore, PutOptions};
@@ -26,7 +27,8 @@ pub(crate) const ENABLED: &str = "SAIL_PROFILE_ENABLED";
 pub(crate) const LOCATION: &str = "SAIL_PROFILE_LOCATION";
 
 static SENDER: Mutex<Option<mpsc::UnboundedSender<Message>>> = Mutex::new(None);
-static EVENTS: Mutex<Vec<RecordedEvent>> = Mutex::new(Vec::new());
+static EVENTS: LazyLock<Mutex<HashMap<Arc<str>, Vec<RecordedEvent>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static DRIVERS: LazyLock<Mutex<HashMap<u64, ProfileHandle>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static HAS_DRIVERS: AtomicBool = AtomicBool::new(false);
@@ -34,13 +36,12 @@ static HAS_DRIVERS: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug)]
 pub(crate) struct ProfileHandle {
     sender: mpsc::UnboundedSender<Message>,
-    source: String,
+    source: Arc<str>,
     location: String,
 }
 
 #[derive(Serialize)]
 struct RecordedEvent {
-    source: String,
     timestamp_us: u128,
     #[serde(flatten)]
     event: ProfileEvent,
@@ -108,7 +109,6 @@ pub(crate) enum ProfileEvent {
         input_stage: usize,
         batches: u64,
         rows: u64,
-        array_bytes: u64,
         poll_wait_us: u128,
         success: bool,
     },
@@ -120,7 +120,6 @@ pub(crate) enum ProfileEvent {
         channels: usize,
         batches: u64,
         rows: u64,
-        input_array_bytes: u64,
         elapsed_us: u128,
         open_us: u128,
         input_wait_us: u128,
@@ -135,9 +134,31 @@ pub(crate) enum ProfileEvent {
         stage: usize,
         partition: usize,
         attempt: usize,
-        metrics: String,
+        operators: Vec<OperatorMetricSnapshot>,
         success: bool,
     },
+}
+
+#[derive(Serialize)]
+pub(crate) struct OperatorMetricSnapshot {
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    pub(crate) metrics: Vec<MetricSnapshot>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct MetricSnapshot {
+    name: String,
+    value: String,
+}
+
+impl MetricSnapshot {
+    pub(crate) fn from_value(value: &MetricValue) -> Self {
+        Self {
+            name: value.name().to_owned(),
+            value: value.to_string(),
+        }
+    }
 }
 
 impl ProfileEvent {
@@ -163,9 +184,12 @@ impl ProfileEvent {
 }
 
 enum Message {
-    Events(Vec<RecordedEvent>),
+    Events {
+        source: Arc<str>,
+        batch: Vec<RecordedEvent>,
+    },
     Flush {
-        source: String,
+        source: Arc<str>,
         result: oneshot::Sender<Vec<RecordedEvent>>,
     },
 }
@@ -200,11 +224,12 @@ impl ProfileHandle {
                 }
             })
             .collect();
-        let source = if role == "driver" {
+        let source: Arc<str> = if role == "driver" {
             format!("{session_id}-driver")
         } else {
             format!("{session_id}-{role}-{id}")
-        };
+        }
+        .into();
         Some(Self {
             sender,
             source,
@@ -267,12 +292,14 @@ impl ProfileHandle {
         let events = events
             .into_iter()
             .map(|(timestamp_us, event)| RecordedEvent {
-                source: self.source.clone(),
                 timestamp_us,
                 event,
             })
             .collect();
-        let _ = self.sender.send(Message::Events(events));
+        let _ = self.sender.send(Message::Events {
+            source: self.source.clone(),
+            batch: events,
+        });
     }
 
     pub(crate) async fn finish(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -317,14 +344,10 @@ async fn collect(mut receiver: mpsc::UnboundedReceiver<Message>) {
     while let Some(message) = receiver.recv().await {
         let mut events = EVENTS.lock().unwrap_or_else(|error| error.into_inner());
         match message {
-            Message::Events(batch) => events.extend(batch),
+            Message::Events { source, batch } => events.entry(source).or_default().extend(batch),
             Message::Flush { source, result } => {
-                let (selected, remaining): (Vec<_>, Vec<_>) = std::mem::take(&mut *events)
-                    .into_iter()
-                    .partition(|event| event.source == source);
-                *events = remaining;
                 // The flush operation is ordered after all event messages from the actor.
-                let _ = result.send(selected);
+                let _ = result.send(events.remove(&source).unwrap_or_default());
             }
         }
     }
@@ -358,7 +381,70 @@ pub(crate) fn now_us() -> u128 {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::physical_plan::metrics::{Count, PruningMetrics, RatioMetrics, Time};
+
     use super::*;
+
+    #[test]
+    fn operator_metrics_serialize_as_records() -> serde_json::Result<()> {
+        let rows = Count::new();
+        rows.add(7);
+        let time = Time::new();
+        time.add_duration(std::time::Duration::from_nanos(12));
+        let pruning = PruningMetrics::new();
+        pruning.add_pruned(3);
+        pruning.add_matched(4);
+        pruning.add_fully_matched(2);
+        let ratio = RatioMetrics::new();
+        ratio.add_part(2);
+        ratio.add_total(5);
+        let metrics = [
+            MetricValue::OutputRows(rows),
+            MetricValue::ElapsedCompute(time),
+            MetricValue::PruningMetrics {
+                name: "pruning".into(),
+                pruning_metrics: pruning,
+            },
+            MetricValue::Ratio {
+                name: "hit_rate".into(),
+                ratio_metrics: ratio,
+            },
+        ]
+        .iter()
+        .map(MetricSnapshot::from_value)
+        .collect();
+        let event = ProfileEvent::OperatorMetrics {
+            job_id: 1,
+            stage: 2,
+            partition: 3,
+            attempt: 4,
+            operators: vec![OperatorMetricSnapshot {
+                index: 5,
+                name: "TestExec".into(),
+                metrics,
+            }],
+            success: true,
+        };
+        let json = serde_json::to_value(event)?;
+        assert_eq!(json["operators"][0]["index"], 5);
+        assert_eq!(json["operators"][0]["name"], "TestExec");
+        assert_eq!(
+            json["operators"][0]["metrics"][0],
+            serde_json::json!({
+                "name": "output_rows", "value": "7"
+            })
+        );
+        assert_eq!(
+            json["operators"][0]["metrics"][1]["name"],
+            "elapsed_compute"
+        );
+        assert!(json["operators"][0]["metrics"][1]["value"].is_string());
+        assert_eq!(json["operators"][0]["metrics"][2]["name"], "pruning");
+        assert!(json["operators"][0]["metrics"][2]["value"].is_string());
+        assert_eq!(json["operators"][0]["metrics"][3]["name"], "hit_rate");
+        assert!(json["operators"][0]["metrics"][3]["value"].is_string());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn flush_keeps_profiles_separate() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -412,6 +498,7 @@ mod tests {
             let event: serde_json::Value = serde_json::from_str(lines[0])?;
             assert_eq!(event["job_id"], job_id);
             assert_eq!(event["type"], "task_started");
+            assert!(event.get("source").is_none());
         }
         tokio::fs::remove_dir_all(directory).await?;
         Ok(())

@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
-use crate::profiling::{ProfileEvent, ProfileHandle};
+use crate::profiling::{MetricSnapshot, OperatorMetricSnapshot, ProfileEvent, ProfileHandle};
 use crate::proto::{RemoteExecutionCodec, proto_to_physical_plan};
 use crate::stream::accessor::TaskStreamFactory;
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
@@ -49,7 +49,7 @@ impl TaskMetrics {
                 stage: key.stage,
                 partition: key.partition,
                 attempt: key.attempt,
-                metrics: summarize_plan_metrics(plan.as_ref()),
+                operators: summarize_plan_metrics(plan.as_ref()),
                 success,
             });
         }
@@ -209,8 +209,8 @@ impl TaskPreparation {
 }
 
 /// Keep per-task measurements compact; the job graph is logged once per job.
-fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> String {
-    fn visit(plan: &dyn ExecutionPlan, index: &mut usize, out: &mut Vec<String>) {
+fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> Vec<OperatorMetricSnapshot> {
+    fn visit(plan: &dyn ExecutionPlan, index: &mut usize, out: &mut Vec<OperatorMetricSnapshot>) {
         // TracingExec delegates metrics to its child, so visiting both would duplicate them.
         if plan.name() != "TracingExec" {
             let operator = *index;
@@ -218,11 +218,17 @@ fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> String {
             if let Some(metrics) = plan.metrics()
                 && metrics.iter().next().is_some()
             {
-                out.push(format!(
-                    "{operator}:{} [{}]",
-                    plan.name(),
-                    metrics.aggregate_by_name().sorted_for_display()
-                ));
+                let metrics = metrics
+                    .aggregate_by_name()
+                    .sorted_for_display()
+                    .iter()
+                    .map(|metric| MetricSnapshot::from_value(metric.value()))
+                    .collect();
+                out.push(OperatorMetricSnapshot {
+                    index: operator,
+                    name: plan.name().to_owned(),
+                    metrics,
+                });
             }
         }
         for child in plan.children() {
@@ -232,7 +238,7 @@ fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> String {
 
     let mut out = Vec::new();
     visit(plan, &mut 0, &mut out);
-    out.join("; ")
+    out
 }
 
 /// Dropping the pending stream cancels preparation cooperatively. The blocking task owns
