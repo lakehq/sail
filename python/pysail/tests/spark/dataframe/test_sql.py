@@ -1,7 +1,5 @@
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
@@ -16,10 +14,30 @@ def test_sql_positional_parameters(spark):
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
 
 
-# Spark binds a parameter before analysis, so `round` implicitly casts a STRING parameter to DOUBLE.
-# Sail resolves a parameter marker as an untyped placeholder and binds its value after planning,
-# so `round` never sees the STRING type and fails to plan.
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_sql_timestamp_string_parameters(spark):
+    timestamp = "2024-05-01 12:00:00.123456789"
+    result = spark.sql(
+        """
+        SELECT
+          TIMESTAMP '2024-05-01 12:00:00.123456' = ? AS comparison,
+          TIMESTAMP '2024-05-01 12:00:00.123456' IN (?) AS in_list,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            BETWEEN ? AND ? AS bounded,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            IS NOT DISTINCT FROM ? AS distinctness
+        """,
+        args=[timestamp] * 5,
+    ).collect()
+    assert result == [(True, True, True, True)]
+
+    assert spark.sql(
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456' = :candidate
+        """,
+        args={"candidate": timestamp},
+    ).collect() == [(True,)]
+
+
 @pytest.mark.parametrize(
     ("query", "args"),
     [
