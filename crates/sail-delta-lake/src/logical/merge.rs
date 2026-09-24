@@ -22,6 +22,7 @@ use crate::logical::table_source::DeltaTableSource;
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     validate_merge_internal_columns(&info, &[MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN])?;
+    let change_data = change_data_enabled(&info.target)?;
     let mode = select_delta_row_level_write_mode(&info.target)?;
     let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
         && matches!(mode, RowLevelWriteMode::MergeOnRead))
@@ -93,6 +94,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
                 // Delta resolves both COW removals and MOR DV updates from touched paths.
                 touched_files: true,
                 row_index_deletes: matches!(mode, RowLevelWriteMode::MergeOnRead),
+                change_data,
             },
         },
     )?;
@@ -110,6 +112,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         Some(Arc::new(expansion.write_plan)),
         expansion.touched_files_plan.map(Arc::new),
         expansion.row_index_delete_plan.map(Arc::new),
+        expansion.change_data_plan.map(Arc::new),
     );
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
@@ -358,4 +361,18 @@ pub(super) fn ensure_row_level_metadata_columns(
     );
 
     Ok(transformed)
+}
+
+pub(super) fn change_data_enabled(plan: &LogicalPlan) -> Result<bool> {
+    let mut enabled = false;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            enabled = crate::change_data_feed::enabled(source.snapshot().metadata());
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(enabled)
 }

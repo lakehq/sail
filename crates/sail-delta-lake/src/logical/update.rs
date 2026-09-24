@@ -17,6 +17,7 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
     let requirements = RowLevelEffectRequirements {
         touched_files: true,
         row_index_deletes: row_index_column.is_some(),
+        change_data: super::merge::change_data_enabled(&info.target_plan)?,
     };
     info.target_plan = Arc::new(ensure_row_level_metadata_columns(
         info.target_plan.as_ref().clone(),
