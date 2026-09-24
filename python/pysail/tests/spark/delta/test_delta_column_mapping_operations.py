@@ -7,13 +7,12 @@ in-memory view so that both sides go through the same Parquet round trip, and
 only column mapping differs between them.
 """
 
-# ruff: noqa: S608
-
 from __future__ import annotations
 
 import datetime
 import json
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -36,8 +35,6 @@ from pyspark.sql.types import (
 )
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
-from pathlib import Path
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
@@ -372,7 +369,7 @@ _DATAFRAME_OPERATIONS = {
     "drop_duplicates_scalar": lambda df: df.dropDuplicates(["grp"]).select("grp").orderBy("grp"),
     "drop_duplicates_struct": lambda df: df.select("s").dropDuplicates().orderBy("s.a", "s.inner.d"),
     "select_nested_columns": lambda df: df.select("id", "s.inner.c", F.get("arr_s", 0)["y"].alias("y")).orderBy("id"),
-    "filter_nested_column": lambda df: df.filter(F.col("s.inner.c") >= 30).select("id").orderBy("id"),
+    "filter_nested_column": lambda df: df.filter(F.col("s.inner.c") >= F.lit(30)).select("id").orderBy("id"),
     "with_field": lambda df: df.select("id", F.col("s").withField("a", F.lit(0)).alias("s")).orderBy("id"),
     "drop_fields": lambda df: df.select("id", F.col("s").dropFields("inner").alias("s")).orderBy("id"),
     "with_column": lambda df: df.withColumn("a2", F.col("s.a") + 1).select("id", "a2", "s").orderBy("id"),
@@ -607,7 +604,7 @@ def test_column_mapped_update_struct_to_null(table_pair: _TablePair) -> None:
     table_pair.assert_same()
 
 
-def test_column_mapped_time_travel(spark: SparkSession, table_pair: _TablePair) -> None:
+def test_column_mapped_time_travel(table_pair: _TablePair) -> None:
     table_pair.sql("DELETE FROM {t} WHERE id > 4")
     table_pair.sql(
         "UPDATE {t} SET name = 'travelled', s = named_struct('a', 0, 'b', '', 'inner', s.inner) WHERE id = 1"
