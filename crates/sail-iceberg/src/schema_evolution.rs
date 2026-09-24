@@ -793,7 +793,7 @@ impl SchemaEvolver {
         current_schema: &IcebergSchema,
         input_schema: &ArrowSchema,
     ) -> Result<SchemaEvolutionOutcome> {
-        use crate::datasource::type_converter::{arrow_type_to_iceberg, iceberg_schema_to_arrow};
+        use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
 
         let mut identifier_names = HashSet::new();
         for id in current_schema.identifier_field_ids() {
@@ -806,7 +806,7 @@ impl SchemaEvolver {
         let mut new_fields = Vec::new();
 
         for field in input_schema.fields() {
-            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+            let mut nested = arrow_field_to_iceberg(field).map_err(|e| {
                 DataFusionError::Plan(format!(
                     "Failed to convert column '{}' to an Iceberg type: {e}",
                     field.name()
@@ -820,12 +820,7 @@ impl SchemaEvolver {
                 next_field_id += 1;
                 id
             };
-            let mut nested = NestedField::new(
-                field_id,
-                field.name().clone(),
-                iceberg_type,
-                !field.is_nullable(),
-            );
+            nested.id = field_id;
             if let Some(existing) = existing_field {
                 Self::reuse_nested_ids_from_existing(
                     existing.as_ref(),

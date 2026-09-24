@@ -87,40 +87,102 @@ pub(crate) async fn read_deletion_vector(
     decode_blob(&blob, cardinality)
 }
 
-/// One blob per file keeps publication and cleanup independent across writers.
-pub(crate) async fn write_deletion_vector(
+pub(crate) struct DeletionVector {
+    pub referenced_data_file: String,
+    pub partition_spec_id: i32,
+    pub partition: Vec<Option<Literal>>,
+    pub positions: RoaringTreemap,
+}
+
+pub(crate) const TARGET_PUFFIN_SIZE: usize = 64 * 1024 * 1024;
+
+pub(crate) async fn write_deletion_vectors(
     store_ctx: &StoreContext,
     data_url: &Url,
-    target_path: &str,
-    partition_spec_id: i32,
-    partition: Vec<Option<Literal>>,
-    mut positions: RoaringTreemap,
-) -> Result<DataFile> {
-    let blob = encode_blob(&mut positions)?;
-    let size = i64::try_from(blob.len()).map_err(|_| {
-        datafusion_common::exec_datafusion_err!("Iceberg deletion vector is too large")
-    })?;
-    let footer = serde_json::to_vec(&serde_json::json!({
-        "blobs": [{
+    vectors: Vec<DeletionVector>,
+    target_size: usize,
+) -> Result<Vec<DataFile>> {
+    let mut bytes = PUFFIN_MAGIC.to_vec();
+    let mut blobs = Vec::new();
+    let mut entries = Vec::new();
+    let mut files = Vec::new();
+    let mut footer_size = 0;
+    for mut vector in vectors {
+        let blob = encode_blob(&mut vector.positions)?;
+        let size = blob.len() as i64;
+        let mut descriptor = serde_json::json!({
             "type": "deletion-vector-v1",
             "fields": [2147483645],
             "snapshot-id": -1,
             "sequence-number": -1,
-            "offset": 4,
+            "offset": bytes.len(),
             "length": size,
             "properties": {
-                "referenced-data-file": target_path,
-                "cardinality": positions.len().to_string(),
+                "referenced-data-file": vector.referenced_data_file,
+                "cardinality": vector.positions.len().to_string(),
             },
-        }],
-    }))
-    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        });
+        let descriptor_size = serde_json::to_vec(&descriptor)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+            .len()
+            + 1;
+        if !entries.is_empty()
+            && bytes.len() + blob.len() + footer_size + descriptor_size + 32 > target_size
+        {
+            files.extend(publish_puffin(store_ctx, data_url, bytes, blobs, entries).await?);
+            bytes = PUFFIN_MAGIC.to_vec();
+            blobs = Vec::new();
+            entries = Vec::new();
+            footer_size = 0;
+            descriptor["offset"] = serde_json::json!(bytes.len());
+        }
+        let offset = bytes.len() as i64;
+        bytes.extend_from_slice(&blob);
+        blobs.push(descriptor);
+        footer_size += descriptor_size;
+        entries.push(DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: String::new(),
+            file_format: DataFileFormat::Puffin,
+            partition: vector.partition,
+            partition_spec_id: vector.partition_spec_id,
+            record_count: vector.positions.len(),
+            file_size_in_bytes: 0,
+            referenced_data_file: Some(vector.referenced_data_file),
+            content_offset: Some(offset),
+            content_size_in_bytes: Some(size),
+            column_sizes: Default::default(),
+            value_counts: Default::default(),
+            null_value_counts: Default::default(),
+            nan_value_counts: Default::default(),
+            lower_bounds: Default::default(),
+            upper_bounds: Default::default(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+        });
+    }
+    if !entries.is_empty() {
+        files.extend(publish_puffin(store_ctx, data_url, bytes, blobs, entries).await?);
+    }
+    Ok(files)
+}
+
+async fn publish_puffin(
+    store_ctx: &StoreContext,
+    data_url: &Url,
+    mut bytes: Vec<u8>,
+    blobs: Vec<serde_json::Value>,
+    mut entries: Vec<DataFile>,
+) -> Result<Vec<DataFile>> {
+    let footer = serde_json::to_vec(&serde_json::json!({ "blobs": blobs }))
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
     let footer_size = i32::try_from(footer.len()).map_err(|_| {
         datafusion_common::exec_datafusion_err!("Iceberg Puffin footer is too large")
     })?;
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(PUFFIN_MAGIC);
-    bytes.extend_from_slice(&blob);
     bytes.extend_from_slice(PUFFIN_MAGIC);
     bytes.extend_from_slice(&footer);
     bytes.extend_from_slice(&footer_size.to_le_bytes());
@@ -128,6 +190,10 @@ pub(crate) async fn write_deletion_vector(
     bytes.extend_from_slice(PUFFIN_MAGIC);
     let file_size_in_bytes = bytes.len() as u64;
     let name = format!("deletion-vector-{}.puffin", uuid::Uuid::new_v4());
+    let file_path = data_url
+        .join(&name)
+        .map_err(|error| DataFusionError::External(Box::new(error)))?
+        .to_string();
     store_ctx
         .prefixed
         .put(
@@ -135,40 +201,92 @@ pub(crate) async fn write_deletion_vector(
             Bytes::from(bytes).into(),
         )
         .await?;
-    let file_path = data_url
-        .join(&name)
-        .map_err(|error| DataFusionError::External(Box::new(error)))?
-        .to_string();
-    Ok(DataFile {
-        content: DataContentType::PositionDeletes,
-        file_path,
-        file_format: DataFileFormat::Puffin,
-        partition,
-        partition_spec_id,
-        record_count: positions.len(),
-        file_size_in_bytes,
-        referenced_data_file: Some(target_path.to_string()),
-        content_offset: Some(4),
-        content_size_in_bytes: Some(size),
-        column_sizes: Default::default(),
-        value_counts: Default::default(),
-        null_value_counts: Default::default(),
-        nan_value_counts: Default::default(),
-        lower_bounds: Default::default(),
-        upper_bounds: Default::default(),
-        block_size_in_bytes: None,
-        key_metadata: None,
-        split_offsets: vec![],
-        equality_ids: vec![],
-        sort_order_id: None,
-        first_row_id: None,
-    })
+    for entry in &mut entries {
+        entry.file_path = file_path.clone();
+        entry.file_size_in_bytes = file_size_in_bytes;
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::spec::PrimitiveLiteral;
+
+    #[test]
+    fn shared_puffin_preserves_each_blob_and_can_roll_between_blobs() -> Result<()> {
+        futures::executor::block_on(async {
+            let url = Url::parse("file:///table/data/").unwrap();
+            let store = StoreContext::new(
+                std::sync::Arc::new(object_store::memory::InMemory::new()),
+                &url,
+            )?;
+            for target_size in [TARGET_PUFFIN_SIZE, 1] {
+                let vectors = (0..2)
+                    .map(|id| DeletionVector {
+                        referenced_data_file: format!("file:///table/data/source-{id}.parquet"),
+                        partition_spec_id: id,
+                        partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(id)))],
+                        positions: RoaringTreemap::from_iter([id as u64, 65536 + id as u64]),
+                    })
+                    .collect();
+                let files = write_deletion_vectors(&store, &url, vectors, target_size).await?;
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].file_path == files[1].file_path, target_size != 1);
+                for (id, file) in files.iter().enumerate() {
+                    assert_eq!(file.partition_spec_id, id as i32);
+                    assert_eq!(
+                        file.partition,
+                        vec![Some(Literal::Primitive(PrimitiveLiteral::Int(id as i32)))]
+                    );
+                    let descriptor = crate::spec::delete_index::PositionDeleteFile::try_from(file)?;
+                    let crate::spec::delete_index::PositionDeleteFile::DeletionVector {
+                        range,
+                        cardinality,
+                        ..
+                    } = descriptor
+                    else {
+                        return exec_err!("Expected a deletion vector descriptor");
+                    };
+                    let positions =
+                        read_deletion_vector(&store, &file.file_path, range.clone(), cardinality)
+                            .await?;
+                    assert_eq!(
+                        positions,
+                        RoaringTreemap::from_iter([id as u64, 65536 + id as u64])
+                    );
+                    let (object_store, path) = store.resolve(&file.file_path)?;
+                    let bytes = object_store.get(&path).await?.bytes().await?;
+                    assert_eq!(bytes.len() as u64, file.file_size_in_bytes);
+                    let footer_size = u32::from_le_bytes(
+                        bytes[bytes.len() - 12..bytes.len() - 8].try_into().unwrap(),
+                    ) as usize;
+                    let footer: serde_json::Value = serde_json::from_slice(
+                        &bytes[bytes.len() - 12 - footer_size..bytes.len() - 12],
+                    )
+                    .unwrap();
+                    let blobs = footer["blobs"].as_array().unwrap();
+                    let blob = blobs
+                        .iter()
+                        .find(|blob| blob["offset"].as_u64() == Some(range.start))
+                        .unwrap();
+                    assert_eq!(
+                        blob["properties"]["referenced-data-file"].as_str(),
+                        file.referenced_data_file.as_deref()
+                    );
+                    assert_eq!(blob["length"].as_u64(), Some(range.end - range.start));
+                    assert_eq!(blobs.len(), if target_size == 1 { 1 } else { 2 });
+                }
+            }
+            assert!(
+                write_deletion_vectors(&store, &url, vec![], TARGET_PUFFIN_SIZE)
+                    .await?
+                    .is_empty()
+            );
+            Ok(())
+        })
+    }
 
     #[test]
     fn portable_vector_round_trip_and_corruption() {

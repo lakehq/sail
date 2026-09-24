@@ -211,7 +211,7 @@ impl PositionDeleteAccumulator {
         if self.rows_by_group.is_empty() {
             return Ok(vec![]);
         }
-        let mut output = Vec::new();
+        let mut vectors = Vec::new();
         for rows in self.rows_by_group.into_values() {
             for (path, positions) in rows.positions_by_file {
                 let target = rows.target.deletion_vector.as_ref().ok_or_else(|| {
@@ -234,20 +234,21 @@ impl PositionDeleteAccumulator {
                         "Iceberg deletion vector position exceeds the data file row count: {path}"
                     );
                 }
-                output.push(
-                    crate::io::deletion_vector::write_deletion_vector(
-                        data_store,
-                        data_url,
-                        &path,
-                        rows.target.partition_spec_id,
-                        rows.target.partition.clone(),
-                        combined,
-                    )
-                    .await?,
-                );
+                vectors.push(crate::io::deletion_vector::DeletionVector {
+                    referenced_data_file: path,
+                    partition_spec_id: rows.target.partition_spec_id,
+                    partition: rows.target.partition.clone(),
+                    positions: combined,
+                });
             }
         }
-        Ok(output)
+        crate::io::deletion_vector::write_deletion_vectors(
+            data_store,
+            data_url,
+            vectors,
+            crate::io::deletion_vector::TARGET_PUFFIN_SIZE,
+        )
+        .await
     }
 
     pub(crate) async fn finish(
@@ -419,16 +420,20 @@ mod tests {
                 0.1.into(),
             )))];
             let path = "file:///table/data/source.parquet";
-            let previous = crate::io::deletion_vector::write_deletion_vector(
+            let previous = crate::io::deletion_vector::write_deletion_vectors(
                 &store,
                 &url,
-                path,
-                0,
-                partition.clone(),
-                RoaringTreemap::from_iter([0]),
+                vec![crate::io::deletion_vector::DeletionVector {
+                    referenced_data_file: path.to_string(),
+                    partition_spec_id: 0,
+                    partition: partition.clone(),
+                    positions: RoaringTreemap::from_iter([0]),
+                }],
+                crate::io::deletion_vector::TARGET_PUFFIN_SIZE,
             )
             .await
-            .expect("previous DV");
+            .expect("previous DV")
+            .remove(0);
             let base = IcebergBaseWriteContext {
                 format_version: FormatVersion::V3,
                 partition_specs: vec![

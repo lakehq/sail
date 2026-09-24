@@ -44,6 +44,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::write::config::WriterConfig;
+use crate::operations::write::metrics::MetricsConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
     CommitMeta, encode_add_data_files, encode_commit_meta, encode_delete_data_files,
@@ -74,6 +75,7 @@ pub struct IcebergWriterExec {
     sort_order: Option<LexOrdering>,
     parquet_properties: WriterProperties,
     target_file_size_bytes: u64,
+    metrics: MetricsConfig,
     cache: Arc<PlanProperties>,
 }
 
@@ -105,6 +107,12 @@ impl IcebergWriterExec {
         let parquet_properties = options.parquet_properties(&properties)?;
         let target_file_size_bytes = options.target_file_size(&properties)?;
         let sort_order = Self::data_sort_order(input.schema().as_ref(), &write_context)?;
+        let metrics = MetricsConfig::from_properties(
+            &write_context.writer_schema,
+            &write_context.sort_order,
+            &properties,
+        )
+        .map_err(DataFusionError::Plan)?;
         Ok(Self {
             input,
             table_url,
@@ -118,6 +126,7 @@ impl IcebergWriterExec {
             sort_order,
             parquet_properties,
             target_file_size_bytes,
+            metrics,
             cache,
         })
     }
@@ -526,6 +535,7 @@ impl ExecutionPlan for IcebergWriterExec {
         let write_context = self.write_context.clone();
         let parquet_properties = self.parquet_properties.clone();
         let target_file_size_bytes = self.target_file_size_bytes;
+        let metrics = self.metrics.clone();
 
         let schema = self.schema();
         let future = async move {
@@ -573,6 +583,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: write_context.unbound_writer_partition_spec(),
                 variant_shredding,
+                metrics,
             };
 
             let data_object_store = get_object_store_from_context(&context, &data_location)?;
