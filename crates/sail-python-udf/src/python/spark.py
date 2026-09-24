@@ -756,6 +756,8 @@ def _call_scalar_pandas_udf(
             yield tuple(_arrow_column_to_pandas(arg.slice(start, batch_size), serializer) for arg in args)
 
     arrays = [_pandas_to_arrow_array(output, output_type, serializer) for output, output_type in udf(None, batches())]
+    if len(arrays) == 1:
+        return arrays[0]
     return pa.concat_arrays(arrays) if arrays else pa.array([])
 
 
@@ -789,7 +791,9 @@ class PySparkScalarPandasIterUdf:
         passthrough_columns: int,
         output_name: str,
         config,
+        buffer,
     ):
+        self._buffer = buffer
         self._udf = udf
         self._passthrough_columns = passthrough_columns
         self._output_name = output_name
@@ -806,10 +810,10 @@ class PySparkScalarPandasIterUdf:
         )
 
     def __call__(self, batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        input_batches, passthrough_batches = itertools.tee(batches)
-
         def pandas_batches():
-            for batch in input_batches:
+            for batch in batches:
+                if self._passthrough_columns:
+                    self._buffer.append(batch.select(range(self._passthrough_columns)))
                 batch_size = max(batch.num_rows, 1)
                 if self._max_records_per_batch > 0:
                     batch_size = min(batch_size, self._max_records_per_batch)
@@ -821,26 +825,29 @@ class PySparkScalarPandasIterUdf:
 
         passthrough = None
         passthrough_offset = 0
-        for output, output_type in self._udf(None, pandas_batches()):
-            array = _pandas_to_arrow_array(output, output_type, self._serializer)
-            output_offset = 0
-            while output_offset < len(array):
-                while passthrough is None or passthrough_offset == passthrough.num_rows:
-                    passthrough = next(passthrough_batches, None)
-                    passthrough_offset = 0
-                    if passthrough is None:
-                        msg = "scalar iterator UDF returned more rows than its input"
-                        raise ValueError(msg)
-                length = min(len(array) - output_offset, passthrough.num_rows - passthrough_offset)
-                columns = [
-                    column.slice(passthrough_offset, length)
-                    for column in passthrough.columns[: self._passthrough_columns]
-                ]
-                columns.append(array.slice(output_offset, length))
-                names = [*passthrough.schema.names[: self._passthrough_columns], self._output_name]
-                yield pa.RecordBatch.from_arrays(columns, names=names)
-                output_offset += length
-                passthrough_offset += length
+        try:
+            for output, output_type in self._udf(None, pandas_batches()):
+                array = _pandas_to_arrow_array(output, output_type, self._serializer)
+                if not self._passthrough_columns:
+                    yield pa.RecordBatch.from_arrays([array], names=[self._output_name])
+                    continue
+                output_offset = 0
+                while output_offset < len(array):
+                    if passthrough is None or passthrough_offset == passthrough.num_rows:
+                        passthrough = self._buffer.popleft()
+                        passthrough_offset = 0
+                        if passthrough is None:
+                            msg = "scalar iterator UDF returned more rows than its input"
+                            raise ValueError(msg)
+                    length = min(len(array) - output_offset, passthrough.num_rows - passthrough_offset)
+                    columns = [column.slice(passthrough_offset, length) for column in passthrough.columns]
+                    columns.append(array.slice(output_offset, length))
+                    names = [*passthrough.schema.names, self._output_name]
+                    yield pa.RecordBatch.from_arrays(columns, names=names)
+                    output_offset += length
+                    passthrough_offset += length
+        finally:
+            self._buffer.close()
 
 
 class PySparkScalarArrowUdf:

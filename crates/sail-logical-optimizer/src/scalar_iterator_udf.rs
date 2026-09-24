@@ -195,3 +195,91 @@ fn extract_scalar_iterators(
     };
     Ok(Transformed::yes(plan))
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::optimizer::optimize_projections::OptimizeProjections;
+    use datafusion::optimizer::{OptimizerContext, OptimizerRule};
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_expr::{ScalarUDF, col};
+    use sail_python_udf::config::PySparkUdfConfig;
+
+    use super::*;
+
+    #[test]
+    fn iterator_prunes_unused_columns_through_nested_calls() -> Result<()> {
+        for passthrough in [false, true] {
+            for depth in [1, 2] {
+                let source =
+                    provider_as_source(Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                        Field::new("id", DataType::Int64, false),
+                        Field::new("payload", DataType::Utf8, true),
+                        Field::new("unused", DataType::Int64, false),
+                    ])))));
+                let udf = ScalarUDF::new_from_impl(PySparkUDF::new(
+                    PySparkUdfKind::ScalarPandasIter,
+                    "identity".to_string(),
+                    vec![],
+                    true,
+                    vec![DataType::Int64],
+                    DataType::Int64,
+                    Arc::new(PySparkUdfConfig::default()),
+                ));
+                let mut value = col("id");
+                for _ in 0..depth {
+                    value = udf.call(vec![value]);
+                }
+                let mut expressions = vec![value.alias("result")];
+                if passthrough {
+                    expressions.push(col("payload"));
+                }
+                let plan = LogicalPlanBuilder::scan("wide", source, None)?
+                    .project(expressions)?
+                    .build()?;
+                let plan = ExtractScalarIteratorUDF.analyze(plan, &ConfigOptions::default())?;
+                let plan = OptimizeProjections::new()
+                    .rewrite(plan, &OptimizerContext::new())?
+                    .data;
+                let mut scans = 0;
+                let mut iterators = 0;
+                plan.apply(|node| {
+                    match node {
+                        LogicalPlan::TableScan(scan) => {
+                            scans += 1;
+                            assert_eq!(
+                                scan.projection,
+                                Some(if passthrough { vec![0, 1] } else { vec![0] })
+                            );
+                        }
+                        LogicalPlan::Extension(extension) => {
+                            if let Some(node) =
+                                extension.node.as_any().downcast_ref::<MapPartitionsNode>()
+                            {
+                                iterators += 1;
+                                assert_eq!(
+                                    node.udf().output_schema().fields().len(),
+                                    1 + usize::from(passthrough)
+                                );
+                                assert_eq!(
+                                    node.udf()
+                                        .output_schema()
+                                        .field(usize::from(passthrough))
+                                        .data_type(),
+                                    &DataType::Int64
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                assert_eq!(scans, 1);
+                assert_eq!(iterators, depth);
+            }
+        }
+        Ok(())
+    }
+}

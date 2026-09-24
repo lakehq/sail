@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{UInt64Array, make_array, new_null_array};
+use datafusion::arrow::array::{NullArray, UInt64Array, make_array, new_null_array};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
@@ -70,14 +70,21 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
         let string = string.to_array(args.number_rows)?;
         let pattern = pattern.to_array(args.number_rows)?;
         let nulls = NullBuffer::union(string.nulls(), pattern.nulls());
-        let active_rows = (0..args.number_rows)
-            .filter(|row| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(*row)))
-            .map(|row| {
-                u64::try_from(row)
-                    .map_err(|_| exec_datafusion_err!("regexp_instr row index does not fit in u64"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if active_rows.is_empty() {
+        let active_rows = if nulls.as_ref().is_none_or(|nulls| nulls.null_count() == 0) {
+            None
+        } else {
+            Some(
+                (0..args.number_rows)
+                    .filter(|row| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(*row)))
+                    .map(|row| {
+                        u64::try_from(row).map_err(|_| {
+                            exec_datafusion_err!("regexp_instr row index does not fit in u64")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        };
+        if args.number_rows == 0 || active_rows.as_ref().is_some_and(Vec::is_empty) {
             return Ok(ColumnarValue::Array(new_null_array(
                 args.return_type(),
                 args.number_rows,
@@ -85,7 +92,14 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
         }
 
         // Convert the index only where both evaluated search arguments are non-null.
-        let index = evaluate_lambda_rows(index, &active_rows)?;
+        let index = if let Some(rows) = &active_rows {
+            evaluate_lambda_rows(index, rows)?
+        } else {
+            let dummy = || Ok(Arc::new(NullArray::new(args.number_rows)) as _);
+            index
+                .evaluate(&[&dummy], |arrays| Ok(arrays.to_vec()))?
+                .into_array(args.number_rows)?
+        };
         let index = if self.ansi_mode {
             cast_with_options(
                 index.as_ref(),
@@ -98,11 +112,11 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
         } else {
             index
         };
-        let search = take_arrays(
-            &[string, pattern],
-            &UInt64Array::from(active_rows.clone()),
-            None,
-        )?;
+        let search = if let Some(rows) = &active_rows {
+            take_arrays(&[string, pattern], &UInt64Array::from(rows.clone()), None)?
+        } else {
+            vec![string, pattern]
+        };
         let [string, pattern] = search.as_slice() else {
             return exec_err!("regexp_instr requires two search arguments");
         };
@@ -115,11 +129,11 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
         );
         let result = regexp_instr_func(&[string, Arc::clone(pattern)])?;
         let result = cast(result.as_ref(), &DataType::Int32)?;
-        Ok(ColumnarValue::Array(scatter_active_rows(
-            result,
-            &active_rows,
-            args.number_rows,
-        )?))
+        let result = match active_rows {
+            Some(rows) => scatter_active_rows(result, &rows, args.number_rows)?,
+            None => result,
+        };
+        Ok(ColumnarValue::Array(result))
     }
 }
 

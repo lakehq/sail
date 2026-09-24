@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::{Result, plan_err};
 use educe::Educe;
 use pyo3::Python;
-use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::udf::{StreamUDF, StreamUDFProjection};
 
+use crate::buffer::PyPassthroughBuffer;
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
@@ -59,7 +60,43 @@ impl StreamUDF for PySparkScalarPandasIterUDF {
         Arc::clone(&self.output_schema)
     }
 
-    fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
+    fn required_input_columns(
+        &self,
+        output_columns: &[usize],
+        input_columns: usize,
+    ) -> Option<Vec<usize>> {
+        let passthrough_columns = self.output_schema.fields().len() - 1;
+        Some(
+            (0..input_columns)
+                .filter(|i| *i >= passthrough_columns || output_columns.contains(i))
+                .collect(),
+        )
+    }
+
+    fn project_input(&self, input_columns: &[usize]) -> Result<Option<StreamUDFProjection>> {
+        let passthrough_columns = self.output_schema.fields().len() - 1;
+        let output_columns = input_columns
+            .iter()
+            .copied()
+            .filter(|i| *i < passthrough_columns)
+            .chain(std::iter::once(passthrough_columns))
+            .collect::<Vec<_>>();
+        Ok(Some(StreamUDFProjection {
+            udf: Arc::new(Self::try_new(
+                self.name.clone(),
+                self.payload.clone(),
+                Arc::new(self.output_schema.project(&output_columns)?),
+                Arc::clone(&self.config),
+            )?),
+            output_columns,
+        }))
+    }
+
+    fn invoke(
+        &self,
+        input: SendableRecordBatchStream,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         let passthrough_columns = self.output_schema.fields().len() - 1;
         let output_name = self.output_schema.field(passthrough_columns).name();
         let function = Python::attach(|py| -> PyUdfResult<_> {
@@ -70,6 +107,7 @@ impl StreamUDF for PySparkScalarPandasIterUDF {
                 passthrough_columns,
                 output_name,
                 &self.config,
+                PyPassthroughBuffer::new(context),
             )?
             .unbind())
         })?;

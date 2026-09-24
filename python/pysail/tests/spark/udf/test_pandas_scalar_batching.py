@@ -190,3 +190,27 @@ def test_scalar_iterator_validates_partition_row_counts(spark, arrow_batch_size,
         ),
     ):
         spark.range(2003, numPartitions=1).select(invalid("id")).collect()
+
+
+@pytest.mark.parametrize("limit", [False, True])
+@pytest.mark.timeout(60, method="thread")
+def test_scalar_iterator_aligns_large_prefetched_passthrough(spark, limit):
+    @pandas_udf("long", PandasUDFType.SCALAR_ITER)
+    def prefetched_identity(batches):
+        values = pd.concat(list(batches), ignore_index=True)
+        for start in range(0, len(values), 777):
+            yield values.iloc[start : start + 777]
+
+    count = 10003
+    padding = "x" * 2048
+    source = spark.range(count, numPartitions=1).withColumn("payload", F.concat("id", F.lit(padding))).coalesce(1)
+    result = source.select("id", "payload", prefetched_identity("id").alias("value"))
+    if limit:
+        assert result.limit(1).collect() == [(0, "0" + padding, 0)]
+    else:
+        actual = result.agg(
+            F.count("*").alias("count"),
+            F.sum(F.when(F.col("payload") != F.concat("id", F.lit(padding)), 1).otherwise(0)).alias("mismatches"),
+            F.sum(F.abs(F.col("value") - F.col("id"))).alias("difference"),
+        ).first()
+        assert actual == (count, 0, 0)
