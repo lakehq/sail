@@ -1,9 +1,4 @@
-"""Observable SQL and HTTP contract tests for Sail's built-in async Jev functions.
-
-The mock and the server run in this process. These tests intentionally use Python
-rather than snapshots so they can assert request isolation, retries and concurrency.
-Local-cluster execution also exercises physical UDF serialization.
-"""
+"""SQL and HTTP contract tests for Sail's async Jev functions."""
 
 import json
 import time
@@ -15,6 +10,7 @@ from email.utils import format_datetime
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 
 from pysail.testing.jev import JevMock
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
@@ -1139,3 +1135,315 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             actual.extend(question[location] for question in body["questions"].values() if location in question)
     assert sorted(value["true"]["amount"] for value in actual) == amounts
     assert all(set(value) == {"true"} and set(value["true"]) == {"amount"} for value in actual)
+
+
+# Jev is the concrete async UDF used to test shared execution paths here.
+# The join, lambda, VALUES, and window argument/order cases cover general async
+# UDF limits in these query shapes. Correlated EXISTS and NOT EXISTS use the
+# same join paths. These failures do not depend on the Jev HTTP API.
+# The grouping cases depend on Jev's distinct call IDs; they do not show that
+# all async UDFs fail when an expression is repeated in GROUP BY.
+# CLUSTER BY and DISTRIBUTE BY fail in SQL analysis, regardless of UDF type.
+# The window partition and correlated scalar errors have only been verified
+# with Jev. Do not assume that every async UDF produces these errors.
+@pytest.mark.parametrize(
+    ("query", "expected", "expected_error"),
+    [
+        pytest.param(
+            "SELECT a.id AS a, b.id AS b FROM range(0, 3, 1, 1) a LEFT JOIN range(0, 3, 1, 1) b ON a.id = b.id "
+            "AND jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY a, b",
+            [{"a": 0, "b": None}, {"a": 1, "b": 1}, {"a": 2, "b": 2}],
+            "async functions should not be called directly",
+            id="left_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id AS a, b.id AS b FROM range(0, 3, 1, 1) a RIGHT JOIN range(0, 3, 1, 1) b ON a.id = b.id "
+            "AND jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY b, a",
+            [{"a": None, "b": 0}, {"a": 1, "b": 1}, {"a": 2, "b": 2}],
+            "async functions should not be called directly",
+            id="right_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id AS a, b.id AS b FROM range(0, 3, 1, 1) a FULL JOIN range(0, 3, 1, 1) b ON a.id = b.id "
+            "AND jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY a NULLS "
+            "FIRST, b NULLS FIRST",
+            [{"a": None, "b": 0}, {"a": 0, "b": None}, {"a": 1, "b": 1}, {"a": 2, "b": 2}],
+            "async functions should not be called directly",
+            id="full_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id AS a FROM range(0, 3, 1, 1) a LEFT SEMI JOIN range(0, 3, 1, 1) b ON a.id = b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY a",
+            [{"a": 1}, {"a": 2}],
+            "async functions should not be called directly",
+            id="left_semi_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id AS a FROM range(0, 3, 1, 1) a LEFT ANTI JOIN range(0, 3, 1, 1) b ON a.id = b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY a",
+            [{"a": 0}],
+            "async functions should not be called directly",
+            id="left_anti_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT b.id AS b FROM range(0, 3, 1, 1) a RIGHT SEMI JOIN range(0, 3, 1, 1) b ON a.id = b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY b",
+            [{"b": 1}, {"b": 2}],
+            "async functions should not be called directly",
+            id="right_semi_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT b.id AS b FROM range(0, 3, 1, 1) a RIGHT ANTI JOIN range(0, 3, 1, 1) b ON a.id = b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING), CAST(b.id AS STRING)), 'q').noul > 0.1 ORDER BY b",
+            [{"b": 0}],
+            "async functions should not be called directly",
+            id="right_anti_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id AS a, b.id AS b FROM range(0,3,1,1) a LEFT JOIN range(0,3,1,1) b ON a.id=b.id AND "
+            "jev_noul(CAST(a.id AS STRING),'q').noul > 0 ORDER BY a,b",
+            [{"a": 0, "b": None}, {"a": 1, "b": 1}, {"a": 2, "b": 2}],
+            "async functions should not be called directly",
+            id="left_single_side_residual",
+            marks=pytest.mark.xfail(
+                reason="The non-inner join residual evaluates Jev synchronously without async preparation.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT id FROM (SELECT id FROM range(0,3,1,1) CLUSTER BY jev_noul(CAST(id AS STRING),'q').noul) "
+            "partitioned ORDER BY id",
+            [{"id": 0}, {"id": 1}, {"id": 2}],
+            "CLUSTER BY",
+            id="cluster_by_jev",
+            marks=pytest.mark.xfail(
+                reason="The SQL analyzer rejects CLUSTER BY before async planning.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT id FROM (SELECT id FROM range(0,3,1,1) DISTRIBUTE BY jev_noul(CAST(id AS STRING),'q').noul) "
+            "partitioned ORDER BY id",
+            [{"id": 0}, {"id": 1}, {"id": 2}],
+            "DISTRIBUTE BY",
+            id="distribute_by_jev",
+            marks=pytest.mark.xfail(
+                reason="The SQL analyzer rejects DISTRIBUTE BY before async planning.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT transform(array('1','2'), x -> jev_noul(x,'q').noul) AS p",
+            [{"p": [0.01, 0.02]}],
+            "Async functions in lambdas aren't supported",
+            id="higher_order_lambda_jev",
+            marks=pytest.mark.xfail(
+                reason="DataFusion LambdaExpr rejects async functions in lambda bodies.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT * FROM VALUES (jev_noul('1','q').noul), (jev_noul('2','q').noul) AS t(p) ORDER BY p",
+            [{"p": 0.01}, {"p": 0.02}],
+            "async functions should not be called directly",
+            id="values_jev",
+            marks=pytest.mark.xfail(
+                reason="Async VALUES is a Sail extension; its expressions currently evaluate synchronously.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT jev_noul(CAST(id % 2 AS STRING), 'q').noul AS p, count(*) AS n FROM range(0,4,1,1) GROUP BY "
+            "jev_noul(CAST(id % 2 AS STRING), 'q').noul ORDER BY p",
+            [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}],
+            "No field named range.",
+            id="grouping_repeated_text",
+            marks=pytest.mark.xfail(
+                reason="Separate Jev call IDs prevent SELECT from matching the repeated GROUP BY expression during rebasing.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT transform(array(id,id+1), x -> x+id) AS a, jev_noul(CAST(id AS STRING),'yes?').noul AS n "
+            "FROM range(2)",
+            [{"a": [0, 1], "n": 0.0}, {"a": [2, 3], "n": 0.01}],
+            "Field of physical LambdaVariable with index 1 doesn't match batch field",
+            id="hof_async_sibling",
+            marks=pytest.mark.xfail(
+                reason="Appended async result columns invalidate the sibling lambda parameter index.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT transform(array(jev_noul(CAST(id AS STRING),'yes?').noul), x -> x+id) AS a FROM range(2)",
+            [{"a": [0.0]}, {"a": [1.01]}],
+            "Field of physical LambdaVariable with index 1 doesn't match batch field",
+            id="hof_async_argument",
+            marks=pytest.mark.xfail(
+                reason="Appended async result columns invalidate the higher-order lambda parameter index.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT id, round(sum(jev_noul(CAST(id AS STRING),'q').noul) OVER (ORDER BY id ROWS BETWEEN "
+            "UNBOUNDED PRECEDING AND CURRENT ROW),2) AS total FROM range(0,3,1,1) ORDER BY id",
+            [{"id": 0, "total": 0.0}, {"id": 1, "total": 0.01}, {"id": 2, "total": 0.03}],
+            "async functions should not be called directly",
+            id="window_argument",
+            marks=pytest.mark.xfail(
+                reason="Window aggregate arguments do not extract async calls.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT id, row_number() OVER (ORDER BY jev_noul(CAST(id AS STRING),'q').noul DESC) AS rank FROM "
+            "range(0,3,1,1) ORDER BY id",
+            [{"id": 0, "rank": 3}, {"id": 1, "rank": 2}, {"id": 2, "rank": 1}],
+            "async functions should not be called directly",
+            id="window_order",
+            marks=pytest.mark.xfail(
+                reason="Window order expressions do not extract async calls.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT id, sum(id) OVER (PARTITION BY jev_noul(CAST(id % 2 AS STRING),'q').noul) AS total FROM "
+            "range(0,4,1,1) ORDER BY id",
+            [{"id": 0, "total": 2}, {"id": 1, "total": 4}, {"id": 2, "total": 2}, {"id": 3, "total": 4}],
+            "All partition by columns should have an ordering",
+            id="window_partition",
+            marks=pytest.mark.xfail(
+                reason="Window partition expressions do not extract async calls.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id FROM range(0,3,1,1) a WHERE EXISTS (SELECT 1 FROM range(0,3,1,1) b WHERE a.id=b.id AND "
+            "jev_noul(concat(CAST(a.id AS STRING),CAST(b.id AS STRING)),'q').noul > 0.1) ORDER BY a.id",
+            [{"id": 1}, {"id": 2}],
+            "async functions should not be called directly",
+            id="correlated_exists",
+            marks=pytest.mark.xfail(
+                reason="Correlated EXISTS cannot execute an async predicate using both scopes.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id FROM range(0,3,1,1) a WHERE NOT EXISTS (SELECT 1 FROM range(0,3,1,1) b WHERE a.id=b.id "
+            "AND jev_noul(concat(CAST(a.id AS STRING),CAST(b.id AS STRING)),'q').noul > 0.1) ORDER BY a.id",
+            [{"id": 0}],
+            "async functions should not be called directly",
+            id="correlated_not_exists",
+            marks=pytest.mark.xfail(
+                reason="Correlated NOT EXISTS cannot execute an async predicate using both scopes.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT a.id, (SELECT max(jev_noul(concat(CAST(a.id AS STRING),CAST(b.id AS STRING)),'q').noul) "
+            "FROM range(0,3,1,1) b WHERE a.id=b.id) AS p FROM range(0,3,1,1) a ORDER BY a.id",
+            [{"id": 0, "p": 0.0}, {"id": 1, "p": 0.11}, {"id": 2, "p": 0.22}],
+            "Physical plan does not support logical expression ScalarSubquery(<subquery>)",
+            id="correlated_scalar",
+            marks=pytest.mark.xfail(
+                reason="A correlated scalar aggregate cannot resolve outer references inside an async argument.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT round(jev_noul(CAST(id % 2 AS STRING), 'q').noul, 2) AS p, count(*) AS n FROM "
+            "range(0,4,1,1) GROUP BY jev_noul(CAST(id % 2 AS STRING), 'q').noul ORDER BY p",
+            [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}],
+            "No field named range.",
+            id="grouping_wrapped_reference",
+            marks=pytest.mark.xfail(
+                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT jev_noul(CAST(id % 2 AS STRING), 'q').noul AS p, count(*) AS n FROM range(0,4,1,1) GROUP BY "
+            "jev_noul(CAST(id % 2 AS STRING), 'q').noul HAVING jev_noul(CAST(id % 2 AS STRING), 'q').noul > 0 "
+            "ORDER BY p",
+            [{"p": 0.01, "n": 2}],
+            "No field named range.",
+            id="grouping_having_reference",
+            marks=pytest.mark.xfail(
+                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+        pytest.param(
+            "SELECT jev_noul(CAST(id % 2 AS STRING), 'q').noul AS p, count(*) AS n FROM range(0,4,1,1) GROUP BY "
+            "GROUPING SETS ((jev_noul(CAST(id % 2 AS STRING), 'q').noul), ()) ORDER BY p NULLS LAST",
+            [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}, {"p": None, "n": 4}],
+            "No field named range.",
+            id="grouping_sets_reference",
+            marks=pytest.mark.xfail(
+                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
+                strict=True,
+                raises=SparkConnectGrpcException,
+            ),
+        ),
+    ],
+)
+@pytest.mark.usefixtures("jev")
+def test_jev_known_query_limitations(spark, query, expected, expected_error):
+    try:
+        rows = [row.asDict(recursive=True) for row in spark.sql(query).collect()]
+    except SparkConnectGrpcException as error:
+        if expected_error not in str(error):
+            pytest.fail(f"Expected error containing {expected_error!r}, got: {error}")
+        raise
+    assert rows == expected
