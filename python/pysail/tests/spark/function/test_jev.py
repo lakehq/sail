@@ -959,12 +959,12 @@ def test_jev_calls_through_aggregate_resolver(spark, jev, query, expected):
 
 @pytest.mark.parametrize("grouped", [False, True])
 def test_jev_dataframe_aggregate_arguments(spark, jev, grouped):
-    from pyspark.sql import functions as F
+    from pyspark.sql import functions as sf
 
     frame = spark.range(0, 4, 1, 1)
-    total = F.round(F.sum(F.expr("jev_noul(CAST(id AS STRING), 'yes?').noul")), 2).alias("total")
+    total = sf.round(sf.sum(sf.expr("jev_noul(CAST(id AS STRING), 'yes?').noul")), 2).alias("total")
     if grouped:
-        result = frame.groupBy((F.col("id") % 2).alias("group_id")).agg(total).orderBy("group_id")
+        result = frame.groupBy((sf.col("id") % 2).alias("group_id")).agg(total).orderBy("group_id")
         expected = [{"group_id": 0, "total": 0.02}, {"group_id": 1, "total": 0.04}]
     else:
         result = frame.agg(total)
@@ -983,7 +983,7 @@ def test_jev_dataframe_aggregate_arguments(spark, jev, grouped):
 def test_jev_aggregate_exemption_keeps_other_volatile_checks(spark, jev, expression):
     with pytest.raises(Exception, match="Non-deterministic expression random"):
         spark.sql(
-            f"SELECT id % 2 AS group_id, {expression} AS total "
+            f"SELECT id % 2 AS group_id, {expression} AS total "  # noqa: S608 -- fixed test expressions
             "FROM range(0, 4, 1, 1) GROUP BY id % 2"
         ).collect()
     assert jev.request_count == 0
@@ -1022,11 +1022,13 @@ def test_jev_aggregate_exemption_keeps_other_volatile_checks(spark, jev, express
     ],
 )
 def test_jev_grouping_keys(spark, jev, query, expected):
+    expected_questions = 4
     assert [row.asDict() for row in spark.sql(query).collect()] == expected
-    assert sum(len(request["body"]["questions"]) for request in jev.requests) == 4
+    assert sum(len(request["body"]["questions"]) for request in jev.requests) == expected_questions
 
 
 def test_jev_grouping_keys_keep_sql_null_and_ordinary_groups(spark, jev):
+    expected_questions = 3
     rows = spark.sql(
         "SELECT id % 2 AS g, "
         "jev_noul(CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE CAST(id % 2 AS STRING) END, 'yes?').noul AS p, "
@@ -1037,21 +1039,22 @@ def test_jev_grouping_keys_keep_sql_null_and_ordinary_groups(spark, jev):
         {"g": 0, "p": None, "n": 1},
         {"g": 1, "p": 0.01, "n": 2},
     ]
-    assert sum(len(request["body"]["questions"]) for request in jev.requests) == 3
+    assert sum(len(request["body"]["questions"]) for request in jev.requests) == expected_questions
 
 
 def test_jev_dataframe_grouping_key(spark, jev):
-    from pyspark.sql import functions as F
+    from pyspark.sql import functions as sf
 
+    expected_questions = 4
     rows = (
         spark.range(0, 4, 1, 1)
-        .groupBy(F.expr("jev_noul(CAST(id % 2 AS STRING), 'yes?').noul").alias("p"))
+        .groupBy(sf.expr("jev_noul(CAST(id % 2 AS STRING), 'yes?').noul").alias("p"))
         .count()
         .orderBy("p")
         .collect()
     )
     assert [row.asDict() for row in rows] == [{"p": 0.0, "count": 2}, {"p": 0.01, "count": 2}]
-    assert sum(len(request["body"]["questions"]) for request in jev.requests) == 4
+    assert sum(len(request["body"]["questions"]) for request in jev.requests) == expected_questions
 
 
 def test_jev_aggregates_over_empty_input_make_no_requests(spark, jev):
