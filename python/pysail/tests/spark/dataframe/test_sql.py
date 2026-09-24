@@ -66,8 +66,7 @@ def test_sql_conditional_preserves_parameter_branch_precision(spark, marker, nam
     ("query", "value"),
     [
         pytest.param(
-            "SELECT nvl2(id, 1, CAST(1.5 AS DOUBLE)) AS v "
-            "FROM VALUES (0), (NULL) AS t(id) WHERE {marker} ORDER BY v",
+            "SELECT nvl2(id, 1, CAST(1.5 AS DOUBLE)) AS v FROM VALUES (0), (NULL) AS t(id) WHERE {marker} ORDER BY v",
             True,
             id="unrelated-parameter",
         ),
