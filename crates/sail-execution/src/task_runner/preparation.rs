@@ -20,10 +20,12 @@ use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio_util::sync::CancellationToken;
 
+use crate::dynamic_filter::{DynamicFilterClient, TaskDynamicFilters};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
-use crate::proto::{RemoteExecutionCodec, proto_to_physical_plan};
+use crate::proto::RemoteExecutionCodec;
+use crate::proto::decode::decode_task_plan;
 use crate::stream::accessor::TaskStreamFactory;
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::TaskRunnerActor;
@@ -32,6 +34,7 @@ pub(super) struct TaskPreparation {
     pub session_id: String,
     pub handle: ActorHandle<TaskRunnerActor>,
     pub celeborn: bool,
+    pub dynamic_filters: DynamicFilterClient,
 }
 
 impl TaskPreparation {
@@ -56,7 +59,7 @@ impl TaskPreparation {
         canceled: &CancellationToken,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
-        let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
+        let (plan, bindings) = decode_task_plan(&context, proto)?;
         let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             key,
@@ -65,6 +68,8 @@ impl TaskPreparation {
             plan,
             context.clone(),
         )?;
+        let (plan, dynamic_filters) =
+            TaskDynamicFilters::prepare(plan, bindings, &definition.dynamic_filter_ids, &context)?;
         debug!(
             "{} execution plan\n{}",
             TaskKeyDisplay(key),
@@ -86,7 +91,17 @@ impl TaskPreparation {
                 "task canceled during preparation".into(),
             ));
         }
-        Ok(plan.execute(key.partition, context)?)
+        if definition.dynamic_filter_ids.is_empty() {
+            return Ok(plan.execute(key.partition, context)?);
+        }
+        // Some operators start reading in execute(). Delay that call until the
+        // initial remote filter snapshot has been applied by the outer stream.
+        let partition = key.partition;
+        let task_context = context.clone();
+        let stream = preparation_stream(key.clone(), move |_| {
+            Ok(plan.execute(partition, task_context)?)
+        });
+        Ok(dynamic_filters.stream(stream, key.clone(), self.dynamic_filters.clone(), context))
     }
 
     fn rewrite_file_scans(

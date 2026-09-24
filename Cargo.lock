@@ -7728,6 +7728,7 @@ name = "sail-execution"
 version = "0.7.1"
 dependencies = [
  "arrow-flight",
+ "async-stream",
  "bytes",
  "chrono",
  "datafusion",

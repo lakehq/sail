@@ -1,0 +1,395 @@
+# serializer version: 1
+---
+name: "test_join_filters_cross_exchanges[flight-1]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#1@0]
+      ProjectionExec: expr=[CASE WHEN #0@0 = 0 THEN 1 WHEN #0@0 = 3 THEN 93 ELSE 17 END as #1]
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 2 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#7@1], channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[label@2 as #5, k@0 as #7], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+    === stage 3 ===
+    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=2, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    SortExec: expr=[#11@0 ASC], preserve_partitioning=[true]
+      ProjectionExec: expr=[#1@0 as #11, #5@1 as #12]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #7@1)], projection=[#1@0, #5@1]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          StageInputExec: input=1, partitioning=Hash([#7@1], 4)
+
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Merge)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#11@0 as k, #12@1 as label]
+      SortPreservingMergeExec: [#11@0 ASC]
+        StageInputExec: input=0, partitioning=Hash([#11@0], 4)
+---
+name: "test_join_filters_cross_exchanges[flight-4]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#1@0]
+      ProjectionExec: expr=[CASE WHEN #0@0 = 0 THEN 1 WHEN #0@0 = 3 THEN 93 ELSE 17 END as #1]
+        RangeExec
+
+    === stage 1 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#7@1], channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[label@2 as #5, k@0 as #7], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+    === stage 2 ===
+    inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    SortExec: expr=[#11@0 ASC], preserve_partitioning=[true]
+      ProjectionExec: expr=[#1@0 as #11, #5@1 as #12]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #7@1)], projection=[#1@0, #5@1]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          StageInputExec: input=1, partitioning=Hash([#7@1], 4)
+
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Merge)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#11@0 as k, #12@1 as label]
+      SortPreservingMergeExec: [#11@0 ASC]
+        StageInputExec: input=0, partitioning=Hash([#11@0], 4)
+---
+name: "test_join_filters_cross_exchanges[storage-1]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#1@0]
+      ProjectionExec: expr=[CASE WHEN #0@0 = 0 THEN 1 WHEN #0@0 = 3 THEN 93 ELSE 17 END as #1]
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+
+    === stage 4 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#7@1], channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[label@2 as #5, k@0 as #7], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+    === stage 5 ===
+    inputs=[StageInput(stage=4, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#7@1], 4)
+
+    === stage 6 ===
+    inputs=[StageInput(stage=3, mode=Forward), StageInput(stage=5, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    SortExec: expr=[#11@0 ASC], preserve_partitioning=[true]
+      ProjectionExec: expr=[#1@0 as #11, #5@1 as #12]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #7@1)], projection=[#1@0, #5@1]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          StageInputExec: input=1, partitioning=Hash([#7@1], 4)
+
+    === stage 7 ===
+    inputs=[StageInput(stage=6, mode=Merge)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#11@0 as k, #12@1 as label]
+      SortPreservingMergeExec: [#11@0 ASC]
+        StageInputExec: input=0, partitioning=Hash([#11@0], 4)
+---
+name: "test_join_filters_cross_exchanges[storage-4]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#1@0]
+      ProjectionExec: expr=[CASE WHEN #0@0 = 0 THEN 1 WHEN #0@0 = 3 THEN 93 ELSE 17 END as #1]
+        RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+
+    === stage 2 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#7@1], channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[label@2 as #5, k@0 as #7], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#7@1], 4)
+
+    === stage 4 ===
+    inputs=[StageInput(stage=1, mode=Forward), StageInput(stage=3, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    SortExec: expr=[#11@0 ASC], preserve_partitioning=[true]
+      ProjectionExec: expr=[#1@0 as #11, #5@1 as #12]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #7@1)], projection=[#1@0, #5@1]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          StageInputExec: input=1, partitioning=Hash([#7@1], 4)
+
+    === stage 5 ===
+    inputs=[StageInput(stage=4, mode=Merge)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#11@0 as k, #12@1 as label]
+      SortPreservingMergeExec: [#11@0 ASC]
+        StageInputExec: input=0, partitioning=Hash([#11@0], 4)
+---
+name: "test_nested_filters[flight]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 * 34 as #1]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 2 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#3@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#3@0]
+      ProjectionExec: expr=[#2@0 * 17 as #3]
+        RangeExec
+
+    === stage 3 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[k], file_type=parquet, predicate=k@0 < 100 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=k_null_count@1 != row_count@2 AND k_min@0 < 100, required_guarantees=[]
+
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#4@0], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[k@0 as #4]
+      FilterExec: k@0 < 100
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 5 ===
+    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=2, mode=Shuffle), StageInput(stage=4, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#13@0 as k]
+      ProjectionExec: expr=[#1@0 as #13]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #9@0)], projection=[#1@0]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          ProjectionExec: expr=[#3@0 as #9]
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#3@0, #4@0)], projection=[#3@0]
+              StageInputExec: input=1, partitioning=Hash([#3@0], 4)
+              StageInputExec: input=2, partitioning=Hash([#4@0], 4)
+---
+name: "test_nested_filters[storage]"
+data:
+  |-
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#1@0], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 * 34 as #1]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+
+    === stage 4 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#3@0], channels=4)
+    placement=Worker
+    DynamicFilterBuildExec: keys=[#3@0]
+      ProjectionExec: expr=[#2@0 * 17 as #3]
+        RangeExec
+
+    === stage 5 ===
+    inputs=[StageInput(stage=4, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#3@0], 4)
+
+    === stage 6 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={1 group: [[<tmp>/data/<id>_0.zst.parquet]]}, projection=[k], file_type=parquet, predicate=k@0 < 100 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=k_null_count@1 != row_count@2 AND k_min@0 < 100, required_guarantees=[]
+
+    === stage 7 ===
+    inputs=[StageInput(stage=6, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 8 ===
+    inputs=[StageInput(stage=7, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[#4@0], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[k@0 as #4]
+      FilterExec: k@0 < 100
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 9 ===
+    inputs=[StageInput(stage=8, mode=Shuffle)]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=Hash([#4@0], 4)
+
+    === stage 10 ===
+    inputs=[StageInput(stage=3, mode=Forward), StageInput(stage=5, mode=Forward), StageInput(stage=9, mode=Forward)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#13@0 as k]
+      ProjectionExec: expr=[#1@0 as #13]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #9@0)], projection=[#1@0]
+          StageInputExec: input=0, partitioning=Hash([#1@0], 4)
+          ProjectionExec: expr=[#3@0 as #9]
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#3@0, #4@0)], projection=[#3@0]
+              StageInputExec: input=1, partitioning=Hash([#3@0], 4)
+              StageInputExec: input=2, partitioning=Hash([#4@0], 4)

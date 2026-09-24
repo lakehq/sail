@@ -183,6 +183,30 @@ pub struct DriverClient {
 }
 
 impl DriverClient {
+    pub(crate) async fn exchange_dynamic_filters(
+        &self,
+        key: &TaskKey,
+        updates: Vec<r#gen::DynamicFilterUpdate>,
+        revision: u64,
+    ) -> ExecutionResult<r#gen::ExchangeDynamicFiltersResponse> {
+        Ok(self
+            .inner
+            .get()
+            .await?
+            .max_decoding_message_size(sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+            .exchange_dynamic_filters(Request::new(r#gen::ExchangeDynamicFiltersRequest {
+                driver_id: self.driver_id.into(),
+                job_id: key.job_id.into(),
+                stage: key.stage as u64,
+                partition: key.partition as u64,
+                attempt: key.attempt as u64,
+                updates,
+                revision,
+            }))
+            .await?
+            .into_inner())
+    }
+
     pub fn new(driver_id: DriverId, options: ClientOptions) -> Self {
         Self {
             inner: ClientHandle::new(options.clone()),

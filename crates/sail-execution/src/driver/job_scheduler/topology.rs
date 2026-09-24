@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
 use indexmap::IndexSet;
@@ -94,7 +94,18 @@ impl JobTopology {
 
         for component in components {
             // check if all inputs within component are forward inputs
-            let mut all_forward = true;
+            // A filter combines contributions from every producer partition. Consumers
+            // must retry together with those producers, even for forward-only pipelines.
+            let mut all_forward = !graph.dynamic_filters.values().any(|route| {
+                route
+                    .producers
+                    .keys()
+                    .any(|stage| component.contains(stage))
+                    && route
+                        .consumers
+                        .iter()
+                        .any(|stage| component.contains(stage))
+            });
             for &u in &component {
                 for input in &graph.stages()[u].inputs {
                     if component.contains(&input.stage) && !matches!(input.mode, InputMode::Forward)
@@ -210,12 +221,67 @@ impl JobTopology {
             }
         }
 
+        // Distinct regions communicate through materialized outputs. Finish an
+        // independent build region before starting its probe scans. Never order
+        // tasks within one pipeline or introduce a dependency cycle.
+        for route in graph.dynamic_filters.values() {
+            for (&producer, &partitions) in &route.producers {
+                let producer_regions = (0..partitions)
+                    .filter_map(|partition| {
+                        task_to_region
+                            .get(&TaskTopology {
+                                stage: producer,
+                                partition,
+                            })
+                            .copied()
+                    })
+                    .collect::<BTreeSet<_>>();
+                for &consumer in &route.consumers {
+                    let partitions = graph.stages()[consumer]
+                        .plan
+                        .output_partitioning()
+                        .partition_count();
+                    let consumer_regions = (0..partitions)
+                        .filter_map(|partition| {
+                            task_to_region
+                                .get(&TaskTopology {
+                                    stage: consumer,
+                                    partition,
+                                })
+                                .copied()
+                        })
+                        .collect::<BTreeSet<_>>();
+                    for &consumer in &consumer_regions {
+                        for &producer in &producer_regions {
+                            if !region_depends_on(&regions, producer, consumer) {
+                                regions[consumer].dependencies.insert(producer);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             regions,
             stages,
             task_regions: task_to_region,
         })
     }
+}
+
+fn region_depends_on(regions: &[TaskRegionTopology], source: usize, target: usize) -> bool {
+    let mut pending = vec![source];
+    let mut visited = HashSet::new();
+    while let Some(region) = pending.pop() {
+        if region == target {
+            return true;
+        }
+        if visited.insert(region) {
+            pending.extend(regions[region].dependencies.iter().copied());
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -284,6 +350,103 @@ mod tests {
         {
             for input_region in &blocking_input_regions {
                 assert!(region.dependencies.contains(input_region));
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_filters_order_materialized_regions_and_keep_pipelines_concurrent() {
+        use datafusion::common::JoinType;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
+        };
+        use datafusion::physical_plan::filter::FilterExec;
+        use datafusion::physical_plan::joins::{HashJoinExecBuilder, PartitionMode};
+
+        for backend in [
+            ShuffleBackendKind::Flight {
+                compression: ShuffleCompression::None,
+            },
+            ShuffleBackendKind::Storage {
+                path: None,
+                max_file_size: 1,
+                compression: ShuffleCompression::None,
+            },
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+            let key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+            let filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![key.clone()], lit(true)));
+            let id = filter.expression_id().unwrap();
+            let build = Arc::new(
+                RepartitionExec::try_new(
+                    Arc::new(EmptyExec::new(schema.clone()).with_partitions(2)),
+                    Partitioning::Hash(vec![key.clone()], 4),
+                )
+                .unwrap(),
+            );
+            let probe = Arc::new(
+                FilterExec::try_new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(BinaryExpr::new(key.clone(), Operator::GtEq, lit(0_i64))),
+                        Operator::And,
+                        filter.clone(),
+                    )),
+                    Arc::new(EmptyExec::new(schema).with_partitions(2)),
+                )
+                .unwrap(),
+            );
+            let probe = Arc::new(
+                RepartitionExec::try_new(probe, Partitioning::Hash(vec![key.clone()], 4)).unwrap(),
+            );
+            let join =
+                HashJoinExecBuilder::new(build, probe, vec![(key.clone(), key)], JoinType::Inner)
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .build()
+                    .unwrap()
+                    .with_dynamic_filter_expr(filter)
+                    .unwrap();
+            let graph = JobGraph::try_new(
+                Arc::new(join),
+                JobGraphOptions {
+                    shuffle_backend: backend.clone(),
+                },
+            )
+            .unwrap();
+            let route = &graph.dynamic_filters[&id];
+            assert_eq!(route.producers.len(), 1);
+            assert_eq!(route.producers.values().next(), Some(&2));
+            let topology = JobTopology::try_new(&graph).unwrap();
+            for &producer in route.producers.keys() {
+                for &consumer in &route.consumers {
+                    for partition in 0..2 {
+                        let source = topology.task_regions[&super::TaskTopology {
+                            stage: producer,
+                            partition,
+                        }];
+                        let target = topology.task_regions[&super::TaskTopology {
+                            stage: consumer,
+                            partition,
+                        }];
+                        match backend {
+                            ShuffleBackendKind::Flight { .. } => assert_eq!(source, target),
+                            _ => {
+                                assert_ne!(source, target);
+                                assert!(super::region_depends_on(
+                                    &topology.regions,
+                                    target,
+                                    source
+                                ));
+                                assert!(!super::region_depends_on(
+                                    &topology.regions,
+                                    source,
+                                    target
+                                ));
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -133,6 +133,18 @@ impl Actor for DriverActor {
         message: DriverMessage,
     ) -> ActorAction {
         match message {
+            DriverMessage::ExchangeDynamicFilters {
+                key,
+                updates,
+                revision,
+                result,
+            } => {
+                let _ = result.send(
+                    self.job_scheduler
+                        .exchange_dynamic_filters(&key, updates, revision),
+                );
+                ActorAction::Continue
+            }
             DriverMessage::Activate { result } => self.handle_activate(ctx, result),
             DriverMessage::RegisterWorker {
                 worker_id,

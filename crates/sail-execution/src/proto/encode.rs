@@ -45,9 +45,6 @@ pub fn encode_remote_physical_plan(
             }
         })
         .data()?;
-    // TODO(distributed-execution): Route dynamic-filter updates and completion from each producer
-    // to every consumer with the same expression ID across stage boundaries, including
-    // attempt-scoped recreation on retry and route cleanup on cancellation.
     try_encode_physical_plan(codec, plan)
 }
 
@@ -74,7 +71,7 @@ where
     Ok(message.encode_to_vec())
 }
 
-pub(super) fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
+pub(crate) fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
     try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
 }
 

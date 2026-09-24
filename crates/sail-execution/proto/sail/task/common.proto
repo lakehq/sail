@@ -6,6 +6,7 @@ message TaskDefinition {
   bytes plan = 1;
   repeated TaskInput inputs = 2;
   TaskOutput output = 3;
+  repeated uint64 dynamic_filter_ids = 4;
 }
 
 message TaskInput {

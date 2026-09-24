@@ -77,7 +77,7 @@ where
     Ok(message)
 }
 
-pub(super) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
+pub(crate) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
     let schema = try_decode_message::<gen_datafusion_common::Schema>(buf)?;
     Ok((&schema).try_into()?)
 }
@@ -108,6 +108,7 @@ pub(super) fn try_decode_physical_plan_with_converter(
     proto_to_physical_plan_with_converter(ctx, codec, proto_converter, &plan)
 }
 
+#[cfg(test)]
 pub(crate) fn proto_to_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
@@ -124,6 +125,23 @@ pub(super) fn proto_to_physical_plan_with_converter(
     plan: &PhysicalPlanNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.try_into_physical_plan_with_converter(ctx, codec, proto_converter)
+}
+
+pub(crate) fn decode_task_plan(
+    ctx: &TaskContext,
+    plan: &PhysicalPlanNode,
+) -> Result<(
+    Arc<dyn ExecutionPlan>,
+    std::collections::HashMap<u64, crate::dynamic_filter::DynamicFilterBinding>,
+)> {
+    let converter = RemotePhysicalProtoConverter::default();
+    let plan = proto_to_physical_plan_with_converter(
+        ctx,
+        &crate::proto::RemoteExecutionCodec,
+        &converter,
+        plan,
+    )?;
+    Ok((plan, converter.dynamic_filters()))
 }
 
 pub(super) fn try_decode_physical_expr(

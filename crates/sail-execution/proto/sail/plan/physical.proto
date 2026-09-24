@@ -70,7 +70,17 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
+    DynamicFilterBuildExecNode dynamic_filter_build = 58;
   }
+}
+
+message DynamicFilterBuildExecNode {
+  bytes input = 1;
+  repeated bytes keys = 2;
+  bytes filter = 3;
+  bytes probe_schema = 4;
+  bool null_equals_null = 5;
+  bool null_aware = 6;
 }
 
 message RemoteCheckpointWriteExecNode {

@@ -355,6 +355,49 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("no physical plan node found"),
         };
         match node_kind {
+            NodeKind::DynamicFilterBuild(node) => {
+                let input = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &node.input,
+                )?;
+                let probe_schema = Arc::new(try_decode_schema(&node.probe_schema)?);
+                let keys = node
+                    .keys
+                    .iter()
+                    .map(|key| {
+                        try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            key,
+                            &input.schema(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let filter = try_decode_physical_expr_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &node.filter,
+                    &probe_schema,
+                )?;
+                if keys.len() != filter.children().len()
+                    || !filter
+                        .is::<datafusion::physical_expr::expressions::DynamicFilterPhysicalExpr>()
+                {
+                    return plan_err!("invalid dynamic filter build description");
+                }
+                Ok(Arc::new(crate::dynamic_filter::DynamicFilterBuildExec {
+                    input,
+                    keys,
+                    filter,
+                    probe_schema,
+                    null_equals_null: node.null_equals_null,
+                    null_aware: node.null_aware,
+                }))
+            }
             NodeKind::Range(r#gen::RangeExecNode {
                 start,
                 end,
@@ -1828,7 +1871,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         buf: &mut Vec<u8>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
-        let node_kind = if let Some(range) = node.downcast_ref::<RangeExec>() {
+        let node_kind = if let Some(build) =
+            node.downcast_ref::<crate::dynamic_filter::DynamicFilterBuildExec>()
+        {
+            NodeKind::DynamicFilterBuild(r#gen::DynamicFilterBuildExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    build.input.clone(),
+                )?,
+                keys: build
+                    .keys
+                    .iter()
+                    .map(|key| try_encode_physical_expr_with_converter(self, proto_converter, key))
+                    .collect::<Result<Vec<_>>>()?,
+                filter: try_encode_physical_expr_with_converter(
+                    self,
+                    proto_converter,
+                    &build.filter,
+                )?,
+                probe_schema: try_encode_schema(&build.probe_schema)?,
+                null_equals_null: build.null_equals_null,
+                null_aware: build.null_aware,
+            })
+        } else if let Some(range) = node.downcast_ref::<RangeExec>() {
             let schema = try_encode_schema(range.original_schema().as_ref())?;
             let projection = self.try_encode_projection(range.projection())?;
             NodeKind::Range(r#gen::RangeExecNode {
