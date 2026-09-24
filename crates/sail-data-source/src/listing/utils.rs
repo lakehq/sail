@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::FieldRef;
@@ -26,6 +27,11 @@ use crate::url::PathGlobFilter;
 /// what it cannot represent. Coercing the inferred schema here, rather than letting the
 /// conversion fail later, keeps files readable that DataFusion can already read: the listing
 /// table casts each file to this schema as it scans.
+///
+/// View types (`Utf8View`, `BinaryView`) are deliberately kept. The Parquet reader produces
+/// them by default (`parquet.schema_force_view_types`), the Arrow-to-Spark conversion maps them
+/// to Spark's string and binary types, and `optimizer.expand_views_at_output` converts the data
+/// at the query output. Collapsing them here would copy every value into a plain buffer.
 pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
     Arc::new(normalize_unsupported_fields(&schema))
 }
@@ -37,12 +43,48 @@ pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
 /// `timestamp[ms]` in one file and `timestamp[us]` in another would otherwise fail to merge,
 /// even though Spark represents both as a single timestamp type, and that failure would occur
 /// before [`rewrite_unsupported_fields`] ever ran.
+///
+/// The same applies to view types. A directory can hold a column as `Utf8View` in one file
+/// and `Utf8` in another (e.g. a raw write followed by an `INSERT`), so a plain string or
+/// binary column is upcast to its view counterpart whenever another file already has that
+/// column as a view. Upcasting keeps the view type the reader produces rather than copying
+/// every value into a plain buffer.
 pub fn try_merge_normalized(schemas: impl IntoIterator<Item = Schema>) -> Result<Schema> {
-    Ok(Schema::try_merge(
-        schemas
-            .into_iter()
-            .map(|schema| normalize_unsupported_fields(&schema)),
-    )?)
+    let schemas = schemas
+        .into_iter()
+        .map(|schema| normalize_unsupported_fields(&schema))
+        .collect::<Vec<_>>();
+    let view_fields = schemas
+        .iter()
+        .flat_map(|schema| schema.fields().iter())
+        .filter(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView))
+        .map(|field| field.name().clone())
+        .collect::<HashSet<_>>();
+    Ok(Schema::try_merge(schemas.iter().map(|schema| {
+        upcast_to_view_fields(schema, &view_fields)
+    }))?)
+}
+
+/// Upcasts plain string and binary fields named in `view_fields` to their view counterparts.
+fn upcast_to_view_fields(schema: &Schema, view_fields: &HashSet<String>) -> Schema {
+    let new_fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let view_type = match field.data_type() {
+                DataType::Utf8 | DataType::LargeUtf8 => DataType::Utf8View,
+                DataType::Binary | DataType::LargeBinary => DataType::BinaryView,
+                _ => return field.as_ref().clone(),
+            };
+            if view_fields.contains(field.name()) {
+                field.as_ref().clone().with_data_type(view_type)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+
+    Schema::new_with_metadata(new_fields, schema.metadata().clone())
 }
 
 fn normalize_unsupported_fields(schema: &Schema) -> Schema {
@@ -53,12 +95,6 @@ fn normalize_unsupported_fields(schema: &Schema) -> Schema {
         .fields()
         .iter()
         .map(|field| match field.data_type() {
-            // Spark has neither Utf8View nor BinaryView, so coerce view types to their plain
-            // counterparts. This also lets a directory that mixes a view file with a plain one
-            // (e.g. a raw write followed by an INSERT) merge, since `Schema::try_merge` rejects
-            // Utf8View-vs-Utf8 and BinaryView-vs-Binary.
-            DataType::Utf8View => field.as_ref().clone().with_data_type(DataType::Utf8),
-            DataType::BinaryView => field.as_ref().clone().with_data_type(DataType::Binary),
             // Spark timestamps are microseconds, so second and millisecond timestamps are
             // widened here; the conversion would otherwise reject them even though the
             // widening is lossless. Nanoseconds are left alone so that they are still
@@ -454,9 +490,9 @@ mod tests {
         let schema = rewrite_unsupported_fields(schema);
         let field = |name: &str| schema.field_with_name(name).unwrap().clone();
 
-        // Spark has neither `Utf8View` nor `BinaryView`; both coerce to their plain forms.
-        assert_eq!(field("view").data_type(), &DataType::Utf8);
-        assert_eq!(field("binview").data_type(), &DataType::Binary);
+        // View types are kept rather than collapsed to their plain forms.
+        assert_eq!(field("view").data_type(), &DataType::Utf8View);
+        assert_eq!(field("binview").data_type(), &DataType::BinaryView);
 
         // Second and millisecond timestamps widen to microseconds, keeping the time zone.
         let us = DataType::Timestamp(TimeUnit::Microsecond, None);
@@ -505,17 +541,55 @@ mod tests {
         // Without normalizing first, that same merge fails - which is what this guards against.
         assert!(Schema::try_merge([ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)]).is_err());
 
-        // `Utf8View` and `Utf8` reconcile the same way.
-        let merged = try_merge_normalized([
-            Schema::new(vec![Field::new("s", DataType::Utf8View, true)]),
-            Schema::new(vec![Field::new("s", DataType::Utf8, true)]),
-        ])
-        .unwrap();
-        assert_eq!(merged.field(0).data_type(), &DataType::Utf8);
-
         // Nanoseconds are deliberately left alone, so they still conflict.
         assert!(
             try_merge_normalized([ts(TimeUnit::Nanosecond), ts(TimeUnit::Microsecond)]).is_err()
+        );
+    }
+
+    #[test]
+    fn test_try_merge_normalized_upcasts_plain_to_view() {
+        let schema = |fields: Vec<(&str, DataType)>| {
+            Schema::new(
+                fields
+                    .into_iter()
+                    .map(|(name, data_type)| Field::new(name, data_type, true))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        // A column that is a view in one file and plain in another merges as the view type.
+        let merged = try_merge_normalized([
+            schema(vec![
+                ("s", DataType::Utf8View),
+                ("b", DataType::Binary),
+                ("plain", DataType::Utf8),
+            ]),
+            schema(vec![
+                ("s", DataType::Utf8),
+                ("b", DataType::BinaryView),
+                ("plain", DataType::Utf8),
+            ]),
+            schema(vec![
+                ("s", DataType::LargeUtf8),
+                ("b", DataType::LargeBinary),
+            ]),
+        ])
+        .unwrap();
+        let field = |name: &str| merged.field_with_name(name).unwrap().data_type().clone();
+        assert_eq!(field("s"), DataType::Utf8View);
+        assert_eq!(field("b"), DataType::BinaryView);
+
+        // A column that is plain in every file is left plain.
+        assert_eq!(field("plain"), DataType::Utf8);
+
+        // Without upcasting first, the mixed merge fails - which is what this guards against.
+        assert!(
+            Schema::try_merge([
+                schema(vec![("s", DataType::Utf8View)]),
+                schema(vec![("s", DataType::Utf8)]),
+            ])
+            .is_err()
         );
     }
 }
