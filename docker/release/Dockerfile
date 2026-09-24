@@ -1,5 +1,5 @@
 ARG RELEASE_TAG
-ARG RUST_VERSION=1.96.0
+ARG RUST_VERSION=1.97.1
 ARG RUST_PROFILE=release
 ARG RUSTFLAGS=""
 ARG PYSPARK_VERSION=4.2.0
@@ -49,6 +49,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry/ \
 FROM python:${PYTHON_VERSION}-slim
 
 ARG PYSPARK_VERSION
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir "pyspark-client==${PYSPARK_VERSION}"
 

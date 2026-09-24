@@ -20,7 +20,7 @@ use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_telemetry::telemetry::global_system_event_reader;
+use sail_telemetry::telemetry::global_system_store_reader;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_data_source_registry;
@@ -156,12 +156,15 @@ impl ServerSessionFactory {
     }
 
     fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
-        let reader = global_system_event_reader().ok_or_else(|| {
+        let reader = global_system_store_reader().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
-                "system event telemetry is not initialized".to_string(),
+                "telemetry is not initialized for system store".to_string(),
             )
         })?;
-        Ok(SystemTableService::new(reader))
+        Ok(SystemTableService::new(
+            reader,
+            self.config.execution.batch_size,
+        ))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {

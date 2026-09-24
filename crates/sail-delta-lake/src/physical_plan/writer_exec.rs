@@ -87,6 +87,7 @@ struct MergeRowMetrics {
     not_matched_by_source_deleted: u64,
     saw_detailed_merge_op: bool,
     uses_source_metric: bool,
+    uses_operation: bool,
 }
 
 enum SourceMetricColumn<'a> {
@@ -231,6 +232,7 @@ impl MergeRowMetrics {
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(());
         };
+        self.uses_operation = true;
         let column = batch.column(index);
         match column.data_type() {
             DataType::Int32 => {
@@ -550,28 +552,15 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_columns.is_empty() {
-            // Upstream repartitioning controls file counts and small-file behavior.
-            return vec![Distribution::UnspecifiedDistribution];
-        }
+        vec![Distribution::UnspecifiedDistribution]
+    }
 
-        // For partitioned tables, require grouping by the partition key so that each task can
-        // write its partitions correctly without opening many writers concurrently.
-        //
-        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
-        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
-            Vec::with_capacity(self.partition_columns.len());
-        for name in &self.partition_columns {
-            let idx = match self.input.schema().index_of(name) {
-                Ok(i) => i,
-                Err(_) => return vec![Distribution::UnspecifiedDistribution],
-            };
-            exprs.push(Arc::new(
-                datafusion_physical_expr::expressions::Column::new(name, idx),
-            ));
-        }
-
-        vec![Distribution::KeyPartitioned(exprs)]
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Writer parallelism follows the input plan. Letting `EnforceDistribution` add a
+        // round-robin repartition just for the writer would make the file layout and the
+        // `operationMetrics` file/byte counters depend on batch arrival order. Operators that do
+        // benefit from partitioning still get it, so upstream parallelism is unaffected.
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -896,6 +885,16 @@ impl DeltaWriterExec {
                 {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Update { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_updated_rows = Some(merge_row_metrics.updated);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Delete { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_deleted_rows = Some(merge_row_metrics.deleted);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
             }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));

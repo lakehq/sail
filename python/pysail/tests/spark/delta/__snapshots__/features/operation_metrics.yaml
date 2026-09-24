@@ -48,6 +48,41 @@ data:
     scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
 ---
+name: "test_cow_merge_excludes_previously_deleted_rows_from_inferred_delete_metrics"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 2094
+    numAddedFiles: 3
+    numFiles: 3
+    numOutputBytes: 2094
+    numOutputFiles: 3
+    numOutputRows: 3
+    numRemovedBytes: 732
+    numRemovedFiles: 1
+    numSourceRows: 1
+    numTargetBytesAdded: 2094
+    numTargetBytesRemoved: 732
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 3
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 2
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 1
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 1
+    numTouchedRows: 3
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
 name: "test_datapredicate_delete_reports_numdeletedrows_and_numcopiedrows"
 data:
   operation: DELETE
@@ -203,7 +238,7 @@ data:
     numTargetRowsCopied: 0
     numTargetRowsDeleted: 1
     numTargetRowsInserted: 0
-    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedDeleted: 1
     numTargetRowsMatchedUpdated: 0
     numTargetRowsNotMatchedBySourceDeleted: 0
     numTargetRowsNotMatchedBySourceUpdated: 0
@@ -285,4 +320,35 @@ data:
     numTouchedRows: 5
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_targetonly_merge_delete_on_a_dv_table_reports_its_detailed_counter"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 0
+    numAddedFiles: 1
+    numFiles: 0
+    numOutputBytes: 0
+    numOutputFiles: 0
+    numOutputRows: 0
+    numRemovedFiles: 1
+    numSourceRows: 1
+    numTargetBytesAdded: 0
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 1
+    numTargetDeletionVectorsRemoved: 1
+    numTargetDeletionVectorsUpdated: 1
+    numTargetFilesAdded: 1
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 1
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
     writeTimeMs: <time_ms>

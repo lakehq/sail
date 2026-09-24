@@ -28,6 +28,7 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 
 # Arrow dependencies
@@ -40,10 +41,10 @@ async-trait = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-serde_json = { workspace = true, features = ["raw_value"] }
+serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 parquet = { workspace = true }

@@ -59,18 +59,18 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 44;
     BarrierExecNode barrier = 45;
     SparkPartitionIdExecNode spark_partition_id = 46;
-    DeletionVectorWriterExecNode deletion_vector_writer = 47;
-    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 48;
-    CoalesceExecNode coalesce = 49;
-    FileDeleteExecNode file_delete = 50;
-    NoopSinkExecNode noop_sink = 51;
-    CsvExecNode csv = 52;
-    ParquetExecNode parquet = 53;
-    RemoteCheckpointWriteExecNode remote_checkpoint_write = 54;
-    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
-    IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
-    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
-    PartitionedTopKExecNode partitioned_top_k = 58;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 47;
+    CoalesceExecNode coalesce = 48;
+    FileDeleteExecNode file_delete = 49;
+    NoopSinkExecNode noop_sink = 50;
+    CsvExecNode csv = 51;
+    ParquetExecNode parquet = 52;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 53;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 54;
+    IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
+    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
+    PartitionedTopKExecNode partitioned_top_k = 57;
+    IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
   }
 }
 
@@ -99,7 +99,12 @@ message ExtendedPhysicalExprNode {
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
+    SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
   }
+}
+
+message SchemaEvolutionDefaultExprNode {
+  bytes field = 1;
 }
 
 message IcebergPartitionTransformExprNode {
@@ -147,6 +152,8 @@ message HigherOrderUdf {
     SparkArraySortUdf sort = 6;
     SparkSequenceUdf spark_sequence_lazy = 7;
     ConvertTzUdf convert_tz_lazy = 8;
+    SparkMapFilterUdf map_filter = 9;
+    SparkRegexpInstrUdf regexp_instr = 10;
   }
 }
 
@@ -156,7 +163,13 @@ message SparkArrayAggregateUdf {
 
 message SparkArrayExistsUdf {}
 
+message SparkRegexpInstrUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkArrayForallUdf {}
+
+message SparkMapFilterUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -226,12 +239,11 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
-    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
-    SparkDateFormatUdf spark_date_format = 36;
-    SparkMapFromArraysUdf spark_map_from_arrays = 37;
-    SparkMapFromEntriesUdf spark_map_from_entries = 38;
-    StrToMapUdf str_to_map = 39;
-    SparkSequenceUdf spark_sequence = 40;
+    SparkDateFormatUdf spark_date_format = 35;
+    SparkMapFromArraysUdf spark_map_from_arrays = 36;
+    SparkMapFromEntriesUdf spark_map_from_entries = 37;
+    StrToMapUdf str_to_map = 38;
+    SparkSequenceUdf spark_sequence = 39;
   }
 }
 
@@ -239,7 +251,15 @@ message ExtendedStreamUdf {
   oneof StreamUdfKind {
     PySparkMapIterUdf py_spark_map_iter = 1;
     PySparkUdtf py_spark_udtf = 2;
+    PySparkScalarPandasIterUdf py_spark_scalar_pandas_iter = 3;
   }
+}
+
+message PySparkScalarPandasIterUdf {
+  string name = 1;
+  bytes payload = 2;
+  bytes output_schema = 3;
+  PySparkUdfConfig config = 4;
 }
 
 message ExtendedAggregateUdf {
@@ -354,10 +374,6 @@ message SparkDateUdf {
   bool is_try = 1;
 }
 
-message SparkTryToTimestampUdf {
-  optional string timezone = 1;
-}
-
 message SparkVariantGetUdf {
   bool safe = 1;
 }
@@ -461,6 +477,11 @@ enum PySparkGroupAggKind {
   PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
 }
 
+enum PySparkAggregateMode {
+  PY_SPARK_AGGREGATE_MODE_GROUPED = 0;
+  PY_SPARK_AGGREGATE_MODE_WINDOW = 1;
+}
+
 message PySparkGroupAggUdaf {
   string name = 1;
   bytes payload = 2;
@@ -474,6 +495,7 @@ message PySparkGroupAggUdaf {
   // Absent for backward compatibility: if not set, defaults to input_types.len().
   // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
   optional uint64 actual_arg_count = 9;
+  PySparkAggregateMode mode = 10;
 }
 
 message PySparkGroupMapUdaf {
@@ -992,6 +1014,11 @@ message CatalogPartitionFieldNode {
   uint32 transform_value = 3;
 }
 
+enum IcebergRowLevelWriteMode {
+  ICEBERG_ROW_LEVEL_WRITE_MODE_COPY_ON_WRITE = 0;
+  ICEBERG_ROW_LEVEL_WRITE_MODE_MERGE_ON_READ = 1;
+}
+
 message IcebergWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -1001,7 +1028,7 @@ message IcebergWriterExecNode {
   string options = 6;
   string write_context_json = 7;
   string lakehouse_table_json = 8;
-  bool merge_row_intents = 9;
+  optional IcebergRowLevelWriteMode row_level_mode = 9;
 }
 
 enum IcebergSnapshotUpdateKind {
@@ -1010,6 +1037,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
   ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_LEVEL_REWRITE = 5;
 }
 
 message IcebergCommitExecNode {
@@ -1029,6 +1057,7 @@ message IcebergManifestScanExecNode {
   string table_url = 1;
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
+  string pruning_json = 3;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1041,7 +1070,15 @@ message IcebergDiscoveryExecNode {
 message IcebergScanByDataFilesExecNode {
   bytes input = 1;
   string table_url = 2;
-  bytes output_schema = 3;
+  bytes file_schema = 3;
+  repeated uint64 projection = 4;
+  bool has_projection = 5;
+  optional bytes predicate = 6;
+  optional uint64 limit = 7;
+}
+
+message IcebergMetadataScanExecNode {
+  bytes input = 1;
 }
 
 message IcebergDeleteApplyExecNode {
@@ -1053,6 +1090,11 @@ message IcebergDeleteApplyExecNode {
   string iceberg_schema_json = 6;
 }
 
+message IcebergRowLineage {
+  optional int64 first_row_id = 1;
+  int64 data_sequence_number = 2;
+}
+
 message IcebergMergeMetadataExecNode {
   bytes input = 1;
   string data_file_path = 2;
@@ -1060,6 +1102,8 @@ message IcebergMergeMetadataExecNode {
   optional string row_index_column_name = 4;
   optional int32 data_file_partition_spec_id = 5;
   optional string data_file_partition_json = 6;
+  IcebergRowLineage row_lineage = 7;
+  map<string, IcebergRowLineage> file_lineage = 8;
 }
 
 message IcebergEqualityDeleteWriterExecNode {
@@ -1089,14 +1133,11 @@ message DeltaLogReplayExecNode {
   }
 }
 
-message DeletionVectorWriterExecNode {
-  bytes input = 1;
-  string table_url = 2;
-  bytes condition = 3;
-  bytes table_schema = 4;
-  int64 version = 5;
-  optional string operation_json = 6;
-  optional string partition_value_columns_json = 7;
+enum DeletionVectorRowOperationMode {
+  DELETION_VECTOR_ROW_OPERATION_MODE_UNSPECIFIED = 0;
+  DELETION_VECTOR_ROW_OPERATION_MODE_UPDATE = 1;
+  DELETION_VECTOR_ROW_OPERATION_MODE_DELETE = 2;
+  DELETION_VECTOR_ROW_OPERATION_MODE_MIXED = 3;
 }
 
 message DeletionVectorRowsWriterExecNode {
@@ -1108,6 +1149,7 @@ message DeletionVectorRowsWriterExecNode {
   optional string operation_json = 6;
   bytes adds_input = 7;
   optional string partition_value_columns_json = 8;
+  DeletionVectorRowOperationMode operation_mode = 9;
 }
 
 message PythonDataSourceInputPartition {

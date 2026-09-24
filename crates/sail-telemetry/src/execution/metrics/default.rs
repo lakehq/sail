@@ -84,7 +84,7 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::CurrentMemoryUsage(gauge) | MetricValue::PeakMemoryUsage { gauge, .. } => {
+            MetricValue::CurrentMemoryUsage(gauge) => {
                 registry
                     .execution_memory_used
                     .recorder(gauge)
@@ -106,7 +106,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::Count { .. }
+            // Peak-memory metrics are handled only by emitters that recognize both the physical
+            // operator and the DataFusion metric name.
+            MetricValue::PeakMemoryUsage { .. }
+            | MetricValue::Count { .. }
             | MetricValue::Gauge { .. }
             | MetricValue::Time { .. }
             | MetricValue::Ratio { .. }

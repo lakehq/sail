@@ -15,13 +15,27 @@ use sail_plan::formatter::SparkPlanFormatter;
 use sail_session::session_factory::{
     ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
 };
-use sail_session::session_manager::{SessionManager, create_session_manager};
+use sail_session::session_manager::{
+    ServerSessionFactoryFn, SessionManager, create_session_manager,
+};
 
 use crate::error::SparkResult;
 use crate::session::{SparkSession, SparkSessionOptions};
 
+/// The session mutator that makes a server session a Spark session.
+///
+/// An embedder that needs to extend server sessions (for example, to register
+/// a data source or a table function) can wrap this mutator in its own
+/// [`ServerSessionMutator`] and pass the resulting session factory to
+/// [`create_spark_session_manager_with_factory`].
 pub struct SparkSessionMutator {
     config: Arc<AppConfig>,
+}
+
+impl SparkSessionMutator {
+    pub fn new(config: Arc<AppConfig>) -> Self {
+        Self { config }
+    }
 }
 
 impl ServerSessionMutator for SparkSessionMutator {
@@ -79,13 +93,12 @@ impl ServerSessionMutator for SparkSessionMutator {
     }
 }
 
-fn create_spark_session_factory(
+/// The session factory used by the Spark Connect server by default.
+pub fn create_spark_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
 ) -> Box<dyn SessionFactory<ServerSessionInfo>> {
-    let mutator = Box::new(SparkSessionMutator {
-        config: config.clone(),
-    });
+    let mutator = Box::new(SparkSessionMutator::new(config.clone()));
     Box::new(ServerSessionFactory::new(config, runtime, mutator))
 }
 
@@ -94,10 +107,22 @@ pub async fn create_spark_session_manager(
     runtime: RuntimeHandle,
     system: &mut ActorSystem,
 ) -> SparkResult<SessionManager> {
+    create_spark_session_manager_with_factory(config, runtime, system, create_spark_session_factory)
+        .await
+}
+
+/// Creates the session manager with a session factory chosen by the caller.
+/// The factory is expected to build on [`SparkSessionMutator`].
+pub async fn create_spark_session_manager_with_factory(
+    config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
+    system: &mut ActorSystem,
+    session_factory_fn: ServerSessionFactoryFn,
+) -> SparkResult<SessionManager> {
     Ok(create_session_manager(
         config.clone(),
         runtime,
-        create_spark_session_factory,
+        session_factory_fn,
         Duration::from_secs(config.spark.session_timeout_secs),
         system,
     )

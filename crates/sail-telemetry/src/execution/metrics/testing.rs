@@ -32,6 +32,7 @@ pub struct MetricEmitterTester {
     provider: SdkMeterProvider,
     registry: Arc<MetricRegistry>,
     plan: Option<Arc<dyn ExecutionPlan>>,
+    task_context: Option<Arc<TaskContext>>,
     expected_metrics: Vec<Cow<'static, str>>,
 }
 
@@ -43,20 +44,13 @@ impl MetricEmitterTester {
             .build();
         let meter = provider.meter("test");
         let registry = Arc::new(MetricRegistry::new(&meter));
-        let expected_metrics = vec![
-            // Each DataFusion execution plan is expected to at least emit
-            // the metrics defined in `BaselineMetrics`.
-            registry.execution_output_size.name(),
-            registry.execution_output_batch_count.name(),
-            registry.execution_output_row_count.name(),
-            registry.execution_elapsed_compute_time.name(),
-        ];
         Self {
             exporter,
             provider,
             registry,
             plan: None,
-            expected_metrics,
+            task_context: None,
+            expected_metrics: vec![],
         }
     }
 
@@ -66,6 +60,23 @@ impl MetricEmitterTester {
     /// No metrics will be emitted for the child plans.
     pub fn with_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
         self.plan = Some(plan);
+        self
+    }
+
+    /// Set the task context used to execute the plan.
+    pub fn with_task_context(mut self, task_context: Arc<TaskContext>) -> Self {
+        self.task_context = Some(task_context);
+        self
+    }
+
+    /// Expect the metrics provided by DataFusion's `BaselineMetrics`.
+    pub fn with_baseline_metrics(mut self) -> Self {
+        self.expected_metrics.extend([
+            self.registry.execution_output_size.name(),
+            self.registry.execution_output_batch_count.name(),
+            self.registry.execution_output_row_count.name(),
+            self.registry.execution_elapsed_compute_time.name(),
+        ]);
         self
     }
 
@@ -86,7 +97,9 @@ impl MetricEmitterTester {
             collection_interval: Duration::ZERO,
         });
         let plan = Arc::new(TracingExec::new(plan, options));
-        let context = Arc::new(TaskContext::default());
+        let context = self
+            .task_context
+            .unwrap_or_else(|| Arc::new(TaskContext::default()));
         let _ = plan.execute(0, context)?.try_collect::<Vec<_>>().await?;
         self.provider
             .force_flush()

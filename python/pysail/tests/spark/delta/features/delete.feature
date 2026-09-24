@@ -1,5 +1,164 @@
 Feature: Delta Lake Delete
 
+  Rule: Row-level target boundaries
+
+    Scenario: DELETE without a predicate removes every row
+      Given variable location for temporary directory delta_delete_all
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_all
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_all (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_all VALUES (1, 'one'), (2, 'two')
+        """
+      Given statement
+        """
+        DELETE FROM delta_delete_all
+        """
+      When query
+        """
+        SELECT * FROM delta_delete_all
+        """
+      Then query result
+        | id | value |
+
+    Scenario: DELETE resolves a target alias
+      Given variable location for temporary directory delta_delete_alias
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_alias
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_alias (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_alias VALUES (1, 'delete'), (2, 'keep')
+        """
+      Given statement
+        """
+        DELETE FROM delta_delete_alias AS target WHERE target.id = 1
+        """
+      When query
+        """
+        SELECT id, value FROM delta_delete_alias ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 2  | keep  |
+
+    Scenario: DELETE accepts a delta path target
+      Given variable location for temporary directory delta_delete_path
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_path
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_path (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_path VALUES (1, 'delete'), (2, 'keep')
+        """
+      Given statement template
+        """
+        DELETE FROM delta.`{{ location.string }}` WHERE id = 1
+        """
+      When query
+        """
+        SELECT id, value FROM delta_delete_path ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 2  | keep  |
+
+    Scenario: DELETE preserves rows for which the predicate is unknown
+      Given variable location for temporary directory delta_delete_unknown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_unknown
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_unknown (id INT, value INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_unknown VALUES (1, NULL), (2, 10), (3, 20)
+        """
+      Given statement
+        """
+        DELETE FROM delta_delete_unknown WHERE value > 10
+        """
+      When query
+        """
+        SELECT id, value FROM delta_delete_unknown ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | NULL  |
+        | 2  | 10    |
+
+    Scenario: DELETE rejects a non-deterministic predicate before writing
+      Given variable location for temporary directory delta_delete_nondeterministic
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_nondeterministic
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_nondeterministic (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_nondeterministic VALUES (1, 'one'), (2, 'two')
+        """
+      When query
+        """
+        DELETE FROM delta_delete_nondeterministic WHERE rand() > 0.5
+        """
+      Then query error Non-deterministic expressions are not allowed in DELETE conditions
+      When query
+        """
+        SELECT id, value FROM delta_delete_nondeterministic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | one   |
+        | 2  | two   |
+
+    Scenario: DELETE rejects target columns that collide with row-level metadata
+      Given variable location for temporary directory delta_delete_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_internal_column (
+          id INT,
+          `__sail_file_path` STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      When query
+        """
+        DELETE FROM delta_delete_internal_column WHERE id = 1
+        """
+      Then query error reserved internal column name
+
   Rule: Basic operations
     Background:
       Given variable location for temporary directory x
@@ -122,6 +281,41 @@ Feature: Delta Lake Delete
         | 4  | Diana | 28  | Sales      | 55000  | true   |
         | 8  | Henry | 33  | HR         | 60000  | true   |
         | 2  | Bob   | 30  | Marketing  | 65000  | true   |
+
+  Rule: Partition-only deletes compare logical values
+    Scenario: Numeric partition comparisons delete only matching files
+      Given variable location for temporary directory delta_delete_numeric_partitions
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_numeric_partitions
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_numeric_partitions (p INT, q INT, v INT)
+        USING DELTA PARTITIONED BY (p, q) LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_numeric_partitions VALUES
+          (10, 2, 100), (2, 10, 200), (3, 2, 300), (NULL, 2, 400)
+        """
+      When query
+        """
+        EXPLAIN DELETE FROM delta_delete_numeric_partitions WHERE p > q
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        DELETE FROM delta_delete_numeric_partitions WHERE p > q
+        """
+      When query
+        """
+        SELECT p, q, v FROM delta_delete_numeric_partitions ORDER BY v
+        """
+      Then query result collected ordered
+        | p    | q  | v   |
+        | 2    | 10 | 200 |
+        | NULL | 2  | 400 |
 
   Rule: Operations on partitioned tables
     Background:

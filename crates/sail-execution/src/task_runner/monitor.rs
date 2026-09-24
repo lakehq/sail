@@ -5,6 +5,7 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::StreamExt;
 use sail_common::actor::ActorHandle;
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
@@ -54,7 +55,19 @@ impl TaskMonitor {
     pub async fn supervise(self) {
         let handle = self.handle.clone();
         let key = self.key.clone();
-        let span = Span::enter_with_local_parent("TaskMonitor::run");
+        // Admission now has one span per batch. Preserve task identity on the monitor
+        // so preparation and execution spans can still be attributed to each attempt.
+        let span = Span::enter_with_local_parent("TaskMonitor::run").with_properties(|| {
+            [
+                (SpanAttribute::EXECUTION_JOB_ID, key.job_id.to_string()),
+                (SpanAttribute::EXECUTION_STAGE, key.stage.to_string()),
+                (
+                    SpanAttribute::EXECUTION_PARTITION,
+                    key.partition.to_string(),
+                ),
+                (SpanAttribute::EXECUTION_ATTEMPT, key.attempt.to_string()),
+            ]
+        });
         let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
             let _ = handle.send(message).await;

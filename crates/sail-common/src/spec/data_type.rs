@@ -600,32 +600,202 @@ pub enum IntervalFieldType {
     Second = 5,
 }
 
+pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "__sail_spark_interval";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "intervalUnit",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SparkIntervalMetadata {
+    YearMonth {
+        start_field: YearMonthIntervalField,
+        end_field: YearMonthIntervalField,
+    },
+    DayTime {
+        start_field: DayTimeIntervalField,
+        end_field: DayTimeIntervalField,
+    },
+}
+
+impl SparkIntervalMetadata {
+    pub fn try_new(
+        interval_unit: IntervalUnit,
+        start_field: Option<IntervalFieldType>,
+        end_field: Option<IntervalFieldType>,
+    ) -> CommonResult<Option<Self>> {
+        let (default_start, default_end) = match interval_unit {
+            IntervalUnit::YearMonth => (IntervalFieldType::Year, IntervalFieldType::Month),
+            IntervalUnit::DayTime => (IntervalFieldType::Day, IntervalFieldType::Second),
+            IntervalUnit::MonthDayNano => return Ok(None),
+        };
+        let has_explicit_start = start_field.is_some();
+        let start_field = start_field.unwrap_or(default_start);
+        let end_field = end_field.unwrap_or(if has_explicit_start {
+            start_field
+        } else {
+            default_end
+        });
+        if start_field > end_field {
+            return Err(CommonError::invalid(format!(
+                "interval start field {start_field:?} must not follow end field {end_field:?}"
+            )));
+        }
+        let metadata = match interval_unit {
+            IntervalUnit::YearMonth => Self::YearMonth {
+                start_field: start_field.try_into()?,
+                end_field: end_field.try_into()?,
+            },
+            IntervalUnit::DayTime => Self::DayTime {
+                start_field: start_field.try_into()?,
+                end_field: end_field.try_into()?,
+            },
+            IntervalUnit::MonthDayNano => unreachable!(),
+        };
+        Ok(Some(metadata.validate()?))
+    }
+
+    pub fn from_json(value: &str) -> CommonResult<Self> {
+        serde_json::from_str::<Self>(value)
+            .map_err(|error| CommonError::invalid(format!("Spark interval metadata: {error}")))?
+            .validate()
+    }
+
+    pub fn to_json(self) -> CommonResult<String> {
+        let metadata = self.validate()?;
+        serde_json::to_string(&metadata)
+            .map_err(|error| CommonError::internal(format!("Spark interval metadata: {error}")))
+    }
+
+    pub fn interval_unit(self) -> IntervalUnit {
+        match self {
+            Self::YearMonth { .. } => IntervalUnit::YearMonth,
+            Self::DayTime { .. } => IntervalUnit::DayTime,
+        }
+    }
+
+    pub fn start_field(self) -> IntervalFieldType {
+        match self {
+            Self::YearMonth { start_field, .. } => start_field.into(),
+            Self::DayTime { start_field, .. } => start_field.into(),
+        }
+    }
+
+    pub fn end_field(self) -> IntervalFieldType {
+        match self {
+            Self::YearMonth { end_field, .. } => end_field.into(),
+            Self::DayTime { end_field, .. } => end_field.into(),
+        }
+    }
+
+    pub fn wider(self, other: Self) -> Option<Self> {
+        match (self, other) {
+            (
+                Self::YearMonth {
+                    start_field: left_start,
+                    end_field: left_end,
+                },
+                Self::YearMonth {
+                    start_field: right_start,
+                    end_field: right_end,
+                },
+            ) => Some(Self::YearMonth {
+                start_field: left_start.min(right_start),
+                end_field: left_end.max(right_end),
+            }),
+            (
+                Self::DayTime {
+                    start_field: left_start,
+                    end_field: left_end,
+                },
+                Self::DayTime {
+                    start_field: right_start,
+                    end_field: right_end,
+                },
+            ) => Some(Self::DayTime {
+                start_field: left_start.min(right_start),
+                end_field: left_end.max(right_end),
+            }),
+            _ => None,
+        }
+    }
+
+    fn validate(self) -> CommonResult<Self> {
+        let valid = match self {
+            Self::YearMonth {
+                start_field,
+                end_field,
+            } => start_field <= end_field,
+            Self::DayTime {
+                start_field,
+                end_field,
+            } => start_field <= end_field,
+        };
+        if valid {
+            Ok(self)
+        } else {
+            Err(CommonError::invalid(format!(
+                "interval start field {:?} must not follow end field {:?}",
+                self.start_field(),
+                self.end_field()
+            )))
+        }
+    }
+}
+
 impl IntervalFieldType {
     fn invalid(value: i32) -> CommonError {
         CommonError::invalid(format!("interval field type: {value}"))
     }
 }
 
-impl TryFrom<DayTimeIntervalField> for IntervalFieldType {
-    type Error = CommonError;
-
-    fn try_from(field_type: DayTimeIntervalField) -> CommonResult<IntervalFieldType> {
+impl From<DayTimeIntervalField> for IntervalFieldType {
+    fn from(field_type: DayTimeIntervalField) -> IntervalFieldType {
         match field_type {
-            DayTimeIntervalField::Day => Ok(IntervalFieldType::Day),
-            DayTimeIntervalField::Hour => Ok(IntervalFieldType::Hour),
-            DayTimeIntervalField::Minute => Ok(IntervalFieldType::Minute),
-            DayTimeIntervalField::Second => Ok(IntervalFieldType::Second),
+            DayTimeIntervalField::Day => IntervalFieldType::Day,
+            DayTimeIntervalField::Hour => IntervalFieldType::Hour,
+            DayTimeIntervalField::Minute => IntervalFieldType::Minute,
+            DayTimeIntervalField::Second => IntervalFieldType::Second,
         }
     }
 }
 
-impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
+impl TryFrom<IntervalFieldType> for DayTimeIntervalField {
     type Error = CommonError;
 
-    fn try_from(field_type: YearMonthIntervalField) -> CommonResult<IntervalFieldType> {
+    fn try_from(field_type: IntervalFieldType) -> CommonResult<DayTimeIntervalField> {
         match field_type {
-            YearMonthIntervalField::Year => Ok(IntervalFieldType::Year),
-            YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
+            IntervalFieldType::Day => Ok(DayTimeIntervalField::Day),
+            IntervalFieldType::Hour => Ok(DayTimeIntervalField::Hour),
+            IntervalFieldType::Minute => Ok(DayTimeIntervalField::Minute),
+            IntervalFieldType::Second => Ok(DayTimeIntervalField::Second),
+            field => Err(CommonError::invalid(format!(
+                "day-time interval field: {field:?}"
+            ))),
+        }
+    }
+}
+
+impl From<YearMonthIntervalField> for IntervalFieldType {
+    fn from(field_type: YearMonthIntervalField) -> IntervalFieldType {
+        match field_type {
+            YearMonthIntervalField::Year => IntervalFieldType::Year,
+            YearMonthIntervalField::Month => IntervalFieldType::Month,
+        }
+    }
+}
+
+impl TryFrom<IntervalFieldType> for YearMonthIntervalField {
+    type Error = CommonError;
+
+    fn try_from(field_type: IntervalFieldType) -> CommonResult<YearMonthIntervalField> {
+        match field_type {
+            IntervalFieldType::Year => Ok(YearMonthIntervalField::Year),
+            IntervalFieldType::Month => Ok(YearMonthIntervalField::Month),
+            field => Err(CommonError::invalid(format!(
+                "year-month interval field: {field:?}"
+            ))),
         }
     }
 }
@@ -662,4 +832,50 @@ pub enum Utf8Type {
     Char {
         length: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spark_interval_metadata_json_is_stable() -> CommonResult<()> {
+        let metadata = SparkIntervalMetadata::DayTime {
+            start_field: DayTimeIntervalField::Hour,
+            end_field: DayTimeIntervalField::Second,
+        };
+        let json = metadata.to_json()?;
+        assert_eq!(
+            json,
+            r#"{"intervalUnit":"dayTime","startField":"hour","endField":"second"}"#
+        );
+        assert_eq!(SparkIntervalMetadata::from_json(&json)?, metadata);
+        Ok(())
+    }
+
+    #[test]
+    fn spark_interval_metadata_rejects_invalid_qualifiers() {
+        assert!(
+            SparkIntervalMetadata::try_new(
+                IntervalUnit::YearMonth,
+                Some(IntervalFieldType::Year),
+                Some(IntervalFieldType::Day),
+            )
+            .is_err()
+        );
+        assert!(
+            SparkIntervalMetadata::from_json(
+                r#"{"intervalUnit":"dayTime","startField":"second","endField":"day"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            SparkIntervalMetadata::DayTime {
+                start_field: DayTimeIntervalField::Second,
+                end_field: DayTimeIntervalField::Day,
+            }
+            .to_json()
+            .is_err()
+        );
+    }
 }

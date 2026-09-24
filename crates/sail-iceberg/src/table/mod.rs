@@ -18,7 +18,7 @@ use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
 use url::Url;
 
-use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::scan::IcebergScan;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
 use crate::options::r#gen::IcebergReadOptions;
@@ -98,8 +98,8 @@ impl Table {
         Ok((schema, snapshot, self.metadata.partition_specs.clone()))
     }
 
-    /// Build an Iceberg table provider that reflects the requested snapshot options.
-    pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
+    /// Build an Iceberg table scan that reflects the requested snapshot options.
+    pub fn new_scan(&self, options: &IcebergReadOptions) -> Result<IcebergScan> {
         if self.metadata.current_snapshot().is_none()
             && options.snapshot_id.is_none()
             && options.use_ref.is_none()
@@ -108,23 +108,25 @@ impl Table {
             let schema = self.metadata.current_schema().cloned().ok_or_else(|| {
                 DataFusionError::Plan("No current schema found in table metadata".to_string())
             })?;
-            let provider = IcebergTableProvider::new_empty(
+            let mut read_scan = IcebergScan::new_empty(
                 self.table_url.to_string(),
                 schema,
                 self.metadata.partition_specs.clone(),
                 self.metadata.default_spec_id,
             )?;
-            return Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read));
+            read_scan.set_table_metadata(&self.metadata)?;
+            return Ok(read_scan.with_metadata_as_data_read(options.metadata_as_data_read));
         }
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
-        let provider = IcebergTableProvider::new(
+        let mut read_scan = IcebergScan::new(
             self.table_url.to_string(),
             schema,
             snapshot,
             partition_specs,
             self.metadata.default_spec_id,
         )?;
-        Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read))
+        read_scan.set_table_metadata(&self.metadata)?;
+        Ok(read_scan.with_metadata_as_data_read(options.metadata_as_data_read))
     }
 
     /// Create a Transaction anchored at the current snapshot, if one exists.

@@ -20,7 +20,6 @@ use crate::task_runner::{
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
-#[tonic::async_trait]
 impl Actor for WorkerActor {
     type Message = WorkerMessage;
     type Options = WorkerOptions;
@@ -70,7 +69,7 @@ impl Actor for WorkerActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn { compression, .. } => {
@@ -88,11 +87,12 @@ impl Actor for WorkerActor {
                 ));
                 Some(CelebornStreamManager::new(client))
             }
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
         let task_runner = ctx
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -116,11 +116,24 @@ impl Actor for WorkerActor {
         let span = Span::enter_with_local_parent("WorkerActor::serve");
         let task_context = self.options.session.task_ctx();
         self.server = server
-            .start(Self::serve(ctx.handle().clone(), task_runner, task_context, addr).in_span(span))
+            .start(
+                Self::serve(
+                    ctx.handle().clone(),
+                    task_runner,
+                    task_context,
+                    addr,
+                    self.options.shuffle_backend.flight_compression(),
+                )
+                .in_span(span),
+            )
             .await;
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             WorkerMessage::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)

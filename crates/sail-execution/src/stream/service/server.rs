@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status, Streaming, async_trait};
 
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
+use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
 
@@ -63,11 +64,15 @@ pub trait TaskStreamFetcher<K>: Send + Sync {
 
 pub struct TaskStreamFlightServer<K> {
     fetcher: Box<dyn TaskStreamFetcher<K>>,
+    compression: ShuffleCompression,
 }
 
 impl<K> TaskStreamFlightServer<K> {
-    pub fn new(fetcher: Box<dyn TaskStreamFetcher<K>>) -> Self {
-        Self { fetcher }
+    pub fn new(fetcher: Box<dyn TaskStreamFetcher<K>>, compression: ShuffleCompression) -> Self {
+        Self {
+            fetcher,
+            compression,
+        }
     }
 }
 
@@ -132,7 +137,12 @@ where
             .await
             .map_err(|_| Status::internal("failed to receive task stream"))??;
         let stream = stream.map_err(|e| FlightError::Tonic(Box::new(e.into())));
+        let options = self
+            .compression
+            .ipc_write_options()
+            .map_err(|e| Status::internal(e.to_string()))?;
         let stream = FlightDataEncoderBuilder::new()
+            .with_options(options)
             .build(stream)
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream) as Self::DoGetStream))

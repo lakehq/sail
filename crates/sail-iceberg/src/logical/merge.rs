@@ -1,26 +1,30 @@
 use std::sync::Arc;
 
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result, not_impl_err};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, Result, ScalarValue, not_impl_err};
 use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource, lit};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
-    MergeNotMatchedBySourceAction,
+    MergeNotMatchedBySourceAction, RowLevelCommand, RowLevelWriteMode,
 };
-use sail_logical_plan::merge::{expand_merge, validate_merge_internal_columns};
-use sail_logical_plan::row_level::RowLevelWriteNode;
+use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_logical_plan::merge::{
+    MergePlanRequirements, expand_merge, validate_merge_internal_columns,
+};
+use sail_logical_plan::row_level::{
+    RowLevelEffectPlans, RowLevelEffectRequirements, RowLevelWriteNode,
+};
 
 use crate::logical::table_source::IcebergTableSource;
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 
 /// Expand MERGE information into a unified row-level write node for Iceberg.
 ///
-/// Iceberg MERGE is planned as merge-on-read: target rows affected by DELETE or
-/// UPDATE clauses are represented by position deletes, and UPDATE/INSERT output
-/// rows are appended as new data files.
+/// The table mode selects either affected-file rewrites or position deletes.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     // TODO: Add Iceberg MERGE schema evolution support.
     if info.options.with_schema_evolution {
@@ -33,15 +37,35 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             MERGE_ROW_INDEX_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
             MERGE_PARTITION_COLUMN,
+            crate::row_lineage::ROW_ID_COLUMN,
+            crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ],
     )?;
-    let expected_snapshot_id = Some(merge_target_snapshot_id(info.target.as_ref())?);
+    let (mode, snapshot_id) =
+        super::row_level::target_write_state(&info.target, RowLevelCommand::Merge)?;
+    let expected_snapshot_id = Some(snapshot_id);
     let row_index_column = merge_needs_position_deletes(&info).then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
         info.target.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
     )?;
+    if mode == RowLevelWriteMode::CopyOnWrite
+        && info.options.not_matched_by_source_clauses.is_empty()
+        && let Some(predicate) = conjunction(info.options.target_only_predicates.clone())
+    {
+        let predicate = sail_logical_plan::row_level::rewrite_row_level_target_condition(
+            Some(ExprWithSource::new(predicate, None)),
+            &info.options.resolved_target_schema,
+            info.target.schema(),
+            &info.options.resolved_target_field_names,
+        )?
+        .ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("Missing MERGE target predicate")
+        })?;
+        target_plan =
+            super::row_level::select_copy_on_write_candidates(target_plan, predicate.expr)?;
+    }
     let target_fields: Vec<String> = target_plan
         .schema()
         .fields()
@@ -52,11 +76,14 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         "iceberg merge target schema after metadata columns: {:?}",
         target_fields
     );
+    let mut row_metadata_columns = vec![MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN];
+    row_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     let mut required_metadata_columns = vec![
         MERGE_FILE_COLUMN,
         MERGE_PARTITION_SPEC_ID_COLUMN,
         MERGE_PARTITION_COLUMN,
     ];
+    required_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     if let Some(row_index_column) = row_index_column {
         required_metadata_columns.push(row_index_column);
     }
@@ -85,25 +112,41 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
-    let raw_source = Arc::clone(&info.source);
-    let raw_input_schema = info.input_schema.clone();
     let expansion = expand_merge(
         info,
         MERGE_FILE_COLUMN,
         row_index_column,
-        &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
+        &row_metadata_columns,
+        MergePlanRequirements {
+            preserve_unmodified_target_rows: mode == RowLevelWriteMode::CopyOnWrite,
+            source_metrics: false,
+            effects: RowLevelEffectRequirements::default(),
+        },
     )?;
-    // Iceberg consumes delete metadata from the write plan. RowLevelWriteNode still
-    // requires a touched-file input, so use an empty placeholder instead of planning
-    // cloned joins that would duplicate the source and target scans.
-    let placeholder_touched_plan = LogicalPlanBuilder::empty(false).build()?;
+    let write_plan = match (mode, row_index_column) {
+        (RowLevelWriteMode::CopyOnWrite, Some(_)) => {
+            super::row_level::select_copy_on_write_rows(expansion.write_plan)?
+        }
+        (RowLevelWriteMode::CopyOnWrite, None) => {
+            let mut projection = expansion
+                .write_plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            projection.push(lit(ScalarValue::Utf8(None)).alias(MERGE_FILE_COLUMN));
+            LogicalPlanBuilder::from(expansion.write_plan)
+                .project(projection)?
+                .build()?
+        }
+        _ => expansion.write_plan,
+    };
+    let effects = RowLevelEffectPlans::new(Some(Arc::new(write_plan)), None, None);
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
-        raw_source,
-        raw_input_schema,
-        Arc::new(expansion.write_plan),
-        Arc::new(placeholder_touched_plan),
-        None,
+        mode,
+        effects,
         expansion.options,
         expansion.output_schema,
     )
@@ -112,23 +155,6 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
     }))
-}
-
-fn merge_target_snapshot_id(plan: &LogicalPlan) -> Result<Option<i64>> {
-    let mut snapshot_id = None;
-    plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node
-            && let Some(source) = scan.source.downcast_ref::<IcebergTableSource>()
-        {
-            snapshot_id = source
-                .provider()
-                .current_snapshot()
-                .map(|snapshot| snapshot.snapshot_id());
-            return Ok(TreeNodeRecursion::Stop);
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(snapshot_id)
 }
 
 fn merge_needs_position_deletes(info: &MergeInfo) -> bool {
@@ -186,7 +212,7 @@ fn try_enable_merge_metadata_columns(
     Ok(None)
 }
 
-fn ensure_merge_metadata_columns(
+pub(crate) fn ensure_merge_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
     row_index_col: Option<&str>,
@@ -195,6 +221,8 @@ fn ensure_merge_metadata_columns(
         file_col,
         MERGE_PARTITION_SPEC_ID_COLUMN,
         MERGE_PARTITION_COLUMN,
+        crate::row_lineage::ROW_ID_COLUMN,
+        crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
     ];
     if let Some(row_index_col) = row_index_col {
         metadata_cols.push(row_index_col);

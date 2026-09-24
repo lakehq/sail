@@ -59,6 +59,7 @@ impl PartitionKey {
 
 fn encode_literal(lit: &Literal, out: &mut Vec<u8>) {
     match lit {
+        Literal::Null => out.push(0),
         Literal::Primitive(p) => encode_primitive(p, out),
         Literal::Struct(fields) => {
             out.extend_from_slice(&(fields.len() as u32).to_le_bytes());
@@ -118,12 +119,21 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
         }
         PrimitiveLiteral::Float(OrderedFloat(f)) => {
             out.push(0x04);
-            // Normalize +0.0/-0.0 via bit-pattern per Iceberg Scan Planning note 3.
-            out.extend_from_slice(&f.to_bits().to_le_bytes());
+            let bits = if f.is_nan() {
+                f32::NAN.to_bits()
+            } else {
+                f.to_bits()
+            };
+            out.extend_from_slice(&bits.to_le_bytes());
         }
         PrimitiveLiteral::Double(OrderedFloat(f)) => {
             out.push(0x05);
-            out.extend_from_slice(&f.to_bits().to_le_bytes());
+            let bits = if f.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                f.to_bits()
+            };
+            out.extend_from_slice(&bits.to_le_bytes());
         }
         PrimitiveLiteral::Int128(i) => {
             out.push(0x06);
@@ -211,11 +221,9 @@ impl DeleteFileIndex {
                 Ok(())
             }
             DataContentType::PositionDeletes => {
-                if let Some(ref path) = file_ref.data_file.referenced_data_file {
-                    self.pos_by_path
-                        .entry(path.clone())
-                        .or_default()
-                        .push(file_ref);
+                let path = referenced_path(&file_ref.data_file);
+                if let Some(path) = path {
+                    self.pos_by_path.entry(path).or_default().push(file_ref);
                 } else {
                     let key = PartitionKey::new(
                         file_ref.partition_spec_id,
@@ -254,7 +262,9 @@ impl DeleteFileIndex {
         // Equality deletes scoped to the same partition.
         if let Some(refs) = self.eq_by_partition.get(&key) {
             for r in refs {
-                if data_sequence_number < r.data_sequence_number {
+                if data_sequence_number < r.data_sequence_number
+                    && equality_may_match(data_file, &r.data_file)
+                {
                     matched.equality.push(r.clone());
                 }
             }
@@ -262,7 +272,9 @@ impl DeleteFileIndex {
 
         // Global (unpartitioned) equality deletes.
         for r in &self.global_eq {
-            if data_sequence_number < r.data_sequence_number {
+            if data_sequence_number < r.data_sequence_number
+                && equality_may_match(data_file, &r.data_file)
+            {
                 matched.equality.push(r.clone());
             }
         }
@@ -293,6 +305,65 @@ impl std::fmt::Display for DeleteIndexError {
 }
 
 impl std::error::Error for DeleteIndexError {}
+
+fn referenced_path(file: &DataFile) -> Option<String> {
+    const PATH_FIELD_ID: i32 = 2_147_483_546;
+    if let Some(path) = &file.referenced_data_file {
+        return Some(path.clone());
+    }
+    let lower = file.lower_bounds.get(&PATH_FIELD_ID)?;
+    let upper = file.upper_bounds.get(&PATH_FIELD_ID)?;
+    if lower != upper {
+        return None;
+    }
+    if let PrimitiveLiteral::String(path) = &lower.literal {
+        Some(path.clone())
+    } else {
+        None
+    }
+}
+
+fn equality_may_match(data: &DataFile, delete: &DataFile) -> bool {
+    if data.record_count == 0 || delete.record_count == 0 {
+        return false;
+    }
+    delete.equality_ids.iter().all(|id| {
+        let data_nulls = data.null_value_counts.get(id).copied();
+        let delete_nulls = delete.null_value_counts.get(id).copied();
+        if (data_nulls == Some(data.record_count) && delete_nulls == Some(0))
+            || (delete_nulls == Some(delete.record_count) && data_nulls == Some(0))
+        {
+            return false;
+        }
+        // Equality deletes match NULL and NaN keys as well as ordinary values.
+        if data_nulls != Some(0) && delete_nulls != Some(0) {
+            return true;
+        }
+        let bounds = [
+            data.lower_bounds.get(id),
+            data.upper_bounds.get(id),
+            delete.lower_bounds.get(id),
+            delete.upper_bounds.get(id),
+        ];
+        if bounds.iter().flatten().any(|bound| {
+            matches!(
+                bound.literal,
+                PrimitiveLiteral::Float(_) | PrimitiveLiteral::Double(_)
+            )
+        }) && data.nan_value_counts.get(id) != Some(&0)
+            && delete.nan_value_counts.get(id) != Some(&0)
+        {
+            return true;
+        }
+        let less = |left: Option<&crate::spec::Datum>, right: Option<&crate::spec::Datum>| {
+            left.zip(right).is_some_and(|(left, right)| {
+                crate::datasource::predicate::compare(&left.literal, &right.literal)
+                    .is_some_and(|order| order.is_lt())
+            })
+        };
+        !less(bounds[1], bounds[2]) && !less(bounds[3], bounds[0])
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -460,6 +531,85 @@ mod tests {
     }
 
     #[test]
+    fn equality_bounds_keep_possible_null_and_nan_matches() {
+        use crate::spec::{Datum, PrimitiveType};
+        for (nulls, nans, expected) in [
+            (Some(0), Some(0), false),
+            (Some(1), Some(0), true),
+            (None, Some(0), true),
+            (Some(0), Some(1), true),
+            (Some(0), None, true),
+        ] {
+            let (mut data, _) = unpartitioned_data("data", 1);
+            let mut delete = make_delete(
+                DataContentType::EqualityDeletes,
+                "delete",
+                vec![],
+                0,
+                None,
+                2,
+                true,
+            );
+            for (file, value) in [(&mut data, 1.0), (&mut delete.data_file, 2.0)] {
+                file.lower_bounds.insert(
+                    1,
+                    Datum::new(
+                        PrimitiveType::Double,
+                        PrimitiveLiteral::Double(value.into()),
+                    ),
+                );
+                file.upper_bounds = file.lower_bounds.clone();
+                file.null_value_counts = nulls.map(|count| (1, count)).into_iter().collect();
+                file.nan_value_counts = nans.map(|count| (1, count)).into_iter().collect();
+            }
+            let mut index = DeleteFileIndex::new();
+            index.insert(delete).unwrap();
+            assert_eq!(!index.for_data_file(&data, 1).equality.is_empty(), expected);
+            assert!(index.for_data_file(&data, 2).equality.is_empty());
+        }
+    }
+
+    #[test]
+    fn position_path_bounds_only_infer_a_single_target() {
+        use crate::spec::{Datum, PrimitiveType};
+        for upper in ["target", "z-other"] {
+            let mut delete = make_delete(
+                DataContentType::PositionDeletes,
+                "delete",
+                vec![],
+                0,
+                None,
+                2,
+                true,
+            );
+            delete.data_file.lower_bounds.insert(
+                2_147_483_546,
+                Datum::new(
+                    PrimitiveType::String,
+                    PrimitiveLiteral::String("target".into()),
+                ),
+            );
+            delete.data_file.upper_bounds.insert(
+                2_147_483_546,
+                Datum::new(
+                    PrimitiveType::String,
+                    PrimitiveLiteral::String(upper.into()),
+                ),
+            );
+            let mut index = DeleteFileIndex::new();
+            index.insert(delete).unwrap();
+            let (target, _) = unpartitioned_data("target", 2);
+            let (other, _) = unpartitioned_data("other", 2);
+            assert_eq!(index.for_data_file(&target, 2).positional.len(), 1);
+            assert_eq!(
+                index.for_data_file(&other, 2).positional.len(),
+                usize::from(upper != "target")
+            );
+            assert!(index.for_data_file(&target, 3).positional.is_empty());
+        }
+    }
+
+    #[test]
     fn global_equality_applies_across_partitions() {
         let mut idx = DeleteFileIndex::new();
         idx.insert(make_delete(
@@ -487,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn float_partition_key_uses_bit_pattern() {
+    fn floating_point_partition_key_matches_iceberg_equality() {
         let pos_zero = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
             OrderedFloat(0.0f32),
         )))];
@@ -505,6 +655,28 @@ mod tests {
         )))];
         let k_dup = PartitionKey::new(0, &pos_zero_dup);
         assert_eq!(k_pos, k_dup);
+
+        let float_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
+            OrderedFloat(f32::from_bits(0x7fc0_0001)),
+        )))];
+        let other_float_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
+            OrderedFloat(f32::from_bits(0xffc0_0042)),
+        )))];
+        assert_eq!(
+            PartitionKey::new(0, &float_nan),
+            PartitionKey::new(0, &other_float_nan)
+        );
+
+        let double_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Double(
+            OrderedFloat(f64::from_bits(0x7ff8_0000_0000_0001)),
+        )))];
+        let other_double_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Double(
+            OrderedFloat(f64::from_bits(0xfff8_0000_0000_0042)),
+        )))];
+        assert_eq!(
+            PartitionKey::new(0, &double_nan),
+            PartitionKey::new(0, &other_double_nan)
+        );
     }
 
     #[test]

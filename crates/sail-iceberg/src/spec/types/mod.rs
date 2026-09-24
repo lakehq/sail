@@ -19,6 +19,7 @@
 
 pub mod values;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Index;
@@ -343,6 +344,24 @@ impl PrimitiveType {
         )
     }
 
+    /// Return a literal that uses this type's representation, applying Iceberg's
+    /// supported primitive promotions when necessary.
+    pub(crate) fn promote_literal<'a>(
+        &self,
+        literal: &'a PrimitiveLiteral,
+    ) -> Option<Cow<'a, PrimitiveLiteral>> {
+        match (self, literal) {
+            (PrimitiveType::Long, PrimitiveLiteral::Int(value)) => {
+                Some(Cow::Owned(PrimitiveLiteral::Long(i64::from(*value))))
+            }
+            (PrimitiveType::Double, PrimitiveLiteral::Float(value)) => Some(Cow::Owned(
+                PrimitiveLiteral::Double(OrderedFloat(f64::from(value.into_inner()))),
+            )),
+            (_, literal) if self.compatible(literal) => Some(Cow::Borrowed(literal)),
+            _ => None,
+        }
+    }
+
     /// Decode a PrimitiveLiteral from the serialized bound bytes that appear in manifests.
     pub fn literal_from_bytes(&self, bytes: &[u8]) -> Result<PrimitiveLiteral, String> {
         use crate::spec::types::values::PrimitiveLiteral as PL;
@@ -412,7 +431,10 @@ impl PrimitiveType {
                 PL::String(val)
             }
             PrimitiveType::Uuid => {
-                return Err("uuid bound decoding not supported".to_string());
+                let bytes: [u8; 16] = bytes
+                    .try_into()
+                    .map_err(|_| "Invalid UUID bound bytes".to_string())?;
+                PL::UInt128(u128::from_be_bytes(bytes))
             }
             PrimitiveType::Fixed(_)
             | PrimitiveType::Binary
@@ -420,7 +442,13 @@ impl PrimitiveType {
             | PrimitiveType::Geometry { .. }
             | PrimitiveType::Geography { .. } => PL::Binary(bytes.to_vec()),
             PrimitiveType::Decimal { .. } => {
-                return Err("decimal bound decoding not supported".to_string());
+                if bytes.is_empty() || bytes.len() > 16 {
+                    return Err("Invalid decimal bound bytes".to_string());
+                }
+                let sign_extension = if bytes[0] & 0x80 == 0 { 0 } else { u8::MAX };
+                let mut extended = [sign_extension; 16];
+                extended[16 - bytes.len()..].copy_from_slice(bytes);
+                PL::Int128(i128::from_be_bytes(extended))
             }
             PrimitiveType::Unknown => {
                 return Err("unknown bound decoding is only valid for null values".to_string());
@@ -773,7 +801,7 @@ impl fmt::Display for StructType {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
+#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -805,31 +833,73 @@ struct SerdeNestedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_field_default")]
     pub initial_default: Option<JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_field_default")]
     pub write_default: Option<JsonValue>,
 }
 
-impl From<SerdeNestedField> for NestedField {
-    fn from(value: SerdeNestedField) -> Self {
-        // TODO(V3): Preserve explicit JSON null defaults separately from absent defaults.
-        NestedField {
+fn deserialize_field_default<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<JsonValue>, D::Error> {
+    JsonValue::deserialize(deserializer).map(Some)
+}
+
+impl TryFrom<SerdeNestedField> for NestedField {
+    type Error = String;
+
+    fn try_from(value: SerdeNestedField) -> Result<Self, Self::Error> {
+        let parse_default = |json: JsonValue| -> Result<Literal, String> {
+            if json.is_null() {
+                if value.required {
+                    return Err(format!(
+                        "Required Iceberg field '{}' cannot default to null",
+                        value.name
+                    ));
+                }
+                return Ok(Literal::Null);
+            }
+            if matches!(
+                value.field_type.as_ref(),
+                Type::Primitive(
+                    PrimitiveType::Unknown
+                        | PrimitiveType::Variant
+                        | PrimitiveType::Geometry { .. }
+                        | PrimitiveType::Geography { .. }
+                )
+            ) {
+                return Err(format!(
+                    "Iceberg field '{}' requires a null default",
+                    value.name
+                ));
+            }
+            if matches!(value.field_type.as_ref(), Type::Struct(_))
+                && json.as_object().is_some_and(|fields| !fields.is_empty())
+            {
+                return Err(format!(
+                    "Struct default for '{}' must be empty; defaults belong to child fields",
+                    value.name
+                ));
+            }
+            Literal::try_from_json(json, &value.field_type)?
+                .ok_or_else(|| "Invalid null default".to_string())
+        };
+        let initial_default = value
+            .initial_default
+            .clone()
+            .map(parse_default)
+            .transpose()?;
+        let write_default = value.write_default.clone().map(parse_default).transpose()?;
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
-            initial_default: value.initial_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(|x| x)
-            }),
-            write_default: value.write_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(|x| x)
-            }),
+            initial_default,
+            write_default,
             field_type: value.field_type,
             doc: value.doc,
-        }
+        })
     }
 }
 

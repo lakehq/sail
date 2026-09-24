@@ -1,9 +1,7 @@
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
-use crate::proto::RemoteExecutionCodec;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerComponents, TaskRunnerMessage};
 
-#[tonic::async_trait]
 impl Actor for TaskRunnerActor {
     type Message = TaskRunnerMessage;
     type Options = TaskRunnerComponents;
@@ -14,25 +12,39 @@ impl Actor for TaskRunnerActor {
 
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
+            session_id,
             extensions,
             placement,
         } = options;
         Self {
+            session_id,
             signals: Default::default(),
-            codec: Box::new(RemoteExecutionCodec),
+            tasks: Default::default(),
             extensions,
             placement,
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
-            TaskRunnerMessage::RunTask {
-                key,
+            TaskRunnerMessage::RunTaskBatch {
+                job_id,
+                stage,
+                tasks,
                 definition,
                 context,
                 peers,
-            } => self.handle_run_task(ctx, key, definition, context, peers),
+                result,
+            } => {
+                let output = self
+                    .handle_run_task_batch(ctx, job_id, stage, tasks, definition, context, peers);
+                let _ = result.send(output);
+                ActorAction::Continue
+            }
             TaskRunnerMessage::StopTask { key } => self.handle_stop_task(key),
             TaskRunnerMessage::ReportTaskStatus {
                 key,
@@ -100,6 +112,7 @@ impl Actor for TaskRunnerActor {
             TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage } => {
                 self.handle_clean_up_celeborn_streams(ctx, job_id, stage)
             }
+            TaskRunnerMessage::CloseJob { job_id } => self.handle_close_job(job_id),
             TaskRunnerMessage::Shutdown => self.handle_shutdown(),
         }
     }

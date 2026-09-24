@@ -1,8 +1,8 @@
 pub mod error;
+pub mod events;
 mod execution;
 mod loggers;
 pub mod metrics;
-pub mod system_event;
 pub mod telemetry;
 
 pub const SCOPE_NAME: &str = "sail";
@@ -15,11 +15,11 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn service_name(self) -> &'static str {
         match self {
-            Self::Server => "server",
-            Self::FlightServer => "flight-server",
-            Self::Worker => "worker",
+            Self::Server => "sail-server",
+            Self::FlightServer => "sail-flight-server",
+            Self::Worker => "sail-worker",
         }
     }
 }

@@ -82,9 +82,7 @@ impl SchemaEvolver {
                     field.name()
                 ))
             })?;
-            if !Self::field_types_equivalent(table_field.data_type(), field.data_type())
-                && !Self::is_safe_write_cast(table_field.data_type(), field.data_type())
-            {
+            if !Self::write_type_compatible(table_field, field, iceberg_schema) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
                     field.name(),
@@ -101,12 +99,7 @@ impl SchemaEvolver {
 
             let has_default = iceberg_schema
                 .field_by_name(field.name())
-                .and_then(|nested| {
-                    nested
-                        .write_default
-                        .as_ref()
-                        .or(nested.initial_default.as_ref())
-                })
+                .and_then(|nested| nested.write_default.as_ref())
                 .is_some();
 
             if !field.is_nullable() && !has_default {
@@ -118,6 +111,45 @@ impl SchemaEvolver {
         }
 
         Ok(())
+    }
+
+    fn write_type_compatible(table: &Field, input: &Field, iceberg: &IcebergSchema) -> bool {
+        match (table.data_type(), input.data_type()) {
+            (DataType::Struct(target), DataType::Struct(source)) => {
+                source.iter().all(|field| {
+                    target
+                        .iter()
+                        .any(|candidate| candidate.name() == field.name())
+                }) && target.iter().all(|field| {
+                    match source.iter().find(|source| source.name() == field.name()) {
+                        Some(source) => Self::write_type_compatible(field, source, iceberg),
+                        None => {
+                            field.is_nullable()
+                                || crate::datasource::type_converter::iceberg_field_id(field)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|id| iceberg.field_by_id(id))
+                                    .is_some_and(|field| {
+                                        field.write_default.as_ref().is_some_and(|value| {
+                                            !matches!(value, crate::spec::Literal::Null)
+                                        })
+                                    })
+                        }
+                    }
+                })
+            }
+            (
+                DataType::List(target) | DataType::LargeList(target),
+                DataType::List(source) | DataType::LargeList(source),
+            ) => Self::write_type_compatible(target, source, iceberg),
+            (DataType::Map(target, _), DataType::Map(source, _)) => {
+                Self::write_type_compatible(target, source, iceberg)
+            }
+            _ => {
+                Self::field_types_equivalent(table.data_type(), input.data_type())
+                    || Self::is_safe_write_cast(table.data_type(), input.data_type())
+            }
+        }
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
@@ -134,6 +166,9 @@ impl SchemaEvolver {
         if variant_storage_types_equivalent(table_type, input_type) {
             return true;
         }
+        if Self::variable_binary_types_equivalent(table_type, input_type) {
+            return true;
+        }
 
         matches!(
             (table_type, input_type),
@@ -146,7 +181,7 @@ impl SchemaEvolver {
     }
 
     fn field_has_default(field: &NestedField) -> bool {
-        field.write_default.is_some() || field.initial_default.is_some()
+        field.write_default.is_some()
     }
 
     fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
@@ -164,13 +199,17 @@ impl SchemaEvolver {
         matches!(
             (table_type, input_type),
             (DataType::Int64, DataType::Int32) | (DataType::Float64, DataType::Float32)
-        ) || matches!(
-            (table_type, input_type),
-            (
-                DataType::FixedSizeBinary(_),
-                DataType::Binary | DataType::LargeBinary
-            )
-        ) || Self::decimal_precision_contracts(table_type, input_type)
+        ) || (matches!(table_type, DataType::FixedSizeBinary(_))
+            && Self::is_variable_binary(input_type))
+            || Self::decimal_precision_contracts(table_type, input_type)
+    }
+
+    fn variable_binary_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
+        Self::is_variable_binary(table_type) && Self::is_variable_binary(input_type)
+    }
+
+    fn is_variable_binary(data_type: &DataType) -> bool {
+        data_type.is_binary() && !matches!(data_type, DataType::FixedSizeBinary(_))
     }
 
     fn decimal_precision_expands(table_type: &DataType, input_type: &DataType) -> bool {
@@ -217,6 +256,9 @@ impl SchemaEvolver {
 
     fn nested_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
         if table_type == input_type {
+            return true;
+        }
+        if Self::variable_binary_types_equivalent(table_type, input_type) {
             return true;
         }
         if let (
@@ -928,6 +970,81 @@ mod tests {
 
         SchemaEvolver::validate_exact_schema(table_schema.as_ref(), &iceberg_schema, &input_schema)
             .expect("int -> long promotion should be allowed");
+    }
+
+    #[test]
+    fn binary_storage_width_equivalence_is_recursive_but_excludes_fixed() {
+        let table_type = DataType::Struct(
+            vec![
+                Field::new("payload", DataType::LargeBinary, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new("element", DataType::LargeBinary, true))),
+                    true,
+                ),
+                Field::new(
+                    "lookup",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::LargeBinary, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let input_type = DataType::Struct(
+            vec![
+                Field::new("payload", DataType::Binary, true),
+                Field::new(
+                    "items",
+                    DataType::LargeList(Arc::new(Field::new(
+                        "element",
+                        DataType::BinaryView,
+                        true,
+                    ))),
+                    true,
+                ),
+                Field::new(
+                    "lookup",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::Binary, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+
+        assert!(SchemaEvolver::field_types_equivalent(
+            &table_type,
+            &input_type
+        ));
+        assert!(!SchemaEvolver::field_types_equivalent(
+            &DataType::LargeBinary,
+            &DataType::FixedSizeBinary(3),
+        ));
     }
 
     #[test]
