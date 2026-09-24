@@ -40,6 +40,22 @@ Feature: shiftrightunsigned output schema
 
   Rule: Implicit casts
 
+    @sail-bug
+    Scenario: shiftrightunsigned saturates an out-of-range DOUBLE input with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 8 ELSE CAST(3000000000 AS DOUBLE) END, 1
+        ) AS result
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 0  | 4          |
+        | 1  | 1073741823 |
+
     Scenario Outline: shiftrightunsigned preserves numeric CASE inputs: <kind> with ANSI <ansi_mode>
       Given config spark.sql.ansi.enabled = <ansi_mode>
       When query
@@ -75,3 +91,33 @@ Feature: shiftrightunsigned output schema
         | DOUBLE  | true      | CAST(2.5 AS DOUBLE)        | int         | 1              | 2147483644          | 2147483647          |
         | BIGINT  | false     | CAST(3000000000 AS BIGINT) | bigint      | 1500000000     | 9223372036854775804 | 9223372035354775808 |
         | BIGINT  | true      | CAST(3000000000 AS BIGINT) | bigint      | 1500000000     | 9223372036854775804 | 9223372035354775808 |
+
+    Scenario Outline: shiftrightunsigned accepts the INT minimum from numeric CASE inputs: <kind> with ANSI <ansi_mode>
+      Given config spark.sql.ansi.enabled = <ansi_mode>
+      When query
+        """
+        SELECT id, result, typeof(result) AS result_type
+        FROM (
+          SELECT id, shiftrightunsigned(
+            CASE WHEN id = 0
+                 THEN CAST(-2147483648 AS INT)
+                 ELSE <other>
+            END, 1
+          ) AS result
+          FROM VALUES (0), (1) AS t(id)
+        ) AS q
+        ORDER BY id
+        """
+      Then query result
+        | id | result     | result_type |
+        | 0  | 1073741824 | int         |
+        | 1  | 1073741824 | int         |
+
+      Examples:
+        | kind    | ansi_mode | other                                 |
+        | DECIMAL | false     | CAST(-2147483648 AS DECIMAL(11,1))     |
+        | DECIMAL | true      | CAST(-2147483648 AS DECIMAL(11,1))     |
+        | FLOAT   | false     | CAST(-2147483648 AS FLOAT)             |
+        | FLOAT   | true      | CAST(-2147483648 AS FLOAT)             |
+        | DOUBLE  | false     | CAST(-2147483648 AS DOUBLE)            |
+        | DOUBLE  | true      | CAST(-2147483648 AS DOUBLE)            |

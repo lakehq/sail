@@ -60,6 +60,36 @@ def test_sql_conditional_preserves_parameter_branch_precision(spark, marker, nam
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize(
+    ("query", "value"),
+    [
+        pytest.param(
+            "SELECT nvl2(id, 1, CAST(1.5 AS DOUBLE)) AS v "
+            "FROM VALUES (0), (NULL) AS t(id) WHERE {marker} ORDER BY v",
+            True,
+            id="unrelated-parameter",
+        ),
+        pytest.param(
+            "SELECT nvl2(id, 1, {marker}) AS v FROM VALUES (0), (NULL) AS t(id) ORDER BY v",
+            1.5,
+            id="result-parameter",
+        ),
+    ],
+)
+def test_sql_nvl2_preserves_widened_parameter_schema(spark, marker, named, ansi, query, value):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        args = {"value": value} if named else [value]
+        df = spark.sql(query.format(marker=marker), args=args)
+        assert df.dtypes == [("v", "double")]
+        assert df.collect() == [(1.0,), (1.5,)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_sql_case_widens_parameter_marker_branch(spark):
     df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])

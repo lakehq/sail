@@ -18,6 +18,8 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let input_type = value.clone().get_type(function_context.schema)?;
     let (value, input_type) = match input_type {
         DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _) => (
+            // TODO: Match Spark's non-ANSI FLOAT/DOUBLE-to-INT saturation;
+            //  generic casts currently reject out-of-range values.
             value.cast_to(&DataType::Int32, function_context.schema)?,
             DataType::Int32,
         ),
@@ -34,7 +36,7 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let unsigned = when(
         value.clone().lt(lit(0)),
-        lit(max_const) - (abs(value.clone()) - lit(1)),
+        lit(max_const) - (abs(cast(value.clone(), DataType::Int64)) - lit(1)),
     )
     .otherwise(value.clone())?;
 

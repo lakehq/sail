@@ -68,10 +68,18 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
-    if_expr(ScalarFunctionInput {
-        arguments: vec![tested.is_not_null(), if_non_null, if_null],
-        function_context,
-    })
+    if function_context.has_unbound_parameters {
+        // Keep DataFusion's deferred coercion until bound result types are available.
+        return Ok(expr_fn::nvl2(tested, if_non_null, if_null));
+    }
+    let (if_non_null, if_null) =
+        coerce_branch_values(vec![if_non_null, if_null], &function_context)?.two()?;
+    // A simple CASE preserves Spark's branch-based nullability for NVL2.
+    Ok(expr::Expr::Case(expr::Case {
+        expr: Some(Box::new(tested.is_not_null())),
+        when_then_expr: vec![(Box::new(lit(true)), Box::new(if_non_null))],
+        else_expr: Some(Box::new(if_null)),
+    }))
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -104,7 +112,7 @@ fn argument_types(
 }
 
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
-/// Preserves DataFusion's existing nested and legacy string/numeric coercion.
+/// Preserves DataFusion's existing nested and string/numeric coercion.
 // TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
 //  common type as well.
 fn coerce_numeric_values(
@@ -122,15 +130,14 @@ fn coerce_numeric_values(
         wider_numeric_type(&left, right, ansi_mode)
     });
     let common_type = common_type.or_else(|| {
-        if (!ansi_mode
-            && data_types.iter().any(is_string_type)
+        if (data_types.iter().any(is_string_type)
             && data_types.iter().any(is_numeric_type)
             && data_types
                 .iter()
                 .all(|t| t.is_null() || is_numeric_type(t) || is_string_type(t)))
             || data_types.iter().all(|t| t.is_null() || t.is_nested())
         {
-            // Preserve DataFusion's existing coercion for nested types and legacy
+            // Preserve DataFusion's existing coercion for nested types and
             // string/numeric branches before an enclosing numeric CASE/IF uses their type.
             get_coerce_type_for_case_expression(&data_types, None)
         } else {

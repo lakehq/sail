@@ -14,6 +14,23 @@ Feature: nvl2 output schema
          |-- result: integer (nullable = false)
         """
 
+    Scenario: nvl2 preserves the declared nullability of its result branches
+      When query
+        """
+        SELECT nvl2(x, x, 0) AS result
+        FROM VALUES (1), (CAST(NULL AS INT)) AS t(x)
+        ORDER BY result
+        """
+      Then query result
+        | result |
+        | 0      |
+        | 1      |
+      And query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
   Rule: Result type
 
     Scenario: nvl2 is typed by its result arguments when the tested argument is a widened CASE

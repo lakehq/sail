@@ -101,6 +101,25 @@ Feature: if output schema
         | 1  | 1      |
         | 2  | x      |
 
+    Scenario: IF preserves large numeric strings in nested branches with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          id,
+          CAST(if(id = 0, CAST(1.25 AS DECIMAL(5,2)), CASE WHEN id = 1 THEN 1 ELSE '9223372036854775807' END) AS DECIMAL(22,2)) AS direct_result,
+          CAST(if(id = 0, CAST(1.25 AS DECIMAL(5,2)), v) AS DECIMAL(22,2)) AS projected_result
+        FROM (
+          SELECT id, CASE WHEN id = 1 THEN 1 ELSE '9223372036854775807' END AS v
+          FROM VALUES (0), (1), (2) AS t(id)
+        ) AS q
+        """
+      Then query result
+        | id | direct_result         | projected_result      |
+        | 0  | 1.25                  | 1.25                  |
+        | 1  | 1.00                  | 1.00                  |
+        | 2  | 9223372036854775807.00 | 9223372036854775807.00 |
+
   Rule: Numeric branches extracted from nested CASE values
 
     Scenario Outline: IF preserves values extracted from nested CASE branches: <case>, ANSI <ansi>
