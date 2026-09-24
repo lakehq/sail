@@ -192,6 +192,8 @@ _QUERIES = {
     "filter_struct_in": "SELECT id FROM {t} WHERE s.inner IN (named_struct('c', 10, 'd', 'inner1'),"
     " named_struct('c', 30, 'd', 'inner3')) ORDER BY id",
     "filter_struct_is_null": "SELECT id FROM {t} WHERE s IS NULL OR s.inner IS NULL ORDER BY id",
+    "filter_array_struct_is_null": "SELECT id FROM {t} WHERE arr_s IS NULL ORDER BY id",
+    "filter_map_struct_is_not_null": "SELECT id FROM {t} WHERE m_s IS NOT NULL ORDER BY id",
     "filter_array": "SELECT id FROM {t} WHERE array_contains(arr, 2) OR size(arr_s) = 0 ORDER BY id",
     "filter_array_struct": "SELECT id FROM {t} WHERE exists(arr_s, e -> e.x > 12) ORDER BY id",
     "filter_map": "SELECT id FROM {t} WHERE m['k2'] >= 8 OR m_s['k1'].p = 1 ORDER BY id",

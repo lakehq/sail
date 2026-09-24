@@ -885,7 +885,10 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
         }
         _ => catalog_field.data_type().clone(),
     };
-    catalog_field.clone().with_data_type(data_type)
+    catalog_field
+        .clone()
+        .with_name(snapshot_field.name())
+        .with_data_type(data_type)
 }
 
 /// Refreshes map entries by position, since the catalog and the Delta log may name
@@ -1039,6 +1042,7 @@ fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -1047,6 +1051,7 @@ mod tests {
         effective_catalog_commit_end_version, next_catalog_commit_start_version,
         refresh_catalog_delta_schema,
     };
+    use crate::schema::attach_column_mapping_metadata;
 
     #[test]
     fn catalog_schema_refresh_appends_snapshot_fields_without_replacing_existing_types() {
@@ -1103,6 +1108,41 @@ mod tests {
                 .into()
             )
         );
+    }
+
+    #[test]
+    fn catalog_schema_refresh_canonicalizes_mapped_fields() {
+        let mapped = |name: &str, physical: &str, id: u32, data_type: DataType| {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([
+                ("delta.columnMapping.id".to_string(), id.to_string()),
+                (
+                    "delta.columnMapping.physicalName".to_string(),
+                    physical.to_string(),
+                ),
+            ]))
+        };
+        let snapshot_schema = Schema::new(vec![
+            mapped("EventID", "col-id", 1, DataType::Int32),
+            mapped(
+                "Payload",
+                "col-payload",
+                2,
+                DataType::Struct(vec![mapped("Amount", "col-amount", 3, DataType::Int32)].into()),
+            ),
+        ]);
+        let catalog_schema = Schema::new(vec![
+            Field::new("eventid", DataType::Int32, true),
+            Field::new(
+                "payload",
+                DataType::Struct(vec![Field::new("amount", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+        let refreshed = attach_column_mapping_metadata(&refreshed, &snapshot_schema);
+
+        assert_eq!(refreshed, snapshot_schema);
     }
 
     #[test]

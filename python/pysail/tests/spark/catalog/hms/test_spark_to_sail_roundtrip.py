@@ -292,7 +292,9 @@ def test_spark_creates_sail_reads_delta_datasource_table(
     assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
-def _register_delta_schema_in_hms(jvm_spark: SparkSession, database: str, table: str) -> None:
+def _register_delta_schema_in_hms(
+    jvm_spark: SparkSession, database: str, table: str, schema: StructType | None = None
+) -> None:
     """Store the Delta table schema in the HMS entry.
 
     Depending on the Delta Lake version and configuration, Spark either leaves
@@ -302,8 +304,10 @@ def _register_delta_schema_in_hms(jvm_spark: SparkSession, database: str, table:
     entry field names than the Delta log schema.
     """
     session = jvm_spark._jsparkSession  # noqa: SLF001
-    schema = session.table(f"{database}.{table}").schema()
-    session.sessionState().catalog().externalCatalog().alterTableDataSchema(database, table, schema)
+    catalog_schema = (
+        session.table(f"{database}.{table}").schema() if schema is None else session.parseDataType(schema.json())
+    )
+    session.sessionState().catalog().externalCatalog().alterTableDataSchema(database, table, catalog_schema)
 
 
 def test_spark_creates_sail_aggregates_column_mapped_delta_table(
@@ -357,6 +361,34 @@ def test_spark_creates_sail_aggregates_column_mapped_delta_table(
         (2, "y", 2, "q"),
         (3, "z", 3, "r"),
     ]
+
+
+@pytest.mark.parametrize("column_mapping_mode", ["name", "id"])
+def test_spark_creates_sail_reads_case_folded_catalog_delta_fields(
+    jvm_spark: SparkSession,
+    spark: SparkSession,
+    hms_s3_database: str,
+    column_mapping_mode: str,
+) -> None:
+    table = f"roundtrip_delta_case_{column_mapping_mode}"
+    table_fqn = f"{hms_s3_database}.{table}"
+    jvm_spark.sql(
+        f"CREATE TABLE {table_fqn} (EventID INT, Payload STRUCT<Amount: INT>) USING DELTA "
+        f"TBLPROPERTIES ('delta.columnMapping.mode' = '{column_mapping_mode}')"
+    )
+    jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, named_struct('Amount', 10)), (2, named_struct('Amount', 20))")
+    catalog_schema = StructType(
+        [
+            StructField("eventid", IntegerType()),
+            StructField("payload", StructType([StructField("amount", IntegerType())])),
+        ]
+    )
+    _register_delta_schema_in_hms(jvm_spark, hms_s3_database, table, schema=catalog_schema)
+
+    df = spark.table(table_fqn)
+    assert df.schema.fieldNames() == ["EventID", "Payload"]
+    assert [(row.EventID, row.Payload.Amount) for row in df.orderBy("EventID").collect()] == [(1, 10), (2, 20)]
+    assert [row.Amount for row in df.orderBy("EventID").select("Payload.Amount").collect()] == [10, 20]
 
 
 @pytest.mark.parametrize("column_mapping_mode", ["none", "name"])
