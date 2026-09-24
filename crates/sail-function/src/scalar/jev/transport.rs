@@ -43,13 +43,21 @@ impl Limits {
                 Err(_) => exec_err!("Invalid environment value for {name}"),
             }
         }
+        // Keep these limits configurable because API capacity, worker resources, and workload sizes vary.
+        // Fixed limits would require a rebuild to tune throughput, memory use, or accepted request sizes.
         let value = Self {
-            concurrency: read("SAIL_JEV_MAX_CONCURRENCY", 8)?,
-            pending: read("SAIL_JEV_MAX_PENDING_REQUESTS", 16)?,
-            pending_bytes: read("SAIL_JEV_MAX_PENDING_BYTES", 16 * 1024 * 1024)?,
-            target_questions: read("SAIL_JEV_BATCH_TARGET_QUESTIONS", 64)?,
-            target_bytes: read("SAIL_JEV_BATCH_TARGET_BYTES", 256 * 1024)?,
-            hard_bytes: read("SAIL_JEV_MAX_REQUEST_BYTES", 1024 * 1024)?,
+            // Controls pressure on the API. A lower value can reduce throttling; a higher value can improve throughput when capacity permits.
+            concurrency: read("TYPESAFE_JEV_MAX_CONCURRENCY", 8)?,
+            // Bounds admitted work, including active requests. Different workers can support different amounts of pending work.
+            pending: read("TYPESAFE_JEV_MAX_PENDING_REQUESTS", 16)?,
+            // Bounds memory reserved for request bodies. A small worker and a large worker need different budgets.
+            pending_bytes: read("TYPESAFE_JEV_MAX_PENDING_BYTES", 16 * 1024 * 1024)?,
+            // Controls how many questions Sail tries to combine. The useful batch size depends on question complexity and service behavior.
+            target_questions: read("TYPESAFE_JEV_BATCH_TARGET_QUESTIONS", 64)?,
+            // Controls the preferred request size. Small text and large structured inputs have different batching needs.
+            target_bytes: read("TYPESAFE_JEV_BATCH_TARGET_BYTES", 256 * 1024)?,
+            // Sets Sail’s hard request-size limit. A fixed value could reject a legitimate workload even when the provider accepts it.
+            hard_bytes: read("TYPESAFE_JEV_MAX_REQUEST_BYTES", 1024 * 1024)?,
         };
         value.validate()?;
         Ok(value)
@@ -73,7 +81,7 @@ impl Limits {
         }
         if self.pending_bytes < self.hard_bytes {
             return exec_err!(
-                "SAIL_JEV_MAX_PENDING_BYTES must be at least SAIL_JEV_MAX_REQUEST_BYTES for forward progress"
+                "TYPESAFE_JEV_MAX_PENDING_BYTES must be at least TYPESAFE_JEV_MAX_REQUEST_BYTES for forward progress"
             );
         }
         Ok(())
@@ -255,7 +263,7 @@ fn encoded_size(
             questions,
         },
     )
-    .map_err(|_| exec_datafusion_err!("Jev request exceeds SAIL_JEV_MAX_REQUEST_BYTES"))?;
+    .map_err(|_| exec_datafusion_err!("Jev request exceeds TYPESAFE_JEV_MAX_REQUEST_BYTES"))?;
     Ok(out.size)
 }
 
@@ -290,7 +298,7 @@ where
     let state = first.state;
     let options = first.options;
     if !models && state.json.get().len() > limits.hard_bytes {
-        return exec_err!("Jev request exceeds SAIL_JEV_MAX_REQUEST_BYTES");
+        return exec_err!("Jev request exceeds TYPESAFE_JEV_MAX_REQUEST_BYTES");
     }
     let mut candidate = Some(first.questions);
     let mut questions = BTreeMap::new();

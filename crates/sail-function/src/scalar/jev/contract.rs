@@ -41,10 +41,10 @@ impl Options {
         for (key, value) in values {
             if !matches!(
                 key.as_str(),
-                "api_key" | "model" | "timeout_ms" | "retry_budget_ms" | "max_retries"
+                "model" | "timeout_ms" | "retry_budget_ms" | "max_retries"
             ) {
                 return exec_err!(
-                    "Unknown Jev option (allowed: api_key, model, timeout_ms, retry_budget_ms, max_retries)"
+                    "Unknown Jev option (allowed: model, timeout_ms, retry_budget_ms, max_retries)"
                 );
             }
             if !value.is_string() {
@@ -54,15 +54,11 @@ impl Options {
         if models && values.contains_key("model") {
             return exec_err!("jev_models does not accept the model option");
         }
-        let api_key = values
-            .get("api_key")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| env_default("TYPESAFE_API_KEY", ""));
+        let api_key = env_default("TYPESAFE_API_KEY", "");
         let api_key = api_key.trim();
         if api_key.is_empty() || !api_key.bytes().all(|x| (b'!'..=b'~').contains(&x)) {
             return exec_err!(
-                "Jev requires a nonempty API key containing printable ASCII without whitespace; set TYPESAFE_API_KEY or api_key"
+                "Jev requires a nonempty API key containing printable ASCII without whitespace; set TYPESAFE_API_KEY"
             );
         }
         let integer = |key: &str, default: u64, positive: bool| -> Result<u64> {

@@ -32,12 +32,12 @@ def measure(args):
             "SAIL_MODE": "local-cluster",
             "SAIL_CLUSTER__TASK_MAX_ATTEMPTS": "1",
             "SAIL_EXECUTION__DEFAULT_PARALLELISM": str(args.partitions),
-            "SAIL_JEV_MAX_CONCURRENCY": str(args.concurrency),
-            "SAIL_JEV_MAX_PENDING_REQUESTS": str(args.pending_requests),
-            "SAIL_JEV_MAX_PENDING_BYTES": str(args.pending_bytes),
-            "SAIL_JEV_BATCH_TARGET_QUESTIONS": str(args.target_questions),
-            "SAIL_JEV_BATCH_TARGET_BYTES": str(args.target_bytes),
-            "SAIL_JEV_MAX_REQUEST_BYTES": str(args.hard_bytes),
+            "TYPESAFE_JEV_MAX_CONCURRENCY": str(args.concurrency),
+            "TYPESAFE_JEV_MAX_PENDING_REQUESTS": str(args.pending_requests),
+            "TYPESAFE_JEV_MAX_PENDING_BYTES": str(args.pending_bytes),
+            "TYPESAFE_JEV_BATCH_TARGET_QUESTIONS": str(args.target_questions),
+            "TYPESAFE_JEV_BATCH_TARGET_BYTES": str(args.target_bytes),
+            "TYPESAFE_JEV_MAX_REQUEST_BYTES": str(args.hard_bytes),
             "TYPESAFE_BASE_URL": mock.url,
             "TYPESAFE_API_KEY": "benchmark-dummy-key",
             "TYPESAFE_DEFAULT_MODEL": "jev-benchmark",
@@ -103,7 +103,7 @@ def measure(args):
                 "pending_measurement_note": "Parent process extracts reservation peaks from Jev debug logs.",
                 "peak_process_rss_mib": rss_after / divisor,
                 "peak_process_rss_before_query_mib": rss_before / divisor,
-                "limits": {key: value for key, value in settings.items() if key.startswith("SAIL_JEV_")},
+                "limits": {key: value for key, value in settings.items() if key.startswith("TYPESAFE_JEV_")},
             }
         finally:
             spark.stop()

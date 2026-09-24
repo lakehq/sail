@@ -87,39 +87,6 @@ pub fn validate_jev_async_nesting(
     Ok(())
 }
 
-pub const JEV_REDACTED_PLAN: &str =
-    "Jev plan details redacted: explicit options may contain credentials";
-
-/// Options may be computed expressions, so substring-based secret masking is unsafe.
-/// Suppress display details only for plans containing Jev's explicit options argument.
-// TODO(jev): DataFusion and scheduler debug logging can still render the original
-// expressions before these Sail display boundaries. Use TYPESAFE_API_KEY to keep
-// credentials out of the plan; full raw-debug redaction needs separate engine work.
-pub fn jev_plan_has_explicit_options(
-    plan: &datafusion_expr::LogicalPlan,
-) -> datafusion_common::Result<bool> {
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-    use sail_function::scalar::jev::JevKind;
-
-    let mut sensitive = false;
-    plan.apply_with_subqueries(|node| {
-        node.apply_expressions(|expr| {
-            expr.apply(|expr| {
-                if let Expr::ScalarFunction(function) = expr
-                    && function.func.as_async().is_some()
-                    && let Some(kind) = JevKind::from_name(function.func.name())
-                    && function.args.len() > kind.options_index()
-                {
-                    sensitive = true;
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-        })?;
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(sensitive)
-}
-
 pub fn is_built_in_generator_function(name: &str) -> bool {
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
 }

@@ -46,12 +46,12 @@ def remote(jev_service):
         "TYPESAFE_BASE_URL": jev_service.url,
         "TYPESAFE_API_KEY": "mock-default-key",
         "TYPESAFE_DEFAULT_MODEL": "jev-test",
-        "SAIL_JEV_MAX_CONCURRENCY": str(MAX_CONCURRENCY),
-        "SAIL_JEV_MAX_PENDING_REQUESTS": "8",
-        "SAIL_JEV_MAX_PENDING_BYTES": "262144",
-        "SAIL_JEV_BATCH_TARGET_QUESTIONS": str(BATCH_TARGET_QUESTIONS),
-        "SAIL_JEV_BATCH_TARGET_BYTES": str(BATCH_TARGET_BYTES),
-        "SAIL_JEV_MAX_REQUEST_BYTES": str(MAX_REQUEST_BYTES),
+        "TYPESAFE_JEV_MAX_CONCURRENCY": str(MAX_CONCURRENCY),
+        "TYPESAFE_JEV_MAX_PENDING_REQUESTS": "8",
+        "TYPESAFE_JEV_MAX_PENDING_BYTES": "262144",
+        "TYPESAFE_JEV_BATCH_TARGET_QUESTIONS": str(BATCH_TARGET_QUESTIONS),
+        "TYPESAFE_JEV_BATCH_TARGET_BYTES": str(BATCH_TARGET_BYTES),
+        "TYPESAFE_JEV_MAX_REQUEST_BYTES": str(MAX_REQUEST_BYTES),
     }
     with spark_connect_server(envs=envs) as server:
         yield server.remote
@@ -70,20 +70,14 @@ def jev(jev_service):
 
 
 def test_noul_metadata_and_options_position(spark, jev):
-    result = (
-        spark.sql(
-            "SELECT jev_noul('text', 'yes?', NULL, map('api_key', '  override-key  ', 'model', 'jev-pinned')) AS j"
-        )
-        .first()
-        .j
-    )
+    result = spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('model', 'jev-pinned')) AS j").first().j
     assert result.noul == EXPECTED_NOUL
     assert result.model == "jev-pinned"
     assert result.request_id == "mock-1"
     assert result.batch_id
     assert result.usage.input_tokens == EXPECTED_INPUT_TOKENS
     assert result.usage.output_tokens == EXPECTED_OUTPUT_TOKENS
-    assert jev.requests[0]["authorization"] == "Bearer override-key"
+    assert jev.requests[0]["authorization"] == "Bearer mock-default-key"
     assert jev.requests[0]["path"] == "/v1/systemone"
     assert next(iter(jev.requests[0]["body"]["questions"].values()))["instructions"] == "yes?"
 
@@ -107,7 +101,12 @@ def test_nullable_noul_descriptions(spark, jev):
 
 @pytest.mark.parametrize("levels", [1, 11])
 def test_score_operating_guidance_is_not_local_schema_validation(spark, jev, levels):
-    result = spark.sql(f"SELECT jev_score('text', 'rate', array_repeat('level', {levels})) AS j").first().j
+    # Spark 3.5 clients cannot decode the VARIANT legend; collect only the fields under test.
+    result = (
+        spark.sql(f"SELECT jev_score('text', 'rate', array_repeat('level', {levels})) AS j")
+        .selectExpr("j.score", "j.probabilities")
+        .first()
+    )
     assert result.score == (levels - 1) / 2
     assert len(result.probabilities) == levels
     assert jev.request_count == 1
@@ -151,7 +150,7 @@ def test_structured_request_numbers_are_preserved(spark, jev, expression, locati
     original = spark.sql(f"SELECT to_json(to_variant_object({context})) AS j").first().j
     assert json.loads(original, parse_int=Decimal, parse_float=Decimal) == expected
 
-    spark.sql(f"SELECT {expression.format(context=context)} AS j").collect()
+    spark.sql(f"SELECT to_json({expression.format(context=context)}) AS j").collect()
     assert jev.request_count == 1
     body = json.loads(jev.requests[0]["encoded"], parse_int=Decimal, parse_float=Decimal)
     actual = body["state"] if location == "state" else next(iter(body["questions"].values()))[location]
@@ -162,13 +161,15 @@ def test_structured_request_numbers_are_preserved(spark, jev, expression, locati
 
 def test_distinct_decimal_states_do_not_batch_together(spark, jev):
     account = "12345678901234567890123456789012345678"
+    expected_rows = 2
     rows = spark.sql(
         "SELECT jev_noul(to_variant_object(named_struct('account', "
-        f"CAST('{account}' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0)))), 'compare') AS j "
+        "CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) "
+        "+ CAST(id AS DECIMAL(38,0)))), 'compare') AS j "
         "FROM range(0, 2, 1, 1)"
     ).collect()
-    assert len(rows) == 2
-    assert jev.request_count == 2
+    assert len(rows) == expected_rows
+    assert jev.request_count == expected_rows
     states = [
         json.loads(request["encoded"], parse_int=Decimal, parse_float=Decimal)["state"]["account"]
         for request in jev.requests
@@ -286,16 +287,14 @@ def test_different_states_overlap_and_return_to_original_rows(spark, jev):
     assert all(len(request["body"]["questions"]) == 1 for request in jev.requests)
 
 
-def test_credentials_and_model_split_batches(spark, jev):
+def test_model_options_split_batches(spark, jev):
     expected_rows = 12
     rows = spark.sql(
-        "SELECT id, jev_noul('text', 'yes?', NULL, "
-        "map('model', concat('model-', id % 2), 'api_key', concat('key-', id % 3))) AS j "
-        "FROM range(0, 12, 1, 1)"
+        "SELECT id, jev_noul('text', 'yes?', NULL, map('model', concat('model-', id % 2))) AS j FROM range(0, 12, 1, 1)"
     ).collect()
     assert len(rows) == expected_rows
     assert all(row.j.model == f"model-{row.id % 2}" for row in rows)
-    assert {request["authorization"] for request in jev.requests} == {"Bearer key-0", "Bearer key-1", "Bearer key-2"}
+    assert {request["authorization"] for request in jev.requests} == {"Bearer mock-default-key"}
 
 
 @pytest.mark.parametrize("usage", [{}, {"input_tokens": None, "output_tokens": None}])
@@ -353,7 +352,7 @@ def test_missing_choice_and_score_fields_are_errors(spark, jev, expression, fiel
 
     jev.transform = corrupt
     with pytest.raises(Exception, match=rf"(?i){field}"):
-        spark.sql(f"SELECT {expression}").collect()
+        spark.sql(f"SELECT to_json({expression})").collect()
     assert jev.request_count == 1
 
 
@@ -390,17 +389,36 @@ def test_answer_extra_fields_cannot_overwrite_request_metadata(spark, jev):
     assert json.loads(row.answer)["usage"] == {"input_tokens": 999}
 
 
-def test_error_detail_redacts_raw_and_json_escaped_api_keys(spark, jev):
+def test_error_detail_redacts_raw_and_json_escaped_api_keys(spark, jev, monkeypatch):
     key = 'quote"\\backslash-key'
+    monkeypatch.setenv("TYPESAFE_API_KEY", key)
     jev.error_response = {"detail": f"invalid credential: {key}"}
     jev.statuses.append((401, {}))
     with pytest.raises(Exception, match="401") as error:
-        spark.sql(f"SELECT jev_noul('text', 'yes?', NULL, map('api_key', r'{key}'))").collect()
+        spark.sql("SELECT jev_noul('text', 'yes?')").collect()
     message = str(error.value)
     assert key not in message
     assert json.dumps(key)[1:-1] not in message
     assert jev.request_count == 1
     assert jev.requests[0]["authorization"] == f"Bearer {key}"
+
+
+@pytest.mark.parametrize("key", [None, "", "bad key", "nonascii-\u00e9"])
+@pytest.mark.parametrize("expression", ["jev_noul('text', 'yes?')", "jev_models()"])
+def test_environment_api_key_is_required_and_validated(spark, jev, monkeypatch, key, expression):
+    if key is None:
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("TYPESAFE_API_KEY", key)
+    with pytest.raises(Exception, match=r"(?i)(API key|TYPESAFE_API_KEY)"):
+        spark.sql(f"SELECT {expression}").collect()
+    assert jev.request_count == 0
+
+
+def test_environment_api_key_is_trimmed(spark, jev, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "  mock-trimmed-key  ")
+    assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL
+    assert jev.requests[0]["authorization"] == "Bearer mock-trimmed-key"
 
 
 @pytest.mark.parametrize("status", [408, 429, 500, 529])
@@ -449,7 +467,6 @@ def test_attempt_timeout_releases_capacity_for_following_query(spark, jev):
         ("jev_noul(parse_json('null'), 'yes?')", "(?i)state"),
         ("jev_noul(parse_json('true'), 'yes?')", "(?i)state"),
         ("jev_noul('text', 'yes?', NULL, map('unknown', 'x'))", "(?i)(unknown|option)"),
-        ("jev_noul('text', 'yes?', NULL, map('api_key', ''))", "(?i)(key|empty)"),
         ("jev_noul('text', 'yes?', NULL, map('timeout_ms', '0'))", "(?i)timeout"),
         ("jev_noul('text', 'yes?', NULL, map('max_retries', '-1'))", "(?i)retr"),
         ("jev_score('text', 'rate', array())", "(?i)(criteria|level|empty)"),
@@ -460,7 +477,25 @@ def test_attempt_timeout_releases_capacity_for_following_query(spark, jev):
 )
 def test_invalid_inputs_never_reach_service(spark, jev, expression, message):
     with pytest.raises(Exception, match=message):
-        spark.sql(f"SELECT {expression}").collect()
+        spark.sql(f"SELECT to_json({expression})").collect()
+    assert jev.request_count == 0
+
+
+@pytest.mark.parametrize("option", ["api_key", "base_url"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "jev_noul('text', 'yes?', NULL, {options})",
+        "jev_choice('text', 'which?', map('a', 'A'), {options})",
+        "jev_score('text', 'rate', array('low', 'high'), {options})",
+        'jev_system_one(\'text\', parse_json(\'{"q":{"type":"noul"}}\'), {options})',
+        "jev_models({options})",
+    ],
+)
+def test_credentials_and_endpoint_are_not_sql_options(spark, jev, option, expression):
+    call = expression.replace("{options}", f"map('{option}', 'unsupported-option-value')")
+    with pytest.raises(Exception, match=r"(?i)(unknown|unsupported).*option"):
+        spark.sql(f"SELECT to_json({call})").collect()
     assert jev.request_count == 0
 
 
@@ -497,11 +532,11 @@ def test_explain_and_schema_do_not_make_requests(spark, jev):
 
 
 @pytest.mark.parametrize("mode", ["", "EXTENDED", "FORMATTED"])
-def test_explain_redacts_explicit_api_keys(spark, jev, mode):
-    key = "do-not-log-this-secret-key"
-    rows = spark.sql(f"EXPLAIN {mode} SELECT jev_noul('text', 'yes?', NULL, map('api_key', '{key}'))").collect()
+def test_explain_preserves_nonsecret_model_options(spark, jev, mode):
+    rows = spark.sql(f"EXPLAIN {mode} SELECT jev_noul('text', 'yes?', NULL, map('model', 'visible-model'))").collect()
     plan = "\n".join(str(row[0]) for row in rows)
-    assert key not in plan
+    assert "visible-model" in plan
+    assert "mock-default-key" not in plan
     assert jev.request_count == 0
 
 
@@ -512,18 +547,17 @@ def test_environment_api_key_does_not_enter_plan(spark, jev, mode):
     assert jev.request_count == 0
 
 
-def test_invalid_argument_diagnostics_redact_explicit_api_key(spark, jev):
-    key = "do-not-log-this-secret-key"
+def test_invalid_argument_diagnostics_do_not_include_environment_key(spark, jev):
     with pytest.raises(Exception, match=r"(?i)unsupported type") as error:
-        spark.sql(f"SELECT jev_noul(12, 'yes?', NULL, map('api_key', '{key}'))").collect()
-    assert key not in str(error.value)
+        spark.sql("SELECT jev_noul(12, 'yes?')").collect()
+    assert "mock-default-key" not in str(error.value)
     assert jev.request_count == 0
 
 
-def test_generated_column_name_redacts_explicit_api_key(spark, jev):
-    key = "do-not-log-this-secret-key"
-    query = spark.sql(f"SELECT jev_noul('text', 'yes?', NULL, map('api_key', '{key}'))")
-    assert key not in query.columns[0]
+def test_generated_column_name_redacts_options(spark, jev):
+    query = spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('model', 'column-model'))")
+    assert "<redacted options>" in query.columns[0]
+    assert "column-model" not in query.columns[0]
     assert jev.request_count == 0
 
 
