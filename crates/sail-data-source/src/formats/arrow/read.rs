@@ -17,7 +17,7 @@ use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::try_merge_normalized;
+use crate::listing::utils::{ViewTypes, try_merge_normalized};
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
@@ -87,7 +87,10 @@ impl ReadFormat for ArrowReadFormat {
                 schemas.push(schema.as_ref().clone());
             }
         }
-        Ok(Arc::new(try_merge_normalized(schemas)?))
+        Ok(Arc::new(try_merge_normalized(
+            schemas,
+            ViewTypes::Collapse,
+        )?))
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {

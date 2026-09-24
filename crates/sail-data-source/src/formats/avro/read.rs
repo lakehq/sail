@@ -10,7 +10,7 @@ use datafusion_datasource_avro::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::try_merge_normalized;
+use crate::listing::utils::{ViewTypes, try_merge_normalized};
 
 #[derive(Debug, Default, Clone)]
 pub struct AvroReadFormat;
@@ -48,7 +48,10 @@ impl ReadFormat for AvroReadFormat {
                 schemas.push(schema);
             }
         }
-        Ok(Arc::new(try_merge_normalized(schemas)?))
+        Ok(Arc::new(try_merge_normalized(
+            schemas,
+            ViewTypes::Collapse,
+        )?))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
