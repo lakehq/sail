@@ -79,7 +79,7 @@ class JevMock:
                     response = mock.response(body) if status == HTTPStatus.OK else mock.error_response
                     if mock.transform is not None and status == HTTPStatus.OK:
                         response = mock.transform(response, body)
-                    output = json.dumps(response).encode()
+                    output = mock.encode_response(response)
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(output)))
@@ -117,6 +117,7 @@ class JevMock:
         self.body_delay = 0.0
         self.transform = None
         self.error_response = {"detail": "mock HTTP failure"}
+        self.encode_response = lambda response: json.dumps(response).encode()
         self.active = 0
         self.peak_active = 0
         self.request_count = 0

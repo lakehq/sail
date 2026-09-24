@@ -81,6 +81,8 @@ impl JevKind {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Jev {
+    // Distinct volatile call sites must not compare equal in the async mapper.
+    call_id: uuid::Uuid,
     kind: JevKind,
     signature: Signature,
 }
@@ -89,6 +91,7 @@ impl Jev {
     fn new(kind: JevKind) -> Self {
         let (min, max) = kind.arity();
         Self {
+            call_id: uuid::Uuid::new_v4(),
             kind,
             signature: Signature::one_of(
                 (min..=max)
@@ -279,6 +282,7 @@ impl AsyncScalarUDFImpl for Jev {
         }
         if matches!(self.kind, JevKind::Noul | JevKind::Choice | JevKind::Score) {
             for row in rows.iter_mut().flatten() {
+                let row = &mut row.value;
                 let answer = row["answers"]["result"]
                     .as_object()
                     .cloned()

@@ -14,6 +14,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 use super::contract::{Options, retry_after, validate_request, validate_response};
+use super::output::ResponseRow;
 use super::{InputValue, JevKind};
 
 pub(crate) struct RequestRow {
@@ -400,7 +401,7 @@ async fn send(
     runtime: &Runtime,
     models: bool,
     group: &Group,
-) -> std::result::Result<(Value, Option<String>), AttemptFailure> {
+) -> std::result::Result<(Value, Option<String>, bytes::Bytes), AttemptFailure> {
     let endpoint = if models { "models" } else { "systemone" };
     let url = format!("{}/v1/{endpoint}", runtime.base_url);
     let request = if models {
@@ -466,14 +467,19 @@ async fn send(
         delay: None,
         message: e.to_string(),
     })?;
-    Ok((value, request_id))
+    Ok((value, request_id, bytes))
 }
 
-async fn execute(runtime: Arc<Runtime>, models: bool, group: Group) -> Result<Vec<(usize, Value)>> {
+async fn execute(
+    runtime: Arc<Runtime>,
+    kind: JevKind,
+    group: Group,
+) -> Result<Vec<(usize, ResponseRow)>> {
+    let models = kind == JevKind::Models;
     let mut started = None;
     let mut retries = 0usize;
     let mut last_error = String::new();
-    let (response, request_id) = loop {
+    let (response, request_id, response_bytes) = loop {
         let permit = Arc::clone(&runtime.active)
             .acquire_owned()
             .await
@@ -518,6 +524,20 @@ async fn execute(runtime: Arc<Runtime>, models: bool, group: Group) -> Result<Ve
             }
         }
     };
+    // Keep structured answer values in their original JSON form until VARIANT encoding.
+    let raw_answers: BTreeMap<String, &serde_json::value::RawValue> =
+        if matches!(kind, JevKind::Score | JevKind::SystemOne) {
+            let raw: BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_slice(&response_bytes)
+                    .map_err(|_| exec_datafusion_err!("Invalid Jev response JSON"))?;
+            let answers = raw
+                .get("answers")
+                .ok_or_else(|| exec_datafusion_err!("Invalid Jev response at answers"))?;
+            serde_json::from_str(answers.get())
+                .map_err(|_| exec_datafusion_err!("Invalid Jev response at answers"))?
+        } else {
+            BTreeMap::new()
+        };
     let batch_id = uuid::Uuid::new_v4().to_string();
     let mut outputs = Vec::with_capacity(group.rows.len());
     for (row, mapping) in &group.rows {
@@ -530,7 +550,43 @@ async fn execute(runtime: Arc<Runtime>, models: bool, group: Group) -> Result<Ve
             }
             json!({"answers":answers,"model":response["model"],"usage":response["usage"],"request_id":request_id,"batch_id":batch_id})
         };
-        outputs.push((*row, output));
+        let variants = match kind {
+            JevKind::SystemOne => mapping
+                .iter()
+                .map(|(original, wire)| {
+                    let answer = raw_answers.get(wire).ok_or_else(|| {
+                        exec_datafusion_err!("Invalid Jev response at answers")
+                    })?;
+                    Ok((original.clone(), (*answer).to_owned()))
+                })
+                .collect::<Result<_>>()?,
+            JevKind::Score => {
+                let answer = mapping
+                    .first()
+                    .and_then(|(_, wire)| raw_answers.get(wire))
+                    .ok_or_else(|| exec_datafusion_err!("Invalid Jev response at answers"))?;
+                let fields: BTreeMap<String, &serde_json::value::RawValue> =
+                    serde_json::from_str(answer.get())
+                        .map_err(|_| exec_datafusion_err!("Invalid Jev response at answers"))?;
+                let legend = fields
+                    .get("legend")
+                    .ok_or_else(|| exec_datafusion_err!("Invalid Jev response at answers.legend"))?;
+                serde_json::from_str(legend.get())
+                    .map_err(|_| exec_datafusion_err!("Invalid Jev response at answers.legend"))?
+            }
+            _ => BTreeMap::new(),
+        };
+        let mut output = output;
+        if kind == JevKind::SystemOne {
+            if let Some(object) = output.as_object_mut() {
+                object.remove("answers");
+            }
+        } else if kind == JevKind::Score
+            && let Some(answer) = output["answers"]["result"].as_object_mut()
+        {
+            answer.remove("legend");
+        }
+        outputs.push((*row, ResponseRow { value: output, variants }));
     }
     Ok(outputs)
 }
@@ -539,7 +595,7 @@ pub(crate) async fn evaluate<F>(
     kind: JevKind,
     number_rows: usize,
     row: F,
-) -> Result<Vec<Option<Value>>>
+) -> Result<Vec<Option<ResponseRow>>>
 where
     F: FnMut(usize) -> Result<Option<RequestRow>> + Send,
 {
@@ -561,7 +617,7 @@ where
         }
     });
     let results = groups
-        .map_ok(|group| execute(Arc::clone(&runtime), models, group))
+        .map_ok(|group| execute(Arc::clone(&runtime), kind, group))
         .try_buffer_unordered(runtime.limits.pending);
     futures::pin_mut!(results);
     let mut output = vec![None; number_rows];

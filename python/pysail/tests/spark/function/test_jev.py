@@ -663,3 +663,104 @@ def test_cancellation_during_backoff_releases_reservations(spark, jev):
         spark.interruptAll()
         assert future.exception(timeout=10) is not None
     assert spark.sql("SELECT jev_noul('text', 'yes?') AS j").first().j.noul == EXPECTED_NOUL
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        "9223372036854775807",
+        "9223372036854775808",
+        "9223372036854775809",
+        "18446744073709551615",
+        "12345678901234567890123456789012345678",
+        "12345678901234567890.123456789012345678",
+        "-12345678901234567890.123456789012345678",
+        "1.2345678901234567890123456789012345678e20",
+        "1.000e-38",
+        "-0.0",
+        "123456789012345678901234567890123456780.0e-1",
+        "1" + "0" * 255,
+    ],
+)
+@pytest.mark.parametrize("kind", ["score", "system_one"])
+def test_structured_response_numbers_are_preserved(spark, jev, number, kind):
+    marker = "jev-numeric-response-fixture"
+    description = {"nested": [marker, None, True, "text"]}
+
+    def transform(response, _body):
+        for answer in response["answers"].values():
+            if kind == "score":
+                answer["legend"]["0"] = description
+            else:
+                answer["provider_extra"] = description
+        return response
+
+    jev.transform = transform
+    jev.encode_response = lambda response: json.dumps(response).replace(json.dumps(marker), number).encode()
+    if kind == "score":
+        expression = "jev_score('text', 'rate', array('low', 'high'))"
+        selected = "j.legend['0']"
+    else:
+        expression = "jev_system_one('text', parse_json('{\"q\":{\"type\":\"noul\"}}'))"
+        selected = "j.answers['q']"
+    row = spark.sql(
+        f"SELECT to_json({selected}) AS value, j.model, j.request_id, j.usage.input_tokens AS tokens "
+        f"FROM (SELECT {expression} AS j)"
+    ).first()
+    value = json.loads(row.value, parse_int=Decimal, parse_float=Decimal)
+    if kind == "system_one":
+        assert value["type"] == "noul"
+        assert value["noul"] == Decimal("0.75")
+        value = value["provider_extra"]
+    actual, *other = value["nested"]
+    if len(number) > 255:
+        assert float(actual) == float(number)
+    else:
+        assert actual == Decimal(number)
+        if number == "-0.0":
+            assert actual.is_signed()
+    assert other == [None, True, "text"]
+    assert row.model == "jev-test"
+    assert row.request_id == "mock-1"
+    assert row.tokens == EXPECTED_INPUT_TOKENS
+    assert jev.request_count == 1
+
+
+@pytest.mark.parametrize("kind", ["score", "system_one"])
+def test_variant_result_maps_keep_sql_null_rows(spark, jev, kind):
+    state = "CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE 'text' END"
+    if kind == "score":
+        expression = f"jev_score({state}, 'rate', array('low', 'high'))"
+        selected = "j.legend['0']"
+    else:
+        questions = json.dumps({"q": {"type": "noul"}})
+        expression = f"jev_system_one({state}, parse_json('{questions}'))"
+        selected = "j.answers['q']"
+    rows = spark.sql(
+        f"SELECT id, j IS NULL AS skipped, to_json({selected}) AS value "
+        f"FROM (SELECT id, {expression} AS j FROM range(0, 2, 1, 1)) ORDER BY id"
+    ).collect()
+    assert rows[0].skipped
+    assert rows[0].value is None
+    assert not rows[1].skipped
+    assert rows[1].value is not None
+    assert jev.request_count == 1
+
+
+def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
+    probabilities = []
+
+    def vary(response, _body):
+        with jev.lock:
+            probability = (len(probabilities) + 1) / 10
+            probabilities.append(probability)
+        for answer in response["answers"].values():
+            answer["noul"] = probability
+        return response
+
+    jev.transform = vary
+    row = spark.sql("SELECT jev_noul('text', 'yes?') AS a, jev_noul('text', 'yes?') AS b").first()
+    assert jev.request_count == 2
+    assert sorted([row.a.noul, row.b.noul]) == probabilities == [0.1, 0.2]
+    assert {row.a.request_id, row.b.request_id} == {"mock-1", "mock-2"}
+    assert row.a.batch_id != row.b.batch_id

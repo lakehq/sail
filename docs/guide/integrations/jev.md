@@ -230,6 +230,11 @@ If a check fails, Sail returns a query error.
 Sail does not recalculate probabilities, scores, or confidence.
 Sail does not create replacement probabilities or null answers.
 
+Structured results use exact integer and decimal values when VARIANT can store them.
+VARIANT permits up to 38 digits and a scale from 0 to 38.
+Other finite JSON numbers use double precision.
+The typed inference functions use DOUBLE for `noul`, `score`, `confidence`, and probabilities.
+
 Missing or null token counts remain SQL NULL.
 A missing or null usage object causes an error.
 
