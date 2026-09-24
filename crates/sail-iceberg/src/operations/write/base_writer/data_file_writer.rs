@@ -361,7 +361,7 @@ mod tests {
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::prelude::{SessionContext, col, lit};
+    use datafusion::prelude::{col, lit};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::data_type::ByteArray;
     use parquet::file::properties::WriterProperties;
@@ -430,16 +430,12 @@ mod tests {
                 Some(&Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(3)))
             );
 
-            let session = SessionContext::new();
             let (kept, mask) = crate::datasource::pruning::prune_files(
-                &session.state(),
                 &[col("id").gt(lit(10i32))],
                 None,
-                arrow_schema,
                 vec![outcome.data_file],
                 &iceberg_schema,
-            )
-            .map_err(|error| error.to_string())?;
+            );
             assert!(kept.is_empty());
             assert_eq!(mask, Some(vec![false]));
             Ok(())

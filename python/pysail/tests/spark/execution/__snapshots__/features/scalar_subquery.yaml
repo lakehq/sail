@@ -199,6 +199,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -299,6 +302,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -375,6 +381,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -800,6 +809,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -876,6 +888,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -1314,6 +1329,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -1390,6 +1408,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -1911,6 +1932,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -2023,6 +2047,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -2099,6 +2126,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -2646,6 +2676,9 @@ data:
                   Projection: column1 AS #6, column2 AS #7
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -2722,6 +2755,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -3207,6 +3243,9 @@ data:
           Projection: range.id AS #0
             TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -3285,6 +3324,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -3305,21 +3347,21 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
           ProjectionExec: expr=[id@0 as #0]
-            RangeExec
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
         ProjectionExec: expr=[id@0 as #1]
-          RangeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     initial_physical_plan_with_stats:
-    ScalarSubqueryExec: subqueries=1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-          ProjectionExec: expr=[id@0 as #0], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-            RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-      ProjectionExec: expr=[#1@0 as #2], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-        ProjectionExec: expr=[id@0 as #1], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-          RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+    ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+          ProjectionExec: expr=[id@0 as #0], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(2), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
+      ProjectionExec: expr=[#1@0 as #2], statistics=[Rows=Exact(0), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+        ProjectionExec: expr=[id@0 as #1], statistics=[Rows=Exact(0), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(0), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -3327,10 +3369,10 @@ data:
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
-            RangeExec, schema=[id:Int64]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
         ProjectionExec: expr=[id@0 as #1], schema=[#1:Int64]
-          RangeExec, schema=[id:Int64]
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -3339,10 +3381,10 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
             ProjectionExec: expr=[id@0 as #0]
-              RangeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
         ProjectionExec: expr=[id@0 as #1]
-          RangeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -3361,18 +3403,7 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
-    ScalarSubqueryExec: subqueries=1
-      OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
-        SortPreservingMergeExec: [#3@0 ASC]
-          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #0]
-                  RangeExec
-      ProjectionExec: expr=[#1@0 as #2]
-        ProjectionExec: expr=[id@0 as #1]
-          RangeExec
-
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -3383,26 +3414,20 @@ data:
     physical_plan after ProjectionPushdown:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
-        SortPreservingMergeExec: [#3@0 ASC]
-          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #0]
-                  RangeExec
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
-        RangeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
-      SortPreservingMergeExec: [#3@0 ASC]
-        SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              ProjectionExec: expr=[id@0 as #0]
-                RangeExec
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+          RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
-        RangeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after LimitAggregation:
@@ -3427,7 +3452,15 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureCooperative:
-    SAME TEXT AS ABOVE
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+          CooperativeExec
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
+      ProjectionExec: expr=[id@0 as #2]
+        CooperativeExec
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
+
 
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
@@ -3447,27 +3480,25 @@ data:
     physical_plan:
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [#3@0 ASC]
-          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #0]
-                  RangeExec
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+            CooperativeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
-          RangeExec
+          CooperativeExec
+            RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [#3@0 ASC]
-          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #0]
-                  RangeExec
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+            CooperativeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
-          RangeExec
+          CooperativeExec
+            RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
 
     == Distributed Plan ==
@@ -3478,38 +3509,22 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[id@0 as #2]
-      RangeExec
+      CooperativeExec
+        RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
 
     === stage 1 ===
-    inputs=[]
-    mode=Pipelined
-    partitions=1
-    distribution=RoundRobinBatch(channels=4)
-    placement=Worker
-    ProjectionExec: expr=[id@0 as #0]
-      RangeExec
-
-    === stage 2 ===
-    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
-    mode=Pipelined
-    partitions=4
-    distribution=RoundRobinBatch(channels=1)
-    placement=Worker
-    ScalarSubqueryExec: subqueries=1
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
-          StageInputExec: input=0, partitioning=RoundRobinBatch(4)
-      StageInputExec: input=1, partitioning=UnknownPartitioning(1)
-
-    === stage 3 ===
-    inputs=[StageInput(stage=2, mode=Merge)]
+    inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
-      SortPreservingMergeExec: [#3@0 ASC]
-        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+      ScalarSubqueryExec: subqueries=1
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
+            CooperativeExec
+              RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_empty_scalar_subquery_result"
 data:
@@ -3645,6 +3660,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -3721,6 +3739,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -4081,6 +4102,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -4157,6 +4181,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -4580,6 +4607,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -4656,6 +4686,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -5074,6 +5107,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -5150,6 +5186,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -5488,6 +5527,9 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -5564,6 +5606,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -5971,6 +6016,9 @@ data:
             Projection: column1 AS #2, column2 AS #3
               Values: (Utf8("a"), Int32(2)), (Utf8("b"), Int32(1)), (Utf8("c"), Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -6047,6 +6095,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -6441,6 +6492,9 @@ data:
                         Values: (Int32(1)), (Int32(2))
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -6517,6 +6571,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -6908,6 +6965,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(1))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -6984,6 +7044,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -7351,6 +7414,9 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -7427,6 +7493,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -7811,6 +7880,9 @@ data:
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(4))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -7887,6 +7959,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -8291,6 +8366,9 @@ data:
             Projection: column1 AS #3
               Values: (Int32(11)), (Int32(12)), (Int32(13))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -8367,6 +8445,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -8821,6 +8902,9 @@ data:
               Projection: column1 AS #3
                 Values: (Int32(11)), (Int32(12)), (Int32(13))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -8897,6 +8981,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -9290,6 +9377,9 @@ data:
               Projection: column1 AS #2, column2 AS #3
                 Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -9366,6 +9456,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -9765,6 +9858,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -9841,6 +9937,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -10179,6 +10278,9 @@ data:
           Projection: column1 AS #1
             Values: (Int32(1)), (Int32(2)), (Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -10255,6 +10357,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -10594,6 +10699,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(1)), (Int32(2)), (Int32(3))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -10670,6 +10778,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -11040,6 +11151,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(3)), (Int32(1)), (Int32(2))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -11116,6 +11230,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -11499,6 +11616,9 @@ data:
             Projection: column1 AS #1
               Values: (Int32(1)), (Int32(2)), (Int32(3)), (Int32(4))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -11575,6 +11695,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:

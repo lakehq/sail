@@ -115,6 +115,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -193,6 +196,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -207,15 +213,15 @@ data:
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
           ProjectionExec: expr=[id@0 as id]
-            RangeExec
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     initial_physical_plan_with_stats:
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
       CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-          ProjectionExec: expr=[id@0 as id], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-            RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+          ProjectionExec: expr=[id@0 as id], statistics=[Rows=Exact(400), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(400), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -223,7 +229,7 @@ data:
       CoalescePartitionsExec, schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
           ProjectionExec: expr=[id@0 as id], schema=[id:Int64]
-            RangeExec, schema=[id:Int64]
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], schema=[id:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -232,7 +238,7 @@ data:
         CoalescePartitionsExec
           DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
             ProjectionExec: expr=[id@0 as id]
-              RangeExec
+              RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -264,14 +270,14 @@ data:
       DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
         CoalescePartitionsExec
           DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
-            RangeExec
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after OutputRequirements:
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after LimitAggregation:
@@ -317,14 +323,14 @@ data:
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     == Physical Plan ==
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     == Distributed Plan ==
@@ -335,7 +341,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
-      RangeExec
+      RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Shuffle)]
@@ -469,6 +475,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -547,6 +556,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -561,15 +573,15 @@ data:
       IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
           ProjectionExec: expr=[id@0 as id]
-            RangeExec
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     initial_physical_plan_with_stats:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
       IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-          ProjectionExec: expr=[id@0 as id], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-            RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Exact(400), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+          ProjectionExec: expr=[id@0 as id], statistics=[Rows=Exact(400), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(400), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -577,7 +589,7 @@ data:
       IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[id:Int64]
           ProjectionExec: expr=[id@0 as id], schema=[id:Int64]
-            RangeExec, schema=[id:Int64]
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], schema=[id:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -586,7 +598,7 @@ data:
         IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
             ProjectionExec: expr=[id@0 as id]
-              RangeExec
+              RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -610,7 +622,7 @@ data:
         CoalescePartitionsExec
           IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
             ProjectionExec: expr=[id@0 as id]
-              RangeExec
+              RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after CombinePartialFinalAggregate:
@@ -624,14 +636,14 @@ data:
       IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
         CoalescePartitionsExec
           IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-            RangeExec
+            RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after OutputRequirements:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       CoalescePartitionsExec
         IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after LimitAggregation:
@@ -677,14 +689,14 @@ data:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       CoalescePartitionsExec
         IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     == Physical Plan ==
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       CoalescePartitionsExec
         IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-          RangeExec
+          RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
 
     == Distributed Plan ==
@@ -695,7 +707,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-      RangeExec
+      RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0]
 
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Shuffle)]
@@ -840,6 +852,9 @@ data:
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id < Int64(10) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -916,6 +931,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -1397,6 +1415,9 @@ data:
                           Filter: range.id < Int64(10)
                             TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -1475,6 +1496,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -1519,7 +1543,7 @@ data:
                       ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present]
                         ProjectionExec: expr=[id@0 as #2]
                           FilterExec: id@0 < 10
-                            RangeExec
+                            RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
 
 
     initial_physical_plan_with_stats:
@@ -1539,10 +1563,10 @@ data:
                               ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                 IcebergMergeMetadataExec: data_file_column=__sail_file_path, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-                      ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0)),(Col[1]: Min=Exact(Boolean(true)) Max=Exact(Boolean(true)) Null=Exact(0) Distinct=Exact(1))]]
-                        ProjectionExec: expr=[id@0 as #2], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0))]]
-                          FilterExec: id@0 < 10, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0))]]
-                            RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+                      ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present], statistics=[Rows=Inexact(10), Bytes=Inexact(<bytes>), [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0)),(Col[1]: Min=Exact(Boolean(true)) Max=Exact(Boolean(true)) Null=Exact(0) Distinct=Exact(1))]]
+                        ProjectionExec: expr=[id@0 as #2], statistics=[Rows=Inexact(10), Bytes=Inexact(<bytes>), [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0))]]
+                          FilterExec: id@0 < 10, statistics=[Rows=Inexact(10), Bytes=Absent, [(Col[0]: Max=Inexact(Int64(9)) Null=Exact(0))]]
+                            RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(10), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
@@ -1565,7 +1589,7 @@ data:
                       ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int64, __sail_merge_source_row_present:Boolean]
                         ProjectionExec: expr=[id@0 as #2], schema=[#2:Int64]
                           FilterExec: id@0 < 10, schema=[id:Int64]
-                            RangeExec, schema=[id:Int64]
+                            RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
 
 
     physical_plan after OutputRequirements:
@@ -1589,7 +1613,7 @@ data:
                         ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present]
                           ProjectionExec: expr=[id@0 as #2]
                             FilterExec: id@0 < 10
-                              RangeExec
+                              RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
 
 
     physical_plan after aggregate_statistics:
@@ -1605,18 +1629,19 @@ data:
                 ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN id@1 + 1000 ELSE id@1 END as id, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@3 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition, CASE WHEN __common_expr_1@0 THEN 6 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
                   ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                     MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                      HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                        ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                          MonotonicIdExec: col=__sail_merge_target_row_id
-                            ProjectionExec: expr=[#0@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
-                              ProjectionExec: expr=[id@0 as #0, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
-                                ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
-                                  IcebergMergeMetadataExec: data_file_column=__sail_file_path
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                        ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present]
-                          ProjectionExec: expr=[id@0 as #2]
-                            FilterExec: id@0 < 10
-                              RangeExec
+                      ProjectionExec: expr=[id@2 as id, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, __sail_merge_target_row_id@7 as __sail_merge_target_row_id, __sail_merge_target_row_present@8 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_merge_source_row_present@1 as __sail_merge_source_row_present]
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10
+                          ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present]
+                            ProjectionExec: expr=[id@0 as #2]
+                              FilterExec: id@0 < 10
+                                RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                          ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                            MonotonicIdExec: col=__sail_merge_target_row_id
+                              ProjectionExec: expr=[#0@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
+                                ProjectionExec: expr=[id@0 as #0, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
+                                  ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
+                                    IcebergMergeMetadataExec: data_file_column=__sail_file_path
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
 
 
     physical_plan after LimitedDistinctAggregation:
@@ -1642,21 +1667,20 @@ data:
                         ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                             RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=4
-                              HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                                RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                  ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    MonotonicIdExec: col=__sail_merge_target_row_id
-                                      ProjectionExec: expr=[#0@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
-                                        ProjectionExec: expr=[id@0 as #0, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
-                                          ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
-                                            IcebergMergeMetadataExec: data_file_column=__sail_file_path
-                                              DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=4
+                              ProjectionExec: expr=[id@2 as id, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, __sail_merge_target_row_id@7 as __sail_merge_target_row_id, __sail_merge_target_row_present@8 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_merge_source_row_present@1 as __sail_merge_source_row_present]
+                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10
                                   ProjectionExec: expr=[#2@0 as __sail_src_id, true as __sail_merge_source_row_present]
                                     ProjectionExec: expr=[id@0 as #2]
                                       FilterExec: id@0 < 10
-                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          RangeExec
+                                        RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                    ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                      MonotonicIdExec: col=__sail_merge_target_row_id
+                                        ProjectionExec: expr=[#0@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
+                                          ProjectionExec: expr=[id@0 as #0, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
+                                            ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition, __sail_file_row_index@4 as __sail_file_row_index]
+                                              IcebergMergeMetadataExec: data_file_column=__sail_file_path
+                                                DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
 
 
     physical_plan after CombinePartialFinalAggregate:
@@ -1678,18 +1702,16 @@ data:
                       ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                           RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=4
-                            HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                              RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_partition@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
+                              ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+                                FilterExec: id@0 < 10
+                                  RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                 ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                   MonotonicIdExec: col=__sail_merge_target_row_id
                                     ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
                                       IcebergMergeMetadataExec: data_file_column=__sail_file_path
                                         DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                              RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=4
-                                ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-                                  FilterExec: id@0 < 10
-                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                      RangeExec
 
 
     physical_plan after OutputRequirements:
@@ -1704,18 +1726,16 @@ data:
                     ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                         RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=4
-                          HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                            RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_partition@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
+                            ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+                              FilterExec: id@0 < 10
+                                RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                               ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                 MonotonicIdExec: col=__sail_merge_target_row_id
                                   ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
                                     IcebergMergeMetadataExec: data_file_column=__sail_file_path
                                       DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=4
-                              ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-                                FilterExec: id@0 < 10
-                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    RangeExec
 
 
     physical_plan after LimitAggregation:
@@ -1769,18 +1789,16 @@ data:
                     ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                         RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=4
-                          HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                            RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_partition@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
+                            ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+                              FilterExec: id@0 < 10
+                                RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                               ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                 MonotonicIdExec: col=__sail_merge_target_row_id
                                   ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
                                     IcebergMergeMetadataExec: data_file_column=__sail_file_path
                                       DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=4
-                              ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-                                FilterExec: id@0 < 10
-                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    RangeExec
 
 
     == Physical Plan ==
@@ -1795,18 +1813,16 @@ data:
                     ProjectionExec: expr=[__sail_merge_source_row_present@8 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                         RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=4
-                          HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-                            RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_partition@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
+                            ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+                              FilterExec: id@0 < 10
+                                RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                               ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                 MonotonicIdExec: col=__sail_merge_target_row_id
                                   ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@2 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@3 as __sail_iceberg_partition]
                                     IcebergMergeMetadataExec: data_file_column=__sail_file_path
                                       DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=4
-                              ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-                                FilterExec: id@0 < 10
-                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    RangeExec
 
 
     == Distributed Plan ==
@@ -1814,7 +1830,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=Hash(keys=[id@0], channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
       MonotonicIdExec: col=__sail_merge_target_row_id
@@ -1823,35 +1839,19 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_partition@3], 1), file_type=parquet
 
     === stage 1 ===
-    inputs=[]
-    mode=Pipelined
-    partitions=1
-    distribution=RoundRobinBatch(channels=4)
-    placement=Worker
-    RangeExec
-
-    === stage 2 ===
-    inputs=[StageInput(stage=1, mode=Shuffle)]
-    mode=Pipelined
-    partitions=4
-    distribution=Hash(keys=[__sail_src_id@0], channels=4)
-    placement=Worker
-    ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-      FilterExec: id@0 < 10
-        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
-
-    === stage 3 ===
-    inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=2, mode=Shuffle)]
+    inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
-    HashJoinExec: mode=Partitioned, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=id@0 < 10
-      StageInputExec: input=0, partitioning=Hash([id@0], 4)
-      StageInputExec: input=1, partitioning=Hash([__sail_src_id@0], 4)
+    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_partition@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
+      ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+        FilterExec: id@0 < 10
+          RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
-    === stage 4 ===
-    inputs=[StageInput(stage=3, mode=Shuffle)]
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[__sail_file_path@1], channels=4)
@@ -1861,8 +1861,8 @@ data:
         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
           StageInputExec: input=0, partitioning=Hash([__sail_merge_target_row_id@5], 4)
 
-    === stage 5 ===
-    inputs=[StageInput(stage=4, mode=Shuffle)]
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=RoundRobinBatch(channels=1)
@@ -1873,8 +1873,8 @@ data:
           SortExec: expr=[__sail_file_path@1 ASC NULLS LAST, __sail_operation_type@5 DESC NULLS LAST], preserve_partitioning=[true]
             StageInputExec: input=0, partitioning=Hash([__sail_file_path@1], 4)
 
-    === stage 6 ===
-    inputs=[StageInput(stage=5, mode=Shuffle)]
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
@@ -1882,8 +1882,8 @@ data:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 
-    === stage 7 ===
-    inputs=[StageInput(stage=6, mode=Forward)]
+    === stage 5 ===
+    inputs=[StageInput(stage=4, mode=Forward)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
@@ -2025,6 +2025,9 @@ data:
               Projection: distributed_iceberg_commit.id < Int64(10) AS __common_expr_1, distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path
                 TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -2101,6 +2104,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -2487,6 +2493,9 @@ data:
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id >= Int64(0) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -2563,6 +2572,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
