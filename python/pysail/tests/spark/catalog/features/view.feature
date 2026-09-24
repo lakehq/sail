@@ -109,6 +109,39 @@ Feature: Persistent views
       | customer_id   | int       | NULL    |
       | customer_name | string    | NULL    |
 
+  Scenario: Filters do not recover renamed persistent view columns
+    Given final statement
+      """
+      DROP VIEW IF EXISTS renamed_customers
+      """
+    Given statement
+      """
+      CREATE VIEW renamed_customers (customer_id, customer_name) AS SELECT id, name FROM view_customers
+      """
+    When query
+      """
+      SELECT * FROM renamed_customers WHERE id = 1
+      """
+    Then query error (?i)cannot (be )?resolve
+
+  Scenario: Correlated filters resolve renamed persistent view columns as outer references
+    Given final statement
+      """
+      DROP VIEW IF EXISTS renamed_customers
+      """
+    Given statement
+      """
+      CREATE VIEW renamed_customers (customer_id, customer_name) AS SELECT id, name FROM view_customers
+      """
+    When query
+      """
+      SELECT id FROM VALUES (2), (4) AS o(id)
+      WHERE EXISTS (SELECT 1 FROM renamed_customers WHERE customer_id = id)
+      """
+    Then query result
+      | id |
+      | 2  |
+
   Scenario: SHOW TABLES lists persistent views
     When query
       """

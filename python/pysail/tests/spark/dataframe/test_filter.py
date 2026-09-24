@@ -134,6 +134,17 @@ def test_filter_missing_attribute_from_join_output(spark, filter_source):
     assert result.collect() == [Row(key="b")]
 
 
+def test_filter_missing_attribute_from_join_output_after_drop(spark, filter_source):
+    labels = spark.createDataFrame([("b", "B")], "label_key string, label string")
+    # Dropping every right-side column leaves exactly the left input's output.
+    result = (
+        filter_source.join(labels, F.col("key") == F.col("label_key"))
+        .drop(*labels.columns)
+        .where(F.col("label") == "B")
+    )
+    assert result.collect() == [Row(key="b", regionality="INTRA", value=2)]
+
+
 @pytest.mark.parametrize("boundary", ["alias", "aggregate", "join", "union"])
 def test_filter_missing_attribute_rejects_resolution_boundaries(spark, filter_source, boundary):
     projected = filter_source.select("key", "value")
@@ -148,6 +159,18 @@ def test_filter_missing_attribute_rejects_resolution_boundaries(spark, filter_so
         projected = projected.union(projected)
     with pytest.raises(AnalysisException):
         projected.where(F.col("regionality") != "DOMESTIC").collect()
+
+
+@pytest.mark.parametrize("cogroup", [False, True], ids=["group-map", "co-group-map"])
+def test_filter_grouped_map_rejects_grouping_attribute(filter_source, cogroup):
+    grouped = filter_source.groupBy("key")
+    if cogroup:
+        other = filter_source.withColumnRenamed("key", "other_key").groupBy("other_key")
+        result = grouped.cogroup(other).applyInPandas(lambda left, _: left[["value"]], schema="value int")
+    else:
+        result = grouped.applyInPandas(lambda pdf: pdf[["value"]], schema="value int")
+    with pytest.raises(AnalysisException):
+        result.where(F.col("key") == "b").collect()
 
 
 def test_filter_missing_attribute_rejects_unknown_name(filter_source):
@@ -230,6 +253,33 @@ def test_filter_descendant_fallback_preserves_earlier_bindings(spark, failure, r
         .select(F.lit("NEAR").alias("marker"))
         .select(F.lit(1).alias("keep"))
         .where(predicates[0] & predicates[1])
+    )
+    assert outer.where(inner.exists()).collect() == []
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Missing-reference recovery across invalid intermediate projections requires staged expression resolution",
+    strict=True,
+)
+def test_filter_descendant_fallback_preserves_deeper_bindings(spark, failure):
+    outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
+    if failure == "nested-field":
+        columns = [F.struct(F.lit(42).alias("y")).alias("o")]
+        reference = "o.x"
+    else:
+        columns = [F.lit(41).alias("x"), F.lit(42).alias("x")]
+        reference = "x"
+
+    # The failed projection is discarded, but the deeper marker still shadows the outer marker.
+    inner = (
+        spark.range(1)
+        .select(F.lit("DEEP").alias("marker"))
+        .select(*columns)
+        .select(F.lit(1).alias("keep"))
+        .where((F.col("marker").outer() == "OUTER") & (F.col(reference).outer() == 1))
     )
     assert outer.where(inner.exists()).collect() == []
 
@@ -359,14 +409,29 @@ def test_filter_missing_attributes_in_lambda(spark, predicate_kind):
     assert result.collect() == [Row(key="b")]
 
 
+@pytest.mark.parametrize("subset", [None, ["key"]], ids=["distinct", "drop-duplicates-subset"])
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="Sail lowers DataFrame deduplication to Distinct, which cannot expose missing attributes",
     strict=True,
 )
-def test_filter_missing_attribute_through_dataframe_distinct(filter_source):
-    result = filter_source.select("key", "value").distinct().where(F.col("regionality") != "DOMESTIC")
+def test_filter_missing_attribute_through_dataframe_distinct(filter_source, subset):
+    projected = filter_source.select("key", "value")
+    projected = projected.distinct() if subset is None else projected.dropDuplicates(subset)
+    result = projected.where(F.col("regionality") != "DOMESTIC")
     assert result.collect() == [Row(key="b", value=2)]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.lateralJoin requires PySpark 4+")
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail lowers lateral joins to joins, which cannot expose missing left attributes",
+    strict=True,
+)
+def test_filter_missing_attribute_through_lateral_join(spark, filter_source):
+    right = spark.range(1).select(F.lit(1).alias("one"))
+    result = filter_source.select("key").lateralJoin(right).where(F.col("regionality") != "DOMESTIC")
+    assert result.collect() == [Row(key="b", one=1)]
 
 
 @pytest.mark.parametrize(
@@ -383,6 +448,28 @@ def test_filter_missing_attribute_ignores_sampling_auxiliaries(spark, with_repla
 
     assert result.collect() == expected
     assert result.schema == sampled.schema
+
+
+@pytest.mark.parametrize("project_sample", [False, True], ids=["sampled-output", "projected-output"])
+def test_filter_missing_attribute_ignores_stratified_sampling_auxiliary(spark, project_sample):
+    source = spark.range(1).select(F.lit("keep").alias("key"), F.lit(100).alias("rand_value"))
+    sampled = source.select("key").sampleBy("key", {"keep": 1.0}, 42)
+    if project_sample:
+        sampled = sampled.select("key")
+    expected = sampled.collect()
+    assert expected
+
+    result = sampled.where(F.col("rand_value") == 100)  # noqa: PLR2004
+
+    assert result.collect() == expected
+    assert result.schema == sampled.schema
+
+
+def test_filter_except_all_rejects_internal_row_number(spark, filter_source):
+    other = spark.createDataFrame([("a",)], "key string")
+    projected = filter_source.select("key").exceptAll(other)
+    with pytest.raises(AnalysisException):
+        projected.where(F.col("row_num") == 1).collect()
 
 
 def test_filter_missing_grouping_attribute(filter_source):
@@ -428,6 +515,23 @@ def test_filter_temp_view_visible_qualified_attributes(spark, filter_temp_view, 
             SELECT visible.key FROM visible WHERE visible.regionality = 'INTRA'
         """  # noqa: S608
     assert spark.sql(query).collect() == [Row(key="b")]
+
+
+@pytest.mark.parametrize("columns", ["key", "key, regionality"], ids=["removed-by-query", "query-output"])
+def test_filter_with_query_recovers_only_query_output(spark, filter_source, columns):
+    filter_source.createOrReplaceTempView("filter_with_source")
+    try:
+        projected = spark.sql(
+            f"WITH visible AS (SELECT key, regionality FROM filter_with_source) SELECT {columns} FROM visible"  # noqa: S608
+        ).select("key")
+        predicate = F.col("regionality") != "DOMESTIC"
+        if columns == "key":
+            with pytest.raises(AnalysisException):
+                projected.where(predicate).collect()
+        else:
+            assert projected.where(predicate).collect() == [Row(key="b")]
+    finally:
+        spark.catalog.dropTempView("filter_with_source")
 
 
 @pytest.mark.parametrize("subquery", ["scalar", "exists"])

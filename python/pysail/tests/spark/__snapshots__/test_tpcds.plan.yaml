@@ -1624,11 +1624,11 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#323@0 as sum(sales)]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[sum(#257)@0 as #323]
+        ProjectionExec: expr=[sum(__auto_generated_subquery_name.#257)@0 as #323]
           GlobalLimitExec: skip=0, fetch=100
-            AggregateExec: mode=Final, gby=[], aggr=[sum(#257)]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(__auto_generated_subquery_name.#257)]
               CoalescePartitionsExec
-                AggregateExec: mode=Partial, gby=[], aggr=[sum(#257)]
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(__auto_generated_subquery_name.#257)]
                   UnionExec
                     ProjectionExec: expr=[#211@0 * CAST(#213@1 AS Float64) as #257]
                       HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#256@0, #196@0)], projection=[#211@1, #213@2]
@@ -1716,10 +1716,10 @@ data:
                               FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[max(#147)@0 as #190]
-          AggregateExec: mode=Final, gby=[], aggr=[max(#147)]
+        ProjectionExec: expr=[max(__auto_generated_subquery_name.#147)@0 as #190]
+          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[max(#147)]
+              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
                 ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #147]
                   AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
                     RepartitionExec: partitioning=Hash([#100@0], 4), input_partitions=4
@@ -1845,10 +1845,10 @@ data:
                                 FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[max(#147)@0 as #190]
-          AggregateExec: mode=Final, gby=[], aggr=[max(#147)]
+        ProjectionExec: expr=[max(__auto_generated_subquery_name.#147)@0 as #190]
+          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[max(#147)]
+              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
                 ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #147]
                   AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
                     RepartitionExec: partitioning=Hash([#100@0], 4), input_partitions=4

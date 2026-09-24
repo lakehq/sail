@@ -52,6 +52,26 @@ Feature: Scalar subqueries in distributed execution
       | EXISTS    | 1          | WHERE a = lateral_scalar_outer.c1  |
       | c1 IN     | a          |                                   |
 
+  Scenario: Filter subqueries resolve columns hidden by unaliased derived tables as outer references
+    When query
+      """
+      SELECT c FROM VALUES (1), (3) AS u(c)
+      WHERE EXISTS (
+        SELECT 1 FROM (SELECT a FROM VALUES (1, 1), (2, 3) AS t(a, c))
+        WHERE a = c
+      )
+      """
+    Then query result collected
+      | c |
+      | 1 |
+
+  Scenario: Filters do not recover columns hidden by unaliased derived tables
+    When query
+      """
+      SELECT * FROM (SELECT a FROM VALUES (1, 10) AS t(a, b)) WHERE b = 10
+      """
+    Then query error (?i)cannot (be )?resolve
+
   Scenario: Scalar subquery in Parquet scan predicate
     Given variable location for temporary directory scalar_subquery_parquet
     Given statement template
