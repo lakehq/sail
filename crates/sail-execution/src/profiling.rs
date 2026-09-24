@@ -69,6 +69,8 @@ pub(crate) enum ProfileEvent {
         pid: u32,
         process_cpu_percent: Option<f64>,
         process_rss_bytes: u64,
+        host_network_rx_bytes: u64,
+        host_network_rx_delta_bytes: Option<u64>,
         host_network_tx_bytes: u64,
         host_network_tx_delta_bytes: Option<u64>,
     },
