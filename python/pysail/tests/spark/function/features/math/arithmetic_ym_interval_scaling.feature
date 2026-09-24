@@ -134,6 +134,17 @@ Feature: scaling a year-month interval by a number, vs Spark 4.2.0
 
   Rule: a day-time interval scales by the same rule as a year-month one
 
+    Scenario: scaling a non-null day-time interval keeps Spark's non-nullable schema
+      When query
+        """
+        SELECT INTERVAL '1' DAY * 2 AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: interval day to second (nullable = false)
+        """
+
     # `MultiplyDTInterval`/`DivideDTInterval` (`BinaryArithmeticWithDatetimeResolver.scala:156-157,
     # 169`) scale the MICROS and round HALF_UP, exactly as the year-month pair scales the months.
     # Sail spelled this one as an Arrow `Duration` and let DataFusion do it, which was wrong three

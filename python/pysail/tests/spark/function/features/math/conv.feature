@@ -97,3 +97,20 @@ Feature: conv with an argument coming from a column
       Then query result
         | to_binary | to_octal | to_hex |
         | 1010      | 12       | A      |
+
+  Rule: conversion follows Spark's signed and unsigned 64-bit rules
+
+    Scenario Outline: conv <case>
+      When query
+        """
+        SELECT conv(<number>, <from_base>, <to_base>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                | number             | from_base | to_base | result               |
+        | trims input around binary digits    | '  100  '          | 2         | 10      | 4                    |
+        | retains an unsigned 64-bit value    | 'FFFFFFFFFFFFFFFF' | 16        | 10      | 18446744073709551615 |
+        | accepts a negative destination base | '-10'               | 16        | -10     | -16                  |

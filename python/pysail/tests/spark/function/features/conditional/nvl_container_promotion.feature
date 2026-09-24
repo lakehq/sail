@@ -68,6 +68,36 @@ Feature: nvl over containers whose leaves need a promotion
 
   Rule: two structs type only when their field names match
 
+    Scenario: ANSI promotion of a string array records the nullable cast element
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT if(true, array('1'), array(2)) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: long (containsNull = true)
+        """
+
+    Scenario: ANSI promotion refuses a map key cast that could produce NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT nvl(map('1', 1), map(2, 2)) AS value
+        """
+      Then query error (?i)DATA_DIFF_TYPES
+
+    Scenario: case-sensitive ANSI nvl refuses struct fields with different case
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT nvl(named_struct('A', 1), named_struct('a', 2)) AS value
+        """
+      Then query error (?i)DATA_DIFF_TYPES
+
     # `findTypeForComplex` pairs struct fields through `SQLConf.get.resolver` and returns None when a
     # pair of names does not match (`TypeCoercionHelper.scala:164-176`), so Spark refuses the pair
     # instead of renaming it; the resolver is case-insensitive by default, and an extra field is a

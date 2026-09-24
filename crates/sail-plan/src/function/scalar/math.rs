@@ -1438,11 +1438,10 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
             ScalarUDF::from(SparkNegative::new(ansi_mode))
                 .call(vec![string_to_double(arg, ansi_mode)])
         }
-        // Floating-point negation never overflows and is identical in both ANSI
-        // modes, so use the native (vectorized, foldable) operator.
-        Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) => {
-            Expr::Negative(Box::new(arg))
-        }
+        // Preserve the IEEE signed-zero rule for DOUBLE columns: Spark negates
+        // `-0.0` to `0.0`, while DataFusion's native expression keeps `-0.0`.
+        Ok(DataType::Float64) => ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![arg]),
+        Ok(DataType::Float16 | DataType::Float32) => Expr::Negative(Box::new(arg)),
         // A negated numeric literal folds to a literal so constant-arg functions
         // (e.g. `ceil`/`floor` target scale) still see a constant; overflow
         // (`-INT_MIN`) can't fold and falls through to the runtime UDF.

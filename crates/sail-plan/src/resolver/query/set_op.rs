@@ -303,11 +303,11 @@ fn set_operation_has_no_common_type(left: &DataType, right: &DataType) -> bool {
         || (left.is_nested() != right.is_nested())
 }
 
-fn ordinal(number: usize) -> &'static str {
+fn ordinal(number: usize) -> String {
     match number {
-        1 => "first",
-        2 => "second",
-        3 => "third",
-        _ => "nth",
+        1 => "first".to_string(),
+        2 => "second".to_string(),
+        3 => "third".to_string(),
+        _ => format!("{number}th"),
     }
 }

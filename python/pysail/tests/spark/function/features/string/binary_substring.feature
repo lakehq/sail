@@ -35,6 +35,7 @@ Feature: substr, substring, left and overlay over a BINARY, vs Spark 4.2.0
         | left multibyte    | left(X'41E282AC42C3A943', 2)                                | binary | 41E2               |
         | overlay           | overlay(X'537061726B2053514C' PLACING X'5F' FROM 6)         | binary | 537061726B5F53514C |
         | overlay for       | overlay(X'537061726B2053514C' PLACING X'5F5F' FROM 2 FOR 3) | binary | 535F5F6B2053514C   |
+        | overlay negative  | overlay(X'616263' PLACING X'58' FROM 2 FOR -2)              | binary | 615863             |
         | overlay multibyte | overlay(X'41E282AC42C3A943' PLACING X'2D' FROM 2 FOR 3)     | binary | 412D42C3A943       |
 
     Scenario Outline: a binary <case> is an empty BINARY

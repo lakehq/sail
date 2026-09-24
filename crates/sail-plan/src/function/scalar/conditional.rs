@@ -19,6 +19,14 @@ use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, spark_type_name,
 };
 
+fn data_diff_types_error(name: &str, left: &DataType, right: &DataType) -> PlanError {
+    PlanError::analysis(format!(
+        "[DATATYPE_MISMATCH.DATA_DIFF_TYPES] cannot resolve '{name}' with operand types {} and {}. SQLSTATE: 42K09",
+        spark_type_name(left),
+        spark_type_name(right)
+    ))
+}
+
 /// Refuses a branch set Spark refuses to type. `CaseWhenCoercion` and `IfCoercion` take the branches
 /// to `findWiderCommonType`, which pairs struct fields through the resolver and gives up when a name
 /// does not match or the counts differ (`TypeCoercionHelper.scala:164-176`); Spark then raises
@@ -55,15 +63,10 @@ fn rejects_incompatible_branches(
                 || (right.is_numeric() && is_temporal_type(left));
             let legacy_string_promotion =
                 !function_context.plan_config.ansi_mode && data_types.iter().any(is_string_type);
-            struct_pair_spark_refuses(left, right) || (numeric_datetime && !legacy_string_promotion)
+            struct_pair_spark_refuses(left, right, function_context.plan_config.case_sensitive)
+                || (numeric_datetime && !legacy_string_promotion)
         })
-        .map(|(left, right)| {
-            PlanError::analysis(format!(
-                "cannot resolve '{name}' with branch types {} and {}",
-                spark_type_name(left),
-                spark_type_name(right)
-            ))
-        })
+        .map(|(left, right)| data_diff_types_error(name, left, right))
 }
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -169,13 +172,28 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         // (`TypeCoercionHelper.scala:164-176`), and `Coalesce` then raises
         // `DATATYPE_MISMATCH.DATA_DIFF_TYPES`.
         if let (Some(left_type), Some(right_type)) = (&left_type, &right_type)
-            && struct_pair_spark_refuses(left_type, right_type)
+            && struct_pair_spark_refuses(
+                left_type,
+                right_type,
+                function_context.plan_config.case_sensitive,
+            )
         {
-            return Err(PlanError::analysis(format!(
-                "cannot resolve 'nvl' with operand types {} and {}",
-                spark_type_name(left_type),
-                spark_type_name(right_type)
-            )));
+            return Err(data_diff_types_error("nvl", left_type, right_type));
+        }
+        // `findTypeForComplex` rejects MAP pairs when the common key needs a cast that can return
+        // NULL. Do not let DataFusion subsequently coerce that rejected pair to STRING.
+        if let (Some(left_type @ DataType::Map(_, _)), Some(right_type @ DataType::Map(_, _))) =
+            (&left_type, &right_type)
+            && left_type != right_type
+            && spark_wider_type(
+                left_type,
+                right_type,
+                function_context.plan_config.ansi_mode,
+                function_context.plan_config.case_sensitive,
+            )
+            .is_none()
+        {
+            return Err(data_diff_types_error("nvl", left_type, right_type));
         }
         // `coalesce` alone cannot type two containers whose leaves differ -- an array of structs
         // whose leaves widen, a map whose values need a promotion, two structs whose field names
@@ -187,6 +205,7 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 left_type,
                 right_type,
                 function_context.plan_config.ansi_mode,
+                function_context.plan_config.case_sensitive,
             )
         {
             let to_common = |expr: expr::Expr, from: &DataType| {
@@ -337,7 +356,12 @@ fn widen_container_values(
             .skip(1)
             .fold(data_types.first().cloned(), |current, data_type| {
                 current.and_then(|current| {
-                    spark_wider_type(&current, data_type, function_context.plan_config.ansi_mode)
+                    spark_wider_type(
+                        &current,
+                        data_type,
+                        function_context.plan_config.ansi_mode,
+                        function_context.plan_config.case_sensitive,
+                    )
                 })
             })
     else {

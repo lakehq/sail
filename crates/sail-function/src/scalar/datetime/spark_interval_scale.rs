@@ -57,7 +57,7 @@ macro_rules! interval_scale_udf {
                 Ok($result)
             }
 
-            fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
                 // Scaling returns the full interval qualifier, independently of the input:
                 // intervalExpressions.scala:606,659,746,829 in Spark 4.2.0.
                 let metadata = match $result {
@@ -79,7 +79,12 @@ macro_rules! interval_scale_udf {
                     .to_json()
                     .map_err(|error| DataFusionError::Plan(error.to_string()))?;
                 Ok(Arc::new(
-                    Field::new(self.name(), $result, true).with_metadata(
+                    Field::new(
+                        self.name(),
+                        $result,
+                        args.arg_fields.iter().any(|field| field.is_nullable()),
+                    )
+                    .with_metadata(
                         [(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata)].into(),
                     ),
                 ))

@@ -84,18 +84,11 @@ impl ScalarUDFImpl for SparkConv {
             (
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
-            ) => {
-                if *from < 2 || *from > 36 || *to < 2 || *to > 36 {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-                }
-                match i64::from_str_radix(&num_str, *from as u32) {
-                    Ok(n) => {
-                        let result = to_radix_string(n, *to as u32);
-                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                    }
-                    Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-                }
-            }
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(convert(
+                Some(&num_str),
+                Some(*from),
+                Some(*to),
+            )))),
             _ => {
                 let types = vec![num.data_type(), from_base.data_type(), to_base.data_type()];
                 Err(unsupported_data_types_exec_err(
@@ -202,71 +195,84 @@ fn invoke_vectorized(
 
 fn convert(number: Option<&str>, from: Option<i32>, to: Option<i32>) -> Option<String> {
     let (number, from, to) = (number?, from?, to?);
-    if !(2..=36).contains(&from) || !(2..=36).contains(&to) {
+    if !(2..=36).contains(&from) || !(2..=36).contains(&to.unsigned_abs()) {
         return None;
     }
-    i64::from_str_radix(number, from as u32)
-        .ok()
-        .map(|number| to_radix_string(number, to as u32))
+    let number = number.trim();
+    let (negative, number) = match number.strip_prefix('-') {
+        Some(number) => (true, number),
+        None => (false, number),
+    };
+    let number = u64::from_str_radix(number, from as u32).ok()?;
+    if to > 0 {
+        let number = if negative {
+            if number > i64::MAX as u64 {
+                u64::MAX
+            } else {
+                (-(number as i64)) as u64
+            }
+        } else {
+            number
+        };
+        Some(to_radix_u64(number, to as u32))
+    } else {
+        let value = if negative {
+            -(number as i128)
+        } else {
+            number as i128
+        };
+        Some(to_radix_signed(value, to.unsigned_abs()))
+    }
 }
 
-fn to_radix_string(mut n: i64, radix: u32) -> String {
-    if n == 0 {
+fn to_radix_u64(mut value: u64, radix: u32) -> String {
+    if value == 0 {
         return "0".to_string();
     }
-
-    let negative: bool = n < 0;
-    n = n.abs();
-
-    let mut digits: Vec<char> = vec![];
-    let radix: i64 = radix as i64;
-
-    loop {
-        let rem: u8 = (n % radix) as u8;
-        digits.push(
-            char::from_digit(rem as u32, 36)
-                .map(|c| c.to_ascii_uppercase())
-                .unwrap_or('?'),
-        );
-        n /= radix;
-        if n == 0 {
-            break;
-        }
+    let mut digits = Vec::new();
+    while value != 0 {
+        const DIGITS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        digits.push(DIGITS[(value % radix as u64) as usize] as char);
+        value /= radix as u64;
     }
-
-    if negative {
-        digits.push('-');
-    }
-
     digits.iter().rev().collect()
+}
+
+fn to_radix_signed(value: i128, radix: u32) -> String {
+    let negative = value < 0;
+    let mut result = to_radix_u64(value.unsigned_abs() as u64, radix);
+    if negative {
+        result.insert(0, '-');
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn test_to_radix_string_basic_cases() {
-        assert_eq!(to_radix_string(10, 2), "1010");
-        assert_eq!(to_radix_string(10, 8), "12");
-        assert_eq!(to_radix_string(10, 10), "10");
-        assert_eq!(to_radix_string(10, 16), "A");
-        assert_eq!(to_radix_string(255, 16), "FF");
-        assert_eq!(to_radix_string(31, 16), "1F");
-        assert_eq!(to_radix_string(36, 36), "10");
+    fn test_to_radix_signed_basic_cases() {
+        assert_eq!(to_radix_signed(10, 2), "1010");
+        assert_eq!(to_radix_signed(10, 8), "12");
+        assert_eq!(to_radix_signed(10, 10), "10");
+        assert_eq!(to_radix_signed(10, 16), "A");
+        assert_eq!(to_radix_signed(255, 16), "FF");
+        assert_eq!(to_radix_signed(31, 16), "1F");
+        assert_eq!(to_radix_signed(36, 36), "10");
     }
 
     #[test]
-    fn test_to_radix_string_negative_values() {
-        assert_eq!(to_radix_string(-10, 2), "-1010");
-        assert_eq!(to_radix_string(-10, 8), "-12");
-        assert_eq!(to_radix_string(-10, 10), "-10");
-        assert_eq!(to_radix_string(-10, 16), "-A");
+    fn test_to_radix_signed_negative_values() {
+        assert_eq!(to_radix_signed(-10, 2), "-1010");
+        assert_eq!(to_radix_signed(-10, 8), "-12");
+        assert_eq!(to_radix_signed(-10, 10), "-10");
+        assert_eq!(to_radix_signed(-10, 16), "-A");
     }
 
     #[test]
-    fn test_to_radix_string_zero() {
-        assert_eq!(to_radix_string(0, 2), "0");
-        assert_eq!(to_radix_string(0, 10), "0");
-        assert_eq!(to_radix_string(0, 36), "0");
+    fn test_to_radix_signed_zero() {
+        assert_eq!(to_radix_signed(0, 2), "0");
+        assert_eq!(to_radix_signed(0, 10), "0");
+        assert_eq!(to_radix_signed(0, 36), "0");
     }
 }

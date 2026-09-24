@@ -233,6 +233,7 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | a bigint beside an int   | SELECT 3000000000L AS v UNION ALL SELECT -2147483648 AS v          | bigint |
         | an int beside a double   | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DOUBLE) AS v            | double |
         | an int beside a decimal  | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DECIMAL(10,2)) AS v     | decimal(12,2) |
+        | capped decimals preserve integral digits | SELECT CAST(1 AS DECIMAL(38,0)) AS v UNION ALL SELECT CAST(1.5 AS DECIMAL(38,10)) AS v | decimal(38,0) |
         | a distinct union         | SELECT -2147483648 AS v UNION SELECT 3000000000L AS v              | bigint |
 
     Scenario: every row of a widened union survives
@@ -297,6 +298,15 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | case              | query                                            |
         | an INT and a DATE  | 1 AS v UNION ALL SELECT DATE'2024-01-01' AS v    |
         | an INT and an ARRAY | 1 AS v UNION ALL SELECT array(1) AS v          |
+
+    Scenario: a fourth incompatible column identifies its ordinal
+      When query
+        """
+        SELECT 1, 2, 3, DATE'2020-01-01'
+        UNION ALL
+        SELECT 1, 2, 3, 4
+        """
+      Then query error (?i)4th column
 
   Rule: only ANSI widens an integral beside a FLOAT in a set operation
 

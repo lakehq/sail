@@ -3,7 +3,7 @@ use std::sync::{Arc, LazyLock};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use datafusion::arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
-    FieldRef,
+    FieldRef, Float64Type,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::config::ConfigOptions;
@@ -236,6 +236,21 @@ fn negate_decimal(arg: &ColumnarValue) -> Result<Option<ColumnarValue>> {
     Ok(Some(result))
 }
 
+fn negate_float64(arg: &ColumnarValue) -> Option<ColumnarValue> {
+    match arg {
+        ColumnarValue::Array(array) if array.data_type() == &DataType::Float64 => {
+            let array = array.as_primitive::<Float64Type>();
+            Some(ColumnarValue::Array(Arc::new(
+                array.unary::<_, Float64Type>(|value| -value),
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::Float64(Some(value))) => {
+            Some(ColumnarValue::Scalar(ScalarValue::Float64(Some(-value))))
+        }
+        _ => None,
+    }
+}
+
 impl ScalarUDFImpl for SparkNegative {
     fn name(&self) -> &str {
         self.inner.name()
@@ -270,6 +285,11 @@ impl ScalarUDFImpl for SparkNegative {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if let [argument] = args.args.as_slice()
             && let Some(result) = negate_decimal(argument)?
+        {
+            return Ok(result);
+        }
+        if let [argument] = args.args.as_slice()
+            && let Some(result) = negate_float64(argument)
         {
             return Ok(result);
         }

@@ -1012,3 +1012,12 @@ Feature: CSV expression functions handle Spark's CSV options
       Then query result
         | result |
         | NULL   |
+
+    Scenario: from_csv returns NULL for an empty record with a nonempty nullValue marker
+      When query
+        """
+        SELECT from_csv('', 'a STRING', map('nullValue', 'NA')).a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

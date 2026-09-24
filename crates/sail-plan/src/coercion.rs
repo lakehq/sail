@@ -47,6 +47,30 @@ pub(crate) fn spark_wider_numeric_type(
     if (is_decimal(left) && is_fractional(right)) || (is_fractional(left) && is_decimal(right)) {
         return Some(DataType::Float64);
     }
+    let decimal_parts = |data_type: &DataType| match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            Some((i32::from(*precision), i32::from(*scale)))
+        }
+        _ => None,
+    };
+    if let (Some((left_precision, left_scale)), Some((right_precision, right_scale))) =
+        (decimal_parts(left), decimal_parts(right))
+    {
+        let scale = left_scale.max(right_scale);
+        let precision = scale + (left_precision - left_scale).max(right_precision - right_scale);
+        let (precision, scale) = if precision > 38 {
+            (38, (scale - (precision - 38)).max(0))
+        } else {
+            (precision, scale)
+        };
+        return Some(DataType::Decimal128(
+            u8::try_from(precision).ok()?,
+            i8::try_from(scale).ok()?,
+        ));
+    }
     let wider = type_union_resolution(&[left.clone(), right.clone()])?;
     if ansi_mode && matches!(wider, DataType::Float32 | DataType::Float16) {
         return Some(DataType::Float64);
@@ -78,6 +102,7 @@ pub(crate) fn spark_wider_type(
     left: &DataType,
     right: &DataType,
     ansi_mode: bool,
+    case_sensitive: bool,
 ) -> Option<DataType> {
     if left == right {
         return Some(left.clone());
@@ -89,12 +114,20 @@ pub(crate) fn spark_wider_type(
         return Some(left.clone());
     }
     let list_element = |field: &Field, other: &Field| -> Option<Field> {
-        let data_type = spark_wider_type(field.data_type(), other.data_type(), ansi_mode)?;
+        let data_type = spark_wider_type(
+            field.data_type(),
+            other.data_type(),
+            ansi_mode,
+            case_sensitive,
+        )?;
         Some(
             Field::new(
                 field.name(),
-                data_type,
-                field.is_nullable() || other.is_nullable(),
+                data_type.clone(),
+                field.is_nullable()
+                    || other.is_nullable()
+                    || spark_cast_force_nullable(field.data_type(), &data_type)
+                    || spark_cast_force_nullable(other.data_type(), &data_type),
             )
             .with_metadata(field.metadata().clone()),
         )
@@ -112,7 +145,9 @@ pub(crate) fn spark_wider_type(
             | DataType::ListView(right)
             | DataType::LargeListView(right),
         ) => Some(DataType::List(Arc::new(list_element(left, right)?))),
-        (DataType::Map(left, sorted), DataType::Map(right, _)) => {
+        (DataType::Map(left, sorted), DataType::Map(right, _))
+            if !map_key_cast_can_be_null(left, right, ansi_mode, case_sensitive) =>
+        {
             Some(DataType::Map(Arc::new(list_element(left, right)?), *sorted))
         }
         // `findTypeForComplex` pairs struct fields through `SQLConf.get.resolver` and gives up when
@@ -123,9 +158,12 @@ pub(crate) fn spark_wider_type(
                 .iter()
                 .zip(right.iter())
                 .map(|(left, right)| {
-                    left.name()
-                        .eq_ignore_ascii_case(right.name())
-                        .then(|| Some(Arc::new(list_element(left, right)?)))?
+                    (if case_sensitive {
+                        left.name() == right.name()
+                    } else {
+                        left.name().eq_ignore_ascii_case(right.name())
+                    })
+                    .then(|| Some(Arc::new(list_element(left, right)?)))?
                 })
                 .collect::<Option<Fields>>()?;
             Some(DataType::Struct(fields))
@@ -134,6 +172,66 @@ pub(crate) fn spark_wider_type(
         (left, right) => spark_wider_string_type(left, right, ansi_mode)
             .or_else(|| spark_wider_numeric_type(left, right, ansi_mode)),
     }
+}
+
+/// Spark's `Cast.forceNullable` controls nested nullability and rejects MAP keys whose implicit
+/// cast could turn a non-null key into NULL (`Cast.scala:427-447`,
+/// `TypeCoercionHelper.scala:141-160`).
+fn spark_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
+    if from == to || from.is_null() {
+        return false;
+    }
+    if from.is_string() {
+        return !matches!(to, DataType::Binary) && !to.is_string();
+    }
+    if to.is_string() {
+        return false;
+    }
+    if matches!(to, DataType::Date32 | DataType::Date64) {
+        return !matches!(from, DataType::Timestamp(_, _));
+    }
+    if matches!(from, DataType::Date32 | DataType::Date64) {
+        return !matches!(to, DataType::Timestamp(_, _));
+    }
+    matches!(
+        (from, to),
+        (
+            DataType::Float16 | DataType::Float32 | DataType::Float64,
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+        )
+    )
+}
+
+fn map_key_cast_can_be_null(
+    left: &Field,
+    right: &Field,
+    ansi_mode: bool,
+    case_sensitive: bool,
+) -> bool {
+    let (DataType::Struct(left), DataType::Struct(right)) = (left.data_type(), right.data_type())
+    else {
+        return true;
+    };
+    let (Some(left), Some(right)) = (left.first(), right.first()) else {
+        return true;
+    };
+    let Some(common) = spark_wider_type(
+        left.data_type(),
+        right.data_type(),
+        ansi_mode,
+        case_sensitive,
+    ) else {
+        return true;
+    };
+    spark_cast_force_nullable(left.data_type(), &common)
+        || spark_cast_force_nullable(right.data_type(), &common)
 }
 
 /// Spark applies its STRING promotion before returning from `findWiderTypeForTwo`, including when
@@ -268,7 +366,11 @@ pub(crate) fn build_rename_target_type(from: &DataType, to: &DataType) -> DataTy
 /// match (`TypeCoercionHelper.scala:164-176`), and `Coalesce.checkInputDataTypes` then raises
 /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` (`nullExpressions.scala:78-86`). Recurses into an array and a
 /// map so a list of such structs is refused too.
-pub(crate) fn struct_pair_spark_refuses(left: &DataType, right: &DataType) -> bool {
+pub(crate) fn struct_pair_spark_refuses(
+    left: &DataType,
+    right: &DataType,
+    case_sensitive: bool,
+) -> bool {
     match (left, right) {
         (
             DataType::List(left)
@@ -283,13 +385,20 @@ pub(crate) fn struct_pair_spark_refuses(left: &DataType, right: &DataType) -> bo
             | DataType::LargeListView(right),
         )
         | (DataType::Map(left, _), DataType::Map(right, _)) => {
-            struct_pair_spark_refuses(left.data_type(), right.data_type())
+            struct_pair_spark_refuses(left.data_type(), right.data_type(), case_sensitive)
         }
         (DataType::Struct(left), DataType::Struct(right)) => {
             left.len() != right.len()
                 || left.iter().zip(right.iter()).any(|(left, right)| {
-                    !left.name().eq_ignore_ascii_case(right.name())
-                        || struct_pair_spark_refuses(left.data_type(), right.data_type())
+                    !(if case_sensitive {
+                        left.name() == right.name()
+                    } else {
+                        left.name().eq_ignore_ascii_case(right.name())
+                    }) || struct_pair_spark_refuses(
+                        left.data_type(),
+                        right.data_type(),
+                        case_sensitive,
+                    )
                 })
         }
         (DataType::Struct(_), other) | (other, DataType::Struct(_)) => !other.is_null(),

@@ -171,12 +171,18 @@ fn binary_overlay(args: &[ArrayRef]) -> Result<ArrayRef> {
                 return None;
             }
             let bytes = input.value(index);
+            let replacement = replacement.value(index);
             let pos = position.value(index);
-            let count = length.map_or(replacement.value(index).len() as i64, |arg| {
-                arg.value(index)
+            let count = length.map_or(replacement.len() as i64, |arg| {
+                let count = arg.value(index);
+                if count < 0 {
+                    replacement.len() as i64
+                } else {
+                    count
+                }
             });
             let mut value = slice(bytes, 1, pos.saturating_sub(1));
-            value.extend_from_slice(replacement.value(index));
+            value.extend_from_slice(replacement);
             value.extend_from_slice(&slice(bytes, pos.saturating_add(count), i64::MAX));
             Some(value)
         })

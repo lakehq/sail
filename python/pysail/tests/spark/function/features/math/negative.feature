@@ -88,6 +88,15 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | 2  | -0.0   |
         | 3  | NULL   |
 
+    Scenario: negating a cast negative-zero double column yields negative zero
+      When query
+        """
+        SELECT -value AS result FROM VALUES (CAST(-0.0 AS DOUBLE)) AS t(value)
+        """
+      Then query result
+        | result |
+        | -0.0   |
+
     Scenario Outline: Floating-point predicate: <case>
       When query
         """
