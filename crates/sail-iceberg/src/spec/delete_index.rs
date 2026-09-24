@@ -38,7 +38,7 @@ pub struct PartitionKey {
 }
 
 impl PartitionKey {
-    /// Build a [`PartitionKey`] for a delete file or data file's partition values.
+    /// Build a key with the same encoding before and after numeric type promotion.
     pub fn new(spec_id: i32, values: &[Option<Literal>]) -> Self {
         let mut bytes: Vec<u8> = Vec::with_capacity(values.len() * 8);
         for v in values {
@@ -107,21 +107,14 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
             out.push(u8::from(*b));
         }
         PrimitiveLiteral::Int(i) => {
-            out.push(0x02);
-            out.extend_from_slice(&i.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Long(i64::from(*i)), out);
         }
         PrimitiveLiteral::Long(l) => {
             out.push(0x03);
             out.extend_from_slice(&l.to_le_bytes());
         }
         PrimitiveLiteral::Float(OrderedFloat(f)) => {
-            out.push(0x04);
-            let bits = if f.is_nan() {
-                f32::NAN.to_bits()
-            } else {
-                f.to_bits()
-            };
-            out.extend_from_slice(&bits.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Double(OrderedFloat(f64::from(*f))), out);
         }
         PrimitiveLiteral::Double(OrderedFloat(f)) => {
             out.push(0x05);
@@ -648,6 +641,43 @@ mod tests {
         df.partition_spec_id = 3;
         let m = idx.for_data_file(&df, 5);
         assert_eq!(m.equality.len(), 1);
+    }
+
+    #[test]
+    fn partition_keys_preserve_numeric_promotions() {
+        let key = |value| PartitionKey::new(0, &[Some(Literal::Primitive(value))]);
+        for value in [i32::MIN, -1, 0, 1, i32::MAX] {
+            assert_eq!(
+                key(PrimitiveLiteral::Int(value)),
+                key(PrimitiveLiteral::Long(i64::from(value)))
+            );
+        }
+        for value in [
+            f32::NEG_INFINITY,
+            -0.0,
+            0.0,
+            0.1,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            assert_eq!(
+                key(PrimitiveLiteral::Float(OrderedFloat(value))),
+                key(PrimitiveLiteral::Double(OrderedFloat(f64::from(value))))
+            );
+        }
+        assert_ne!(
+            key(PrimitiveLiteral::Int(-1)),
+            key(PrimitiveLiteral::Long(i64::MAX))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Float(OrderedFloat(0.1))),
+            key(PrimitiveLiteral::Double(OrderedFloat(0.1)))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Int(1)),
+            key(PrimitiveLiteral::Double(OrderedFloat(1.0)))
+        );
     }
 
     #[test]

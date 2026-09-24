@@ -12,13 +12,14 @@ use crate::spec::{DataContentType, DataFile, DataFileFormat};
 const PUFFIN_MAGIC: &[u8; 4] = b"PFA1";
 const VECTOR_MAGIC: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 
-fn encode_blob(positions: &RoaringTreemap) -> Result<Vec<u8>> {
+fn encode_blob(positions: &mut RoaringTreemap) -> Result<Vec<u8>> {
     if positions
         .max()
         .is_some_and(|position| position > i64::MAX as u64)
     {
         return exec_err!("Iceberg deletion vector positions must fit in a non-negative long");
     }
+    positions.optimize();
     let length = u32::try_from(4 + positions.serialized_size()).map_err(|_| {
         datafusion_common::exec_datafusion_err!("Iceberg deletion vector is too large")
     })?;
@@ -93,9 +94,9 @@ pub(crate) async fn write_deletion_vector(
     store_ctx: &StoreContext,
     data_url: &Url,
     target: &DataFile,
-    positions: &RoaringTreemap,
+    mut positions: RoaringTreemap,
 ) -> Result<DataFile> {
-    let blob = encode_blob(positions)?;
+    let blob = encode_blob(&mut positions)?;
     let size = i64::try_from(blob.len()).map_err(|_| {
         datafusion_common::exec_datafusion_err!("Iceberg deletion vector is too large")
     })?;
@@ -171,9 +172,9 @@ mod tests {
 
     #[test]
     fn portable_vector_round_trip_and_corruption() {
-        let positions =
+        let mut positions =
             RoaringTreemap::from_iter([0, 1, 65536, u32::MAX as u64, 1 << 32, i64::MAX as u64]);
-        let blob = encode_blob(&positions).unwrap();
+        let blob = encode_blob(&mut positions).unwrap();
         assert_eq!(decode_blob(&blob, positions.len()).unwrap(), positions);
         assert!(decode_blob(&blob, positions.len() + 1).is_err());
         for length in 0..blob.len() {
@@ -184,13 +185,28 @@ mod tests {
             corrupt[offset] ^= 1;
             assert!(decode_blob(&corrupt, positions.len()).is_err());
         }
-        assert!(encode_blob(&RoaringTreemap::from_iter([1 << 63])).is_err());
+        assert!(encode_blob(&mut RoaringTreemap::from_iter([1 << 63])).is_err());
+    }
+
+    #[test]
+    fn portable_run_container_encoding() {
+        let mut positions = RoaringTreemap::from_iter(4000..14000);
+        let blob = encode_blob(&mut positions).unwrap();
+        assert_eq!(
+            blob,
+            [
+                0x00, 0x00, 0x00, 0x1f, 0xd1, 0xd3, 0x39, 0x64, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3b, 0x30, 0x00, 0x00, 0x01, 0x00, 0x00, 0x0f,
+                0x27, 0x01, 0x00, 0xa0, 0x0f, 0x0f, 0x27, 0x2f, 0x17, 0xa8, 0x37,
+            ]
+        );
+        assert_eq!(decode_blob(&blob, 10000).unwrap(), positions);
     }
 
     #[test]
     fn rejects_invalid_keys_and_trailing_bytes_even_with_valid_checksum() {
-        let positions = RoaringTreemap::from_iter([1, 1 << 32]);
-        let blob = encode_blob(&positions).unwrap();
+        let mut positions = RoaringTreemap::from_iter([1, 1 << 32]);
+        let blob = encode_blob(&mut positions).unwrap();
         let mut negative = blob.clone();
         negative[19] = 0x80;
         let mut duplicate = blob.clone();

@@ -285,7 +285,7 @@ impl PositionDeleteAccumulator {
                 }
                 output.push(
                     crate::io::deletion_vector::write_deletion_vector(
-                        data_store, data_url, target, &combined,
+                        data_store, data_url, target, combined,
                     )
                     .await?,
                 );

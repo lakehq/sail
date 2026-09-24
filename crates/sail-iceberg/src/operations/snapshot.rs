@@ -299,6 +299,13 @@ struct RewriteStats {
     deleted_rows: i64,
 }
 
+#[derive(Debug, Default)]
+struct RemovedPositionDeletes {
+    position_delete_files: u64,
+    deletion_vectors: u64,
+    positions: u64,
+}
+
 impl SnapshotChanges {
     fn new(
         added_data_files: &[DataFile],
@@ -620,7 +627,7 @@ impl<'a> SnapshotProducer<'a> {
         sequence_number: i64,
         snapshot_id: i64,
         created_paths: &mut Vec<ObjectPath>,
-    ) -> Result<(Vec<ManifestFile>, u64, u64), String> {
+    ) -> Result<(Vec<ManifestFile>, RemovedPositionDeletes), String> {
         let replaced = self
             .added_delete_files
             .iter()
@@ -628,8 +635,7 @@ impl<'a> SnapshotProducer<'a> {
             .filter_map(|file| file.referenced_data_file.as_ref())
             .collect::<HashSet<_>>();
         let mut output = Vec::new();
-        let mut removed_files = 0u64;
-        let mut removed_positions = 0u64;
+        let mut removed = RemovedPositionDeletes::default();
         for parent in parent_manifests {
             if parent.content != ManifestContentType::Deletes
                 || (replaced.is_empty() && removed_data_file_paths.is_empty())
@@ -667,8 +673,13 @@ impl<'a> SnapshotProducer<'a> {
                     Self::materialize_inherited_entry(entry.as_ref().clone(), &parent, &mut None)?;
                 entry.data_file.partition_spec_id = parent.partition_spec_id;
                 if removes(&entry.data_file) {
-                    removed_files += 1;
-                    removed_positions = removed_positions
+                    if entry.data_file.is_deletion_vector() {
+                        removed.deletion_vectors += 1;
+                    } else {
+                        removed.position_delete_files += 1;
+                    }
+                    removed.positions = removed
+                        .positions
                         .checked_add(entry.data_file.record_count)
                         .ok_or_else(|| {
                             "Iceberg removed position delete count overflow".to_string()
@@ -690,7 +701,7 @@ impl<'a> SnapshotProducer<'a> {
                 .await?,
             );
         }
-        Ok((output, removed_files, removed_positions))
+        Ok((output, removed))
     }
 
     async fn rewrite_parent_manifests(
@@ -934,13 +945,18 @@ impl<'a> SnapshotProducer<'a> {
             .map(|df| df.record_count)
             .sum::<u64>();
         let mut added_position_delete_files = 0usize;
+        let mut added_deletion_vectors = 0usize;
         let mut added_position_deletes = 0u64;
         let mut added_equality_delete_files = 0usize;
         let mut added_equality_deletes = 0u64;
         for df in &self.added_delete_files {
             match df.content {
                 crate::spec::DataContentType::PositionDeletes => {
-                    added_position_delete_files += 1;
+                    if df.is_deletion_vector() {
+                        added_deletion_vectors += 1;
+                    } else {
+                        added_position_delete_files += 1;
+                    }
                     added_position_deletes += df.record_count;
                 }
                 crate::spec::DataContentType::EqualityDeletes => {
@@ -965,11 +981,16 @@ impl<'a> SnapshotProducer<'a> {
                 self.added_delete_files.len().to_string(),
             );
             if added_position_delete_files > 0 {
+                summary = summary.with_property(
+                    "added-position-delete-files",
+                    added_position_delete_files.to_string(),
+                );
+            }
+            if added_deletion_vectors > 0 {
+                summary = summary.with_property("added-dvs", added_deletion_vectors.to_string());
+            }
+            if added_position_deletes > 0 {
                 summary = summary
-                    .with_property(
-                        "added-position-delete-files",
-                        added_position_delete_files.to_string(),
-                    )
                     .with_property("added-position-deletes", added_position_deletes.to_string());
             }
             if added_equality_delete_files > 0 {
@@ -1054,7 +1075,7 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
-        let (rewritten_deletes, removed_delete_files, removed_position_deletes) = self
+        let (rewritten_deletes, removed_position_deletes) = self
             .rewrite_parent_delete_manifests(
                 store_ctx,
                 parent_manifest_entries,
@@ -1065,17 +1086,27 @@ impl<'a> SnapshotProducer<'a> {
             )
             .await?;
         parent_manifest_entries = rewritten_deletes;
+        let removed_delete_files = removed_position_deletes.position_delete_files
+            + removed_position_deletes.deletion_vectors;
         if removed_delete_files > 0 {
             summary = summary
                 .with_property("removed-delete-files", removed_delete_files.to_string())
                 .with_property(
-                    "removed-position-delete-files",
-                    removed_delete_files.to_string(),
-                )
-                .with_property(
                     "removed-position-deletes",
-                    removed_position_deletes.to_string(),
+                    removed_position_deletes.positions.to_string(),
                 );
+        }
+        if removed_position_deletes.position_delete_files > 0 {
+            summary = summary.with_property(
+                "removed-position-delete-files",
+                removed_position_deletes.position_delete_files.to_string(),
+            );
+        }
+        if removed_position_deletes.deletion_vectors > 0 {
+            summary = summary.with_property(
+                "removed-dvs",
+                removed_position_deletes.deletion_vectors.to_string(),
+            );
         }
 
         let rewrite_stats = if update_kind.is_targeted_rewrite() {
@@ -1202,15 +1233,17 @@ impl<'a> SnapshotProducer<'a> {
             added_equality_deletes,
         );
 
-        if removed_position_deletes > 0
+        if removed_position_deletes.positions > 0
             && let Some(total) = summary
                 .additional_properties
                 .get("total-position-deletes")
                 .and_then(|value| value.parse::<u64>().ok())
         {
-            let remaining = total.checked_sub(removed_position_deletes).ok_or_else(|| {
-                "Iceberg removed position deletes exceed the snapshot total".to_string()
-            })?;
+            let remaining = total
+                .checked_sub(removed_position_deletes.positions)
+                .ok_or_else(|| {
+                    "Iceberg removed position deletes exceed the snapshot total".to_string()
+                })?;
             summary = summary.with_property("total-position-deletes", remaining.to_string());
         }
 

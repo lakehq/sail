@@ -26,6 +26,10 @@ Feature: Iceberg v3 merge-on-read deletion vectors
       DELETE FROM iceberg_v3_mor WHERE id = 1
       """
     Then iceberg deletion vectors delete 1 rows across 1 files
+    Then iceberg metadata contains
+      | path                                         | value |
+      | snapshots[1].summary['added-dvs']             | "1"   |
+      | snapshots[1].summary['added-position-deletes'] | "1"   |
     Given statement
       """
       UPDATE iceberg_v3_mor SET value = 200 WHERE id = 2
@@ -47,6 +51,8 @@ Feature: Iceberg v3 merge-on-read deletion vectors
       | snapshots[3].summary['total-position-deletes']     | "4"   |
       | snapshots[3].summary['total-delete-files']         | "1"   |
       | snapshots[3].summary['removed-position-deletes']   | "2"   |
+      | snapshots[3].summary['added-dvs']                  | "1"   |
+      | snapshots[3].summary['removed-dvs']                | "1"   |
     Then iceberg row lineage matches
       | id | original_id | sequence |
       | 2  | 2           | 3        |
@@ -168,6 +174,10 @@ Feature: Iceberg v3 merge-on-read deletion vectors
       | id | original_id | sequence |
       | 2  | 2           | 3        |
       | 3  | 3           | 1        |
+    Then iceberg metadata contains
+      | path                                      | value |
+      | snapshots[2].summary['removed-dvs']        | "1"   |
+      | snapshots[2].summary['total-delete-files'] | "0"   |
     When query
       """
       SELECT * FROM iceberg_v3_mixed ORDER BY id
@@ -213,6 +223,68 @@ Feature: Iceberg v3 merge-on-read deletion vectors
     Then query result ordered
       | id | value |
       | 3  | 30    |
+
+  Scenario Outline: MOR preserves earlier deletes after partition type promotion
+    Given variable location for temporary directory iceberg_mor_promotion
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_mor_promotion
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_mor_promotion (id INT, part <original_type>)
+      USING iceberg PARTITIONED BY (part) LOCATION {{ location.uri }}
+      TBLPROPERTIES ('format-version' = '<version>',
+        'write.merge.mode' = 'merge-on-read', 'write.delete.granularity' = 'file')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_mor_promotion SELECT /*+ COALESCE(1) */ * FROM VALUES
+      (1, <partition_value>), (2, <partition_value>), (3, <partition_value>)
+      """
+    Given iceberg current schema has fields
+      """
+      [
+        {"id": 1, "name": "id", "required": false, "type": "int"},
+        {"id": 2, "name": "part", "required": false, "type": "<promoted_type>"}
+      ]
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_mor_promotion t USING (SELECT 1 AS id) s
+      ON t.id = s.id WHEN MATCHED THEN DELETE
+      """
+    When query
+      """
+      SELECT id FROM iceberg_mor_promotion ORDER BY id
+      """
+    Then query result ordered
+      | id |
+      | 2  |
+      | 3  |
+    Given statement
+      """
+      MERGE INTO iceberg_mor_promotion t USING (SELECT 2 AS id) s
+      ON t.id = s.id WHEN MATCHED THEN DELETE
+      """
+    When query
+      """
+      SELECT id FROM iceberg_mor_promotion ORDER BY id
+      """
+    Then query result ordered
+      | id |
+      | 3  |
+    Then iceberg metadata contains
+      | path                                          | value |
+      | snapshots[2].summary['<file_count_property>']  | "1"   |
+      | snapshots[2].summary['total-position-deletes'] | "2"   |
+
+    Examples:
+      | version | original_type | promoted_type | partition_value   | file_count_property         |
+      | 2       | INT           | long          | 7                 | added-position-delete-files |
+      | 3       | INT           | long          | 7                 | added-dvs                   |
+      | 2       | FLOAT         | double        | CAST(0.1 AS FLOAT) | added-position-delete-files |
+      | 3       | FLOAT         | double        | CAST(0.1 AS FLOAT) | added-dvs                   |
 
   Scenario: V3 MOR applies positions across scan batches
     Given variable location for temporary directory iceberg_v3_batches
