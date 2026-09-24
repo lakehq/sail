@@ -29,6 +29,7 @@ MAX_CONCURRENCY = 4
 BATCH_TARGET_QUESTIONS = 4
 BATCH_TARGET_BYTES = 4096
 MAX_REQUEST_BYTES = 32768
+DOUBLE_FALLBACK_NUMBER = "1" + "0" * 255
 
 
 @pytest.fixture(scope="module")
@@ -680,7 +681,7 @@ def test_cancellation_during_backoff_releases_reservations(spark, jev):
         "1.000e-38",
         "-0.0",
         "123456789012345678901234567890123456780.0e-1",
-        "1" + "0" * 255,
+        DOUBLE_FALLBACK_NUMBER,
     ],
 )
 @pytest.mark.parametrize("kind", ["score", "system_one"])
@@ -702,10 +703,11 @@ def test_structured_response_numbers_are_preserved(spark, jev, number, kind):
         expression = "jev_score('text', 'rate', array('low', 'high'))"
         selected = "j.legend['0']"
     else:
-        expression = "jev_system_one('text', parse_json('{\"q\":{\"type\":\"noul\"}}'))"
+        expression = 'jev_system_one(\'text\', parse_json(\'{"q":{"type":"noul"}}\'))'
         selected = "j.answers['q']"
     row = spark.sql(
-        f"SELECT to_json({selected}) AS value, j.model, j.request_id, j.usage.input_tokens AS tokens "
+        f"SELECT to_json({selected}) AS value, "  # noqa: S608 -- fixed test expressions
+        "j.model, j.request_id, j.usage.input_tokens AS tokens "
         f"FROM (SELECT {expression} AS j)"
     ).first()
     value = json.loads(row.value, parse_int=Decimal, parse_float=Decimal)
@@ -714,7 +716,7 @@ def test_structured_response_numbers_are_preserved(spark, jev, number, kind):
         assert value["noul"] == Decimal("0.75")
         value = value["provider_extra"]
     actual, *other = value["nested"]
-    if len(number) > 255:
+    if number == DOUBLE_FALLBACK_NUMBER:
         assert float(actual) == float(number)
     else:
         assert actual == Decimal(number)
@@ -738,7 +740,7 @@ def test_variant_result_maps_keep_sql_null_rows(spark, jev, kind):
         expression = f"jev_system_one({state}, parse_json('{questions}'))"
         selected = "j.answers['q']"
     rows = spark.sql(
-        f"SELECT id, j IS NULL AS skipped, to_json({selected}) AS value "
+        f"SELECT id, j IS NULL AS skipped, to_json({selected}) AS value "  # noqa: S608 -- fixed test expressions
         f"FROM (SELECT id, {expression} AS j FROM range(0, 2, 1, 1)) ORDER BY id"
     ).collect()
     assert rows[0].skipped
@@ -749,6 +751,7 @@ def test_variant_result_maps_keep_sql_null_rows(spark, jev, kind):
 
 
 def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
+    expected_requests = 2
     probabilities = []
 
     def vary(response, _body):
@@ -761,7 +764,7 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
 
     jev.transform = vary
     row = spark.sql("SELECT jev_noul('text', 'yes?') AS a, jev_noul('text', 'yes?') AS b").first()
-    assert jev.request_count == 2
+    assert jev.request_count == expected_requests
     assert sorted([row.a.noul, row.b.noul]) == probabilities == [0.1, 0.2]
     assert {row.a.request_id, row.b.request_id} == {"mock-1", "mock-2"}
     assert row.a.batch_id != row.b.batch_id
@@ -781,8 +784,7 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
             "jev_noul(CAST(id + 10 AS STRING), 'second?').noul AS b FROM range(0, 4, 1, 2)) "
             "SELECT id % 2 AS group_id, round(sum(a), 2) AS a, round(avg(b), 2) AS b, sum(id) AS c "
             "FROM judged GROUP BY id % 2 HAVING b > 0.1 ORDER BY group_id",
-            [{"group_id": 0, "a": 0.02, "b": 0.11, "c": 2},
-             {"group_id": 1, "a": 0.04, "b": 0.12, "c": 4}],
+            [{"group_id": 0, "a": 0.02, "b": 0.11, "c": 2}, {"group_id": 1, "a": 0.04, "b": 0.12, "c": 4}],
         ),
         (
             "SELECT round(sum(jev_noul(CAST(id AS STRING), 'first?').noul) "
@@ -802,8 +804,11 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
             "jev_noul(CAST(id + 10 AS STRING), 'second?').noul AS b FROM range(0, 4, 1, 2)) "
             "SELECT id % 2 AS group_id, round(sum(a), 2) AS a, round(sum(b), 2) AS b "
             "FROM judged GROUP BY GROUPING SETS ((id % 2), ()) ORDER BY group_id NULLS LAST",
-            [{"group_id": 0, "a": 0.02, "b": 0.22}, {"group_id": 1, "a": 0.04, "b": 0.24},
-             {"group_id": None, "a": 0.06, "b": 0.46}],
+            [
+                {"group_id": 0, "a": 0.02, "b": 0.22},
+                {"group_id": 1, "a": 0.04, "b": 0.24},
+                {"group_id": None, "a": 0.06, "b": 0.46},
+            ],
         ),
         (
             "SELECT round(sum(jev_noul(CASE WHEN id % 2 = 0 THEN NULL "
@@ -818,14 +823,14 @@ def test_repeated_volatile_calls_keep_their_own_answers(spark, jev):
         ),
     ],
 )
-def test_jev_aggregate_arguments_keep_their_own_result_columns(spark, jev, query, expected):
+@pytest.mark.usefixtures("jev")
+def test_jev_aggregate_arguments_keep_their_own_result_columns(spark, query, expected):
     assert [row.asDict() for row in spark.sql(query).collect()] == expected
 
 
 def test_jev_aggregates_over_empty_input_make_no_requests(spark, jev):
     row = spark.sql(
-        "SELECT sum(jev_noul('10', 'first?').noul) AS a, "
-        "avg(jev_noul('20', 'second?').noul) AS b FROM range(0)"
+        "SELECT sum(jev_noul('10', 'first?').noul) AS a, avg(jev_noul('20', 'second?').noul) AS b FROM range(0)"
     ).first()
     assert row.a is None
     assert row.b is None
