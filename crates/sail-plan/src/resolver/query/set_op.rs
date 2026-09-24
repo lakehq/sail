@@ -949,6 +949,7 @@ impl PlanResolver<'_> {
                         t.clone(),
                         false,
                         None,
+                        &schema,
                     )?;
                     // The `CASE` only declares the column nullable, and never changes a value.
                     let casted = if force_nullable && !casted.nullable(&schema)? {
@@ -1296,6 +1297,15 @@ impl PlanResolver<'_> {
             } else {
                 left_field.metadata().clone()
             };
+            // Two intervals of one kind widen to the one that spans both
+            // (`findWiderTypeForTwo`), and the fields they span live in the metadata rather than
+            // in the Arrow type, so they are merged here.
+            if let Some(interval) = merged_interval_metadata(left_field, right_field) {
+                metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    interval,
+                );
+            }
             // The key is written even when the left input has none, so that the metadata of the
             // right input does not survive the merge in its place.
             metadata
@@ -1393,12 +1403,25 @@ impl PlanResolver<'_> {
     /// The type of the first input with the nullability of both at every level they share.
     fn union_like_merge(&self, left: &DataType, right: &DataType, by_name: bool) -> DataType {
         let merge_field = |l: &FieldRef, r: &FieldRef, by_name: bool| {
-            Arc::new(
-                l.as_ref()
-                    .clone()
-                    .with_data_type(self.union_like_merge(l.data_type(), r.data_type(), by_name))
-                    .with_nullable(l.is_nullable() || r.is_nullable()),
-            )
+            let field = l
+                .as_ref()
+                .clone()
+                .with_data_type(self.union_like_merge(l.data_type(), r.data_type(), by_name))
+                .with_nullable(l.is_nullable() || r.is_nullable());
+            // What a field nests widens the same way a column does, and two intervals of one
+            // kind widen to the one that spans both, which their metadata says.
+            let field = match merged_interval_metadata(l, r) {
+                Some(interval) => {
+                    let mut metadata = field.metadata().clone();
+                    metadata.insert(
+                        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                        interval,
+                    );
+                    field.with_metadata(metadata)
+                }
+                None => field,
+            };
+            Arc::new(field)
         };
         match (left, right) {
             (DataType::List(l), DataType::List(r)) => DataType::List(merge_field(l, r, by_name)),
@@ -1687,6 +1710,53 @@ impl PlanResolver<'_> {
 }
 
 /// Whether a type is a variant or holds one at any depth.
+/// The interval metadata of two fields, merged into the one that spans both, or `None` when they
+/// are not two intervals of one kind or already say the same.
+fn merged_interval_metadata(left: &FieldRef, right: &FieldRef) -> Option<String> {
+    use spec::SparkIntervalMetadata::{DayTime, YearMonth};
+
+    let read = |field: &FieldRef| {
+        field
+            .metadata()
+            .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+            .and_then(|x| spec::SparkIntervalMetadata::from_json(x).ok())
+    };
+    let (left, right) = (read(left)?, read(right)?);
+    if left == right {
+        return None;
+    }
+    let merged = match (left, right) {
+        (
+            YearMonth {
+                start_field: ls,
+                end_field: le,
+            },
+            YearMonth {
+                start_field: rs,
+                end_field: re,
+            },
+        ) => YearMonth {
+            start_field: ls.min(rs),
+            end_field: le.max(re),
+        },
+        (
+            DayTime {
+                start_field: ls,
+                end_field: le,
+            },
+            DayTime {
+                start_field: rs,
+                end_field: re,
+            },
+        ) => DayTime {
+            start_field: ls.min(rs),
+            end_field: le.max(re),
+        },
+        _ => return None,
+    };
+    merged.to_json().ok()
+}
+
 fn contains_variant(data_type: &DataType) -> bool {
     match data_type {
         DataType::Struct(_) if is_marked_variant_storage_type(data_type) => true,

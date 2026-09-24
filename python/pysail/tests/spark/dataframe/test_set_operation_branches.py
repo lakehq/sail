@@ -558,7 +558,7 @@ _MATRIX = [
             "rows": ["(datetime.datetime(2024, 1, 1, 10, 0),)", "(datetime.datetime(2024, 1, 2, 0, 0),)"],
         },
     ),  # pre-existing
-    _bug(
+    (
         "B23-dt-day-hour",
         ("two", ("INTERVAL '1' DAY a", "INTERVAL '2' HOUR a"), {}),
         False,
@@ -928,7 +928,7 @@ _MATRIX = [
             "rows": ["(b'ab',)", "(b'cd',)"],
         },
     ),  # pre-existing
-    _bug(
+    (
         "C-str-dt/noansi",
         ("two", ("'1' a", "INTERVAL '1' DAY a"), {}),
         False,
@@ -948,7 +948,7 @@ _MATRIX = [
             "message": '[INCOMPATIBLE_COLUMN_TYPE] UNION can only be performed on tables with compatible column types. The first column of the second table is "INTERVAL DAY" type which is not compatible with "STRING" at the same column of the first table. To fix the error, you might need to add explicit type casts. If necessary set spark.sql.ansi.enabled to false to bypass this error',
         },
     ),  # won(partial)
-    _bug(
+    (
         "C-str-ym/noansi",
         ("two", ("'1' a", "INTERVAL '1' YEAR a"), {}),
         False,
@@ -1072,7 +1072,7 @@ _MATRIX = [
             "rows": ["(b'ab',)", "(b'cd',)"],
         },
     ),
-    _bug(
+    (
         "C-dt-str/noansi",
         ("two", ("INTERVAL '1' DAY a", "'1' a"), {}),
         False,

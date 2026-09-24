@@ -1863,6 +1863,32 @@ def test_a_set_operation_of_a_decimal_and_an_integral_keeps_the_metadata_it_does
         spark.conf.unset("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
 
 
+# A struct whose field names repeat is read by position: the client cannot turn one into a
+# dictionary, so the rows are read off what `show` prints. Measured on the Spark JVM.
+_REPEATED_FIELD_NAMES = [
+    (
+        "SELECT CAST(named_struct('a', 1, 'a', 2) AS STRUCT<a: BIGINT, a: BIGINT>) AS x",
+        ["{1, 2}"],
+    ),
+    (
+        "SELECT named_struct('a', 1, 'a', 2) AS x UNION ALL SELECT named_struct('a', 3L, 'a', 4L) AS x",
+        ["{1, 2}", "{3, 4}"],
+    ),
+]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+@pytest.mark.parametrize(("query", "rows"), _REPEATED_FIELD_NAMES)
+def test_a_cast_of_a_struct_reads_each_field_by_position(spark, query, rows):
+    # TODO: the cast matches the fields of a struct by name, so a name the struct holds twice
+    #   reads the first field twice and the value of the second one is lost. Spark casts by
+    #   position (`Cast.castStruct`). The same queries give the same wrong rows on `main`, and
+    #   the union reaches the cast only once its inputs are widened.
+    printed = spark.sql(query)._show_string(truncate=False)  # noqa: SLF001
+
+    assert sorted(line.strip("| ") for line in printed.splitlines() if line.startswith("|{")) == rows
+
+
 def _field(name, data_type, nullable):
     return {"metadata": {}, "name": name, "nullable": nullable, "type": data_type}
 

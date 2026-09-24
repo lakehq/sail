@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{Expr, Volatility};
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -267,13 +267,82 @@ pub fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
-    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
+    if partition_column_names.is_empty() {
+        return false;
+    }
+    // Stable functions can prune partitions because their values do not change
+    // within a query. DataFusion's listing helper only accepts immutable UDFs.
+    let unsupported = expr.exists(|expr| {
+        Ok(match expr {
+            Expr::Column(column) => !partition_column_names.contains(&column.name.as_str()),
+            Expr::ScalarFunction(function) => {
+                function.func.signature().volatility == Volatility::Volatile
+            }
+            Expr::HigherOrderFunction(function) => {
+                function.func.signature().volatility == Volatility::Volatile
+            }
+            Expr::Literal(_, _)
+            | Expr::Alias(_)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::BinaryExpr(_)
+            | Expr::Between(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_)
+            | Expr::InList(_)
+            | Expr::Case(_)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => false,
+            _ => true,
+        })
+    });
+    matches!(unsupported, Ok(false))
 }
 
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_partition_pruning_function_volatility() {
+        use datafusion::logical_expr::{col, create_udf, lit};
+
+        for (volatility, expected) in [
+            (Volatility::Immutable, true),
+            (Volatility::Stable, true),
+            (Volatility::Volatile, false),
+        ] {
+            let function = create_udf(
+                "partition_value",
+                vec![DataType::Utf8],
+                DataType::Utf8,
+                volatility,
+                Arc::new(|args| {
+                    args.first()
+                        .cloned()
+                        .ok_or_else(|| internal_datafusion_err!("missing input"))
+                }),
+            );
+            let predicate = function.call(vec![col("p")]).eq(lit("2020-01-01"));
+            assert_eq!(
+                can_be_evaluated_for_partition_pruning(&["p"], &predicate),
+                expected
+            );
+            assert!(!can_be_evaluated_for_partition_pruning(&["q"], &predicate));
+            assert!(!can_be_evaluated_for_partition_pruning(&[], &predicate));
+        }
+    }
 
     #[test]
     fn test_has_hidden_path_component() {

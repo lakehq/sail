@@ -548,3 +548,68 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | a                                        |
         | 0.50000000000000000000000000000000000000 |
         | NULL                                     |
+
+  Rule: Two intervals of one kind widen to the one that spans both
+
+    Scenario Outline: <case> widen to <result>
+      # `findWiderTypeForTwo` takes the fields both ends span, which Arrow does not carry in the
+      # type itself, so they travel as metadata.
+      When query
+        """
+        SELECT INTERVAL <left> AS a
+        UNION ALL
+        SELECT INTERVAL <right> AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: <result> (nullable = false)
+        """
+
+      Examples:
+        | case            | left            | right           | result                 |
+        | year and months | '1' YEAR        | '1-2' YEAR TO MONTH | interval year to month |
+        | the other way   | '1-2' YEAR TO MONTH | '1' YEAR    | interval year to month |
+        | months and year | '2' MONTH       | '1' YEAR        | interval year to month |
+        | days and hours  | '1' DAY         | '1 2' DAY TO HOUR | interval day to hour |
+        | hours and minutes | '1' HOUR      | '2' MINUTE      | interval hour to minute |
+
+    Scenario: two intervals that span the same fields are left alone
+      When query
+        """
+        SELECT INTERVAL '1' YEAR AS a
+        UNION ALL
+        SELECT INTERVAL '2' YEAR AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: interval year (nullable = false)
+        """
+
+    Scenario: an intersection widens its intervals as well
+      When query
+        """
+        SELECT INTERVAL '1' DAY AS a
+        INTERSECT
+        SELECT INTERVAL '1 0' DAY TO HOUR AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: interval day to hour (nullable = false)
+        """
+
+    Scenario: an interval inside a struct widens too
+      When query
+        """
+        SELECT named_struct('i', INTERVAL '1' YEAR) AS a
+        UNION ALL
+        SELECT named_struct('i', INTERVAL '1-2' YEAR TO MONTH) AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: struct (nullable = false)
+         |    |-- i: interval year to month (nullable = false)
+        """

@@ -13,7 +13,7 @@ use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
@@ -27,6 +27,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -67,6 +68,16 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+        let spark_interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
+                .map(spec::SparkIntervalMetadata::to_json)
+                .transpose()?,
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
@@ -91,8 +102,35 @@ impl PlanResolver<'_> {
             cast_to_type,
             is_try,
             day_time_interval_field,
+            schema,
         )?;
-        Ok(NamedExpr::new(name, expr))
+        Ok(match spark_interval_metadata {
+            Some(metadata) => {
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
+            }
+            None => NamedExpr::new(name, expr),
+        })
     }
 
     /// Casts a resolved expression the way a Spark `Cast` does, for ANSI mode and the types
@@ -113,6 +151,7 @@ impl PlanResolver<'_> {
         cast_to_type: DataType,
         is_try: bool,
         day_time_interval_field: Option<spec::IntervalFieldType>,
+        schema: &DFSchemaRef,
     ) -> PlanResult<expr::Expr> {
         let expr_type = expr_field.data_type().clone();
         let expr_is_variant = is_variant_storage_field(expr_field);
@@ -204,6 +243,30 @@ impl PlanResolver<'_> {
                     to,
                 )
             }
+            (DataType::Interval(IntervalUnit::YearMonth), to, is_try) if to.is_integer() => {
+                let interval_metadata = expr_field
+                    .metadata()
+                    .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                    .map(|value| spec::SparkIntervalMetadata::from_json(value))
+                    .transpose()?;
+                let months = ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![expr]);
+                let value = if matches!(
+                    interval_metadata,
+                    Some(spec::SparkIntervalMetadata::YearMonth {
+                        end_field: spec::YearMonthIntervalField::Year,
+                        ..
+                    })
+                ) {
+                    months / lit(12_i32)
+                } else {
+                    months
+                };
+                if is_try {
+                    try_cast(value, to)
+                } else {
+                    cast(value, to)
+                }
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -236,13 +299,16 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8View::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
@@ -273,6 +339,19 @@ impl PlanResolver<'_> {
         };
         Ok(expr)
     }
+}
+
+fn spark_string_cast_arguments(
+    expr: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let mut arguments = vec![expr];
+    if let Some(interval) = interval {
+        // Physical expression serialization does not preserve intermediate field metadata.
+        arguments.push(lit(interval.to_json()?));
+    }
+    Ok(arguments)
 }
 
 /// Returns true if the cast from `from` to `to` involves a Struct

@@ -42,8 +42,16 @@ fn named_struct(args: Vec<Expr>) -> Expr {
             _ => None,
         })
         .collect::<Option<Vec<_>>>();
+    // A name the struct holds twice is left to DataFusion, since `StructFunction` builds the
+    // Arrow fields itself and Arrow refuses a struct whose field names repeat.
+    let repeated = |names: &[String]| {
+        names
+            .iter()
+            .enumerate()
+            .any(|(i, name)| names[..i].contains(name))
+    };
     match names {
-        Some(names) if !names.is_empty() => {
+        Some(names) if !names.is_empty() && !repeated(&names) => {
             let values = args.into_iter().skip(1).step_by(2).collect();
             Expr::ScalarFunction(expr::ScalarFunction {
                 func: Arc::new(ScalarUDF::from(StructFunction::new(names))),
