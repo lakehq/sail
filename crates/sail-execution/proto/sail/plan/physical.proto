@@ -160,6 +160,7 @@ message HigherOrderUdf {
     SparkSequenceUdf spark_sequence_lazy = 7;
     ConvertTzUdf convert_tz_lazy = 8;
     SparkMapFilterUdf map_filter = 9;
+    SparkRegexpInstrUdf regexp_instr = 10;
   }
 }
 
@@ -168,6 +169,10 @@ message SparkArrayAggregateUdf {
 }
 
 message SparkArrayExistsUdf {}
+
+message SparkRegexpInstrUdf {
+  bool ansi_mode = 1;
+}
 
 message SparkArrayForallUdf {}
 
@@ -253,7 +258,15 @@ message ExtendedStreamUdf {
   oneof StreamUdfKind {
     PySparkMapIterUdf py_spark_map_iter = 1;
     PySparkUdtf py_spark_udtf = 2;
+    PySparkScalarPandasIterUdf py_spark_scalar_pandas_iter = 3;
   }
+}
+
+message PySparkScalarPandasIterUdf {
+  string name = 1;
+  bytes payload = 2;
+  bytes output_schema = 3;
+  PySparkUdfConfig config = 4;
 }
 
 message ExtendedAggregateUdf {
@@ -471,6 +484,11 @@ enum PySparkGroupAggKind {
   PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
 }
 
+enum PySparkAggregateMode {
+  PY_SPARK_AGGREGATE_MODE_GROUPED = 0;
+  PY_SPARK_AGGREGATE_MODE_WINDOW = 1;
+}
+
 message PySparkGroupAggUdaf {
   string name = 1;
   bytes payload = 2;
@@ -484,6 +502,7 @@ message PySparkGroupAggUdaf {
   // Absent for backward compatibility: if not set, defaults to input_types.len().
   // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
   optional uint64 actual_arg_count = 9;
+  PySparkAggregateMode mode = 10;
 }
 
 message PySparkGroupMapUdaf {

@@ -305,7 +305,10 @@ use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_scalar_iter_udf::PySparkScalarPandasIterUDF;
+use sail_python_udf::udf::pyspark_udaf::{
+    PySparkAggregateMode, PySparkGroupAggKind, PySparkGroupAggregateUDF,
+};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use sail_system_store::catalog::SystemTable;
@@ -3971,6 +3974,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 config,
                 kind,
                 actual_arg_count,
+                mode,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -3982,11 +3986,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
                 let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
+                let mode = match r#gen::PySparkAggregateMode::try_from(mode)
+                    .map_err(|e| plan_datafusion_err!("invalid Python aggregate mode: {e}"))?
+                {
+                    r#gen::PySparkAggregateMode::Grouped => PySparkAggregateMode::Grouped,
+                    r#gen::PySparkAggregateMode::Window => PySparkAggregateMode::Window,
+                };
                 let actual_arg_count = actual_arg_count
                     .map(|c| c as usize)
                     .unwrap_or(input_types.len()); // backward compat: all inputs are real
                 let udaf = PySparkGroupAggregateUDF::new(
                     kind,
+                    mode,
                     name,
                     payload,
                     deterministic,
@@ -4085,6 +4096,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let output_type = self.try_encode_data_type(func.output_type())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
             let kind = self.try_encode_pyspark_group_agg_kind(func.kind())?;
+            let mode = match func.mode() {
+                PySparkAggregateMode::Grouped => r#gen::PySparkAggregateMode::Grouped,
+                PySparkAggregateMode::Window => r#gen::PySparkAggregateMode::Window,
+            };
             UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
@@ -4095,6 +4110,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 config: Some(config),
                 kind,
                 actual_arg_count: Some(func.actual_arg_count() as u64),
+                mode: mode as i32,
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupMapUDF>() {
             let input_types = func
@@ -4918,6 +4934,22 @@ impl RemoteExecutionCodec {
             None => return plan_err!("ExtendedStreamUdf: no UDF found"),
         };
         let udf: Arc<dyn StreamUDF> = match stream_udf_kind {
+            StreamUdfKind::PySparkScalarPandasIter(r#gen::PySparkScalarPandasIterUdf {
+                name,
+                payload,
+                output_schema,
+                config,
+            }) => {
+                let config = config.as_ref().ok_or_else(|| {
+                    plan_datafusion_err!("missing config for PySparkScalarPandasIterUDF")
+                })?;
+                Arc::new(PySparkScalarPandasIterUDF::try_new(
+                    name.clone(),
+                    payload.clone(),
+                    Arc::new(try_decode_schema(output_schema)?),
+                    Arc::new(self.try_decode_pyspark_udf_config(config)?),
+                )?)
+            }
             StreamUdfKind::PySparkMapIter(r#gen::PySparkMapIterUdf {
                 kind,
                 name,
@@ -4987,7 +5019,14 @@ impl RemoteExecutionCodec {
 
     fn try_encode_stream_udf(&self, udf: &dyn StreamUDF) -> Result<ExtendedStreamUdf> {
         let udf = udf as &dyn Any;
-        let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
+        let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkScalarPandasIterUDF>() {
+            StreamUdfKind::PySparkScalarPandasIter(r#gen::PySparkScalarPandasIterUdf {
+                name: func.name().to_string(),
+                payload: func.payload().to_vec(),
+                output_schema: try_encode_schema(func.output_schema().as_ref())?,
+                config: Some(self.try_encode_pyspark_udf_config(func.config())?),
+            })
+        } else if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
             let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
             let output_schema = try_encode_schema(func.output_schema().as_ref())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;

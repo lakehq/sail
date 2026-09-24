@@ -29,6 +29,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 

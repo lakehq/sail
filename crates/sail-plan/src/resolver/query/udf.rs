@@ -207,6 +207,18 @@ impl PlanResolver<'_> {
         let grouping = self
             .resolve_named_expressions(grouping, schema, state)
             .await?;
+        let (input, grouping, replacements) =
+            self.expand_grouping_generators(input, grouping, state)?;
+        let schema = input.schema();
+        let args = args
+            .into_iter()
+            .map(|arg| {
+                Ok(NamedExpr {
+                    expr: Self::replace_grouping_expressions(arg.expr, &replacements)?,
+                    ..arg
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
         let (args, offsets) = Self::resolve_group_map_argument_offsets(&args, &grouping)?;
         let input_names = args
             .iter()

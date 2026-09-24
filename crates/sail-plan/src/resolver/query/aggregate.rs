@@ -940,7 +940,7 @@ impl PlanResolver<'_> {
     /// Expands a generator in the grouping into rows, naming the unnested column
     /// after the grouping output. Returns a map from each generator to its column.
     /// A no-op when the grouping has no generator.
-    fn expand_grouping_generators(
+    pub(super) fn expand_grouping_generators(
         &self,
         input: LogicalPlan,
         grouping: Vec<NamedExpr>,
@@ -1023,7 +1023,10 @@ impl PlanResolver<'_> {
     }
 
     /// Reuses the input column for each materialized grouping expression.
-    fn replace_grouping_expressions(expr: Expr, replacements: &[(Expr, Expr)]) -> PlanResult<Expr> {
+    pub(super) fn replace_grouping_expressions(
+        expr: Expr,
+        replacements: &[(Expr, Expr)],
+    ) -> PlanResult<Expr> {
         if replacements.is_empty() {
             return Ok(expr);
         }
