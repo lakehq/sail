@@ -1,5 +1,5 @@
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray};
@@ -8,6 +8,7 @@ use datafusion::arrow::record_batch::RecordBatch as ArrowRecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
+use roaring::RoaringTreemap;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -16,7 +17,7 @@ use crate::physical_plan::delete_writer_common;
 use crate::physical_plan::write_context::IcebergBaseWriteContext;
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 use crate::spec::types::values::Literal;
-use crate::spec::{DataContentType, DataFile};
+use crate::spec::{DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestStatus};
 
 #[derive(Debug, Clone, PartialEq)]
 struct PositionDeleteTarget {
@@ -28,7 +29,7 @@ struct PositionDeleteTarget {
 #[derive(Debug)]
 struct PositionDeleteRows {
     target: PositionDeleteTarget,
-    positions_by_file: BTreeMap<String, BTreeSet<i64>>,
+    positions_by_file: BTreeMap<String, RoaringTreemap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,7 +76,11 @@ pub(crate) struct PositionDeleteAccumulator {
 impl PositionDeleteAccumulator {
     pub(crate) fn try_new(base_table_context: &IcebergBaseWriteContext) -> Result<Self> {
         Ok(Self {
-            granularity: PositionDeleteGranularity::from_base_context(base_table_context)?,
+            granularity: if base_table_context.format_version == FormatVersion::V3 {
+                PositionDeleteGranularity::File
+            } else {
+                PositionDeleteGranularity::from_base_context(base_table_context)?
+            },
             rows_by_group: BTreeMap::new(),
         })
     }
@@ -186,9 +191,107 @@ impl PositionDeleteAccumulator {
             rows.positions_by_file
                 .entry(file_path.to_string())
                 .or_default()
-                .insert(row_index);
+                .insert(row_index as u64);
         }
         Ok(())
+    }
+
+    pub(crate) async fn finish_deletion_vectors(
+        self,
+        base: &IcebergBaseWriteContext,
+        table_store: &StoreContext,
+        data_store: &StoreContext,
+        data_url: &Url,
+    ) -> Result<Vec<DataFile>> {
+        if self.rows_by_group.is_empty() {
+            return Ok(vec![]);
+        }
+        let manifest_list = base.current_manifest_list.as_ref().ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!(
+                "Iceberg deletion vectors require a pinned snapshot"
+            )
+        })?;
+        let manifests = crate::io::load_manifest_list(table_store, manifest_list).await?;
+        let deletes = crate::io::load_delete_file_index(
+            &base.partition_specs,
+            base.format_version,
+            table_store,
+            &manifests,
+        )
+        .await?;
+        let mut targets = BTreeMap::new();
+        for manifest_file in manifests
+            .entries()
+            .iter()
+            .filter(|file| file.content == ManifestContentType::Data)
+        {
+            let manifest =
+                crate::io::load_manifest(table_store, &manifest_file.manifest_path).await?;
+            for entry in manifest
+                .entries()
+                .iter()
+                .filter(|entry| entry.status != ManifestStatus::Deleted)
+            {
+                if self
+                    .rows_by_group
+                    .contains_key(&PositionDeleteGroupKey::File(
+                        entry.data_file.file_path.clone(),
+                    ))
+                {
+                    let mut file = entry.data_file.clone();
+                    file.partition_spec_id = manifest_file.partition_spec_id;
+                    targets.insert(
+                        file.file_path.clone(),
+                        (
+                            file,
+                            entry
+                                .sequence_number
+                                .unwrap_or(manifest_file.sequence_number),
+                        ),
+                    );
+                }
+            }
+        }
+        let mut output = Vec::new();
+        for rows in self.rows_by_group.into_values() {
+            for (path, positions) in rows.positions_by_file {
+                let (target, sequence) = targets.get(&path).ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Iceberg deletion vector target is not live in the pinned snapshot: {path}"
+                    )
+                })?;
+                if target.partition_spec_id != rows.target.partition_spec_id
+                    || target.partition != rows.target.partition
+                {
+                    return datafusion_common::exec_err!(
+                        "Iceberg deletion vector target partition does not match: {path}"
+                    );
+                }
+                let applicable = deletes.for_data_file(target, *sequence);
+                let mut combined = positions;
+                combined |= super::delete_apply_exec::load_deleted_positions(
+                    table_store,
+                    &applicable.positional,
+                    &path,
+                )
+                .await?;
+                if combined
+                    .max()
+                    .is_some_and(|position| position >= target.record_count)
+                {
+                    return datafusion_common::exec_err!(
+                        "Iceberg deletion vector position exceeds the data file row count: {path}"
+                    );
+                }
+                output.push(
+                    crate::io::deletion_vector::write_deletion_vector(
+                        data_store, data_url, target, &combined,
+                    )
+                    .await?,
+                );
+            }
+        }
+        Ok(output)
     }
 
     pub(crate) async fn finish(
@@ -253,17 +356,25 @@ async fn write_position_delete_file(
     data_store_ctx: &StoreContext,
     data_url: &Url,
     target: &PositionDeleteTarget,
-    positions_by_file: &BTreeMap<String, BTreeSet<i64>>,
+    positions_by_file: &BTreeMap<String, RoaringTreemap>,
     referenced_data_file: Option<&str>,
 ) -> Result<DataFile> {
     let delete_schema = position_delete_arrow_schema();
-    let row_count = positions_by_file.values().map(BTreeSet::len).sum();
+    let row_count = usize::try_from(
+        positions_by_file
+            .values()
+            .map(RoaringTreemap::len)
+            .sum::<u64>(),
+    )
+    .map_err(|_| {
+        datafusion_common::exec_datafusion_err!("Iceberg position delete count exceeds usize")
+    })?;
     let mut file_paths = Vec::with_capacity(row_count);
     let mut pos_values = Vec::with_capacity(row_count);
     for (file_path, positions) in positions_by_file {
         for position in positions {
             file_paths.push(Some(file_path.as_str()));
-            pos_values.push(*position);
+            pos_values.push(position as i64);
         }
     }
     let batch = ArrowRecordBatch::try_new(

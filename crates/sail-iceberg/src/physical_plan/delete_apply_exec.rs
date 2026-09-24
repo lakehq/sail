@@ -30,6 +30,7 @@ use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuil
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::SchemaDescriptor;
+use roaring::RoaringTreemap;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -321,17 +322,23 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 }
 
 /// Load all applicable position-delete rows for the target data file.
-async fn load_deleted_positions(
+pub(crate) async fn load_deleted_positions(
     store_ctx: &StoreContext,
     delete_files: &[DeleteFileRef],
     data_file_path: &str,
-) -> Result<Vec<u64>> {
+) -> Result<RoaringTreemap> {
     if delete_files.is_empty() {
-        return Ok(Vec::new());
+        return Ok(RoaringTreemap::new());
     }
 
-    let mut deleted_positions = Vec::new();
+    let mut deleted_positions = RoaringTreemap::new();
     for delete_file in delete_files {
+        if delete_file.is_deletion_vector() {
+            deleted_positions |=
+                crate::io::deletion_vector::read_deletion_vector(store_ctx, &delete_file.data_file)
+                    .await?;
+            continue;
+        }
         let (store, path) = store_ctx.resolve(&delete_file.data_file.file_path)?;
         let file_size = delete_file.data_file.file_size_in_bytes;
         let delete_batches = read_parquet_all(store.clone(), &path, file_size).await?;
@@ -380,14 +387,12 @@ async fn load_deleted_positions(
                 }
                 let position = positions.value(row_index);
                 if position >= 0 {
-                    deleted_positions.push(position as u64);
+                    deleted_positions.insert(position as u64);
                 }
             }
         }
     }
 
-    deleted_positions.sort_unstable();
-    deleted_positions.dedup();
     Ok(deleted_positions)
 }
 
@@ -693,23 +698,17 @@ async fn read_parquet_all(
 fn compute_delete_mask(
     batch: &RecordBatch,
     row_offset: u64,
-    sorted_positions: &[u64],
+    deleted_positions: &RoaringTreemap,
     equality_deletes: &[LoadedEqualityDelete],
 ) -> Result<datafusion::arrow::array::BooleanArray> {
     let row_count = batch.num_rows();
     let mut keep_rows = vec![true; row_count];
 
-    // Positional deletes: look up positions in this batch's row range.
-    if !sorted_positions.is_empty() {
-        let end_offset = row_offset + row_count as u64;
-        let first_position = sorted_positions.partition_point(|&position| position < row_offset);
-        let last_position = sorted_positions.partition_point(|&position| position < end_offset);
-        for &position in &sorted_positions[first_position..last_position] {
-            let row_index = (position - row_offset) as usize;
-            if row_index < row_count {
-                keep_rows[row_index] = false;
-            }
-        }
+    let end_offset = row_offset + row_count as u64;
+    let mut positions = deleted_positions.iter();
+    positions.advance_to(row_offset);
+    for position in positions.take_while(|position| *position < end_offset) {
+        keep_rows[(position - row_offset) as usize] = false;
     }
 
     // Equality deletes: convert data-batch rows once per key set and probe the set.
@@ -829,7 +828,7 @@ mod tests {
     #[test]
     fn mask_drops_positions_within_range() {
         let batch = make_batch();
-        let positions = vec![1u64, 3, 100];
+        let positions = RoaringTreemap::from_iter([1, 3, 100]);
         let mask = compute_delete_mask(&batch, 0, &positions, &[]).unwrap();
         // Rows 1 and 3 dropped.
         let values = (0..mask.len())
@@ -842,7 +841,7 @@ mod tests {
     fn mask_respects_row_offset_window() {
         let batch = make_batch(); // 5 rows
         // Upstream row offset 10 means this batch spans rows [10, 15).
-        let positions = vec![9u64, 11, 14, 20];
+        let positions = RoaringTreemap::from_iter([9, 11, 14, 20]);
         let mask = compute_delete_mask(&batch, 10, &positions, &[]).unwrap();
         // Positions 11 and 14 drop rows 1 and 4; the other positions are outside the batch.
         let values = (0..mask.len())
@@ -873,7 +872,8 @@ mod tests {
             deleted_rows,
         }];
 
-        let mask = compute_delete_mask(&batch, 0, &[], &equality_deletes).unwrap();
+        let mask =
+            compute_delete_mask(&batch, 0, &RoaringTreemap::new(), &equality_deletes).unwrap();
         let values = (0..mask.len())
             .map(|index| mask.value(index))
             .collect::<Vec<_>>();
@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn mask_combines_positions_and_equality() {
         let batch = make_batch();
-        let positions = vec![0u64]; // drops row 0
+        let positions = RoaringTreemap::from_iter([0]); // drops row 0
 
         let key_fields = vec![EqualityKeyField {
             field_id: 1,
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn mask_noop_when_no_deletes() {
         let batch = make_batch();
-        let mask = compute_delete_mask(&batch, 0, &[], &[]).unwrap();
+        let mask = compute_delete_mask(&batch, 0, &RoaringTreemap::new(), &[]).unwrap();
         assert!((0..mask.len()).all(|i| mask.value(i)));
     }
 }

@@ -129,8 +129,21 @@ impl IcebergWriterExec {
         options: IcebergWriterExecOptions,
         write_context: IcebergWriteContext,
     ) -> Result<Self> {
-        let merge_distribution_keys =
-            Self::merge_distribution_keys(input.schema().as_ref(), &partition_columns)?;
+        // All changes to a v3 data file must reach the same DV writer, even
+        // when updates move its rows to different destination partitions.
+        let merge_distribution_keys = if write_context
+            .base_table
+            .as_ref()
+            .is_some_and(|base| base.format_version == FormatVersion::V3)
+            && input.schema().index_of(MERGE_FILE_COLUMN).is_ok()
+        {
+            vec![Arc::new(Column::new(
+                MERGE_FILE_COLUMN,
+                input.schema().index_of(MERGE_FILE_COLUMN)?,
+            )) as Arc<dyn PhysicalExpr>]
+        } else {
+            Self::merge_distribution_keys(input.schema().as_ref(), &partition_columns)?
+        };
         let mut writer = Self::new(
             input,
             table_url,
@@ -516,7 +529,7 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_location = write_context.data_location()?;
-            let preserve_lineage = row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
+            let preserve_lineage = row_level_mode.is_some()
                 && write_context
                     .base_table
                     .as_ref()
@@ -565,12 +578,7 @@ impl ExecutionPlan for IcebergWriterExec {
                                 .to_string(),
                         ));
                     }
-                    FormatVersion::V2 => {}
-                    FormatVersion::V3 => {
-                        return Err(DataFusionError::NotImplemented(
-                            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
-                        ));
-                    }
+                    FormatVersion::V2 | FormatVersion::V3 => {}
                 }
                 Some(PositionDeleteAccumulator::try_new(base_table_context)?)
             } else {
@@ -627,9 +635,26 @@ impl ExecutionPlan for IcebergWriterExec {
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
             let delete_files = if let Some(position_deletes) = position_deletes {
                 let data_store_ctx = StoreContext::new(data_object_store, &data_location)?;
-                position_deletes
-                    .finish(&data_store_ctx, &data_location)
-                    .await?
+                if let Some(base) =
+                    base_table_context.filter(|base| base.format_version == FormatVersion::V3)
+                {
+                    let table_store = StoreContext::new(
+                        get_object_store_from_context(&context, &table_url)?,
+                        &table_url,
+                    )?;
+                    position_deletes
+                        .finish_deletion_vectors(
+                            base,
+                            &table_store,
+                            &data_store_ctx,
+                            &data_location,
+                        )
+                        .await?
+                } else {
+                    position_deletes
+                        .finish(&data_store_ctx, &data_location)
+                        .await?
+                }
             } else {
                 Vec::new()
             };
@@ -638,7 +663,10 @@ impl ExecutionPlan for IcebergWriterExec {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
                 removed_data_file_paths: removed_data_file_paths.into_iter().collect(),
-                skip_empty_commit: row_level_mode == Some(RowLevelWriteMode::CopyOnWrite),
+                skip_empty_commit: row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
+                    || (row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
+                        && base_table_context
+                            .is_some_and(|base| base.format_version == FormatVersion::V3)),
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,

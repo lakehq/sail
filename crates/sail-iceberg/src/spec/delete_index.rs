@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-use crate::spec::manifest::{DataContentType, DataFile, DataFileFormat};
+use crate::spec::manifest::{DataContentType, DataFile};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 
 /// A single delete file, augmented with the sequence number inherited from its
@@ -26,10 +26,7 @@ pub struct DeleteFileRef {
 impl DeleteFileRef {
     /// Whether this ref describes a v3 deletion vector (Puffin blob).
     pub fn is_deletion_vector(&self) -> bool {
-        self.data_file.content == DataContentType::PositionDeletes
-            && self.data_file.file_format == DataFileFormat::Puffin
-            && self.data_file.content_offset.is_some()
-            && self.data_file.content_size_in_bytes.is_some()
+        self.data_file.is_deletion_vector()
     }
 }
 
@@ -196,13 +193,23 @@ impl DeleteFileIndex {
             && self.pos_by_path.is_empty()
     }
 
-    /// Register a delete file reference into the index. Returns `Err` if the ref is a
-    /// deletion vector (v3) — callers handle DV support separately.
+    /// Register a delete file, rejecting malformed or duplicate deletion vectors.
     pub fn insert(&mut self, file_ref: DeleteFileRef) -> Result<(), DeleteIndexError> {
         if file_ref.is_deletion_vector() {
-            return Err(DeleteIndexError::DeletionVectorUnsupported(
-                file_ref.data_file.file_path.clone(),
-            ));
+            file_ref
+                .data_file
+                .validate_deletion_vector()
+                .map_err(DeleteIndexError::InvalidDeletionVector)?;
+            if let Some(path) = &file_ref.data_file.referenced_data_file
+                && self
+                    .pos_by_path
+                    .get(path)
+                    .is_some_and(|files| files.iter().any(DeleteFileRef::is_deletion_vector))
+            {
+                return Err(DeleteIndexError::InvalidDeletionVector(format!(
+                    "Multiple Iceberg deletion vectors reference {path}"
+                )));
+            }
         }
         match file_ref.data_file.content {
             DataContentType::Data => Err(DeleteIndexError::NotADeleteFile(
@@ -244,7 +251,9 @@ impl DeleteFileIndex {
         // Positional deletes that reference this path.
         if let Some(refs) = self.pos_by_path.get(&data_file.file_path) {
             for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
+                if data_sequence_number <= r.data_sequence_number
+                    && key == PartitionKey::new(r.partition_spec_id, &r.data_file.partition)
+                {
                     matched.positional.push(r.clone());
                 }
             }
@@ -257,6 +266,14 @@ impl DeleteFileIndex {
                     matched.positional.push(r.clone());
                 }
             }
+        }
+
+        if matched
+            .positional
+            .iter()
+            .any(DeleteFileRef::is_deletion_vector)
+        {
+            matched.positional.retain(DeleteFileRef::is_deletion_vector);
         }
 
         // Equality deletes scoped to the same partition.
@@ -286,17 +303,14 @@ impl DeleteFileIndex {
 /// Errors surfaced when building a [`DeleteFileIndex`].
 #[derive(Debug)]
 pub enum DeleteIndexError {
-    DeletionVectorUnsupported(String),
+    InvalidDeletionVector(String),
     NotADeleteFile(String),
 }
 
 impl std::fmt::Display for DeleteIndexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DeletionVectorUnsupported(path) => write!(
-                f,
-                "v3 deletion vectors are not yet supported (file: {path})"
-            ),
+            Self::InvalidDeletionVector(message) => write!(f, "{message}"),
             Self::NotADeleteFile(path) => {
                 write!(f, "attempted to index a non-delete file: {path}")
             }
@@ -680,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn deletion_vector_rejected_at_insert() {
+    fn deletion_vector_supersedes_position_deletes_and_rejects_duplicates() {
         let mut dv = make_delete(
             DataContentType::PositionDeletes,
             "s3://t/dv.puffin",
@@ -695,12 +709,22 @@ mod tests {
         dv.data_file.content_size_in_bytes = Some(128);
         assert!(dv.is_deletion_vector());
 
+        dv.data_file.file_size_in_bytes = 256;
         let mut idx = DeleteFileIndex::new();
-        let err = idx.insert(dv).unwrap_err();
-        assert!(matches!(
-            err,
-            DeleteIndexError::DeletionVectorUnsupported(_)
-        ));
+        idx.insert(dv.clone()).unwrap();
+        let mut older = dv.clone();
+        older.data_file.file_format = DataFileFormat::Parquet;
+        older.data_file.content_offset = None;
+        older.data_file.content_size_in_bytes = None;
+        idx.insert(older).unwrap();
+        let mut data = dv.data_file.clone();
+        data.content = DataContentType::Data;
+        data.file_path = "s3://t/d.parquet".to_string();
+        assert_eq!(idx.for_data_file(&data, 5).positional, vec![dv.clone()]);
+        assert!(idx.for_data_file(&data, 6).is_empty());
+        data.partition_spec_id = 1;
+        assert!(idx.for_data_file(&data, 5).is_empty());
+        assert!(idx.insert(dv).is_err());
     }
 
     #[test]

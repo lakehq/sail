@@ -31,6 +31,7 @@ pub struct IcebergBaseWriteContext {
     pub current_schema_id: i32,
     pub last_partition_id: i32,
     pub current_snapshot_id: Option<i64>,
+    pub current_manifest_list: Option<String>,
 }
 
 impl IcebergBaseWriteContext {
@@ -44,6 +45,9 @@ impl IcebergBaseWriteContext {
             current_schema_id: metadata.current_schema_id,
             last_partition_id: metadata.last_partition_id,
             current_snapshot_id: metadata.current_snapshot_id,
+            current_manifest_list: metadata
+                .current_snapshot()
+                .map(|snapshot| snapshot.manifest_list().to_string()),
         }
     }
 

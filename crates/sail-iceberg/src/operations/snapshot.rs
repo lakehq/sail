@@ -190,15 +190,23 @@ fn validate_delete_files_for_format(
     if format_version == FormatVersion::V1 && !delete_files.is_empty() {
         return Err("Iceberg v1 snapshots cannot add delete files".to_string());
     }
-    if format_version == FormatVersion::V3
-        && delete_files
-            .iter()
-            .any(|file| file.content == crate::spec::DataContentType::PositionDeletes)
-    {
-        return Err(
-            "Iceberg v3 snapshots cannot add position delete files; v3 requires deletion vectors"
-                .to_string(),
-        );
+    let mut referenced_paths = HashSet::new();
+    for file in delete_files {
+        if file.is_deletion_vector() {
+            if format_version != FormatVersion::V3 {
+                return Err("Iceberg deletion vectors require format-version 3".to_string());
+            }
+            file.validate_deletion_vector()?;
+            if !referenced_paths.insert(file.referenced_data_file.as_deref()) {
+                return Err(
+                    "Multiple Iceberg deletion vectors reference the same data file".to_string(),
+                );
+            }
+        } else if format_version == FormatVersion::V3
+            && file.content == crate::spec::DataContentType::PositionDeletes
+        {
+            return Err("Iceberg v3 snapshots cannot add position delete files; v3 requires deletion vectors".to_string());
+        }
     }
     Ok(())
 }
@@ -604,6 +612,87 @@ impl<'a> SnapshotProducer<'a> {
         Ok(entry)
     }
 
+    async fn rewrite_parent_delete_manifests(
+        &self,
+        store_ctx: &StoreContext,
+        parent_manifests: Vec<ManifestFile>,
+        removed_data_file_paths: &HashSet<String>,
+        sequence_number: i64,
+        snapshot_id: i64,
+        created_paths: &mut Vec<ObjectPath>,
+    ) -> Result<(Vec<ManifestFile>, u64, u64), String> {
+        let replaced = self
+            .added_delete_files
+            .iter()
+            .filter(|file| file.is_deletion_vector())
+            .filter_map(|file| file.referenced_data_file.as_ref())
+            .collect::<HashSet<_>>();
+        let mut output = Vec::new();
+        let mut removed_files = 0u64;
+        let mut removed_positions = 0u64;
+        for parent in parent_manifests {
+            if parent.content != ManifestContentType::Deletes
+                || (replaced.is_empty() && removed_data_file_paths.is_empty())
+            {
+                output.push(parent);
+                continue;
+            }
+            let manifest = crate::io::load_manifest(store_ctx, &parent.manifest_path)
+                .await
+                .map_err(|error| error.to_string())?;
+            let removes = |file: &DataFile| {
+                file.content == crate::spec::DataContentType::PositionDeletes
+                    && file.referenced_data_file.as_ref().is_some_and(|path| {
+                        replaced.contains(path) || removed_data_file_paths.contains(path)
+                    })
+            };
+            if !manifest
+                .entries()
+                .iter()
+                .any(|entry| entry.status != ManifestStatus::Deleted && removes(&entry.data_file))
+            {
+                output.push(parent);
+                continue;
+            }
+            let (entries, mut metadata) = manifest.into_parts();
+            if let Some(current) = &self.manifest_metadata {
+                metadata.format_version = current.format_version;
+            }
+            let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
+            for entry in entries
+                .iter()
+                .filter(|entry| entry.status != ManifestStatus::Deleted)
+            {
+                let mut entry =
+                    Self::materialize_inherited_entry(entry.as_ref().clone(), &parent, &mut None)?;
+                entry.data_file.partition_spec_id = parent.partition_spec_id;
+                if removes(&entry.data_file) {
+                    removed_files += 1;
+                    removed_positions = removed_positions
+                        .checked_add(entry.data_file.record_count)
+                        .ok_or_else(|| {
+                            "Iceberg removed position delete count overflow".to_string()
+                        })?;
+                    writer.add_deleted_entry(entry)?;
+                } else {
+                    writer.add_existing_entry(entry)?;
+                }
+            }
+            output.push(
+                self.write_manifest(
+                    store_ctx,
+                    writer,
+                    sequence_number,
+                    snapshot_id,
+                    None,
+                    created_paths,
+                )
+                .await?,
+            );
+        }
+        Ok((output, removed_files, removed_positions))
+    }
+
     async fn rewrite_parent_manifests(
         &self,
         store_ctx: &StoreContext,
@@ -965,6 +1054,30 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
+        let (rewritten_deletes, removed_delete_files, removed_position_deletes) = self
+            .rewrite_parent_delete_manifests(
+                store_ctx,
+                parent_manifest_entries,
+                &removed_data_file_paths,
+                new_sequence_number,
+                new_snapshot_id,
+                created_paths,
+            )
+            .await?;
+        parent_manifest_entries = rewritten_deletes;
+        if removed_delete_files > 0 {
+            summary = summary
+                .with_property("removed-delete-files", removed_delete_files.to_string())
+                .with_property(
+                    "removed-position-delete-files",
+                    removed_delete_files.to_string(),
+                )
+                .with_property(
+                    "removed-position-deletes",
+                    removed_position_deletes.to_string(),
+                );
+        }
+
         let rewrite_stats = if update_kind.is_targeted_rewrite() {
             let (rewritten_manifests, stats) = self
                 .rewrite_parent_manifests(
@@ -1088,6 +1201,18 @@ impl<'a> SnapshotProducer<'a> {
             added_position_deletes,
             added_equality_deletes,
         );
+
+        if removed_position_deletes > 0
+            && let Some(total) = summary
+                .additional_properties
+                .get("total-position-deletes")
+                .and_then(|value| value.parse::<u64>().ok())
+        {
+            let remaining = total.checked_sub(removed_position_deletes).ok_or_else(|| {
+                "Iceberg removed position deletes exceed the snapshot total".to_string()
+            })?;
+            summary = summary.with_property("total-position-deletes", remaining.to_string());
+        }
 
         let mut list_writer = ManifestListWriter::new();
         let mut total_manifest_count = 0;

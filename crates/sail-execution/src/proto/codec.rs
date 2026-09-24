@@ -5819,6 +5819,7 @@ mod tests {
             current_schema_id: 0,
             last_partition_id: 999,
             current_snapshot_id: Some(42),
+            current_manifest_list: Some("file:///tmp/table/metadata/snap-42.avro".to_string()),
         });
         let plan = Arc::new(IcebergWriterExec::new_copy_on_write(
             Arc::new(EmptyExec::new(input_schema)),
@@ -5844,6 +5845,14 @@ mod tests {
                 .as_ref()
                 .and_then(|base| base.current_snapshot_id),
             Some(42)
+        );
+        assert_eq!(
+            writer
+                .write_context()
+                .base_table
+                .as_ref()
+                .and_then(|base| base.current_manifest_list.as_deref()),
+            Some("file:///tmp/table/metadata/snap-42.avro")
         );
         Ok(())
     }
@@ -5919,6 +5928,7 @@ mod tests {
             current_schema_id: 0,
             last_partition_id: 999,
             current_snapshot_id: Some(7),
+            current_manifest_list: None,
         });
         write_context.commit_writer_schema = false;
         write_context.commit_writer_partition_spec = false;
