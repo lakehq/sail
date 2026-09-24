@@ -6,9 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, PrimitiveArray, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, Int64Type, TimeUnit};
-use datafusion_common::cast::{
-    as_date32_array, as_large_string_array, as_string_array, as_string_view_array,
-};
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -17,6 +15,7 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::string_array_iter;
 
 const DEFAULT_PATTERN: &str = "yyyy-MM-dd HH:mm:ss";
 
@@ -177,40 +176,14 @@ impl SparkUnixTimestamp {
                         array.len(),
                     )));
                 };
-                let array: PrimitiveArray<Int64Type> = match array.data_type() {
-                    DataType::Utf8 => as_string_array(array)?
-                        .iter()
-                        .map(|value| {
-                            value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
-                                .transpose()
-                                .map(Option::flatten)
-                        })
-                        .collect::<Result<_>>()?,
-                    DataType::LargeUtf8 => as_large_string_array(array)?
-                        .iter()
-                        .map(|value| {
-                            value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
-                                .transpose()
-                                .map(Option::flatten)
-                        })
-                        .collect::<Result<_>>()?,
-                    DataType::Utf8View => as_string_view_array(array)?
-                        .iter()
-                        .map(|value| {
-                            value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
-                                .transpose()
-                                .map(Option::flatten)
-                        })
-                        .collect::<Result<_>>()?,
-                    other => {
-                        return exec_err!(
-                            "spark_unix_timestamp function unsupported formatted input data type: {other}"
-                        );
-                    }
-                };
+                let array: PrimitiveArray<Int64Type> = string_array_iter(array.as_ref())?
+                    .map(|value| {
+                        value
+                            .map(|value| self.formatted_string_to_seconds(value, &format, safe))
+                            .transpose()
+                            .map(Option::flatten)
+                    })
+                    .collect::<Result<_>>()?;
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             ColumnarValue::Scalar(scalar) => {
@@ -272,21 +245,8 @@ impl SparkUnixTimestamp {
             );
         }
         let mut cache = HashMap::<String, DateTimeFormat>::new();
-        let array = match format_array.data_type() {
-            DataType::Utf8 => {
-                let formats = as_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            DataType::LargeUtf8 => {
-                let formats = as_large_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            DataType::Utf8View => {
-                let formats = as_string_view_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            _ => return exec_err!("spark_unix_timestamp format argument must be a string array"),
-        };
+        let formats = string_array_iter(format_array)?;
+        let array = self.parse_array_with_formats(array, formats, &mut cache, safe)?;
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
 
@@ -297,26 +257,7 @@ impl SparkUnixTimestamp {
         cache: &mut HashMap<String, DateTimeFormat>,
         safe: bool,
     ) -> Result<PrimitiveArray<Int64Type>> {
-        match array.data_type() {
-            DataType::Utf8 => {
-                self.parse_values_with_formats(as_string_array(array)?.iter(), formats, cache, safe)
-            }
-            DataType::LargeUtf8 => self.parse_values_with_formats(
-                as_large_string_array(array)?.iter(),
-                formats,
-                cache,
-                safe,
-            ),
-            DataType::Utf8View => self.parse_values_with_formats(
-                as_string_view_array(array)?.iter(),
-                formats,
-                cache,
-                safe,
-            ),
-            other => exec_err!(
-                "spark_unix_timestamp function unsupported formatted input data type: {other}"
-            ),
-        }
+        self.parse_values_with_formats(string_array_iter(array)?, formats, cache, safe)
     }
 
     fn parse_values_with_formats<'v, 'f>(

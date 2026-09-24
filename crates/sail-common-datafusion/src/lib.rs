@@ -6,6 +6,7 @@ pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
+mod java_float;
 pub mod lakesource;
 pub mod literal;
 pub mod logical_expr;
