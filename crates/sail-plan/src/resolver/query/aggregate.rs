@@ -50,8 +50,7 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
     let _ = expr.apply(|e| {
         if let Expr::ScalarFunction(f) = e
             && f.func.signature().volatility == Volatility::Volatile
-            && !(f.func.as_async().is_some()
-                && sail_function::scalar::jev::JevKind::from_name(f.func.name()).is_some())
+            && f.func.as_async().is_none()
         {
             found_name = Some(f.func.name().to_string());
             return Ok(TreeNodeRecursion::Stop);

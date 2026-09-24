@@ -51,9 +51,6 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
 }
 
 // Prepare asynchronous functions for physical planning.
-// The current checks and rewrites apply only to Jev calls.
-// When adding an async UDF, check whether it needs these rules.
-// If it does, extend the eligibility checks below.
 pub fn prepare_async_functions(
     plan: datafusion_expr::LogicalPlan,
 ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
@@ -65,17 +62,15 @@ pub fn prepare_async_functions(
     use datafusion_expr::utils::{conjunction, split_conjunction_owned};
     use datafusion_expr::{Aggregate, Filter, JoinType, LogicalPlan, Projection};
     use sail_common_datafusion::utils::items::ItemTaker;
-    use sail_function::scalar::jev::JevKind;
     use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 
     let contains_async = |expr: &Expr| {
         expr.exists(|expr| {
             Ok(matches!(expr, Expr::ScalarFunction(function)
-                if function.func.as_async().is_some()
-                    && JevKind::from_name(function.func.name()).is_some()))
+                if function.func.as_async().is_some()))
         })
     };
-    // This scan avoids plan transformation for queries without async Jev calls,
+    // This scan avoids plan transformation for queries without async calls,
     // at the cost of another scan when they are present.
     let has_async = plan.apply_with_subqueries(|node| {
         node.apply_expressions(|expr| {
@@ -101,11 +96,9 @@ pub fn prepare_async_functions(
                         argument.apply(|nested| {
                             if let Expr::ScalarFunction(inner) = nested
                                 && inner.func.as_async().is_some()
-                                && (JevKind::from_name(outer.func.name()).is_some()
-                                    || JevKind::from_name(inner.func.name()).is_some())
                             {
                                 return datafusion_common::plan_err!(
-                                    "Jev async calls cannot be nested inside another async call; materialize the inner result in a table before evaluating the outer call"
+                                    "Async calls cannot be nested inside another async call; materialize the inner result in a table before evaluating the outer call"
                                 );
                             }
                             Ok(TreeNodeRecursion::Continue)
@@ -183,7 +176,7 @@ pub fn prepare_async_functions(
             }
             LogicalPlan::Aggregate(mut aggregate) => {
                 // DataFusion 55.1.0 assigns the same async result-column offset to
-                // different aggregates. Project Jev calls first so each aggregate
+                // different aggregates. Project async calls first so each aggregate
                 // reads its own result column.
                 let mut projection = aggregate
                     .input
@@ -235,7 +228,6 @@ pub fn prepare_async_functions(
                             .transform_up(|expr| {
                                 if let Expr::ScalarFunction(function) = &expr
                                     && function.func.as_async().is_some()
-                                    && JevKind::from_name(function.func.name()).is_some()
                                 {
                                     let name = loop {
                                         let name = format!("__sail_async_aggregate_{next_alias}");

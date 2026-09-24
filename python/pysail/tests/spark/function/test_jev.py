@@ -693,7 +693,7 @@ def test_jev_required_sort_for_order_sensitive_aggregate(spark, jev, order):
     ],
 )
 def test_direct_async_nesting_is_diagnosed(spark, jev, query):
-    with pytest.raises(Exception, match="Jev async calls cannot be nested"):
+    with pytest.raises(Exception, match="Async calls cannot be nested"):
         spark.sql(query).collect()
     assert jev.request_count == 0
 
