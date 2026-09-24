@@ -46,6 +46,10 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
     pub legacy_size_of_null: bool,
+    /// Whether two decimals that widen past the maximum precision keep the digits of the fraction
+    /// rather than those of the integral part
+    /// (`spark.sql.legacy.decimal.retainFractionDigitsOnTruncate`, default false).
+    pub legacy_retain_fraction_digits: bool,
     /// Type coercion policy for values written into table columns.
     pub store_assignment_policy: StoreAssignmentPolicy,
     /// Policy for duplicate keys created by map functions.
@@ -89,6 +93,7 @@ impl Default for PlanConfig {
             session_user_id: "".to_string(),
             ansi_mode: true,
             legacy_size_of_null: true,
+            legacy_retain_fraction_digits: false,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,

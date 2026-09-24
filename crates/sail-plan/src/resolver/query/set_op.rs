@@ -604,24 +604,26 @@ impl PlanResolver<'_> {
             }
             (F::Array(a), F::Array(b)) => return self.has_wider_type(a, b, ansi, by_name),
             (F::Map(lk, lv), F::Map(rk, rv)) => {
+                // What a map holds is compared by position, since `unionByName` does not reach
+                // into a map (`ResolveUnion.mergeFields`).
                 // A key that the cast to the wider type could turn NULL has no wider type
                 // (`findTypeForComplex`).
                 let key = if lk.data_type().equals_datatype(rk.data_type()) {
                     Some(true)
                 } else {
-                    match self.wider_type(lk, rk, ansi, by_name) {
+                    match self.wider_type(lk, rk, ansi, false) {
                         Some(t) => Some(
                             !cast_force_nullable(lk.data_type(), &t)
                                 && !cast_force_nullable(rk.data_type(), &t),
                         ),
-                        None => match self.has_wider_type(lk, rk, ansi, by_name) {
+                        None => match self.has_wider_type(lk, rk, ansi, false) {
                             Some(true) => None,
                             other => other,
                         },
                     }
                 };
                 return match key {
-                    Some(true) => self.has_wider_type(lv, rv, ansi, by_name),
+                    Some(true) => self.has_wider_type(lv, rv, ansi, false),
                     other => other,
                 };
             }
@@ -673,7 +675,7 @@ impl PlanResolver<'_> {
         }
         // A nested field of the wider type can hold NULL where either side can, or where the
         // cast to it can make one, and carries no metadata (`findTypeForComplex`).
-        let merge_field = |x: &FieldRef, y: &FieldRef| {
+        let merge_field = |x: &FieldRef, y: &FieldRef, by_name: bool| {
             self.wider_type(x, y, ansi, by_name).map(|t| {
                 let nullable = x.is_nullable()
                     || y.is_nullable()
@@ -687,7 +689,9 @@ impl PlanResolver<'_> {
             (F::CalendarInterval, F::CalendarInterval) => Some(lt.clone()),
             (F::Udt | F::CalendarInterval, _) | (_, F::Udt | F::CalendarInterval) => None,
             (F::String, F::String) | (F::Binary, F::Binary) => Some(lt.clone()),
-            (a, b) if a.is_numeric() && b.is_numeric() => Self::wider_numeric_type(lt, rt, ansi),
+            (a, b) if a.is_numeric() && b.is_numeric() => {
+                Self::wider_numeric_type(lt, rt, ansi, self.config.legacy_retain_fraction_digits)
+            }
             // A date, then a timestamp without a time zone, then one with.
             (a, b) if a.is_datetime() && b.is_datetime() => {
                 let rank = |f: F| match f {
@@ -719,7 +723,7 @@ impl PlanResolver<'_> {
                 }
             }
             (F::Array(a), F::Array(b)) => {
-                let element = merge_field(a, b)?;
+                let element = merge_field(a, b, by_name)?;
                 Some(match lt {
                     DataType::LargeList(_) => DataType::LargeList(element),
                     _ => DataType::List(element),
@@ -733,9 +737,9 @@ impl PlanResolver<'_> {
                 let key = if lk.data_type().equals_datatype(rk.data_type()) {
                     lk.clone()
                 } else {
-                    merge_field(lk, rk)?
+                    merge_field(lk, rk, false)?
                 };
-                let value = merge_field(lv, rv)?;
+                let value = merge_field(lv, rv, false)?;
                 let DataType::Map(entries, sorted) = lt else {
                     return None;
                 };
@@ -755,7 +759,7 @@ impl PlanResolver<'_> {
                 }
                 let fields = pairs
                     .into_iter()
-                    .map(|(x, y)| merge_field(x, y))
+                    .map(|(x, y)| merge_field(x, y, by_name))
                     .collect::<Option<Vec<_>>>()?;
                 Some(DataType::Struct(fields.into()))
             }
@@ -766,7 +770,12 @@ impl PlanResolver<'_> {
     /// The wider of two numeric types: the one that comes later in `numericPrecedence`, a
     /// decimal that holds both (`widerDecimalType`), or DOUBLE for a decimal and a floating
     /// type. With ANSI mode an integral type and FLOAT widen to DOUBLE.
-    fn wider_numeric_type(left: &DataType, right: &DataType, ansi: bool) -> Option<DataType> {
+    fn wider_numeric_type(
+        left: &DataType,
+        right: &DataType,
+        ansi: bool,
+        retain_fraction_digits: bool,
+    ) -> Option<DataType> {
         use DataType::*;
 
         let decimal = |t: &DataType| match t {
@@ -793,9 +802,12 @@ impl PlanResolver<'_> {
             let scale = s1.max(s2);
             let precision = scale + (p1 - s1).max(p2 - s2);
             // Past the maximum precision the integral digits are kept and the fraction is cut
-            // (`DecimalType.boundedPreferIntegralDigits`).
+            // (`DecimalType.boundedPreferIntegralDigits`), unless the legacy setting asks for the
+            // fraction to be kept instead (`DecimalPrecisionTypeCoercion.bounded`).
             let (precision, scale) = if precision <= 38 {
                 (precision, scale)
+            } else if retain_fraction_digits {
+                (38, scale.min(38))
             } else {
                 (38, (scale - (precision - 38)).max(0))
             };
@@ -965,7 +977,16 @@ impl PlanResolver<'_> {
             return None;
         }
         let by_position = || left.iter().zip(right.iter()).collect::<Vec<_>>();
-        if !by_name {
+        // Two structs whose names already line up are taken as they are, and no field of them is
+        // matched by name (`ResolveUnion.mergeFields` over `equalsStructurallyByName`). Matching
+        // them by name would pair a field with the first one the resolver reads as equal, which
+        // is another field where two names differ only in case.
+        let aligned = || {
+            left.iter()
+                .zip(right.iter())
+                .all(|(x, y)| self.match_identifier(x.name(), y.name()))
+        };
+        if !by_name || aligned() {
             return Some(by_position());
         }
         let by_name = left
@@ -996,8 +1017,8 @@ impl PlanResolver<'_> {
             (F::Udt, _) | (_, F::Udt) => Some(false),
             (F::Array(a), F::Array(b)) => self.equals_structurally(a, b, by_name),
             (F::Map(ak, av), F::Map(bk, bv)) => every([
-                self.equals_structurally(ak, bk, by_name),
-                self.equals_structurally(av, bv, by_name),
+                self.equals_structurally(ak, bk, false),
+                self.equals_structurally(av, bv, false),
             ]),
             (F::Struct(a), F::Struct(b)) => match self.struct_field_pairs(a, b, by_name) {
                 Some(pairs) => every(
@@ -1119,21 +1140,31 @@ impl PlanResolver<'_> {
         match (F::of(left), F::of(right)) {
             (F::Array(a), F::Array(b)) => self.left_is_cast(a, b, ansi, by_name),
             (F::Map(lk, lv), F::Map(rk, rv)) => {
-                self.left_is_cast(lk, rk, ansi, by_name) || self.left_is_cast(lv, rv, ansi, by_name)
+                self.left_is_cast(lk, rk, ansi, false) || self.left_is_cast(lv, rv, ansi, false)
             }
             (F::Struct(a), F::Struct(b)) => self
                 .struct_field_pairs(a, b, by_name)
                 .into_iter()
                 .flatten()
                 .any(|(x, y)| self.left_is_cast(x, y, ansi, by_name)),
-            _ => Self::atomic_left_is_cast(left.data_type(), right.data_type(), ansi),
+            _ => Self::atomic_left_is_cast(
+                left.data_type(),
+                right.data_type(),
+                ansi,
+                self.config.legacy_retain_fraction_digits,
+            ),
         }
     }
 
     /// The same for two atomic types that have a wider type. The widening is Spark's
     /// (`findWiderTypeForTwo`), taken family by family, since DataFusion's disagrees with it on
     /// decimals, timestamps and binary.
-    fn atomic_left_is_cast(left: &DataType, right: &DataType, ansi: bool) -> bool {
+    fn atomic_left_is_cast(
+        left: &DataType,
+        right: &DataType,
+        ansi: bool,
+        retain_fraction_digits: bool,
+    ) -> bool {
         use DataType::*;
 
         let is_string = |t: &DataType| matches!(t, Utf8 | LargeUtf8 | Utf8View);
@@ -1210,21 +1241,18 @@ impl PlanResolver<'_> {
             }
             return l < r;
         }
-        if let Some((p, s)) = decimal(left) {
-            if decimal(right).is_some() {
-                return Self::wider_numeric_type(left, right, ansi).and_then(|t| decimal(&t))
-                    != Some((p, s));
-            }
-            if let Some(digits) = integral_digits(right) {
-                // A decimal that holds every value of the integral type is the wider one.
-                return p - s < digits;
-            }
-            // A decimal and a floating type widen to DOUBLE.
-            return right.is_floating();
-        }
-        if decimal(right).is_some() {
-            // An integral type is cast to a decimal, and a floating type widens to DOUBLE.
-            return left != &Float64;
+        if decimal(left).is_some() || decimal(right).is_some() {
+            // Whether a decimal is the wider type is the widening itself, which the legacy
+            // setting changes, so it is asked rather than worked out a second time here.
+            let Some(wider) = Self::wider_numeric_type(left, right, ansi, retain_fraction_digits)
+            else {
+                return false;
+            };
+            return match (decimal(left), decimal(&wider)) {
+                // Two decimals are one type however Arrow stores them.
+                (Some(l), Some(w)) => l != w,
+                _ => !left.equals_datatype(&wider),
+            };
         }
         if let (Some(l), Some(r)) = (datetime_rank(left), datetime_rank(right)) {
             return l < r;
@@ -1364,7 +1392,7 @@ impl PlanResolver<'_> {
 
     /// The type of the first input with the nullability of both at every level they share.
     fn union_like_merge(&self, left: &DataType, right: &DataType, by_name: bool) -> DataType {
-        let merge_field = |l: &FieldRef, r: &FieldRef| {
+        let merge_field = |l: &FieldRef, r: &FieldRef, by_name: bool| {
             Arc::new(
                 l.as_ref()
                     .clone()
@@ -1373,12 +1401,12 @@ impl PlanResolver<'_> {
             )
         };
         match (left, right) {
-            (DataType::List(l), DataType::List(r)) => DataType::List(merge_field(l, r)),
+            (DataType::List(l), DataType::List(r)) => DataType::List(merge_field(l, r, by_name)),
             (DataType::LargeList(l), DataType::LargeList(r)) => {
-                DataType::LargeList(merge_field(l, r))
+                DataType::LargeList(merge_field(l, r, by_name))
             }
             (DataType::FixedSizeList(l, n), DataType::FixedSizeList(r, _)) => {
-                DataType::FixedSizeList(merge_field(l, r), *n)
+                DataType::FixedSizeList(merge_field(l, r, by_name), *n)
             }
             (DataType::Map(l, sorted), DataType::Map(r, _)) => {
                 match (l.data_type(), r.data_type()) {
@@ -1386,7 +1414,12 @@ impl PlanResolver<'_> {
                         if lf.len() == 2 && rf.len() == 2 =>
                     {
                         let entries = DataType::Struct(
-                            vec![merge_field(&lf[0], &rf[0]), merge_field(&lf[1], &rf[1])].into(),
+                            // What a map holds is compared by position, even by name.
+                            vec![
+                                merge_field(&lf[0], &rf[0], false),
+                                merge_field(&lf[1], &rf[1], false),
+                            ]
+                            .into(),
                         );
                         DataType::Map(
                             Arc::new(l.as_ref().clone().with_data_type(entries)),
@@ -1401,7 +1434,7 @@ impl PlanResolver<'_> {
                     Some(pairs) => DataType::Struct(
                         pairs
                             .into_iter()
-                            .map(|(x, y)| merge_field(x, y))
+                            .map(|(x, y)| merge_field(x, y, by_name))
                             .collect::<Vec<_>>()
                             .into(),
                     ),
@@ -1439,10 +1472,7 @@ impl PlanResolver<'_> {
         let mut values = Vec::new();
         let mut fields = Vec::new();
         for target_field in to.iter() {
-            match from
-                .iter()
-                .find(|x| self.match_identifier(x.name(), target_field.name()))
-            {
+            match self.find_struct_field(from, target_field.name())? {
                 Some(from_field) => {
                     let from_field = read(from_field);
                     let value = get_field(expr.clone(), from_field.name().to_string());
@@ -1554,17 +1584,45 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// The field of a struct that a name reads, the way Spark resolves it
+    /// (`ExtractValue.findField`): the name is matched by the resolver, and a name that matches
+    /// more than one field is ambiguous. `None` when no field matches, which each caller reports
+    /// its own way.
+    fn find_struct_field<'a>(
+        &self,
+        fields: &'a Fields,
+        name: &str,
+    ) -> PlanResult<Option<&'a FieldRef>> {
+        let matched = fields
+            .iter()
+            .filter(|x| self.match_identifier(x.name(), name))
+            .collect::<Vec<_>>();
+        match matched.as_slice() {
+            [] => Ok(None),
+            [field] => Ok(Some(field)),
+            [field, ..] => Err(PlanError::AnalysisError(format!(
+                "[AMBIGUOUS_REFERENCE_TO_FIELDS] Ambiguous reference to the field {}. It appears \
+                 {} times in the schema.",
+                quote_identifier_name(field.name()),
+                matched.len()
+            ))),
+        }
+    }
+
     /// Without `allowMissingColumns`, `unionByName` matches the fields of a nested struct by name,
     /// in structs and in arrays of them but not in maps, and refuses a field of the first input
     /// that the second one lacks (`ResolveUnion.addFields`).
     fn check_nested_fields_by_name(&self, left: &DataType, right: &DataType) -> PlanResult<()> {
+        // Two structs whose names already line up are taken as they are, and no field of them is
+        // read by name (`ResolveUnion.mergeFields` over `equalsStructurallyByName`). So a name
+        // either of them holds twice is only ambiguous where the fields have to be matched.
+        if self.struct_names_aligned(left, right) {
+            return Ok(());
+        }
         match (left, right) {
             (DataType::Struct(left_fields), DataType::Struct(right_fields)) => {
                 for left_field in left_fields.iter() {
-                    match right_fields
-                        .iter()
-                        .find(|x| self.match_identifier(x.name(), left_field.name()))
-                    {
+                    match self.find_struct_field(right_fields, left_field.name())? {
                         Some(right_field) => self.check_nested_fields_by_name(
                             left_field.data_type(),
                             right_field.data_type(),

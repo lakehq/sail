@@ -325,3 +325,226 @@ Feature: Set operations (INTERSECT, EXCEPT)
       Then query result
         | k |
         | 1 |
+
+  Rule: The inputs widen to a decimal that the maximum precision can hold
+
+    Scenario Outline: the integral digits are kept with ANSI <ansi>
+      # Past the maximum precision the digits of the integral part are kept and the fraction is
+      # cut, which rounds the value (`DecimalType.boundedPreferIntegralDigits`).
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        UNION ALL
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a |
+        | 2 |
+        | 2 |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: the fraction is kept instead with the legacy setting and ANSI <ansi>
+      # The setting is read where the type is bounded, so it applies whatever the mode
+      # (`DecimalPrecisionTypeCoercion.bounded`).
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        UNION ALL
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a                      |
+        | 1.50000000000000000000 |
+        | 2.00000000000000000000 |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: a union that removes duplicates compares the widened values
+      # Cutting the fraction makes the two values one.
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        UNION
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a |
+        | 2 |
+
+    Scenario: the legacy setting keeps the two values apart
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        UNION
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a                      |
+        | 1.50000000000000000000 |
+        | 2.00000000000000000000 |
+
+    Scenario: an intersection finds the rounded value on both sides
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        INTERSECT
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a |
+        | 2 |
+
+    Scenario: an intersection finds nothing with the legacy setting
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        INTERSECT
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a |
+
+    Scenario: a difference removes the rounded value
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        EXCEPT ALL
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a |
+
+    Scenario: a difference keeps the value with the legacy setting
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        EXCEPT ALL
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        """
+      Then query result
+        | a                      |
+        | 1.50000000000000000000 |
+
+    Scenario: a decimal that the maximum precision holds is not cut either way
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT CAST(1.5 AS DECIMAL(12,2)) AS a
+        UNION ALL
+        SELECT CAST(2 AS DECIMAL(10,0)) AS a
+        """
+      Then query result
+        | a    |
+        | 1.50 |
+        | 2.00 |
+
+    Scenario: the setting reaches a decimal inside an array
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT array(CAST(1.5 AS DECIMAL(38,20))) AS a
+        UNION ALL
+        SELECT array(CAST(2 AS DECIMAL(38,0))) AS a
+        """
+      Then query result
+        | a                        |
+        | [1.50000000000000000000] |
+        | [2.00000000000000000000] |
+
+    Scenario: the setting reaches a decimal inside a struct
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT named_struct('x', CAST(1.5 AS DECIMAL(38,20))) AS a
+        UNION ALL
+        SELECT named_struct('x', CAST(2 AS DECIMAL(38,0))) AS a
+        """
+      Then query result
+        | a                        |
+        | {1.50000000000000000000} |
+        | {2.00000000000000000000} |
+
+    Scenario: the setting reaches the value of a map
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT map('k', CAST(1.5 AS DECIMAL(38,20))) AS a
+        UNION ALL
+        SELECT map('k', CAST(2 AS DECIMAL(38,0))) AS a
+        """
+      Then query result
+        | a                             |
+        | {k -> 1.50000000000000000000} |
+        | {k -> 2.00000000000000000000} |
+
+    Scenario: the second input is the one that holds the fraction
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT CAST(2 AS DECIMAL(38,0)) AS a
+        UNION ALL
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        """
+      Then query result
+        | a                      |
+        | 1.50000000000000000000 |
+        | 2.00000000000000000000 |
+
+    Scenario: a decimal key that the wider type could turn NULL has no wider type
+      # A map is refused rather than widened when its key would have to be cast
+      # (`findTypeForComplex`).
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT map(CAST(1.5 AS DECIMAL(38,20)), 1) AS a
+        UNION ALL
+        SELECT map(CAST(2 AS DECIMAL(38,0)), 1) AS a
+        """
+      Then query error INCOMPATIBLE_COLUMN_TYPE
+
+    @sail-bug
+    Scenario: a value that does not fit the wider decimal is NULL without ANSI mode
+      # TODO: Sail raises where Spark reads the value as NULL, since a cast that overflows is an
+      #   error in Sail whatever the mode. The same query fails on `main` too.
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(9999999999999999999 AS DECIMAL(38,0)) AS a
+        UNION ALL
+        SELECT CAST(1.5 AS DECIMAL(38,20)) AS a
+        """
+      Then query result
+        | a                      |
+        | NULL                   |
+        | 1.50000000000000000000 |
+
+    @sail-bug
+    Scenario: an integral value that does not fit the wider decimal is NULL as well
+      # TODO: the same gap as above, reached by widening an integral type into a decimal whose
+      #   digits are all fraction.
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(0.5 AS DECIMAL(38,38)) AS a
+        UNION ALL
+        SELECT CAST(2 AS INT) AS a
+        """
+      Then query result
+        | a                                        |
+        | 0.50000000000000000000000000000000000000 |
+        | NULL                                     |

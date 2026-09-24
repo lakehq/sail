@@ -55,6 +55,9 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        // TODO: support outer references in scalar-subquery projections, including a
+        // single-row Range. Cardinality information alone does not make DataFusion
+        // decorrelate these projections. See test_with_column_correlated_scalar_projection.
         let subquery = {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?

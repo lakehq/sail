@@ -28,7 +28,7 @@ import datetime
 
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
-from pyspark.sql.functions import col, lit, lower, row_number
+from pyspark.sql.functions import col, expr, lit, lower, row_number
 from pyspark.sql.functions import sum as spark_sum
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from pyspark.sql.window import Window
@@ -128,6 +128,22 @@ def _cases(spark):
         "with_column_referring_to_itself": lambda: base().withColumn("A", col("a") + 1),
         "with_column_dotted_name": lambda: spark.sql("SELECT named_struct('x', 1) AS s").withColumn("s.x", lit(9)),
         "with_column_ambiguous_name": lambda: spark.sql("SELECT 1 AS a, 2 AS A").withColumn("a", lit(9)),
+        "with_column_generator_one_field": lambda: base().withColumn("z", expr("inline(array(named_struct('x', a)))")),
+        "with_column_generator_array": lambda: base().withColumn("z", expr("explode(array(a, b))")),
+        "with_column_generator_stack": lambda: base().withColumn("z", expr("stack(2, a, b)")),
+        "with_column_generator_two_fields": lambda: base().withColumn(
+            "z", expr("inline(array(named_struct('x', a, 'y', b)))")
+        ),
+        "with_column_generator_posexplode": lambda: base().withColumn("z", expr("posexplode(array(a, b))")),
+        "with_column_generator_json_tuple": lambda: base().withColumn(
+            "z", expr("""json_tuple('{"k":1,"j":2}', 'k', 'j')""")
+        ),
+        "with_column_generator_in_expression": lambda: base().withColumn("z", expr("explode(array(a, b)) + 1")),
+        "with_column_generator_in_function": lambda: base().withColumn("z", expr("abs(explode(array(a)))")),
+        "with_column_generator_nested": lambda: base().withColumn("z", expr("explode(array(explode(array(a))))")),
+        "with_column_star": lambda: base().withColumn("z", expr("*")),
+        "with_column_qualified_star": lambda: base().alias("q").withColumn("z", expr("q.*")),
+        "with_columns_star": lambda: base().withColumns({"z": expr("*")}),
         "with_columns_two_entries": lambda: base().withColumns({"A": lit(9), "c": lit(7)}),
         "with_columns_entries_differing_in_case": lambda: base().withColumns({"c": lit(1), "C": lit(2)}),
         "with_column_renamed_same_case": lambda: base().withColumnRenamed("a", "z"),
@@ -211,6 +227,22 @@ RESULTS = [
     ("with_metadata_same_case", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{"k": "v"}, {}]),
     ("with_metadata_differing_case", "false", ["A", "b"], ["{'A': 1, 'b': 2}"], [{"k": "v"}, {}]),
     ("with_metadata_non_ascii", "false", ["Ä"], ["{'Ä': 1}"], [{"k": "v"}]),
+    # A generator that outputs one column takes the name it is given.
+    ("with_column_generator_one_field", "false", ["a", "b", "z"], ["{'a': 1, 'b': 2, 'z': 1}"], [{}, {}, {}]),
+    (
+        "with_column_generator_array",
+        "false",
+        ["a", "b", "z"],
+        ["{'a': 1, 'b': 2, 'z': 1}", "{'a': 1, 'b': 2, 'z': 2}"],
+        [{}, {}, {}],
+    ),
+    (
+        "with_column_generator_stack",
+        "false",
+        ["a", "b", "z"],
+        ["{'a': 1, 'b': 2, 'z': 1}", "{'a': 1, 'b': 2, 'z': 2}"],
+        [{}, {}, {}],
+    ),
     ("with_metadata_replaces", "false", ["a", "b"], ["{'a': 1, 'b': 2}"], [{"j": "w"}, {}]),
     ("with_metadata_replaces", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{"j": "w"}, {}]),
     # An empty map is how metadata is removed, since `withMetadata` replaces it (issue #1815).
@@ -225,6 +257,18 @@ ERRORS = [
     _error_param("with_metadata_unknown_name", "false", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
     _error_param("with_metadata_unknown_name", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
     _error_param("with_metadata_non_ascii", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
+    # A generator is only a column of its own, never a part of an expression.
+    _error_param("with_column_generator_in_expression", "false", "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS"),
+    _error_param("with_column_generator_in_function", "false", "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS"),
+    _error_param("with_column_generator_nested", "false", "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS"),
+    # One name is not enough for a generator that outputs more than one column.
+    _error_param("with_column_generator_two_fields", "false", "UDTF_ALIAS_NUMBER_MISMATCH"),
+    _error_param("with_column_generator_posexplode", "false", "UDTF_ALIAS_NUMBER_MISMATCH"),
+    _error_param("with_column_generator_json_tuple", "false", "UDTF_ALIAS_NUMBER_MISMATCH"),
+    # A star is a whole list of columns, which one name cannot take.
+    _error_param("with_column_star", "false", "INVALID_USAGE_OF_STAR_OR_REGEX"),
+    _error_param("with_column_qualified_star", "false", "INVALID_USAGE_OF_STAR_OR_REGEX"),
+    _error_param("with_columns_star", "false", "INVALID_USAGE_OF_STAR_OR_REGEX"),
 ]
 
 
@@ -279,7 +323,47 @@ def test_replacement_survives_a_later_analysis(spark, case_sensitive, columns):
         _unconfigure(spark)
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+# A column that comes out of an alias carries no qualifier, and the ones the input passes through
+# keep theirs, whatever the operation builds around them. Measured on the Spark JVM.
+_QUALIFIER_AFTER_WITH_COLUMN = [
+    (lambda df: df.withColumn("c", lit(9)), "q.c", None),
+    (lambda df: df.withColumn("c", lit(9)), "q.a", ["a"]),
+    (lambda df: df.withColumn("a", lit(9)), "q.a", None),
+    (lambda df: df.withMetadata("a", {"k": "v"}), "q.a", None),
+    (lambda df: df.withColumns({"c": lit(9), "d": lit(8)}), "q.b", ["b"]),
+    (lambda df: df.withColumn("c", lit(9)).withColumn("d", col("q.a")), "q.a", ["a"]),
+    # A column copied out of another one is a new name too, however plain its expression reads.
+    (lambda df: df.withColumn("c", col("a")), "q.c", None),
+    (lambda df: df.withColumn("a", col("a")), "q.a", None),
+    (lambda df: df.withColumn("c", col("a")), "q.b", ["b"]),
+]
+
+# Every column an aggregate outputs is built by it, so none of them keeps a qualifier either.
+_QUALIFIER_AFTER_AGGREGATE = [("q.a", None), ("a", ["a"])]
+
+
+@pytest.mark.parametrize(("operation", "name", "columns"), _QUALIFIER_AFTER_WITH_COLUMN)
+def test_the_qualifier_a_column_keeps(spark, operation, name, columns):
+    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("q")
+
+    if columns is None:
+        with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION"):
+            _ = operation(df).select(name).collect()
+    else:
+        assert operation(df).select(name).columns == columns
+
+
+@pytest.mark.parametrize(("name", "columns"), _QUALIFIER_AFTER_AGGREGATE)
+def test_the_qualifier_an_aggregate_does_not_keep(spark, name, columns):
+    df = spark.sql("SELECT 1 AS a, 2 AS b").select("a").alias("q").withColumn("a", spark_sum("a"))
+
+    if columns is None:
+        with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION"):
+            _ = df.select(name).collect()
+    else:
+        assert df.select(name).columns == columns
+
+
 def test_an_added_column_carries_no_qualifier(spark):
     # The star expansion returns the input's own attributes for the columns it passes through, so
     # those keep their qualifier, while a column the projection adds is an alias with none.
@@ -760,6 +844,38 @@ def test_a_filter_by_a_replaced_column_reads_the_original(spark):
     # limitation is older than the rewrite rather than a consequence of it.
     same_case = df.withColumn("a", -col("a"))
     assert [tuple(row) for row in same_case.filter(df["a"] == _SELECTED).collect()] == [(-_SELECTED,)]
+
+
+# A key a `USING` join hid stays reachable by its qualified name while the new expression is
+# resolved, and stays out of the output. Measured on the Spark JVM.
+_HIDDEN_JOIN_KEY = [
+    ("z", "r.a", ["a", "b", "c", "z"], [(1, 11, 22, 1)]),
+    ("z", "l.a", ["a", "b", "c", "z"], [(1, 11, 22, 1)]),
+    ("z", "r.c", ["a", "b", "c", "z"], [(1, 11, 22, 22)]),
+    ("z", "a", ["a", "b", "c", "z"], [(1, 11, 22, 1)]),
+    ("a", "r.a + 5", ["a", "b", "c"], [(6, 11, 22)]),
+]
+
+
+@pytest.mark.parametrize(("name", "expression", "columns", "rows"), _HIDDEN_JOIN_KEY)
+def test_with_column_reads_a_key_the_join_hid(spark, name, expression, columns, rows):
+    left = spark.sql("SELECT 1 AS a, 11 AS b").alias("l")
+    right = spark.sql("SELECT 1 AS a, 22 AS c").alias("r")
+
+    df = left.join(right, "a").withColumn(name, expr(expression))
+    assert df.columns == columns
+    assert [tuple(row) for row in df.collect()] == rows
+    # The hidden key is not a column of the output, so a star does not expand to it.
+    assert df.select("*").columns == columns
+
+
+def test_with_columns_reads_the_keys_of_both_sides(spark):
+    left = spark.sql("SELECT 1 AS a, 11 AS b").alias("l")
+    right = spark.sql("SELECT 1 AS a, 22 AS c").alias("r")
+
+    df = left.join(right, "a").withColumns({"z": col("r.a"), "y": col("l.a")})
+    assert df.columns == ["a", "b", "c", "z", "y"]
+    assert [tuple(row) for row in df.collect()] == [(1, 11, 22, 1, 1)]
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)

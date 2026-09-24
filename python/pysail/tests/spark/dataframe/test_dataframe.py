@@ -1213,7 +1213,8 @@ def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
     # The fields of a struct are matched by the resolver, like any other name.
     left = spark.sql("SELECT named_struct('x', 1) AS s")
     right = spark.sql("SELECT named_struct('X', 3) AS s")
-    assert [r.s.asDict() for r in left.unionByName(right).collect()] == [{"x": 1}, {"x": 3}]
+    rows = left.unionByName(right).collect()
+    assert sorted((r.s.asDict() for r in rows), key=lambda x: x["x"]) == [{"x": 1}, {"x": 3}]
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
@@ -1703,6 +1704,163 @@ def test_an_aggregate_reads_a_column_that_carries_metadata(spark, operation, row
     frame = spark.sql("SELECT * FROM VALUES (1, 'A'), (2, 'B') AS t(id, s)").withMetadata("s", {"foo": "bar"})
 
     assert sorted(operation(frame).collect(), key=repr) == sorted(rows, key=repr)
+
+
+# `unionByName` reorders the fields of a nested struct by name, but not inside a map, which
+# `ResolveUnion.mergeFields` does not reach into: there the fields are matched by position, and so
+# is the check on the types. Measured on the Spark JVM.
+def test_union_by_name_matches_a_struct_inside_a_map_by_position(spark):
+    left = spark.sql("SELECT map('k', named_struct('a', 1, 'b', 2)) AS s")
+    right = spark.sql("SELECT map('k', named_struct('b', 3, 'a', 4)) AS s")
+
+    result = left.unionByName(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema.simpleString() == "struct<s:map<string,struct<a:int,b:int>>>"
+    assert sorted(tuple(row.s["k"]) for row in result.collect()) == [(1, 2), (3, 4)]
+
+
+def test_union_by_name_keeps_the_names_of_a_struct_inside_a_map(spark):
+    left = spark.sql("SELECT map('k', named_struct('a', 1)) AS s")
+    right = spark.sql("SELECT map('k', named_struct('z', 2)) AS s")
+
+    result = left.unionByName(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema.simpleString() == "struct<s:map<string,struct<a:int>>>"
+    assert sorted(tuple(row.s["k"]) for row in result.collect()) == [(1,), (2,)]
+
+
+@pytest.mark.parametrize("by_name", [False, True])
+def test_a_set_operation_refuses_a_struct_inside_a_map_whose_fields_do_not_line_up(spark, by_name):
+    left = spark.sql("SELECT map('k', named_struct('a', 1, 'b', 2L)) AS s")
+    right = spark.sql("SELECT map('k', named_struct('b', 3L, 'a', 4)) AS s")
+
+    result = left.unionByName(right) if by_name else left.union(right)
+    result._cached_schema = None  # noqa: SLF001
+    message = _refused(
+        "UNION",
+        "first",
+        "MAP<STRING, STRUCT<b: BIGINT NOT NULL, a: INT NOT NULL>>",
+        "MAP<STRING, STRUCT<a: INT NOT NULL, b: BIGINT NOT NULL>>",
+    )
+    with pytest.raises(Exception, match=re.escape(message)):
+        _ = result.schema
+
+
+# A field is read out of the second input by name, and a name that matches more than one field is
+# ambiguous (`ExtractValue.findField`). The first input is not read that way, so it may hold the
+# same name twice. Measured on the Spark JVM.
+_AMBIGUOUS_NESTED_FIELDS = [
+    ("SELECT named_struct('a', 1, 'b', 2) AS s", "SELECT named_struct('b', 3, 'a', 4, 'a', 5) AS s"),
+    ("SELECT named_struct('a', 1, 'b', 2) AS s", "SELECT named_struct('b', 3, 'a', 4, 'A', 5) AS s"),
+    (
+        "SELECT named_struct('x', named_struct('a', 1, 'b', 2)) AS s",
+        "SELECT named_struct('x', named_struct('b', 3, 'a', 4, 'a', 5)) AS s",
+    ),
+]
+
+
+# Two structs whose names already line up are taken as they are, and no field is read by name, so
+# a name either of them holds twice is harmless there. Measured on the Spark JVM.
+_ALIGNED_REPEATED_NAMES = [
+    ("SELECT named_struct('a', 1, 'A', 2) AS s", "SELECT named_struct('a', 3, 'A', 4) AS s", "false"),
+    ("SELECT named_struct('a', 1, 'A', 2) AS s", "SELECT named_struct('a', 3, 'A', 4) AS s", "true"),
+    # The names line up under the resolver, so the fields are not reordered by name either.
+    ("SELECT named_struct('a', 1, 'A', 2) AS s", "SELECT named_struct('A', 3, 'a', 4) AS s", "false"),
+    (
+        "SELECT named_struct('x', named_struct('a', 1, 'A', 2)) AS s",
+        "SELECT named_struct('x', named_struct('a', 3, 'A', 4)) AS s",
+        "false",
+    ),
+]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_union_by_name_does_not_pair_two_fields_that_differ_only_in_case(spark, nested):
+    # The two structs already line up, so their fields are taken in order. Matching each one by
+    # name would pair `A` with `a`, which the resolver reads as the same name, and then the two
+    # types would have to widen.
+    inner = "named_struct('a', {0}, 'A', '{1}')"
+    build = (lambda x, y: f"named_struct('x', {inner.format(x, y)})") if nested else inner.format
+    left = spark.sql(f"SELECT {build(1, 'bad')} AS s")
+    right = spark.sql(f"SELECT {build(2, 'ok')} AS s")
+
+    result = left.unionByName(right)
+    result._cached_schema = None  # noqa: SLF001
+    values = [tuple(row.s.x if nested else row.s) for row in result.collect()]
+    assert sorted(values) == [(1, "bad"), (2, "ok")]
+
+
+@pytest.mark.parametrize(("left", "right", "case_sensitive"), _ALIGNED_REPEATED_NAMES)
+def test_union_by_name_takes_aligned_structs_that_repeat_a_name(spark, left, right, case_sensitive):
+    try:
+        spark.conf.set("spark.sql.caseSensitive", case_sensitive)
+        result = spark.sql(left).unionByName(spark.sql(right))
+        result._cached_schema = None  # noqa: SLF001
+        assert result.schema.simpleString() in (
+            "struct<s:struct<a:int,A:int>>",
+            "struct<s:struct<x:struct<a:int,A:int>>>",
+        )
+        values = [tuple(row.s.x if hasattr(row.s, "x") else row.s) for row in result.collect()]
+        assert sorted(values) == [(1, 2), (3, 4)]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+@pytest.mark.parametrize(("left", "right"), _AMBIGUOUS_NESTED_FIELDS)
+def test_union_by_name_refuses_a_nested_field_that_appears_twice(spark, left, right):
+    result = spark.sql(left).unionByName(spark.sql(right))
+    result._cached_schema = None  # noqa: SLF001
+    message = "[AMBIGUOUS_REFERENCE_TO_FIELDS] Ambiguous reference to the field `a`. It appears 2 times in the schema."
+    with pytest.raises(Exception, match=re.escape(message)):
+        _ = result.schema
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_union_by_name_reads_one_field_into_each_output_of_a_repeated_name(spark):
+    # The first input is rebuilt by position, so a name it holds twice is not ambiguous: each of
+    # its outputs reads the one field of the second input that matches.
+    # TODO: Sail cannot carry a struct that holds one name twice as far as the client, which reads
+    #   the fields of a struct by name. The same query fails on `main` too, for a different reason.
+    left = spark.sql("SELECT named_struct('a', 1, 'a', 2, 'b', 3) AS s")
+    right = spark.sql("SELECT named_struct('b', 4, 'a', 5) AS s")
+
+    result = left.unionByName(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema.simpleString() == "struct<s:struct<a:int,a:int,b:int>>"
+    assert sorted(tuple(row.s) for row in result.collect()) == [(1, 2, 3), (5, 5, 4)]
+
+
+# A column keeps the metadata of the first input unless that input is cast to the wider type, and
+# whether it is cast depends on the widening itself: a decimal wide enough to hold every value of
+# an integral type is already the wider one, which the legacy setting can change. Measured on the
+# Spark JVM.
+_DECIMAL_METADATA = [
+    ("true", "TINYINT", {"side": "L"}),
+    ("true", "SMALLINT", {"side": "L"}),
+    ("true", "INT", {"side": "L"}),
+    ("true", "BIGINT", {"side": "L"}),
+    ("false", "TINYINT", {"side": "L"}),
+    ("false", "SMALLINT", {}),
+    ("false", "INT", {}),
+    ("false", "BIGINT", {}),
+]
+
+
+@pytest.mark.parametrize("op", ["union", "intersect", "exceptAll"])
+@pytest.mark.parametrize(("legacy", "integral", "expected"), _DECIMAL_METADATA)
+def test_a_set_operation_of_a_decimal_and_an_integral_keeps_the_metadata_it_does_not_cast(
+    spark, op, legacy, integral, expected
+):
+    try:
+        spark.conf.set("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate", legacy)
+        left = spark.sql("SELECT CAST(0.5 AS DECIMAL(38,35)) AS a").withMetadata("a", {"side": "L"})
+        right = spark.sql(f"SELECT CAST(2 AS {integral}) AS a")
+
+        result = getattr(left, op)(right)
+        result._cached_schema = None  # noqa: SLF001
+        assert result.schema["a"].metadata == expected
+    finally:
+        spark.conf.unset("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
 
 
 def _field(name, data_type, nullable):

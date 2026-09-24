@@ -408,6 +408,9 @@ impl PlanResolver<'_> {
         }
         // A name that carries a plan ID comes from a DataFrame column object, which Spark
         // reports on its own error condition instead of the one for a name in a query.
+        // TODO: support Spark 4.2's non-strict name fallback after verifying that the source
+        // plan is reachable. Dropping the plan ID here would accept unrelated DataFrames.
+        // See test_with_column_non_strict_shadowed_reference.
         if plan_id.is_some() {
             return Err(PlanError::AnalysisError(format!(
                 "[CANNOT_RESOLVE_DATAFRAME_COLUMN] Cannot resolve dataframe column \"{}\". \

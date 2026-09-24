@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, DFSchemaRef};
-use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
-};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection, cast, col, lit};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::Explode;
+use sail_function::scalar::multi_expr::MultiExpr;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
@@ -51,6 +52,13 @@ impl PlanResolver<'_> {
         )?))
     }
 
+    /// TODO: this reads every target field out of the input by name, which diverges from Spark's
+    ///   `Project.reorderFields` in several ways: a nullable target field the input lacks is
+    ///   filled with NULL rather than refused, the name is matched by the resolver instead of
+    ///   ignoring the case of ASCII letters only, a name that matches two columns is
+    ///   `AMBIGUOUS_COLUMN_OR_FIELD`, a nested field is reordered by name as well, and a column
+    ///   that is not cast keeps its qualifier and its plan id. Its own change is PR #2610, which
+    ///   carries the measurements and the tests, so this one leaves the behavior as it is.
     pub(super) async fn resolve_query_to_schema(
         &self,
         input: spec::QueryPlan,
@@ -181,14 +189,13 @@ impl PlanResolver<'_> {
         // `None` when no metadata was specified on the alias.
         type AliasEntry = (String, Expr, Option<Vec<(String, String)>>);
 
-        let input = self.resolve_query_plan(input, state).await?;
-        // If the input is a SubqueryAlias, save the alias and re-apply it after building the
-        // projection. A Projection node strips qualifiers from its output schema, so without
-        // re-wrapping, subsequent operations could no longer reference columns by the qualified name.
-        let input_alias = match &input {
-            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
-            _ => None,
-        };
+        // A key that a `USING` join or a natural join hid is still reachable by its qualified
+        // name while the new expression is resolved, and stays out of the output
+        // (`LogicalPlan.metadataOutput`), so the input is resolved with its hidden fields and
+        // only the visible ones are projected.
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let schema = input.schema();
         // The alias names are collected first so that duplicates are rejected before the
         // expressions are resolved, which is the order in which Spark reports the errors.
@@ -228,7 +235,20 @@ impl PlanResolver<'_> {
                 quote_identifier_name(name)
             )));
         }
-        let names = Self::get_field_names(schema, state)?;
+        // A hidden field is reachable by name but is not a column of the input: no alias
+        // replaces one and none of them is passed through.
+        let mut visible = Vec::new();
+        for column in schema.columns() {
+            let info = state.get_field_info(&column.name)?;
+            if !info.is_hidden() {
+                let name = info.name().to_string();
+                visible.push((column, name));
+            }
+        }
+        let names = visible
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect::<Vec<_>>();
         // A column takes the first alias that matches it, so an alias that another one already
         // matched is discarded. It is discarded before its expression is resolved, which is what
         // makes an expression that cannot be resolved harmless there.
@@ -250,8 +270,54 @@ impl PlanResolver<'_> {
                 {
                     continue;
                 }
-                let expr = self.resolve_expression(expr, schema, state).await?;
-                results.push((name, expr, metadata));
+                // One name cannot take the whole list of columns a star stands for
+                // (`ResolveStar`, `invalidStarUsageError`).
+                if matches!(expr, spec::Expr::UnresolvedStar { .. }) {
+                    return Err(PlanError::AnalysisError(
+                        "[INVALID_USAGE_OF_STAR_OR_REGEX] Invalid usage of '*' in expression \
+                         `alias`."
+                            .to_string(),
+                    ));
+                }
+                let resolved = self.resolve_named_expression(expr, schema, state).await?;
+                // Spark's ExtractGenerator permits a generator only at the root of a
+                // projected expression, after removing aliases. Check before rewriting
+                // generators, which would otherwise hide their original placement.
+                let contains_generator = |expr: &Expr| {
+                    expr.exists(|node| {
+                        Ok(matches!(node, Expr::ScalarFunction(function)
+                            if function.func.inner().is::<Explode>()))
+                    })
+                };
+                let mut root = &resolved.expr;
+                while let Expr::Alias(alias) = root {
+                    root = &alias.expr;
+                }
+                let nested = match root {
+                    Expr::ScalarFunction(function) if function.func.inner().is::<Explode>() => {
+                        let mut nested = false;
+                        for argument in &function.args {
+                            if contains_generator(argument)? {
+                                nested = true;
+                                break;
+                            }
+                        }
+                        nested
+                    }
+                    other => contains_generator(other)?,
+                };
+                if nested {
+                    // TODO: Spark names the expression the generator sits in, rendered as SQL
+                    //   (`"(explode(array(a, b)) + 1)"`), where this names the column instead.
+                    //   `select` accepts the same expression rather than refusing it, since the
+                    //   check lives here and not where a projection is built.
+                    return Err(PlanError::AnalysisError(format!(
+                        "[UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS] The generator is not \
+                         supported: nested in expressions \"{}\".",
+                        resolved.name.join(", ")
+                    )));
+                }
+                results.push((name, resolved.expr, metadata));
             }
             results
         };
@@ -266,29 +332,36 @@ impl PlanResolver<'_> {
                     .any(|column| self.match_identifier(name, column))
             })
             .collect::<Vec<_>>();
-        let mut expr = schema
-            .columns()
-            .into_iter()
-            .zip(names)
-            .map(|(column, name)| {
-                // The alias name replaces the name of the column that it matches.
-                //
-                // TODO: replacing in place takes the column out of the output, and Sail has no
-                // equivalent of Spark's missing-attribute pull-up for `Filter`, only for `Sort`.
-                // See `test_a_filter_by_a_replaced_column_reads_the_original`.
-                match aliases
-                    .iter()
-                    .find(|(alias, ..)| self.match_identifier(alias, &name))
-                {
-                    Some((alias, expr, metadata)) => {
-                        Self::added_column(alias, expr, metadata, schema)
-                    }
-                    None => NamedExpr::new(vec![name], Expr::Column(column)),
+        // A column the input passes through keeps its qualifier, and every other output is a new
+        // name, which has none, however it is built (`Alias.qualifier`). So the qualifier is
+        // decided here, where a column that is only passed through is told apart from one the
+        // operation builds, rather than read off the expression, which a copy of a column and a
+        // column itself leave looking the same.
+        let mut qualifiers = Vec::with_capacity(visible.len());
+        let mut expr = Vec::with_capacity(visible.len());
+        for (column, name) in visible {
+            // The alias name replaces the name of the column that it matches.
+            //
+            // TODO: replacing in place takes the column out of the output, and Sail has no
+            // equivalent of Spark's missing-attribute pull-up for `Filter`, only for `Sort`.
+            // See `test_a_filter_by_a_replaced_column_reads_the_original`.
+            match aliases
+                .iter()
+                .find(|(alias, ..)| self.match_identifier(alias, &name))
+            {
+                Some((alias, e, metadata)) => {
+                    qualifiers.push(None);
+                    expr.push(Self::added_column(alias, e, metadata, schema));
                 }
-            })
-            .collect::<Vec<_>>();
+                None => {
+                    qualifiers.push(column.relation.clone());
+                    expr.push(NamedExpr::new(vec![name], Expr::Column(column)));
+                }
+            }
+        }
         for ((name, e, metadata), matched) in aliases.iter().zip(matched) {
             if !matched {
+                qualifiers.push(None);
                 expr.push(Self::added_column(name, e, metadata, schema));
             }
         }
@@ -297,23 +370,48 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
+        // One name per column the generator outputs, and `withColumn` gives exactly one
+        // (`GeneratorResolution.makeGeneratorOutput`).
+        for named in &expr {
+            if let Expr::ScalarFunction(function) = &named.expr
+                && function.func.inner().is::<MultiExpr>()
+                && named.name.len() != function.args.len()
+            {
+                return Err(PlanError::AnalysisError(format!(
+                    "[UDTF_ALIAS_NUMBER_MISMATCH] The number of aliases supplied in the AS clause \
+                     does not match the number of columns output by the UDTF. Expected {} \
+                     aliases, but got {}. Please ensure that the number of aliases provided \
+                     matches the number of columns output by the UDTF.",
+                    function.args.len(),
+                    named.name.join(",")
+                )));
+            }
+        }
         let expr = self.rewrite_multi_expr(expr)?;
         // An aggregate turns the projection into an aggregation without grouping, as it does for
         // `select`, so the columns passed through are refused there unless they are aggregated.
-        let result = if Self::contains_aggregate(&expr) {
-            self.rewrite_aggregate(input, expr, vec![], None, false, state)?
-        } else {
-            let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
-            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
-        };
-        if let Some(alias) = input_alias {
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                Arc::new(result),
-                alias,
-            )?))
-        } else {
-            Ok(result)
+        // Every column it outputs is then an aggregate rather than a column of the input, so none
+        // of them keeps a qualifier either.
+        if Self::contains_aggregate(&expr) {
+            return self.rewrite_aggregate(input, expr, vec![], None, false, state);
         }
+        qualifiers.resize(expr.len(), None);
+        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        let expr = expr
+            .into_iter()
+            .zip(qualifiers)
+            .map(|(e, qualifier)| match (e, qualifier) {
+                (Expr::Alias(e), Some(relation)) => Expr::Alias(datafusion_expr::expr::Alias {
+                    relation: Some(relation),
+                    ..e
+                }),
+                (e, _) => e,
+            })
+            .collect::<Vec<_>>();
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expr,
+            Arc::new(input),
+        )?))
     }
 
     /// Builds the named expression for a column added or replaced by `withColumn`.
