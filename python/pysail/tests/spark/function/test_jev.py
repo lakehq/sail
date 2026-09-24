@@ -637,12 +637,27 @@ def test_jev_where_filters_over_joins(spark, jev, query, expected):
             "SELECT id FROM range(0, 4, 1, 1) ORDER BY jev_noul(CAST(id % 2 AS STRING), 'yes?').noul DESC, id DESC",
             [3, 1, 2, 0],
         ),
+        (
+            "SELECT id FROM range(0, 4, 1, 1) SORT BY jev_noul(CAST(id AS STRING), 'yes?').noul DESC",
+            [3, 2, 1, 0],
+        ),
     ],
 )
 def test_jev_direct_order_by(spark, jev, query, expected):
     result = spark.sql(query)
     assert result.columns == ["id"]
     assert [row.id for row in result.collect()] == expected
+    assert jev.request_count > 0
+
+
+@pytest.mark.parametrize("order", ["ORDER BY", "SORT BY"])
+def test_jev_required_sort_for_order_sensitive_aggregate(spark, jev, order):
+    query = (
+        "SELECT collect_list(id) AS ids FROM (SELECT id FROM range(0, 4, 1, 1) "  # noqa: S608 -- fixed test sort clauses
+        f"{order} jev_noul(CAST(id AS STRING), 'yes?').noul DESC)"
+    )
+    row = spark.sql(query).first()
+    assert row.ids == [3, 2, 1, 0]
     assert jev.request_count > 0
 
 

@@ -64,7 +64,9 @@ pub fn prepare_async_functions(
     use datafusion_expr::expr_rewriter::NamePreserver;
     use datafusion_expr::utils::{conjunction, split_conjunction_owned};
     use datafusion_expr::{Aggregate, Filter, JoinType, LogicalPlan, Projection};
+    use sail_common_datafusion::utils::items::ItemTaker;
     use sail_function::scalar::jev::JevKind;
+    use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 
     let contains_async = |expr: &Expr| {
         expr.exists(|expr| {
@@ -140,39 +142,43 @@ pub fn prepare_async_functions(
                     predicate, input,
                 )?)))
             }
-            LogicalPlan::Sort(mut sort) => {
-                let output = sort
-                    .input
+            plan if matches!(&plan, LogicalPlan::Sort(_))
+                || matches!(&plan, LogicalPlan::Extension(extension)
+                    if extension.node.as_any().is::<SortWithinPartitionsNode>()
+                        || extension.node.as_any().is::<RequiredSortNode>()) =>
+            {
+                let input = Arc::new(plan.inputs().one()?.clone());
+                let output = input
                     .schema()
                     .columns()
                     .into_iter()
                     .map(Expr::Column)
                     .collect::<Vec<_>>();
                 let mut projection = output.clone();
+                let mut expressions = plan.expressions();
                 let mut next_alias = 0usize;
-                for order in &mut sort.expr {
-                    if !contains_async(&order.expr)? {
+                for expression in &mut expressions {
+                    if !contains_async(expression)? {
                         continue;
                     }
                     let name = loop {
                         let name = format!("__sail_async_sort_{next_alias}");
                         next_alias += 1;
-                        if !sort.input.schema().has_column_with_unqualified_name(&name) {
+                        if !input.schema().has_column_with_unqualified_name(&name) {
                             break name;
                         }
                     };
-                    projection.push(order.expr.clone().alias(name.clone()));
-                    order.expr = Expr::Column(Column::from_name(name));
+                    projection.push(expression.clone().alias(name.clone()));
+                    *expression = Expr::Column(Column::from_name(name));
                 }
                 if projection.len() == output.len() {
-                    return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+                    return Ok(Transformed::no(plan));
                 }
-                sort.input = Arc::new(LogicalPlan::Projection(Projection::try_new(
-                    projection, sort.input,
-                )?));
+                let input = LogicalPlan::Projection(Projection::try_new(projection, input)?);
+                let sort = plan.with_new_exprs(expressions, vec![input])?;
                 Ok(Transformed::yes(LogicalPlan::Projection(Projection::try_new(
                     output,
-                    Arc::new(LogicalPlan::Sort(sort)),
+                    Arc::new(sort),
                 )?)))
             }
             LogicalPlan::Aggregate(mut aggregate) => {
