@@ -41,14 +41,21 @@ pub fn apply_transform(
                 Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes)))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int(v))) => {
-                let w = w as i32;
+                let w = i32::try_from(w).ok().filter(|width| *width > 0)?;
                 let rem = v.rem_euclid(w);
-                Some(Literal::Primitive(PrimitiveLiteral::Int(v - rem)))
+                Some(Literal::Primitive(PrimitiveLiteral::Int(
+                    v.wrapping_sub(rem),
+                )))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                let w = w as i64;
+                let w = i64::from(w);
+                if w == 0 {
+                    return None;
+                }
                 let rem = v.rem_euclid(w);
-                Some(Literal::Primitive(PrimitiveLiteral::Long(v - rem)))
+                Some(Literal::Primitive(PrimitiveLiteral::Long(
+                    v.wrapping_sub(rem),
+                )))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => {
                 let width = i128::from(w);
@@ -64,7 +71,17 @@ pub fn apply_transform(
                 Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_int(v, n))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(v, n))))
+                let micros = if matches!(
+                    field_type,
+                    Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+                ) {
+                    v.div_euclid(1_000)
+                } else {
+                    v
+                };
+                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(
+                    micros, n,
+                ))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => Some(Literal::Primitive(
                 PrimitiveLiteral::Int(bucket_decimal(v, n)),
@@ -190,8 +207,7 @@ pub fn apply_transform(
                     _ => us_or_ns,
                 };
                 let hours = micros.div_euclid(3_600_000_000);
-                // safe downcast in typical ranges
-                let hours_i32 = i32::try_from(hours).unwrap_or(i32::MAX);
+                let hours_i32 = hours as i32;
                 Some(Literal::Primitive(PrimitiveLiteral::Int(hours_i32)))
             }
             _ => value,

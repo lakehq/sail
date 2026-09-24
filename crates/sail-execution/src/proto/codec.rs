@@ -268,7 +268,8 @@ use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkN
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergMetadataScanExec, IcebergPartitionTransformExpr, IcebergScanByDataFilesExec,
+    IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
@@ -1587,12 +1588,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
                 snapshot_json,
+                pruning_json,
             }) => {
                 let snapshot: sail_iceberg::spec::Snapshot = serde_json::from_str(&snapshot_json)
                     .map_err(|e| {
                     plan_datafusion_err!("failed to decode Iceberg snapshot: {e}")
                 })?;
-                Ok(Arc::new(IcebergManifestScanExec::new(table_url, snapshot)))
+                let pruning = serde_json::from_str(&pruning_json).map_err(|error| {
+                    plan_datafusion_err!("failed to decode Iceberg pruning: {error}")
+                })?;
+                Ok(Arc::new(IcebergManifestScanExec::new(
+                    table_url, snapshot, pruning,
+                )))
             }
             NodeKind::IcebergDiscovery(r#gen::IcebergDiscoveryExecNode {
                 input,
@@ -1612,16 +1619,55 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergScanByDataFiles(r#gen::IcebergScanByDataFilesExecNode {
                 input,
                 table_url,
-                output_schema,
+                file_schema,
+                projection,
+                has_projection,
+                predicate,
+                limit,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
-                let output_schema = Arc::new(try_decode_schema(&output_schema)?);
+                let file_schema = Arc::new(try_decode_schema(&file_schema)?);
+                let projection = has_projection
+                    .then(|| {
+                        projection
+                            .into_iter()
+                            .map(|index| {
+                                usize::try_from(index).map_err(|error| {
+                                    plan_datafusion_err!("invalid Iceberg projection: {error}")
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                let predicate = predicate
+                    .map(|predicate| {
+                        try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &file_schema,
+                        )
+                    })
+                    .transpose()?;
+                let limit = limit
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|error| plan_datafusion_err!("invalid Iceberg limit: {error}"))?;
                 Ok(Arc::new(IcebergScanByDataFilesExec::new(
                     input,
                     table_url,
-                    output_schema,
-                )))
+                    file_schema,
+                    projection,
+                    predicate,
+                    limit,
+                )?))
+            }
+            NodeKind::IcebergMetadataScan(r#gen::IcebergMetadataScanExecNode { input }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(IcebergMetadataScanExec::new(input)))
             }
             NodeKind::IcebergDeleteApply(r#gen::IcebergDeleteApplyExecNode {
                 input,
@@ -2703,6 +2749,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url: manifest_scan.table_url().to_string(),
                 snapshot_json,
+                pruning_json: serde_json::to_string(manifest_scan.pruning()).map_err(|error| {
+                    plan_datafusion_err!("failed to encode Iceberg pruning: {error}")
+                })?,
             })
         } else if let Some(discovery) = node.downcast_ref::<IcebergDiscoveryExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -2722,12 +2771,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 proto_converter,
                 scan_by_files.input().clone(),
             )?;
-            let output_schema = try_encode_schema(scan_by_files.output_schema().as_ref())?;
+            let file_schema = try_encode_schema(scan_by_files.file_schema().as_ref())?;
             NodeKind::IcebergScanByDataFiles(r#gen::IcebergScanByDataFilesExecNode {
                 input,
                 table_url: scan_by_files.table_url().to_string(),
-                output_schema,
+                file_schema,
+                projection: scan_by_files
+                    .projection()
+                    .map(|projection| projection.iter().map(|index| *index as u64).collect())
+                    .unwrap_or_default(),
+                has_projection: scan_by_files.projection().is_some(),
+                predicate: scan_by_files
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(self, proto_converter, predicate)
+                    })
+                    .transpose()?,
+                limit: scan_by_files.limit().map(|limit| limit as u64),
             })
+        } else if let Some(metadata_scan) = node.downcast_ref::<IcebergMetadataScanExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                Arc::clone(metadata_scan.input()),
+            )?;
+            NodeKind::IcebergMetadataScan(r#gen::IcebergMetadataScanExecNode { input })
         } else if let Some(delete_apply) = node.downcast_ref::<IcebergDeleteApplyExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,

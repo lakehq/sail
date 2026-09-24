@@ -155,6 +155,13 @@ def normalize_plan_text(plan_text: str) -> str:
 
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+        # PyIceberg filenames retain their task and file counters; only the write UUID varies.
+        block = re.sub(
+            r"(?<![\w.-])(\d{5}-\d+-)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+            r"\1<uuid>\2",
+            block,
+            flags=re.IGNORECASE,
+        )
         # Extract the group list between the first "[" and the last "]"
         start = block.find("[")
         end = block.rfind("]")

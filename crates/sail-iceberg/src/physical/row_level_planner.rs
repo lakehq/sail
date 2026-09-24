@@ -124,6 +124,9 @@ async fn plan_iceberg_delete(
         Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
             .await?;
     ensure_current_row_level_mode(&table, node)?;
+    if let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await? {
+        return Ok(plan);
+    }
     let current_schema = table.metadata().current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
     })?;
@@ -183,6 +186,11 @@ async fn plan_iceberg_copy_on_write(
     let [input] = physical_inputs else {
         return plan_err!("Iceberg copy-on-write requires exactly one write-plan input");
     };
+    if node.command() == RowLevelCommand::Delete
+        && let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await?
+    {
+        return Ok(plan);
+    }
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session, node)?;
     let distribution_key = match node.command() {
@@ -213,31 +221,6 @@ async fn plan_iceberg_copy_on_write(
         &PhysicalSinkMode::Append,
         data_schema.as_ref(),
     )?;
-    if node.command() == RowLevelCommand::Delete
-        && let Some(paths) = crate::logical::row_level::target_provider(node.raw_target())?
-            .metadata_delete_paths(session)
-            .await?
-    {
-        let batch = encode_commit_meta(CommitMeta {
-            table_uri: table_url.to_string(),
-            removed_data_file_paths: paths,
-            skip_empty_commit: true,
-            requirements: write_context.requirements,
-            table_properties: writer_options.table_properties.clone(),
-            lakehouse_table: writer_options.lakehouse_table.clone(),
-            ..Default::default()
-        })?;
-        let input = MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
-        return Ok(Arc::new(
-            IcebergCommitExec::new(
-                input,
-                table_url,
-                writer_options.lakehouse_table,
-                SnapshotUpdateKind::RowLevelRewrite,
-            )
-            .with_expected_snapshot_id(node.expected_snapshot_id()),
-        ));
-    }
     let writer = Arc::new(IcebergWriterExec::new_copy_on_write(
         Arc::clone(input),
         table_url.clone(),
@@ -261,6 +244,57 @@ async fn plan_iceberg_copy_on_write(
         )
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     ))
+}
+
+async fn plan_metadata_delete(
+    session: &dyn Session,
+    node: &RowLevelWriteNode,
+    table: &Table,
+    table_url: &url::Url,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let predicate = node
+        .condition()
+        .map(|condition| condition.expr.clone())
+        .unwrap_or_else(|| datafusion_expr::lit(true));
+    let Some(paths) = crate::logical::row_level::target_scan(node.raw_target())?
+        .metadata_delete_paths(session, &predicate)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let writer_options = resolve_row_level_writer_options(session, node)?;
+    let partition_columns = IcebergLakeSource::partition_columns_from_metadata(table)?;
+    let schema = table.metadata().current_schema().ok_or_else(|| {
+        datafusion_common::plan_datafusion_err!("Iceberg table metadata is missing current schema")
+    })?;
+    let schema = crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?;
+    let write_context = prepare_iceberg_write_context(
+        table_url,
+        Some(table.metadata()),
+        &writer_options,
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        &schema,
+    )?;
+    let batch = encode_commit_meta(CommitMeta {
+        table_uri: table_url.to_string(),
+        removed_data_file_paths: paths,
+        skip_empty_commit: true,
+        requirements: write_context.requirements,
+        table_properties: writer_options.table_properties.clone(),
+        lakehouse_table: writer_options.lakehouse_table.clone(),
+        ..Default::default()
+    })?;
+    let input = MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+    Ok(Some(Arc::new(
+        IcebergCommitExec::new(
+            input,
+            table_url.clone(),
+            writer_options.lakehouse_table,
+            SnapshotUpdateKind::RowLevelRewrite,
+        )
+        .with_expected_snapshot_id(node.expected_snapshot_id()),
+    )))
 }
 
 fn ensure_current_row_level_mode(table: &Table, node: &RowLevelWriteNode) -> Result<()> {

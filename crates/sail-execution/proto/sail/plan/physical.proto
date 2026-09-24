@@ -70,6 +70,7 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
+    IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
   }
 }
 
@@ -1037,6 +1038,7 @@ message IcebergManifestScanExecNode {
   string table_url = 1;
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
+  string pruning_json = 3;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1049,7 +1051,15 @@ message IcebergDiscoveryExecNode {
 message IcebergScanByDataFilesExecNode {
   bytes input = 1;
   string table_url = 2;
-  bytes output_schema = 3;
+  bytes file_schema = 3;
+  repeated uint64 projection = 4;
+  bool has_projection = 5;
+  optional bytes predicate = 6;
+  optional uint64 limit = 7;
+}
+
+message IcebergMetadataScanExecNode {
+  bytes input = 1;
 }
 
 message IcebergDeleteApplyExecNode {

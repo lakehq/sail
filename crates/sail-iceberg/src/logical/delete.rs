@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::{Result, plan_datafusion_err};
+use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use sail_common_datafusion::datasource::{
     DeleteInfo, MERGE_FILE_COLUMN, OPERATION_COLUMN, RowLevelCommand, RowLevelOperationType,
@@ -99,11 +99,12 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         };
         super::row_level::select_copy_on_write_rows(rows)?
     } else {
-        let predicate = condition.as_ref().ok_or_else(|| {
-            plan_datafusion_err!("Iceberg equality-delete MOR DELETE requires a WHERE condition")
-        })?;
+        let predicate = condition
+            .as_ref()
+            .map(|condition| condition.expr.clone())
+            .unwrap_or_else(|| lit(true));
         LogicalPlanBuilder::from(target_plan.clone())
-            .filter(predicate.expr.clone())?
+            .filter(predicate)?
             .build()?
     };
     let node = RowLevelWriteNode::new_delete(

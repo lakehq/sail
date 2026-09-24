@@ -65,7 +65,7 @@ impl IcebergDiscoveryExec {
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(output_partitions),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Ok(Self {
