@@ -86,8 +86,6 @@ pub(super) struct PlanResolverState {
     param_values: HashMap<String, ScalarValue>,
     /// Positional parameter values available alongside `param_values`.
     positional_param_values: Vec<ScalarValue>,
-    /// Parameter-derived schemas may remain provisional after their values are bound.
-    has_parameterized_input: bool,
     /// Stack of in-scope lambda parameter frames (innermost last).
     /// Each frame holds the declared parameter names of one enclosing lambda
     /// function, along with the parameter field when the enclosing
@@ -115,7 +113,6 @@ impl PlanResolverState {
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
             positional_param_values: Vec::new(),
-            has_parameterized_input: false,
             lambda_param_scopes: Vec::new(),
             windows: HashMap::new(),
         }
@@ -295,11 +292,6 @@ impl PlanResolverState {
         &mut self.config
     }
 
-    /// Whether parameter-derived schemas still require deferred type coercion.
-    pub fn has_unbound_parameters(&self) -> bool {
-        self.has_parameterized_input
-    }
-
     /// Returns the named parameter value for the given name, if any.
     pub fn get_param_value(&self, name: &str) -> Option<&ScalarValue> {
         self.param_values.get(name)
@@ -359,9 +351,6 @@ impl<'a> ParamValuesScope<'a> {
         named: HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> Self {
-        // Keep deferring coercion in callers after this scope ends: substituting
-        // parameters does not fully analyze CASE and UNION output schemas.
-        state.has_parameterized_input |= !named.is_empty() || !positional.is_empty();
         let previous_param_values = std::mem::replace(&mut state.param_values, named);
         let previous_positional_param_values =
             std::mem::replace(&mut state.positional_param_values, positional);

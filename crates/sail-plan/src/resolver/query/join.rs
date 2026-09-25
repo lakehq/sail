@@ -246,7 +246,6 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema: &join_schema,
-                                has_unbound_parameters: state.has_unbound_parameters(),
                             },
                         })?;
                         Ok(expression.alias(state.register_field_name(name)))

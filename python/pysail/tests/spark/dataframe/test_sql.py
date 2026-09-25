@@ -1,7 +1,5 @@
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
@@ -89,6 +87,7 @@ def test_sql_nvl2_preserves_widened_parameter_schema(spark, marker, named, ansi,
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.parametrize("through_view", [False, True], ids=["dataframe", "temp-view"])
 @pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
 @pytest.mark.parametrize(
     "query",
@@ -107,12 +106,16 @@ def test_sql_nvl2_preserves_widened_parameter_schema(spark, marker, named, ansi,
         ),
     ],
 )
-def test_sql_conditional_preserves_composed_parameter_precision(spark, marker, named, query):
+def test_sql_conditional_preserves_composed_parameter_precision(spark, marker, named, query, through_view):
     original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", "false")
     try:
         args = {"value": 16777217.0} if named else [16777217.0]
         df = spark.sql(query.format(marker=marker), args=args)
+        if through_view:
+            # Queries over the view are resolved without the parameters.
+            df.createOrReplaceTempView("parameterized_input")
+            df = spark.table("parameterized_input")
         result = df.selectExpr(
             "id",
             "CASE WHEN id = 0 THEN CAST(2 AS FLOAT) ELSE v END AS case_result",
@@ -124,10 +127,10 @@ def test_sql_conditional_preserves_composed_parameter_precision(spark, marker, n
             (1, 16777217.0, 16777217.0, 16777217.0),
         ]
     finally:
+        spark.sql("DROP VIEW IF EXISTS parameterized_input")
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_sql_case_widens_parameter_marker_branch(spark):
     df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])
     assert df.dtypes == [("v", "bigint")]

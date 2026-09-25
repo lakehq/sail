@@ -68,10 +68,6 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
-    if function_context.has_unbound_parameters {
-        // Keep DataFusion's deferred coercion until bound result types are available.
-        return Ok(expr_fn::nvl2(tested, if_non_null, if_null));
-    }
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
     // Preserve NVL2's common result type before exposing a CASE to its callers.
     let common_type =
@@ -126,11 +122,6 @@ fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    if function_context.has_unbound_parameters {
-        // TODO: Apply Spark numeric branch coercion after parameters are bound.
-        // Their provisional types can also hide behind projected columns.
-        return Ok(arguments);
-    }
     let data_types = argument_types(&arguments, function_context)?;
     let ansi_mode = function_context.plan_config.ansi_mode;
     let common_type = data_types.iter().try_fold(DataType::Null, |left, right| {

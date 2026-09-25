@@ -109,13 +109,10 @@ impl PlanResolver<'_> {
                 };
                 let mut union =
                     Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
-                if !state.has_unbound_parameters() {
-                    // Conditional coercion needs the common UNION schema.
-                    // Parameter types remain provisional until values are substituted.
-                    // TODO: Match Spark's ANSI string coercion for UNION inputs. DataFusion
-                    //  widens numeric/STRING inputs to STRING, so typeof also reports STRING.
-                    union.schema = Arc::new(coerce_union_schema(&union.inputs)?);
-                }
+                // Conditional coercion needs the common UNION schema.
+                // TODO: Match Spark's ANSI string coercion for UNION inputs. DataFusion
+                //  widens numeric/STRING inputs to STRING, so typeof also reports STRING.
+                union.schema = Arc::new(coerce_union_schema(&union.inputs)?);
                 let plan = LogicalPlan::Union(union);
                 if is_all {
                     Ok(plan)

@@ -168,7 +168,6 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema,
-                                has_unbound_parameters: state.has_unbound_parameters(),
                             },
                         };
                         func(input)?
@@ -228,7 +227,6 @@ impl PlanResolver<'_> {
                                         plan_config: &self.config,
                                         session_context: self.ctx,
                                         schema,
-                                        has_unbound_parameters: state.has_unbound_parameters(),
                                     },
                                 };
                                 func(input)?
