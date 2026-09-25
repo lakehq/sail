@@ -141,9 +141,7 @@ def test_score_accepts_parquet_string_arrays(spark, jev, tmp_path, list_type):
 @pytest.mark.parametrize("array_type", [pa.ListViewArray, pa.LargeListViewArray], ids=["list_view", "large_list_view"])
 @pytest.mark.parametrize("ipc_writer", [pa.ipc.new_file, pa.ipc.new_stream], ids=["file", "stream"])
 def test_score_accepts_arrow_list_views(spark, jev, tmp_path, array_type, ipc_writer):
-    levels = array_type.from_arrays(
-        [2, 0, 1], [2, 1, 3], pa.array(["unused", "low", "medium", "high", "tail"])
-    )
+    levels = array_type.from_arrays([2, 0, 1], [2, 1, 3], pa.array(["unused", "low", "medium", "high", "tail"]))
     table = pa.table({"id": [0, 1, 2], "state": ["text", None, "text"], "levels": levels})
     path = tmp_path / "score_levels.arrow"
     with path.open("wb") as sink, ipc_writer(sink, table.schema) as writer:
