@@ -6,7 +6,6 @@ use arrow_pyarrow::FromPyArrow;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_common::{DataFusionError, Result, exec_err};
 use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
@@ -95,7 +94,8 @@ enum PyMapStreamState {
 }
 
 pub struct PyMapStream {
-    inner: SendableRecordBatchStream,
+    output: ReceiverStream<Result<RecordBatch>>,
+    schema: SchemaRef,
     state: PyMapStreamState,
 }
 
@@ -134,10 +134,8 @@ impl PyMapStream {
             }
         });
         Self {
-            inner: Box::pin(RecordBatchStreamAdapter::new(
-                output_schema,
-                ReceiverStream::new(output_rx),
-            )),
+            output: ReceiverStream::new(output_rx),
+            schema: output_schema,
             state: PyMapStreamState::Running {
                 signal: signal_tx,
                 python_task,
@@ -189,6 +187,8 @@ impl PyMapStream {
 
 impl Drop for PyMapStream {
     fn drop(&mut self) {
+        // Release producers blocked on a full output channel before joining them.
+        self.output.close();
         let state = std::mem::replace(&mut self.state, PyMapStreamState::Stopped);
         match state {
             PyMapStreamState::Running {
@@ -200,7 +200,7 @@ impl Drop for PyMapStream {
                 // to finish processing all input batches received before the stop signal.
                 // Unfortunately, there is no reliable way to abort the thread cleanly,
                 // so we have to wait for it to finish.
-                let _ = python_task.join();
+                let _ = Python::attach(|py| py.detach(|| python_task.join()));
             }
             PyMapStreamState::Stopped => {}
         }
@@ -211,12 +211,12 @@ impl Stream for PyMapStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
+        Pin::new(&mut self.output).poll_next(cx)
     }
 }
 
 impl RecordBatchStream for PyMapStream {
     fn schema(&self) -> SchemaRef {
-        self.inner.schema()
+        Arc::clone(&self.schema)
     }
 }
