@@ -214,6 +214,29 @@ Feature: Set operations (INTERSECT, EXCEPT)
 
   Rule: UNION column types
 
+    Scenario Outline: UNION retains a DOUBLE first input when combined with DECIMAL: <operator>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(v) AS result_type
+        FROM (
+          SELECT CAST(1.25 AS DOUBLE) AS v
+          <operator>
+          SELECT CAST(2.5 AS DECIMAL(2,1)) AS v
+        ) AS q
+        """
+      Then query result
+        | result_type |
+        | double      |
+        | double      |
+
+      Examples:
+        | operator  | ansi  |
+        | UNION ALL | false |
+        | UNION     | false |
+        | UNION ALL | true  |
+        | UNION     | true  |
+
     Scenario: UNION keeps interval values from inputs with different qualifiers
       When query
         """

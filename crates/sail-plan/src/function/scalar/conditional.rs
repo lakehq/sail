@@ -124,8 +124,9 @@ fn argument_types(
 /// Preserves DataFusion's existing nested and string/numeric coercion.
 // TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
 //  common type as well.
-// TODO: In ANSI mode, promote STRING branches to BIGINT or DOUBLE like Spark,
-//  so that UPDATE and MERGE can store mixed INT/STRING results in numeric columns.
+// TODO: Match Spark ANSI STRING/numeric coercion, including nested results and
+//  projected/cached sources. Eager STRING typing regresses supported numeric
+//  UPDATE/MERGE assignments; preserve store-assignment policy when fixing this.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -167,6 +168,8 @@ fn coerce_numeric_values(
                 // NULL values are coerced to the common type by DataFusion.
                 Ok(arg)
             } else {
+                // TODO: Return NULL for overflowing implicit DECIMAL casts in non-ANSI mode.
+                // Retaining fractional digits can narrow the integral range.
                 // Like DataFusion's type coercion, this keeps values of the common type unchanged
                 // and casts a scalar subquery inside the subquery.
                 Ok(arg.cast_to(&common_type, function_context.schema)?)

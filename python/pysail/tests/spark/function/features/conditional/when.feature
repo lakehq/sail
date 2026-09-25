@@ -277,6 +277,24 @@ Feature: when output schema
         | false                  | -3            | 1            | decimal(38,0)  |
         | true                   | -2.5000000000 | 1.0000000000 | decimal(38,10) |
 
+    @spark-4.0
+    @sail-bug
+    Scenario: Legacy decimal conditional overflow returns NULL with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT id, if(id = 0,
+          CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)),
+          CAST(1 AS DECIMAL(38,10))) AS result
+        FROM range(2)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result       |
+        | 0  | NULL         |
+        | 1  | 1.0000000000 |
+
   Rule: Persistent views
 
     Scenario: CASE in a persistent view keeps the type resolved with ANSI disabled
