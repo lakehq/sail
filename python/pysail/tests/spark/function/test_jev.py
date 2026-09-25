@@ -111,6 +111,33 @@ def test_score_operating_guidance_is_not_local_schema_validation(spark, jev, lev
     assert jev.request_count == 1
 
 
+@pytest.mark.parametrize(
+    "list_type",
+    [pa.list_(pa.string()), pa.large_list(pa.string()), pa.list_(pa.string(), 2)],
+    ids=["list", "large_list", "fixed_size_list"],
+)
+def test_score_accepts_parquet_string_arrays(spark, jev, tmp_path, list_type):
+    path = tmp_path / "score_levels.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": [0, 1, 2],
+                "state": ["text", None, "text"],
+                "levels": pa.array([["low", "high"], ["skip", "me"], ["bad", "good"]], type=list_type),
+            }
+        ),
+        path,
+    )
+    frame = spark.read.parquet(str(path))
+    assert frame.schema["levels"].dataType.simpleString() == "array<string>"
+
+    rows = frame.selectExpr("id", "jev_score(state, 'rate', levels).score AS score").orderBy("id").collect()
+
+    assert [(row.id, row.score) for row in rows] == [(0, 0.5), (1, None), (2, 0.5)]
+    criteria = [question["criteria"] for request in jev.requests for question in request["body"]["questions"].values()]
+    assert sorted(criteria) == [["bad", "good"], ["low", "high"]]
+
+
 def test_string_state_is_literal_and_json_null_instructions_are_preserved(spark, jev):
     assert spark.sql("SELECT jev_noul('{\"text\": 1}', parse_json('null')) AS j").first().j.noul == EXPECTED_NOUL
     body = jev.requests[0]["body"]

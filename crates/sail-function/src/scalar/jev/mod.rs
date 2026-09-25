@@ -125,7 +125,7 @@ impl Jev {
                 is_variant_storage_field(field)
                     || match self.kind {
                         JevKind::Score => {
-                            matches!(ty, DataType::List(item) if string_type(item.data_type()))
+                            matches!(ty, DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) if string_type(item.data_type()))
                         }
                         _ => string_map(ty),
                     }
@@ -426,15 +426,19 @@ fn json_value(array: &dyn Array, _field: &Field, index: usize) -> Result<Option<
             let DataType::List(field) = value.data_type() else {
                 return exec_err!("invalid Jev array argument");
             };
-            let array = value.value(0);
-            Value::Array(
-                (0..array.len())
-                    .map(|i| {
-                        json_value(array.as_ref(), field, i)
-                            .map(|value| value.unwrap_or(Value::Null))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            )
+            json_list(value.value(0), field)?
+        }
+        ScalarValue::LargeList(value) => {
+            let DataType::LargeList(field) = value.data_type() else {
+                return exec_err!("invalid Jev array argument");
+            };
+            json_list(value.value(0), field)?
+        }
+        ScalarValue::FixedSizeList(value) => {
+            let DataType::FixedSizeList(field, _) = value.data_type() else {
+                return exec_err!("invalid Jev array argument");
+            };
+            json_list(value.value(0), field)?
         }
         ScalarValue::Map(value) => {
             let entries = value.value(0);
@@ -454,6 +458,14 @@ fn json_value(array: &dyn Array, _field: &Field, index: usize) -> Result<Option<
         _ => return exec_err!("unsupported Jev input type {}", array.data_type()),
     };
     Ok(Some(value))
+}
+
+fn json_list(array: ArrayRef, field: &Field) -> Result<Value> {
+    Ok(Value::Array(
+        (0..array.len())
+            .map(|i| json_value(array.as_ref(), field, i).map(|value| value.unwrap_or(Value::Null)))
+            .collect::<Result<Vec<_>>>()?,
+    ))
 }
 
 fn variant_field(name: &str, nullable: bool) -> Field {
