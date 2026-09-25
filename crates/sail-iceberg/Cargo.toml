@@ -61,9 +61,14 @@ rust_decimal = { workspace = true }
 base64 = { workspace = true }
 murmur3 = { workspace = true }
 educe = { workspace = true }
+roaring = { workspace = true }
+crc32fast = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dev-dependencies]
+sail-telemetry = { path = "../sail-telemetry" }
 
 [lints]
 workspace = true

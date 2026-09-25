@@ -16,7 +16,6 @@ Feature: map_entries function
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null map literal yields a non-nullable array
       When query
         """
@@ -31,7 +30,6 @@ Feature: map_entries function
          |    |    |-- value: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null map column yields a non-nullable array
       When query
         """
@@ -60,7 +58,6 @@ Feature: map_entries function
          |    |    |-- value: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a nullable map value propagates to the struct value field
       When query
         """

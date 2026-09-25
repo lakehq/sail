@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod conversions;
+pub(crate) mod literal_serde;
 pub mod metadata;
 pub mod partition_transform;
 pub mod snapshot_id;

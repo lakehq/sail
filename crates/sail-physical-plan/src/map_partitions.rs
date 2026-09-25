@@ -109,8 +109,8 @@ impl ExecutionPlan for MapPartitionsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.input.execute(partition, context)?;
-        let output = self.udf.invoke(stream)?;
+        let stream = self.input.execute(partition, Arc::clone(&context))?;
+        let output = self.udf.invoke(stream, context)?;
         let schema = self.schema();
         let output =
             output.map(move |x| x.and_then(|batch| record_batch_with_schema(batch, &schema)));

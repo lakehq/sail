@@ -375,9 +375,6 @@ Feature: map_filter with lambda
 
   Rule: Output schema preserves map nullability
 
-    # Sail's existing map constructor declares this non-null map nullable.
-    # map_filter preserves its input nullability; fix the constructor separately.
-    @sail-bug
     Scenario: Map filter preserves non-nullable literal map schema
       When query
         """

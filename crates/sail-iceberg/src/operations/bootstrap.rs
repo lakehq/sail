@@ -459,11 +459,23 @@ pub async fn replace_empty_table_metadata(
     replacement_metadata.location = table_url.to_string();
     replacement_metadata.last_updated_ms = commit_timestamp_ms;
     replacement_metadata.last_column_id = last_column_id;
-    replacement_metadata.schemas.push(iceberg_schema.clone());
+    if !replacement_metadata
+        .schemas
+        .iter()
+        .any(|schema| schema.schema_id() == iceberg_schema.schema_id())
+    {
+        replacement_metadata.schemas.push(iceberg_schema.clone());
+    }
     replacement_metadata.current_schema_id = iceberg_schema.schema_id();
-    replacement_metadata
+    if !replacement_metadata
         .partition_specs
-        .push(partition_spec.clone());
+        .iter()
+        .any(|spec| spec.spec_id() == partition_spec.spec_id())
+    {
+        replacement_metadata
+            .partition_specs
+            .push(partition_spec.clone());
+    }
     replacement_metadata.default_spec_id = partition_spec.spec_id();
     replacement_metadata.last_partition_id = last_partition_id;
     replacement_metadata.properties = table_properties;
