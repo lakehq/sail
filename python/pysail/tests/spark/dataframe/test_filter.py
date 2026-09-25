@@ -49,6 +49,48 @@ def test_filter_missing_attribute_preserves_alias_precedence(filter_source, hide
     assert result.collect() == [expected]
 
 
+@pytest.mark.parametrize(
+    ("aliased", "reference"),
+    [(False, "bound"), (False, "unbound"), (True, "bound"), (True, "unbound"), (True, "qualified")],
+)
+@pytest.mark.parametrize("chained", [False, True])
+def test_filter_replaced_attribute_preserves_reference_scope(filter_source, aliased, reference, chained):
+    source = filter_source.alias("origin") if aliased else filter_source
+    projected = source.withColumn("value", F.lit(100))
+    if chained:
+        key = "origin.key" if aliased else "key"
+        projected = projected.withColumn("label", F.concat(F.col(key), F.lit("!")))
+    if reference == "bound":
+        predicate = source.value == 2  # noqa: PLR2004
+    elif reference == "qualified":
+        predicate = F.col("origin.value") == 2  # noqa: PLR2004
+    else:
+        predicate = F.col("value") == 2  # noqa: PLR2004
+
+    result = projected.where(predicate)
+    expected = []
+    if reference != "unbound":
+        row = {"key": "b", "regionality": "INTRA", "value": 100}
+        if chained:
+            row["label"] = "b!"
+        expected = [Row(**row)]
+    assert result.collect() == expected
+    assert result.schema == projected.schema
+
+
+@pytest.mark.parametrize("alias", ["origin", "output"])
+@pytest.mark.parametrize("reference", ["bound", "qualified"])
+def test_filter_replaced_attribute_preserves_explicit_alias_boundary(filter_source, alias, reference):
+    source = filter_source.alias("origin")
+    projected = source.withColumn("value", F.lit(100)).alias(alias)
+    predicate = (source.value if reference == "bound" else F.col("origin.value")) == 2  # noqa: PLR2004
+    if reference == "qualified" and alias == "origin":
+        assert projected.where(predicate).collect() == []
+    else:
+        with pytest.raises(AnalysisException):
+            projected.where(predicate).collect()
+
+
 def test_filter_missing_attributes_through_nested_projections(filter_source):
     result = (
         filter_source.select("key", "regionality")

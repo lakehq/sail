@@ -2,9 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::Column;
-use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
-};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection, cast, col, lit};
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -187,13 +185,6 @@ impl PlanResolver<'_> {
         type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
 
         let input = self.resolve_query_plan(input, state).await?;
-        // If the input is a SubqueryAlias, save the alias and re-apply it after building the
-        // projection. A Projection node strips qualifiers from its output schema, so without
-        // re-wrapping, subsequent operations could no longer reference columns by the qualified name.
-        let input_alias = match &input {
-            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
-            _ => None,
-        };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
         let mut aliases: IndexMap<String, AliasEntry> = async {
@@ -258,16 +249,21 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
-        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
-        if let Some(alias) = input_alias {
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                Arc::new(result),
-                alias,
-            )?))
-        } else {
-            Ok(result)
+        let mut expr = self.rewrite_named_expressions(expr, state)?;
+        // Spark preserves qualifiers only on untouched columns. Keep them on the
+        // projection expressions so missing-filter recovery can cross this project.
+        for expr in &mut expr {
+            if let Expr::Alias(alias) = expr
+                && !aliases.contains_key(state.get_field_info(&alias.name)?.name())
+                && let Expr::Column(column) = alias.expr.as_ref()
+            {
+                alias.relation = column.relation.clone();
+            }
         }
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expr,
+            Arc::new(input),
+        )?))
     }
 
     pub(super) async fn resolve_query_replace(
