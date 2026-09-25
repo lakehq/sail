@@ -18,6 +18,7 @@ New Iceberg tables created in Sail default to **version 2**. Use the `format-ver
 | Format-version upgrades           | :white_check_mark: | Through the `format-version` table property.                                 |
 | Format-version downgrades         | :x:                | —                                                                            |
 | Parquet data and delete files     | :white_check_mark: | Delete-file support is listed by version below.                              |
+| Puffin deletion-vector files      | :white_check_mark: | Version 3 merge-on-read operations.                                          |
 | Avro manifests and manifest lists | :white_check_mark: | —                                                                            |
 | Avro and ORC data files           | :x:                | —                                                                            |
 
@@ -43,16 +44,18 @@ New Iceberg tables created in Sail default to **version 2**. Use the `format-ver
 Iceberg uses copy-on-write to rewrite affected data files and merge-on-read to record deletes separately from data files.
 In Sail, copy-on-write is the default for `DELETE`, `UPDATE`, and `MERGE INTO`.
 The `write.delete.mode`, `write.update.mode`, and `write.merge.mode` table properties select the mode for each operation.
+Merge-on-read uses Parquet position-delete files for version 2 `MERGE` and Puffin deletion vectors for version 3 DML.
 
-| Operation                                       | Copy-on-write                   | Merge-on-read                                                                     | Notes                                                                                                                                         |
-| ----------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DELETE`                                        | :white_check_mark: Versions 1–3 | Partial: equality-delete files on unpartitioned version 2 or 3 tables.            | Merge-on-read uses all columns as equality keys; nested, floating-point, `unknown`, and `variant` fields are unsupported in this writer path. |
-| `UPDATE`                                        | :white_check_mark: Versions 1–3 | :x:                                                                               | —                                                                                                                                             |
-| `MERGE INTO` with inserts, updates, and deletes | :white_check_mark: Versions 1–3 | Partial: position-delete files on version 2 tables, including partitioned tables. | Matched, insert, and `WHEN NOT MATCHED BY SOURCE` clauses. Multiple source matches cannot update one target row.                              |
-| `MERGE WITH SCHEMA EVOLUTION`                   | :x:                             | :x:                                                                               | —                                                                                                                                             |
+| Operation                                       | Copy-on-write (v1–v3) | Merge-on-read (v2) | Merge-on-read (v3) | Notes                                                                                                                                                                                  |
+| ----------------------------------------------- | --------------------- | ------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DELETE`                                        | :white_check_mark:    | Partial            | :white_check_mark: | V2 uses equality-delete files on unpartitioned tables, with all columns as equality keys; nested, floating-point, `unknown`, and `variant` fields are unsupported in that writer path. |
+| `UPDATE`                                        | :white_check_mark:    | :x:                | :white_check_mark: | V3 merge-on-read supports updates that move rows between partitions.                                                                                                                   |
+| `MERGE INTO` with inserts, updates, and deletes | :white_check_mark:    | :white_check_mark: | :white_check_mark: | Matched, insert, and `WHEN NOT MATCHED BY SOURCE` clauses. Multiple source matches cannot update one target row.                                                                       |
+| `MERGE WITH SCHEMA EVOLUTION`                   | :x:                   | :x:                | :x:                | —                                                                                                                                                                                      |
 
 Whole-file deletes proven from metadata remove file references directly, including on partitioned tables.
-Merge-on-read `MERGE` appends replacement data for updated rows.
+Version 3 merge-on-read supports both partitioned and non-partitioned tables.
+Merge-on-read `UPDATE` and `MERGE` append replacement data for updated rows.
 
 ## Metadata, Schema, and Layout
 
@@ -73,13 +76,13 @@ The following metadata and layout features apply across supported format version
 
 ## Version 2: Delete Files
 
-| Feature                              | Read               | Write              | Notes                                                                                                                            |
-| ------------------------------------ | ------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| Sequence numbers and inheritance     | :white_check_mark: | :white_check_mark: | Used to determine delete applicability.                                                                                          |
-| Manifest and data-file content types | :white_check_mark: | :white_check_mark: | Distinguishes data, equality deletes, and position deletes.                                                                      |
-| Position-delete files                | :white_check_mark: | Partial            | Written by version 2 merge-on-read `MERGE`. Existing files can still be read after an upgrade to version 3.                      |
-| Equality-delete files                | :white_check_mark: | Partial            | Reads bind keys by field ID and apply partition/sequence rules; write support is listed under [DML Operations](#dml-operations). |
-| Delete-aware scan planning           | :white_check_mark: | —                  | Applies supported deletes before returning rows, including scans with a limit.                                                   |
+| Feature                              | Read               | Write              | Notes                                                                                                                                               |
+| ------------------------------------ | ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sequence numbers and inheritance     | :white_check_mark: | :white_check_mark: | Used to determine delete applicability.                                                                                                             |
+| Manifest and data-file content types | :white_check_mark: | :white_check_mark: | Distinguishes data, equality deletes, and position deletes.                                                                                         |
+| Position-delete files                | :white_check_mark: | Partial            | Written by version 2 merge-on-read `MERGE`. Existing files can still be read after an upgrade to version 3.                                         |
+| Equality-delete files                | :white_check_mark: | Partial            | Written by version 2 merge-on-read `DELETE`; reads bind keys by field ID and apply partition/sequence rules. See [DML Operations](#dml-operations). |
+| Delete-aware scan planning           | :white_check_mark: | —                  | Applies supported deletes before returning rows, including scans with a limit.                                                                      |
 
 ## Version 3: Extended Types and Capabilities
 
@@ -90,9 +93,9 @@ The following metadata and layout features apply across supported format version
 | `timestamp_ns`, `timestamptz_ns`              | Partial            | Iceberg/Arrow conversion and defaults are implemented; Spark Connect result-schema conversion does not support nanosecond timestamps.                             |
 | Geometry and geography                        | :x:                | Binary storage conversion does not provide their logical type semantics.                                                                                          |
 | Initial and write defaults                    | Partial            | Applies defaults already present in metadata, including SQL `DEFAULT`. Declaring defaults in `CREATE TABLE` or changing them with `ALTER TABLE` is not supported. |
-| Row lineage and first-row-ID inheritance      | :white_check_mark: | Assigns lineage on writes; copy-on-write preserves row IDs and advances update sequence numbers.                                                                  |
+| Row lineage and first-row-ID inheritance      | :white_check_mark: | Assigns row IDs on insert. Copy-on-write and merge-on-read updates preserve row IDs and advance update sequence numbers.                                          |
 | Multi-argument partition/sort transforms      | :x:                | —                                                                                                                                                                 |
-| Deletion vectors in Puffin files              | :x:                | Neither read nor write; scans reject these delete artifacts.                                                                                                      |
+| Deletion vectors in Puffin files              | :white_check_mark: | Reads and writes vectors, combining prior positional deletes when replacing a data file's vector.                                                                 |
 | Encryption keys and AES-GCM stream encryption | :x:                | —                                                                                                                                                                 |
 
 ## Catalogs and Maintenance

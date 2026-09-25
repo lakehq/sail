@@ -162,23 +162,35 @@ WHEN MATCHED THEN UPDATE SET name = source.name
 WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
 ```
 
-To use merge-on-read `MERGE`, create a version 2 table with the operation's mode set explicitly:
+For version 3 merge-on-read, set the mode for each DML operation:
 
 ```sql
 CREATE TABLE iceberg_mor_users (id INT, name STRING)
 USING iceberg
 LOCATION 'file:///tmp/sail/iceberg_mor_users'
-TBLPROPERTIES ('format-version' = '2', 'write.merge.mode' = 'merge-on-read');
+TBLPROPERTIES (
+  'format-version' = '3',
+  'write.delete.mode' = 'merge-on-read',
+  'write.update.mode' = 'merge-on-read',
+  'write.merge.mode' = 'merge-on-read'
+);
 
-INSERT INTO iceberg_mor_users VALUES (1, 'Alice');
+INSERT INTO iceberg_mor_users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol');
+
+UPDATE iceberg_mor_users SET name = 'Alicia' WHERE id = 1;
+DELETE FROM iceberg_mor_users WHERE id = 2;
 
 MERGE INTO iceberg_mor_users AS target
-USING (SELECT 1 AS id, 'Alicia' AS name) AS source
+USING (SELECT * FROM VALUES (3, 'Caroline'), (4, 'Dave') AS s(id, name)) AS source
 ON target.id = source.id
-WHEN MATCHED THEN UPDATE SET name = source.name;
+WHEN MATCHED THEN UPDATE SET name = source.name
+WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
+
+SELECT * FROM iceberg_mor_users ORDER BY id;
 ```
 
-This mode writes position-delete files and replacement data files.
+The result contains `(1, 'Alicia')`, `(3, 'Caroline')`, and `(4, 'Dave')`.
+Version 3 merge-on-read records deleted row positions in Puffin deletion vectors and writes replacement data files for updated rows.
 See [DML Operations](./features#dml-operations) for the supported modes.
 
 ## Time Travel
