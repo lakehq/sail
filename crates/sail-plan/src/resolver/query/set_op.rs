@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
-use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
+use datafusion_common::{Column, DFSchema, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
@@ -112,7 +113,49 @@ impl PlanResolver<'_> {
                 // Conditional coercion needs the common UNION schema.
                 // TODO: Match Spark's ANSI string coercion for UNION inputs. DataFusion
                 //  widens numeric/STRING inputs to STRING, so typeof also reports STRING.
-                union.schema = Arc::new(coerce_union_schema(&union.inputs)?);
+                let coerced = coerce_union_schema(&union.inputs)?;
+                // Take only types and nullability from the coerced schema, since DataFusion lets
+                // the last input's field metadata (such as a Spark interval qualifier) win.
+                // Columns keep the loose type where DataFusion's common type differs from Spark:
+                // DATE with TIMESTAMP becomes a nanosecond TIMESTAMP_NTZ, and ANSI numeric with
+                // STRING becomes STRING, which store assignment rejects.
+                // TODO: Widen these columns and interval qualifiers like Spark.
+                let fields = union
+                    .schema
+                    .iter()
+                    .zip(coerced.fields())
+                    .enumerate()
+                    .map(|(i, ((qualifier, field), coerced_field))| {
+                        let types = union
+                            .inputs
+                            .iter()
+                            .map(|input| input.schema().field(i).data_type())
+                            .collect::<Vec<_>>();
+                        let has = |f: fn(&DataType) -> bool| types.iter().any(|t| f(t));
+                        let keep_loose_type =
+                            (has(|t| matches!(t, DataType::Date32 | DataType::Date64))
+                                && has(|t| matches!(t, DataType::Timestamp(_, _))))
+                                || (self.config.ansi_mode
+                                    && has(DataType::is_string)
+                                    && has(DataType::is_numeric));
+                        let field = if keep_loose_type {
+                            Arc::clone(field)
+                        } else {
+                            Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_data_type(coerced_field.data_type().clone())
+                                    .with_nullable(coerced_field.is_nullable()),
+                            )
+                        };
+                        (qualifier.cloned(), field)
+                    })
+                    .collect();
+                union.schema = Arc::new(DFSchema::new_with_metadata(
+                    fields,
+                    union.schema.metadata().clone(),
+                )?);
                 let plan = LogicalPlan::Union(union);
                 if is_all {
                     Ok(plan)

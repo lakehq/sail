@@ -554,6 +554,40 @@ Feature: Delta Lake Merge
         | STRICT |
         | LEGACY |
 
+    Scenario: A UNION source mixing INT and STRING values is assigned with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      Given variable location for temporary directory delta_merge_union_source
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_union_source
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_union_source (id INT, i INT, s STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_union_source VALUES (1, 10, '5'), (2, 20, NULL)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_union_source AS t
+        USING (SELECT 1 AS id, 5 AS v UNION ALL SELECT 3 AS id, '7' AS v) AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET t.i = s.v
+        WHEN NOT MATCHED THEN INSERT (id, i, s) VALUES (s.id, s.v, 'n')
+        """
+      When query
+        """
+        SELECT id, i, s FROM delta_merge_union_source ORDER BY id
+        """
+      Then query result ordered
+        | id | i  | s    |
+        | 1  | 5  | 5    |
+        | 2  | 20 | NULL |
+        | 3  | 7  | n    |
+
   Rule: Matched updates, deletes, and default inserts
     Background:
       Given variable location for temporary directory merge_basic

@@ -152,7 +152,6 @@ Feature: if output schema
         """
       Then query error CAST_INVALID_INPUT
 
-    @sail-bug
     Scenario: ANSI UNION exposes its numeric common type to typeof
       Given config spark.sql.ansi.enabled = true
       When query

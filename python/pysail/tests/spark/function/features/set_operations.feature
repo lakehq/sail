@@ -211,3 +211,34 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query result
         | id |
+
+  Rule: UNION column types
+
+    Scenario: UNION keeps interval values from inputs with different qualifiers
+      When query
+        """
+        SELECT k, CAST(v AS INT) AS months
+        FROM (
+          SELECT 1 AS k, INTERVAL '14' MONTH AS v
+          UNION ALL
+          SELECT 2 AS k, INTERVAL '1' YEAR AS v
+        ) AS q
+        ORDER BY k
+        """
+      Then query result ordered
+        | k | months |
+        | 1 | 14     |
+        | 2 | 12     |
+
+    Scenario: UNION of DATE and TIMESTAMP matches DATE values in a non-UTC session time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT d
+        FROM VALUES (DATE '2024-06-15'), (DATE '2024-06-16') AS t(d)
+        WHERE d IN (SELECT DATE '2024-06-15' UNION ALL SELECT TIMESTAMP '2000-01-01 00:00:00')
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-06-15 |
