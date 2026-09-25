@@ -27,10 +27,13 @@ impl PlanResolver<'_> {
         let output_schema = Arc::clone(input.schema());
         // Most predicates only reference the input's output. Resolving them against it
         // first avoids building the descendant schema, which grows with the chain depth.
-        // An outer reference may instead belong to a descendant, so it takes the full path.
-        if let Ok(predicate) = self
-            .resolve_expression(condition.clone(), &output_schema, state)
-            .await
+        // Subquery filters need descendant resolution before outer references. Avoid
+        // resolving them speculatively: nested correlated filters would otherwise
+        // resolve the entire subquery tree twice at each level.
+        if state.get_outer_query_schema().is_none()
+            && let Ok(predicate) = self
+                .resolve_expression(condition.clone(), &output_schema, state)
+                .await
             && !predicate.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn(..))))?
         {
             return Ok(LogicalPlan::Filter(Filter::try_new(
@@ -131,7 +134,7 @@ impl PlanResolver<'_> {
 
     /// Only cross operators that can carry additional columns without changing
     /// their semantics. Spark also stops at aliases and multi-input operators.
-    fn filter_missing_input_child<'a>(
+    pub(in crate::resolver) fn filter_missing_input_child<'a>(
         plan: &'a LogicalPlan,
         state: &PlanResolverState,
     ) -> Option<&'a LogicalPlan> {

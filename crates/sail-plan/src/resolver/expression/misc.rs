@@ -268,6 +268,26 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        fn discard_failed_filter_input(
+            expr: &expr::Expr,
+            schema: &DFSchemaRef,
+            state: &mut PlanResolverState,
+        ) {
+            let index = state.get_filter_schemas(schema).and_then(|schemas| {
+                expr.column_refs()
+                    .into_iter()
+                    .filter_map(|column| {
+                        schemas.iter().position(|schema| schema.has_column(column))
+                    })
+                    .max()
+            });
+            if let Some(index) = index.filter(|index| *index > 0) {
+                // Spark discards tentative descendant bindings when extracting a
+                // struct field fails, then retries earlier outputs and outer references.
+                state.discard_filter_schemas_from(index);
+            }
+        }
+
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -299,7 +319,20 @@ impl PlanResolver<'_> {
                     value: Some(name.one()?),
                 }
             }
-            _ => return Err(PlanError::invalid("extraction must be a literal")),
+            _ => {
+                // Array-index validation preserves the resolved array binding in Spark.
+                if !matches!(
+                    data_type,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                ) {
+                    discard_failed_filter_input(&expr, schema, state);
+                }
+                return Err(PlanError::invalid("extraction must be a literal"));
+            }
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
@@ -357,6 +390,7 @@ impl PlanResolver<'_> {
             }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
+                    discard_failed_filter_input(&expr, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"
                     )));
@@ -368,6 +402,7 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>()
                     .one()
                 else {
+                    discard_failed_filter_input(&expr, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "missing or ambiguous field: {name}"
                     )));
@@ -375,6 +410,7 @@ impl PlanResolver<'_> {
                 expr.field(name)
             }
             _ => {
+                discard_failed_filter_input(&expr, schema, state);
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
                 )));

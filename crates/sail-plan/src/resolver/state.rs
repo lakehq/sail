@@ -7,6 +7,7 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 
 /// The field information for fields in the logical plan.
@@ -229,12 +230,20 @@ impl PlanResolverState {
     }
 
     pub fn register_filter_input_boundary(&mut self, plan: &LogicalPlan) {
-        // Empty outputs have no IDs distinguishing them from unrelated projections.
-        // Their imported descendants already end at an empty alias or table scan.
-        if !plan.schema().fields().is_empty() {
-            self.filter_input_boundaries
-                .push(Self::filter_input_boundary_key(plan));
+        let mut plan = plan;
+        // Empty outputs can share a schema with unrelated plans. Stop recovery at
+        // the first nonempty input instead, whose field IDs distinguish the boundary.
+        while plan.schema().fields().is_empty() {
+            let Some(child) = PlanResolver::filter_missing_input_child(plan, self) else {
+                return;
+            };
+            if !child.schema().fields().is_empty() {
+                break;
+            }
+            plan = child;
         }
+        self.filter_input_boundaries
+            .push(Self::filter_input_boundary_key(plan));
     }
 
     pub fn is_filter_input_boundary(&self, plan: &LogicalPlan) -> bool {

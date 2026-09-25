@@ -697,3 +697,65 @@ def test_filter_missing_attribute_ignores_internal_auxiliaries(spark, operation,
     else:
         with pytest.raises(AnalysisException):
             projected.where(predicate).collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize(
+    "failure", ["missing-field", "non-struct", "invalid-selector", "dynamic-selector", "dynamic-primitive-selector"]
+)
+def test_filter_correlated_extract_discards_invalid_descendant(spark, failure):
+    if failure in ("invalid-selector", "dynamic-selector", "dynamic-primitive-selector"):
+        outer_value = F.create_map(F.lit(1), F.col("id"))
+        field = F.lit(0) + F.lit(1) if failure.startswith("dynamic-") else 1
+        payload = {1: 1}
+    else:
+        outer_value = F.struct(F.col("id").alias("x"))
+        field = "x"
+        payload = Row(x=1)
+    outer = spark.range(1, 3).select(outer_value.alias("payload"))
+    value = F.lit(42) if failure in ("non-struct", "dynamic-primitive-selector") else F.struct(F.lit(42).alias("y"))
+    inner = (
+        spark.range(1)
+        .select(value.alias("payload"))
+        .select(F.lit(1).alias("keep"))
+        .where(F.col("payload").outer()[field] == 1)
+    )
+    assert outer.where(inner.exists()).collect() == [Row(payload=payload)]
+
+
+@pytest.mark.parametrize("with_cte", [False, True], ids=["without-cte", "with-cte"])
+@pytest.mark.parametrize("operation", ["project", "limit", "sorted-window"])
+def test_filter_empty_with_query_preserves_resolution_boundary(spark, with_cte, operation):
+    query = "SELECT payload.* FROM (SELECT struct() AS payload, id FROM range(1))"
+    if with_cte:
+        query = "WITH unused AS (SELECT 1) " + query
+    if operation == "limit":
+        query += " LIMIT 1"
+    elif operation == "sorted-window":
+        query += " ORDER BY id"
+
+    projected = spark.sql(query)
+    if operation == "sorted-window":
+        projected = projected.withColumn("rn", F.row_number().over(Window.orderBy(F.lit(1))))
+    expected = [Row(rn=1)] if operation == "sorted-window" else [Row()]
+    assert projected.collect() == expected
+
+    if with_cte:
+        with pytest.raises(AnalysisException):
+            projected.where("id = 0").collect()
+    else:
+        result = projected.where("id = 0")
+        assert result.collect() == expected
+        assert result.schema == projected.schema
+
+
+@pytest.mark.timeout(30)
+def test_filter_nested_correlated_subquery_schema(spark):
+    # Check analysis separately from execution, which also decorrelates the subqueries.
+    query = ""
+    for level in range(20, 0, -1):
+        nested = f" AND EXISTS ({query})" if query else ""
+        query = f"SELECT 1 FROM VALUES (1) t{level}(id) WHERE t{level}.id = t{level - 1}.id{nested}"  # noqa: S608
+    query = f"SELECT * FROM VALUES (1) t0(id) WHERE EXISTS ({query})"  # noqa: S608
+
+    assert spark.sql(query).schema == StructType([StructField("id", IntegerType(), False)])
