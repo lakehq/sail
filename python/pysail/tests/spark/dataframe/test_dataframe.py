@@ -96,6 +96,74 @@ def test_dataframe_describe_and_summary_string_column(spark):
     }
 
 
+def test_dataframe_describe_and_summary_numeric_string_column(spark):
+    """Include numeric strings in numeric statistics while counting all strings."""
+    df = spark.createDataFrame([("10",), ("20",), ("not-a-number",), (None,)], "value STRING")
+
+    assert {row.summary: row.value for row in df.describe("value").collect()} == {
+        "count": "3",
+        "mean": "15.0",
+        "stddev": "7.0710678118654755",
+        "min": "10",
+        "max": "not-a-number",
+    }
+    summary = df.summary("count", "mean", "stddev", "min", "max").collect()
+    assert {row.summary: row.value for row in summary} == {
+        "count": "3",
+        "mean": "15.0",
+        "stddev": "7.0710678118654755",
+        "min": "10",
+        "max": "not-a-number",
+    }
+
+
+def test_dataframe_describe_and_summary_ignore_unsupported_columns(spark):
+    """Exclude unsupported columns from statistics on a mixed schema."""
+    df = spark.createDataFrame(
+        [(1, "10", True), (2, "not-a-number", False)],
+        "id LONG, value STRING, flag BOOLEAN",
+    )
+
+    describe = df.describe()
+    assert describe.columns == ["summary", "id", "value"]
+    assert {row.summary for row in describe.collect()} == {"count", "mean", "stddev", "min", "max"}
+
+    summary = df.summary()
+    assert summary.columns == ["summary", "id", "value"]
+    assert {row.summary for row in summary.collect()} == {
+        "count",
+        "mean",
+        "stddev",
+        "min",
+        "25%",
+        "50%",
+        "75%",
+        "max",
+    }
+
+
+def test_dataframe_describe_and_summary_unsupported_column_only(spark):
+    """Return only statistic labels when every selected column is unsupported."""
+    df = spark.createDataFrame([(True,), (False,)], "flag BOOLEAN")
+
+    describe = df.describe("flag")
+    assert describe.columns == ["summary"]
+    assert {row.summary for row in describe.collect()} == {"count", "mean", "stddev", "min", "max"}
+
+    summary = df.summary()
+    assert summary.columns == ["summary"]
+    assert {row.summary for row in summary.collect()} == {
+        "count",
+        "mean",
+        "stddev",
+        "min",
+        "25%",
+        "50%",
+        "75%",
+        "max",
+    }
+
+
 def test_dataframe_with_column_alias(spark):
     df = spark.createDataFrame(
         schema="id INTEGER, value STRING",

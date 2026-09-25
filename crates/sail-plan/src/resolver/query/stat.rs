@@ -37,7 +37,18 @@ impl PlanResolver<'_> {
             input.schema().columns()
         } else {
             self.resolve_columns(input.schema(), &columns, state)?
-        };
+        }
+        .into_iter()
+        .filter(|column| {
+            input.schema().field_from_column(column).is_ok_and(|field| {
+                field.data_type().is_numeric()
+                    || matches!(
+                        field.data_type(),
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                    )
+            })
+        })
+        .collect();
         let statistics: HashSet<String> = if statistics.is_empty() {
             HashSet::from([
                 "count".to_string(),
@@ -221,9 +232,13 @@ impl PlanResolver<'_> {
             }
         }
 
-        let stats_plan = LogicalPlanBuilder::from(input)
-            .aggregate(Vec::<Expr>::new(), all_aggregates)?
-            .build()?;
+        let stats_plan = if all_aggregates.is_empty() {
+            LogicalPlanBuilder::empty(true).build()?
+        } else {
+            LogicalPlanBuilder::from(input)
+                .aggregate(Vec::<Expr>::new(), all_aggregates)?
+                .build()?
+        };
 
         let summary_alias = state.register_field_name("summary");
         let create_stat_row =
@@ -246,6 +261,10 @@ impl PlanResolver<'_> {
         let mut union_plan = None;
         for stat_type in statistics {
             let stat_type = stat_type.as_str();
+            let is_supported_statistic = matches!(
+                stat_type,
+                "count" | "mean" | "stddev" | "min" | "25%" | "50%" | "75%" | "max"
+            );
             let mut stats_by_column = Vec::new();
             for column in &columns {
                 let column_name = column.name().to_string();
@@ -304,7 +323,7 @@ impl PlanResolver<'_> {
                 }
             }
 
-            if !stats_by_column.is_empty() {
+            if is_supported_statistic {
                 let stat_row = create_stat_row(stat_type, stats_by_column)?;
                 union_plan = Some(match union_plan {
                     Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
