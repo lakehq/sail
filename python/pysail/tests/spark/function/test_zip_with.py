@@ -203,3 +203,35 @@ def test_map_zip_with_literal_struct_key_nullability(spark):
     )
     assert result.schema[0].dataType.keyType == T.StructType([T.StructField("x", T.IntegerType(), False)])
     assert list(result.first().result.values()) == [5]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT zip_with(array(1), array(2), (x, y) -> struct(x, y))",
+            "zip_with(array(1), array(2), lambdafunction(struct(namedlambdavariable(), "
+            "namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+        ),
+        (
+            "SELECT map_zip_with(map('a', 1), map('a', 2), (k, x, y) -> struct(x, y))",
+            "map_zip_with(map(a, 1), map(a, 2), lambdafunction(struct(namedlambdavariable(), "
+            "namedlambdavariable()), namedlambdavariable(), namedlambdavariable(), namedlambdavariable()))",
+        ),
+        (
+            "SELECT zip_with(array(struct(1)), array(struct(2)), (x, y) -> x)",
+            "zip_with(array(struct(1)), array(struct(2)), lambdafunction(namedlambdavariable(), "
+            "namedlambdavariable(), namedlambdavariable()))",
+        ),
+    ],
+)
+def test_zip_functions_preserve_explicit_struct_column_names(spark, query, expected):
+    assert spark.sql(query).columns == [expected]
+
+
+def test_zip_with_preserves_connect_struct_column_name(spark):
+    result = spark.range(1).select(F.zip_with(F.array(F.lit(1)), F.array(F.lit(2)), lambda x, y: F.struct(x, y)))
+    assert result.columns == [
+        "zip_with(array(1), array(2), lambdafunction(struct(namedlambdavariable(), "
+        "namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))"
+    ]

@@ -516,6 +516,8 @@ fn zip_collections(input: ScalarFunctionInput, map: bool) -> PlanResult<expr::Ex
             let argument = if argument.get_type(schema)? == data_type {
                 argument
             } else {
+                // TODO: Match Spark timestamp formatting and DST resolution when shared
+                // nested map casts support them (map_zip_with_deferred_casts.feature).
                 cast(argument, data_type)
             };
             lambda_with_fresh_parameter(argument, "__zip_collection")

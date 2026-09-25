@@ -113,3 +113,14 @@ Feature: map_zip_with coerces keys using Spark's wider types
         | mixed interval family | true  | INTERVAL '1' DAY   | INTERVAL '1' MONTH |
         | mixed interval family | false | INTERVAL '1' MONTH | INTERVAL '1' DAY   |
         | mixed interval family | false | INTERVAL '1' DAY   | INTERVAL '1' MONTH |
+
+  Rule: Map zip keys must support Spark ordering
+
+    Scenario: Calendar interval map keys are rejected
+      When query
+        """
+        SELECT map_values(map_zip_with(map(make_interval(0, 1, 0, 2, 0, 0, 0), 1),
+                                       map(make_interval(0, 1, 0, 2, 0, 0, 0), 2),
+                                       (k, x, y) -> x + y))
+        """
+      Then query error (?i)order|key|types

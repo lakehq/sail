@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::{concat, take, take_arrays};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, IntervalUnit};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
@@ -457,7 +457,8 @@ fn common_key_type(
     case_sensitive: bool,
 ) -> Option<DataType> {
     match (left, right) {
-        (DataType::Map(..), _) | (_, DataType::Map(..)) => None,
+        (DataType::Map(..) | DataType::Interval(IntervalUnit::MonthDayNano), _)
+        | (_, DataType::Map(..) | DataType::Interval(IntervalUnit::MonthDayNano)) => None,
         // Keep Spark's microsecond timestamp precision instead of DataFusion's
         // date/timestamp comparison coercion, which produces nanoseconds.
         (DataType::Date32, timestamp @ DataType::Timestamp(..))

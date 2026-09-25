@@ -39,7 +39,7 @@ impl PlanResolver<'_> {
             named_arguments,
             is_distinct,
             is_user_defined_function: _,
-            is_internal: _,
+            is_internal,
             ignore_nulls,
             filter,
             order_by,
@@ -295,7 +295,9 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = if canonical_function_name == "struct" && state.config().anonymous_lambda_display
+        let name = if canonical_function_name == "struct"
+            && is_internal == Some(true)
+            && state.config().anonymous_lambda_display
         {
             let DataType::Struct(fields) = func.get_type(schema)? else {
                 return Err(PlanError::internal("struct function has a non-struct type"));
