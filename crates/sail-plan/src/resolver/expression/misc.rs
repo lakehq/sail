@@ -272,7 +272,7 @@ impl PlanResolver<'_> {
             expr: &expr::Expr,
             schema: &DFSchemaRef,
             state: &mut PlanResolverState,
-        ) {
+        ) -> bool {
             let index = state.get_filter_schemas(schema).and_then(|schemas| {
                 expr.column_refs()
                     .into_iter()
@@ -285,9 +285,13 @@ impl PlanResolver<'_> {
                 // Spark discards tentative descendant bindings when extracting a
                 // struct field fails, then retries earlier outputs and outer references.
                 state.discard_filter_schemas_from(index);
+                true
+            } else {
+                false
             }
         }
 
+        let is_attribute = matches!(&child, spec::Expr::UnresolvedAttribute { .. });
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -314,6 +318,14 @@ impl PlanResolver<'_> {
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
+                if is_attribute
+                    && matches!(data_type, DataType::Struct(_))
+                    && discard_failed_filter_input(&expr, schema, state)
+                {
+                    return Err(PlanError::invalid("extraction must be a literal"));
+                }
+                // TODO: Reject dynamic struct selectors outside recovered attributes once
+                // the spec distinguishes SQL field selectors from column expressions.
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),

@@ -142,3 +142,14 @@ Feature: struct function
       Then query result
         | result |
         | true   |
+
+  Rule: Struct field extraction
+
+    @sail-bug
+    Scenario: struct field extraction rejects a column selector
+      When query
+        """
+        SELECT named_struct('selector', 1)[selector]
+        FROM VALUES ('selector') AS t(selector)
+        """
+      Then query error (?i)(INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal)

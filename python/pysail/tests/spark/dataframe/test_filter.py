@@ -723,6 +723,27 @@ def test_filter_correlated_extract_discards_invalid_descendant(spark, failure):
     assert outer.where(inner.exists()).collect() == [Row(payload=payload)]
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("selector", ["column", "sql-column", "sql-field"])
+def test_filter_correlated_extract_preserves_selector_kind(spark, selector):
+    outer = spark.createDataFrame(
+        [({"selector": 1}, "selector"), ({"selector": 2}, "selector")],
+        "payload map<string,int>, selector string",
+    )
+    inner = spark.range(1).select(F.struct(F.lit(42).alias("selector")).alias("payload")).select(F.lit(1).alias("keep"))
+    if selector == "column":
+        predicate = F.col("payload").outer()[F.col("selector").outer()] == 1
+    elif selector == "sql-column":
+        predicate = "payload[selector] = 1"
+    else:
+        predicate = "coalesce(payload, payload).selector = 42"
+    result = outer.where(inner.where(predicate).exists())
+    expected = [Row(payload={"selector": 1}, selector="selector")]
+    if selector == "sql-field":
+        expected.append(Row(payload={"selector": 2}, selector="selector"))
+    assert result.collect() == expected
+
+
 @pytest.mark.parametrize("with_cte", [False, True], ids=["without-cte", "with-cte"])
 @pytest.mark.parametrize("operation", ["project", "limit", "sorted-window"])
 def test_filter_empty_with_query_preserves_resolution_boundary(spark, with_cte, operation):
