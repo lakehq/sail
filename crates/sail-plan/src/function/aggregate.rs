@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use datafusion::functions_aggregate::{
     approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
     covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
+use datafusion::functions_nested::sort::ArraySort;
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::prelude::SessionContext;
@@ -55,6 +57,14 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
+use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_zip_with::SparkZipWith;
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
@@ -861,7 +871,16 @@ pub(super) fn approx_percentile_arguments(
         let has_non_foldable_function = argument.exists(|expression| {
             Ok(match expression {
                 expr::Expr::HigherOrderFunction(function) => {
+                    let f = function.func.inner().as_ref() as &dyn Any;
                     is_higher_order_function(function.func.name())
+                        || f.is::<SparkArrayAggregate>()
+                        || f.is::<SparkArrayFilter>()
+                        || f.is::<SparkMapFilter>()
+                        || f.is::<SparkArrayTransform>()
+                        || f.is::<SparkArrayExists>()
+                        || f.is::<SparkArrayForall>()
+                        || f.is::<SparkArraySort>()
+                        || f.is::<SparkZipWith>()
                 }
                 expr::Expr::ScalarFunction(function)
                     if {
@@ -895,7 +914,7 @@ pub(super) fn approx_percentile_arguments(
                 }
                 // Only no-comparator array_sort lowers to ASC/NULLS LAST.
                 // Spark's foldable sort_array uses ASC/FIRST or DESC/LAST.
-                expr::Expr::ScalarFunction(function) if function.func.name() == "array_sort" => {
+                expr::Expr::ScalarFunction(function) if function.func.inner().is::<ArraySort>() => {
                     function.args.len() == 3
                         && function.args.get(1) == Some(&lit("ASC"))
                         && function.args.get(2) == Some(&lit("NULLS LAST"))
