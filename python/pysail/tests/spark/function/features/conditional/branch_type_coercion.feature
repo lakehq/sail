@@ -74,6 +74,72 @@ Feature: the common type of the branches of a CASE or an IF
         | a float beside a decimal  | false | CASE WHEN true THEN CAST(0.1 AS FLOAT) ELSE CAST(2.25 AS DECIMAL(10,2)) END | double |
         | an int beside a decimal   | false | CASE WHEN true THEN 1 ELSE CAST(1.5 AS DECIMAL(10,1)) END            | decimal(11,1) |
 
+  Rule: STRING branches use Spark's scalar promotion
+
+    # ANSI uses `AnsiStringPromotionTypeCoercion.findWiderTypeForString`: integral values become
+    # BIGINT, fractional values (including DECIMAL) become DOUBLE, and other atomic peers remain
+    # their own type. Legacy `stringPromotion` instead returns STRING for every atomic peer except
+    # BOOLEAN and BINARY (`AnsiTypeCoercion.scala:143-147`, `TypeCoercion.scala:112-121`).
+    Scenario Outline: <case> is <type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                               | ansi  | expression                                                   | type   |
+        | a CASE of an int and a string      | true  | CASE WHEN true THEN 1 ELSE '2' END                          | bigint |
+        | an IF of an int and a string       | true  | if(true, 1, '2')                                            | bigint |
+        | coalesce of an int and a string    | true  | coalesce(CAST(NULL AS INT), '2')                            | bigint |
+        | an IF of a decimal and a string    | true  | if(true, '1', CAST(2 AS DECIMAL(10,2)))                     | double |
+        | a CASE of an int and a string      | false | CASE WHEN true THEN 1 ELSE '2' END                          | string |
+
+  Rule: decimal container promotion preserves Spark nested nullability
+
+    # `widerDecimalType` calls `boundedPreferIntegralDigits`: when precision exceeds 38 it drops
+    # fractional digits first, so DECIMAL(38,2) and DECIMAL(38,10) widen to DECIMAL(38,2).
+    Scenario: an array of capped decimals preserves integral digits
+      When query
+        """
+        SELECT typeof(array(CAST(1 AS DECIMAL(38,2)), CAST(1 AS DECIMAL(38,10)))) AS result_type
+        """
+      Then query result
+        | result_type          |
+        | array<decimal(38,2)> |
+
+    # `findTypeForComplex` uses only child nullability and `Cast.forceNullable` for the common
+    # type (`TypeCoercionHelper.scala:144-147`); widening these decimal elements is safe.
+    Scenario: if keeps non-null decimal array elements when their common type widens
+      When query
+        """
+        SELECT if(true, array(CAST(1 AS DECIMAL(12,2))), array(CAST(1 AS DECIMAL(14,4)))) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: decimal(14,4) (containsNull = false)
+        """
+
+    Scenario: if widens timestamp and timestamp_ntz map keys to timestamp
+      When query
+        """
+        SELECT CAST(
+          if(
+            true,
+            map(to_timestamp('2020-01-01 00:00:00'), 1),
+            map(to_timestamp_ntz('2020-01-01 00:00:00'), 2)
+          ) AS STRING
+        ) AS result
+        """
+      Then query result
+        | result                     |
+        | {2020-01-01 00:00:00 -> 1} |
+
   Rule: branches with no common type are refused
 
     # CaseWhenCoercion and IfCoercion leave incompatible branches unchanged;
@@ -86,10 +152,12 @@ Feature: the common type of the branches of a CASE or an IF
       Then query error (?i)cannot resolve
 
       Examples:
-        | case                       | expression                                        |
-        | a CASE of an INT and a DATE | CASE WHEN true THEN 1 ELSE DATE'2024-01-01' END  |
-        | a CASE of an INT and an ARRAY | CASE WHEN true THEN 1 ELSE array(1) END        |
-        | an IF of an INT and a DATE  | if(true, 1, DATE'2024-01-01')                     |
+        | case                                  | expression                                         |
+        | a CASE of an INT and a DATE           | CASE WHEN true THEN 1 ELSE DATE'2024-01-01' END    |
+        | a CASE of an INT and an ARRAY         | CASE WHEN true THEN 1 ELSE array(1) END            |
+        | an IF of an INT and a DATE            | if(true, 1, DATE'2024-01-01')                      |
+        | an IF of maps with incompatible keys  | if(true, map('1', 1), map(2, 2))                   |
+        | a CASE of maps with incompatible keys | CASE WHEN true THEN map('1', 1) ELSE map(2, 2) END |
 
   Rule: branches that are structs type only when their field names match
 

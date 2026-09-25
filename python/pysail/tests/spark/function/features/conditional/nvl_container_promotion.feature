@@ -2,6 +2,42 @@ Feature: nvl over containers whose leaves need a promotion
 
   Rule: nvl of two containers never fails where Spark types them
 
+    # `findTypeForComplex` rejects MAP key pairs whose implicit cast can return NULL
+    # (`TypeCoercionHelper.scala:149-155`). `Cast.forceNullable` distinguishes TIMESTAMP from
+    # TIMESTAMP_NTZ, so DATE must not silently coerce this key pair (`Cast.scala:439-443`).
+    Scenario: nvl refuses map keys of date and timestamp_ntz
+      When query
+        """
+        SELECT nvl(
+          map(DATE'2024-01-01', 1),
+          map(TIMESTAMP_NTZ'2024-01-01 00:00:00', 2)
+        ) AS value
+        """
+      Then query error (?i)DATA_DIFF_TYPES|Cannot automatically convert
+
+    # The MAP-key safety check applies to keys only. Spark still widens DATE map values to
+    # TIMESTAMP (`TypeCoercion.scala:94`), so rejecting this pair would turn a valid query into a
+    # regression.
+    Scenario: nvl widens map values from date to timestamp
+      When query
+        """
+        SELECT CAST(nvl(map('a', DATE'2020-01-01'), map('a', TIMESTAMP'2020-01-01 00:00:00')) AS STRING) AS result
+        """
+      Then query result
+        | result                     |
+        | {a -> 2020-01-01 00:00:00} |
+
+    # Two day-time ranges widen to their covering range, rather than to the default DAY TO SECOND
+    # (`TypeCoercion.scala:96-99`).
+    Scenario: nvl widens map day-time interval values to their covering range
+      When query
+        """
+        SELECT CAST(nvl(map('a', INTERVAL '1' DAY), map('a', INTERVAL '2' HOUR)) AS STRING) AS result
+        """
+      Then query result
+        | result                             |
+        | {a -> INTERVAL '1 00' DAY TO HOUR} |
+
     # `Nvl` is `Coalesce(Seq(left, right))` (`nullExpressions.scala:246`), and `coalesce` widens two
     # containers leaf by leaf (`TypeCoercionHelper.scala:141`, string promotion included,
     # `TypeCoercion.scala:168`), so every pair below is answered by Spark.
@@ -81,6 +117,73 @@ Feature: nvl over containers whose leaves need a promotion
          |    |-- element: long (containsNull = true)
         """
 
+    # `findTypeForComplex` adds `Cast.forceNullable` to the nested flag. Spark's decimal target
+    # loses fractional digits here, so `canNullSafeCastToDecimal` is false (`Cast.scala:445`).
+    Scenario: decimal array promotion records a nullable narrowing decimal cast
+      When query
+        """
+        SELECT if(true, array(CAST(1 AS DECIMAL(20,10))), array(CAST(1 AS DECIMAL(38,30)))) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: decimal(38,28) (containsNull = true)
+        """
+
+    # `findWiderTypeForDecimal` first turns BIGINT into DECIMAL(20,0), then bounds the common
+    # DECIMAL(50,30) to DECIMAL(38,18) (`TypeCoercionHelper.scala:190-193`).
+    Scenario: integral and decimal arrays preserve integral digits when their common decimal caps
+      When query
+        """
+        SELECT if(true, array(CAST(1 AS BIGINT)), array(CAST(1 AS DECIMAL(38,30)))) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: decimal(38,18) (containsNull = true)
+        """
+
+    Scenario: a narrowing decimal cast makes an array element nullable on its own
+      When query
+        """
+        SELECT array(CAST(1 AS DECIMAL(38,30))) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: decimal(38,30) (containsNull = true)
+        """
+
+    # Every DECIMAL is a Spark `FractionalType`, so a cast to an integral type can turn a valid
+    # finite value into NULL. `Cast.forceNullable` therefore marks the ARRAY element nullable
+    # (`Cast.scala:445-446`).
+    Scenario: a decimal cast to tinyint makes an array element nullable
+      When query
+        """
+        SELECT array(CAST(CAST(99999 AS DECIMAL(5,0)) AS TINYINT)) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: byte (containsNull = true)
+        """
+
+    Scenario: a bigint array has non-null elements before conditional promotion
+      When query
+        """
+        SELECT array(CAST(1 AS BIGINT)) AS value
+        """
+      Then query schema
+        """
+        root
+         |-- value: array (nullable = false)
+         |    |-- element: long (containsNull = false)
+        """
+
     Scenario: ANSI promotion refuses a map key cast that could produce NULL
       Given config spark.sql.ansi.enabled = true
       When query
@@ -88,6 +191,52 @@ Feature: nvl over containers whose leaves need a promotion
         SELECT nvl(map('1', 1), map(2, 2)) AS value
         """
       Then query error (?i)DATA_DIFF_TYPES
+
+    Scenario: IF reports Spark's data-difference error template
+      When query
+        """
+        SELECT if(true, 1, DATE'2024-01-01') AS value
+        """
+      Then query error (?i)Input to `if` should all be the same type, but it's \["INT", "DATE"\]
+
+    Scenario: CASE reports Spark's analyzed function name in a data-difference error
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 ELSE DATE'2024-01-01' END AS value
+        """
+      Then query error (?i)Input to `casewhen` should all be the same type, but it's \["INT", "DATE"\]
+
+    # `CaseWhen.checkInputDataTypes` contributes the complete SQL expression to the surrounding
+    # analysis error, while the function parameter remains `casewhen`
+    # (`conditionalExpressions.scala:220-228`).
+    Scenario: CASE names its whole expression in a data-difference error
+      When query
+        """
+        SELECT CASE WHEN true THEN array(1) ELSE 1 END AS value
+        """
+      Then query error (?i)Cannot resolve "CASE WHEN true THEN array[(]1[)] ELSE 1 END"
+
+    Scenario: NVL reports its coalesce replacement in a data-difference error
+      When query
+        """
+        SELECT nvl(1, DATE'2024-01-01') AS value
+        """
+      Then query error (?i)Input to `coalesce` should all be the same type
+
+    # Spark fills DATATYPE_MISMATCH's `<sqlExpr>` parameter with the complete resolved
+    # expression, including nvl's coalesce replacement (`error-conditions.json`).
+    Scenario Outline: <fn> names the whole expression in its data-difference error
+      When query
+        """
+        SELECT <expression> AS value
+        """
+      Then query error (?i)Cannot resolve "<rendered>"
+
+      Examples:
+        | fn       | expression                    | rendered                                 |
+        | coalesce | coalesce(1, DATE'2024-01-01') | coalesce[(]1, DATE '2024-01-01'[)]       |
+        | nvl      | nvl(1, DATE'2024-01-01')      | coalesce[(]1, DATE '2024-01-01'[)]       |
+        | if       | if(true, 1, DATE'2024-01-01') | [(]IF[(]true, 1, DATE '2024-01-01'[)][)] |
 
     Scenario: case-sensitive ANSI nvl refuses struct fields with different case
       Given config spark.sql.ansi.enabled = true
@@ -97,6 +246,18 @@ Feature: nvl over containers whose leaves need a promotion
         SELECT nvl(named_struct('A', 1), named_struct('a', 2)) AS value
         """
       Then query error (?i)DATA_DIFF_TYPES
+
+    # Spark's default resolver is Unicode case-insensitive, not ASCII-only
+    # (`SQLConf.resolver`, `caseSensitiveAnalysis`).
+    Scenario: case-insensitive nvl widens struct fields with Unicode case variants
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT CAST(nvl(named_struct('Ä', 1), named_struct('ä', 2)) AS STRING) AS result
+        """
+      Then query result
+        | result |
+        | {1}    |
 
     # `findTypeForComplex` pairs struct fields through `SQLConf.get.resolver` and returns None when a
     # pair of names does not match (`TypeCoercionHelper.scala:164-176`), so Spark refuses the pair

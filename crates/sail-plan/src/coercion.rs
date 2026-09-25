@@ -1,11 +1,56 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::type_coercion::binary::type_union_resolution;
 use datafusion_expr::{ExprSchemable, expr};
+use icu_casemap::CaseMapper;
+use regex::Regex;
 use sail_common::spec;
+
+// Spark 4.2 resolves case-insensitive names with Java 17 `String.equalsIgnoreCase`.
+// Its Unicode table is version 13, so preserve identity mappings for later-assigned code points.
+// TODO: centralize this in Sail's general resolver. Other resolver paths still use
+// `eq_ignore_ascii_case`; widening structs needs the exact comparison here to avoid changing
+// Spark's accepted/rejected verdict.
+#[expect(clippy::expect_used)]
+static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
+});
+
+fn spark_field_names_equal(left: &str, right: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        return left == right;
+    }
+    let case_mapper = CaseMapper::new();
+    let mut left_chars = left.chars();
+    let mut right_chars = right.chars();
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (None, None) => return true,
+            (Some(left), Some(right)) if java_char_eq_ignore_case(&case_mapper, left, right) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+    let mut left_buffer = [0; 4];
+    let mut right_buffer = [0; 4];
+    if !(JDK_17_ASSIGNED_CHARACTER.is_match(left.encode_utf8(&mut left_buffer))
+        && JDK_17_ASSIGNED_CHARACTER.is_match(right.encode_utf8(&mut right_buffer)))
+    {
+        return false;
+    }
+    let left_upper = case_mapper.simple_uppercase(left);
+    let right_upper = case_mapper.simple_uppercase(right);
+    left_upper == right_upper
+        || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
+}
 
 /// The type Spark widens a pair of NUMERIC types to, for the places that pick one type for several
 /// branches: `CASE`, `IF`, and the set operations.
@@ -56,12 +101,28 @@ pub(crate) fn spark_wider_numeric_type(
         }
         _ => None,
     };
-    if let (Some((left_precision, left_scale)), Some((right_precision, right_scale))) =
-        (decimal_parts(left), decimal_parts(right))
+    // `findWiderTypeForDecimal` first maps Spark integral types to their decimal ranges (BYTE
+    // 3, SHORT 5, INT 10, LONG 20) before applying `widerDecimalType`. DataFusion instead keeps
+    // the existing decimal's scale, losing integral digits when the result caps at precision 38.
+    let integral_decimal_parts = |data_type: &DataType| match data_type {
+        DataType::Int8 => Some((3, 0)),
+        DataType::Int16 => Some((5, 0)),
+        DataType::Int32 => Some((10, 0)),
+        DataType::Int64 => Some((20, 0)),
+        _ => None,
+    };
+    let left_decimal = decimal_parts(left);
+    let right_decimal = decimal_parts(right);
+    if let (Some((left_precision, left_scale)), Some((right_precision, right_scale))) = (
+        left_decimal.or_else(|| integral_decimal_parts(left)),
+        right_decimal.or_else(|| integral_decimal_parts(right)),
+    ) && (left_decimal.is_some() || right_decimal.is_some())
     {
         let scale = left_scale.max(right_scale);
         let precision = scale + (left_precision - left_scale).max(right_precision - right_scale);
         let (precision, scale) = if precision > 38 {
+            // DecimalType.boundedPreferIntegralDigits keeps the integral range and removes
+            // fractional digits first when the pair cannot fit in Spark's precision 38.
             (38, (scale - (precision - 38)).max(0))
         } else {
             (precision, scale)
@@ -86,6 +147,25 @@ pub(crate) fn spark_wider_numeric_type_of(
     let mut common = data_types.first()?.clone();
     for data_type in data_types.iter().skip(1) {
         common = spark_wider_numeric_type(&common, data_type, ansi_mode)?;
+    }
+    Some(common)
+}
+
+/// The type Spark chooses for a whole conditional branch set. Legacy Spark orders STRING branches
+/// before the remaining operands because the pairwise rule is not associative
+/// (`TypeCoercion.scala:176-184`); ANSI uses the original order.
+pub(crate) fn spark_wider_type_of(
+    data_types: &[DataType],
+    ansi_mode: bool,
+    case_sensitive: bool,
+) -> Option<DataType> {
+    let mut ordered = data_types.iter().collect::<Vec<_>>();
+    if !ansi_mode {
+        ordered.sort_by_key(|data_type| !data_type.is_string());
+    }
+    let mut common = (*ordered.first()?).clone();
+    for data_type in ordered.iter().skip(1) {
+        common = spark_wider_type(&common, data_type, ansi_mode, case_sensitive)?;
     }
     Some(common)
 }
@@ -120,6 +200,22 @@ pub(crate) fn spark_wider_type(
             ansi_mode,
             case_sensitive,
         )?;
+        let mut metadata = field.metadata().clone();
+        if let (Some(left), Some(right)) = (
+            field
+                .metadata()
+                .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                .and_then(|value| spec::SparkIntervalMetadata::from_json(value).ok()),
+            other
+                .metadata()
+                .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                .and_then(|value| spec::SparkIntervalMetadata::from_json(value).ok()),
+        ) {
+            metadata.insert(
+                spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                left.wider(right)?.to_json().ok()?,
+            );
+        }
         Some(
             Field::new(
                 field.name(),
@@ -129,7 +225,7 @@ pub(crate) fn spark_wider_type(
                     || spark_cast_force_nullable(field.data_type(), &data_type)
                     || spark_cast_force_nullable(other.data_type(), &data_type),
             )
-            .with_metadata(field.metadata().clone()),
+            .with_metadata(metadata),
         )
     };
     match (left, right) {
@@ -146,7 +242,7 @@ pub(crate) fn spark_wider_type(
             | DataType::LargeListView(right),
         ) => Some(DataType::List(Arc::new(list_element(left, right)?))),
         (DataType::Map(left, sorted), DataType::Map(right, _))
-            if !map_key_cast_can_be_null(left, right, ansi_mode, case_sensitive) =>
+            if !spark_map_key_cast_can_be_null(left, right, ansi_mode, case_sensitive) =>
         {
             Some(DataType::Map(Arc::new(list_element(left, right)?), *sorted))
         }
@@ -158,17 +254,26 @@ pub(crate) fn spark_wider_type(
                 .iter()
                 .zip(right.iter())
                 .map(|(left, right)| {
-                    (if case_sensitive {
-                        left.name() == right.name()
-                    } else {
-                        left.name().eq_ignore_ascii_case(right.name())
-                    })
-                    .then(|| Some(Arc::new(list_element(left, right)?)))?
+                    spark_field_names_equal(left.name(), right.name(), case_sensitive)
+                        .then(|| Some(Arc::new(list_element(left, right)?)))?
                 })
                 .collect::<Option<Fields>>()?;
             Some(DataType::Struct(fields))
         }
         (left, right) if left.is_nested() || right.is_nested() => None,
+        // `findWiderDateTimeType` widens DATE with either TIMESTAMP representation to the
+        // timestamp (`TypeCoercionHelper.scala:243-254`). Keeping the timestamp's Arrow type here
+        // preserves its unit and zone for the cast that follows.
+        (DataType::Date32 | DataType::Date64, timestamp @ DataType::Timestamp(_, _))
+        | (timestamp @ DataType::Timestamp(_, _), DataType::Date32 | DataType::Date64) => {
+            Some(timestamp.clone())
+        }
+        // Spark's `findWiderDateTimeType` chooses TIMESTAMP over TIMESTAMP_NTZ
+        // (`TypeCoercionHelper.scala:251-252`). The zoned Arrow timestamp is the TIMESTAMP form.
+        (timestamp @ DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
+        | (DataType::Timestamp(_, None), timestamp @ DataType::Timestamp(_, Some(_))) => {
+            Some(timestamp.clone())
+        }
         (left, right) => spark_wider_string_type(left, right, ansi_mode)
             .or_else(|| spark_wider_numeric_type(left, right, ansi_mode)),
     }
@@ -177,7 +282,7 @@ pub(crate) fn spark_wider_type(
 /// Spark's `Cast.forceNullable` controls nested nullability and rejects MAP keys whose implicit
 /// cast could turn a non-null key into NULL (`Cast.scala:427-447`,
 /// `TypeCoercionHelper.scala:141-160`).
-fn spark_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
+pub(crate) fn spark_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
     if from == to || from.is_null() {
         return false;
     }
@@ -187,16 +292,80 @@ fn spark_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
     if to.is_string() {
         return false;
     }
+    // Arrow's timezone distinguishes Spark TIMESTAMP (a zone) from TIMESTAMP_NTZ (no zone).
+    // `Cast.forceNullable` exempts only the former on the DATE paths; the NTZ conversion may
+    // produce NULL and is therefore unsafe for a MAP key (`Cast.scala:439-443`).
     if matches!(to, DataType::Date32 | DataType::Date64) {
-        return !matches!(from, DataType::Timestamp(_, _));
+        return !matches!(from, DataType::Timestamp(_, Some(_)));
     }
     if matches!(from, DataType::Date32 | DataType::Date64) {
-        return !matches!(to, DataType::Timestamp(_, _));
+        return !matches!(to, DataType::Timestamp(_, Some(_)));
+    }
+    if matches!(from, DataType::Timestamp(_, Some(_)))
+        && matches!(to, DataType::Int8 | DataType::Int16 | DataType::Int32)
+    {
+        return true;
+    }
+    if matches!(from, DataType::Time32(_) | DataType::Time64(_))
+        && matches!(to, DataType::Int8 | DataType::Int16)
+    {
+        return true;
+    }
+    if matches!(
+        from,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) && matches!(to, DataType::Timestamp(_, Some(_)))
+    {
+        return true;
+    }
+    if matches!(to, DataType::Interval(IntervalUnit::MonthDayNano)) {
+        return true;
+    }
+    // `Cast.canNullSafeCastToDecimal` controls every implicit cast TO DECIMAL. A nested cast that
+    // cannot prove its target range is safe must make its element/value/field nullable
+    // (`Cast.scala:413-420,445`).
+    let decimal_parts = |data_type: &DataType| match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            Some((i32::from(*precision), i32::from(*scale)))
+        }
+        _ => None,
+    };
+    if let Some((to_precision, to_scale)) = decimal_parts(to) {
+        let target_integral_digits = to_precision - to_scale;
+        // `canNullSafeCastToDecimal` checks `to.isWiderThan(from)` for every NumericType before
+        // its decimal-only fallback. The latter still permits a target with strictly more
+        // integral digits even when it loses fractional digits (`Cast.scala:413-420`).
+        let safely_wider = match from {
+            DataType::Boolean => target_integral_digits >= 1 && to_scale >= 0,
+            DataType::Int8 => target_integral_digits >= 3 && to_scale >= 0,
+            DataType::Int16 => target_integral_digits >= 5 && to_scale >= 0,
+            DataType::Int32 => target_integral_digits >= 10 && to_scale >= 0,
+            DataType::Int64 => target_integral_digits >= 20 && to_scale >= 0,
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                let source_integral_digits = i32::from(*precision) - i32::from(*scale);
+                (target_integral_digits >= source_integral_digits && to_scale >= i32::from(*scale))
+                    || target_integral_digits > source_integral_digits
+            }
+            _ => false,
+        };
+        return !safely_wider;
     }
     matches!(
         (from, to),
         (
-            DataType::Float16 | DataType::Float32 | DataType::Float64,
+            DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _),
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -209,7 +378,7 @@ fn spark_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
     )
 }
 
-fn map_key_cast_can_be_null(
+pub(crate) fn spark_map_key_cast_can_be_null(
     left: &Field,
     right: &Field,
     ansi_mode: bool,
@@ -234,6 +403,20 @@ fn map_key_cast_can_be_null(
         || spark_cast_force_nullable(right.data_type(), &common)
 }
 
+/// `findTypeForComplex` refuses a MAP pair when its entry-key cast could turn a non-null key into
+/// NULL (`TypeCoercionHelper.scala:149-163`). Values do not take part in this decision.
+pub(crate) fn spark_map_pair_refuses(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+    case_sensitive: bool,
+) -> bool {
+    let (DataType::Map(left, _), DataType::Map(right, _)) = (left, right) else {
+        return false;
+    };
+    spark_map_key_cast_can_be_null(left, right, ansi_mode, case_sensitive)
+}
+
 /// Spark applies its STRING promotion before returning from `findWiderTypeForTwo`, including when
 /// that call came recursively from an ARRAY, MAP, or STRUCT. Legacy coercion promotes the atomic
 /// peer to STRING; ANSI promotes the STRING to BIGINT, DOUBLE, or the temporal peer
@@ -247,22 +430,31 @@ fn spark_wider_string_type(left: &DataType, right: &DataType, ansi_mode: bool) -
         return None;
     };
     if !ansi_mode {
-        return matches!(
-            other,
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-        )
-        .then(|| string.clone())
-        .or_else(|| other.is_numeric().then(|| string.clone()));
+        return (!other.is_nested()
+            && !matches!(
+                other,
+                DataType::Boolean | DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            ))
+        .then(|| string.clone());
     }
     match other {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            Some(DataType::Int64)
-        }
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            Some(DataType::Int64)
-        }
-        DataType::Float16 | DataType::Float32 | DataType::Float64 => Some(DataType::Float64),
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => Some(other.clone()),
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => Some(DataType::Int64),
+        DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => Some(DataType::Float64),
+        DataType::Interval(_) | DataType::Duration(_) => None,
+        other if !other.is_nested() => Some(other.clone()),
         _ => None,
     }
 }
@@ -390,15 +582,12 @@ pub(crate) fn struct_pair_spark_refuses(
         (DataType::Struct(left), DataType::Struct(right)) => {
             left.len() != right.len()
                 || left.iter().zip(right.iter()).any(|(left, right)| {
-                    !(if case_sensitive {
-                        left.name() == right.name()
-                    } else {
-                        left.name().eq_ignore_ascii_case(right.name())
-                    }) || struct_pair_spark_refuses(
-                        left.data_type(),
-                        right.data_type(),
-                        case_sensitive,
-                    )
+                    !spark_field_names_equal(left.name(), right.name(), case_sensitive)
+                        || struct_pair_spark_refuses(
+                            left.data_type(),
+                            right.data_type(),
+                            case_sensitive,
+                        )
                 })
         }
         (DataType::Struct(_), other) | (other, DataType::Struct(_)) => !other.is_null(),
@@ -457,6 +646,31 @@ pub(crate) fn spark_interval_metadata_for_expression(
             })?,
         });
         Ok(TreeNodeRecursion::Jump)
+    })?;
+    Ok(combined)
+}
+
+/// Collect interval qualifiers below a container expression. The top-level field of `map(...)` is
+/// a MAP, but its interval literal arguments still carry the DAY/HOUR qualifier that Spark widens
+/// through `findTypeForComplex` (`TypeCoercion.scala:96-99`).
+pub(crate) fn spark_nested_interval_metadata_for_expression(
+    expression: &expr::Expr,
+    schema: &DFSchemaRef,
+) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
+    let mut combined = None::<spec::SparkIntervalMetadata>;
+    expression.apply(|candidate| {
+        let candidate_metadata = spark_interval_metadata_for_expression(candidate, schema)?;
+        if let Some(candidate_metadata) = candidate_metadata {
+            combined = Some(match combined {
+                Some(current) => current.wider(candidate_metadata).ok_or_else(|| {
+                    datafusion_common::DataFusionError::Plan(
+                        "incompatible Spark interval metadata in expression".to_string(),
+                    )
+                })?,
+                None => candidate_metadata,
+            });
+        }
+        Ok(TreeNodeRecursion::Continue)
     })?;
     Ok(combined)
 }

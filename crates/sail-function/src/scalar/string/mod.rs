@@ -10,6 +10,7 @@ pub mod spark_concat_ws;
 pub mod spark_encode_decode;
 pub mod spark_length;
 pub mod spark_mask;
+pub mod spark_overlay;
 pub mod spark_quote;
 pub mod spark_regexp_extract_all;
 pub mod spark_regexp_instr;

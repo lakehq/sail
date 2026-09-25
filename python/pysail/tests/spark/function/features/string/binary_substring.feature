@@ -89,6 +89,27 @@ Feature: substr, substring, left and overlay over a BINARY, vs Spark 4.2.0
         | tinyint  | left(X'4142', 1Y)                                 | 41     |
         | smallint | left(X'537061726B2053514C', CAST(3 AS SMALLINT))  | 537061 |
 
+  Rule: implicit BINARY substring arguments preserve cast nullability
+
+    # `Substring` and `Left` take integral positions. Spark's implicit STRING-to-integral cast is
+    # force-nullable, so the BINARY output is nullable even for a non-null literal
+    # (`Cast.scala:427-446`, `stringExpressions.scala:2301-2313,2405-2408`).
+    Scenario Outline: <function> with a string length is nullable
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+      Examples:
+        | function | expression              |
+        | substr   | substr(X'0102', '1')    |
+        | left     | left(X'0102', '1')      |
+
   Rule: right is the exception -- Spark reads its BINARY input as a STRING
 
     # `Right` takes only strings, so a BINARY is implicitly cast and the result is a STRING, which

@@ -218,9 +218,25 @@ fn subtract_timestamps_in_local_time(left: Expr, right: Expr) -> Expr {
 /// Decimal intermediates keep interval scaling and addition from overflowing before the guard.
 /// Numeric arithmetic also avoids DataFusion's unsupported TIME interval-bound propagation.
 fn shift_time_by_interval(time: Expr, interval: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
-    let result_type = match time.get_type(schema)? {
-        DataType::Time64(TimeUnit::Nanosecond) => DataType::Time64(TimeUnit::Nanosecond),
-        _ => DataType::Time64(TimeUnit::Microsecond),
+    use sail_common::spec::{DayTimeIntervalField, SparkIntervalMetadata};
+
+    // TimeAddInterval chooses max(time precision, interval precision). A day-time interval gains
+    // microsecond precision only when it reaches SECOND; DAY/HOUR/MINUTE have precision zero.
+    // Missing metadata denotes Arrow's default DAY TO SECOND physical interval.
+    let interval_reaches_second = !matches!(
+        spark_interval_metadata_for_expression(&interval, schema)?,
+        Some(SparkIntervalMetadata::DayTime {
+            end_field: DayTimeIntervalField::Day
+                | DayTimeIntervalField::Hour
+                | DayTimeIntervalField::Minute,
+            ..
+        })
+    );
+    let time_type = time.get_type(schema)?;
+    let result_type = match (&time_type, interval_reaches_second) {
+        (DataType::Time64(TimeUnit::Nanosecond), _) => DataType::Time64(TimeUnit::Nanosecond),
+        (_, true) => DataType::Time64(TimeUnit::Microsecond),
+        _ => time_type,
     };
     let null = time.clone().is_null().or(interval.clone().is_null());
     let nanos = cast(
@@ -1480,6 +1496,14 @@ fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
+fn spark_conv(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    Ok(ScalarUDF::from(SparkConv::new(function_context.plan_config.ansi_mode)).call(arguments))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -1502,7 +1526,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("cbrt", F::unary(double(expr_fn::cbrt))),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
-        ("conv", F::udf(SparkConv::new())),
+        ("conv", F::custom(spark_conv)),
         ("cos", F::unary(double(expr_fn::cos))),
         ("cosh", F::unary(double(expr_fn::cosh))),
         ("cot", F::unary(double(expr_fn::cot))),
@@ -2909,8 +2933,9 @@ fn named_struct_type_name(operand: &Expr, schema: &DFSchemaRef) -> Option<String
         return None;
     }
     let mut fields = Vec::with_capacity(function.args.len() / 2);
-    for pair in function.args.chunks_exact(2) {
-        let [Expr::Literal(ScalarValue::Utf8(Some(name)), _), value] = pair else {
+    let (pairs, _) = function.args.as_chunks::<2>();
+    for [name_expr, value] in pairs {
+        let Expr::Literal(ScalarValue::Utf8(Some(name)), _) = name_expr else {
             return None;
         };
         let (_, source) = value.to_field(schema).ok()?;

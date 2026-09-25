@@ -12,6 +12,7 @@ use crate::functions_utils::make_scalar_function;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBinarySubstring {
     signature: Signature,
+    force_nullable: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -20,15 +21,16 @@ pub struct SparkBinaryOverlay {
 }
 
 impl SparkBinarySubstring {
-    pub fn new() -> Self {
+    pub fn new(force_nullable: bool) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            force_nullable,
         }
     }
 }
 impl Default for SparkBinarySubstring {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 impl SparkBinaryOverlay {
@@ -65,7 +67,7 @@ impl ScalarUDFImpl for SparkBinarySubstring {
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Binary,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            self.force_nullable || args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

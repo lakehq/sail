@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -11,20 +12,59 @@ use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::coercion::{
-    build_rename_target_type, needs_struct_field_rename, spark_wider_numeric_type_of,
-    spark_wider_type, struct_pair_spark_refuses,
+    build_rename_target_type, needs_struct_field_rename, spark_map_key_cast_can_be_null,
+    spark_map_pair_refuses, spark_nested_interval_metadata_for_expression,
+    spark_wider_numeric_type_of, spark_wider_type, spark_wider_type_of, struct_pair_spark_refuses,
 };
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, spark_type_name,
 };
 
-fn data_diff_types_error(name: &str, left: &DataType, right: &DataType) -> PlanError {
+fn data_diff_types_error(
+    name: &str,
+    data_types: &[DataType],
+    argument_display_names: &[String],
+) -> PlanError {
+    let function_name = match name {
+        "case" => "casewhen",
+        "nvl" | "ifnull" | "coalesce" => "coalesce",
+        name => name,
+    };
+    let sql_expr = match function_name {
+        "casewhen" if !argument_display_names.is_empty() => {
+            let mut sql = String::from("CASE");
+            let mut arguments = argument_display_names.iter();
+            while let Some(condition) = arguments.next() {
+                if let Some(value) = arguments.next() {
+                    sql.push_str(&format!(" WHEN {condition} THEN {value}"));
+                } else {
+                    sql.push_str(&format!(" ELSE {condition}"));
+                }
+            }
+            sql.push_str(" END");
+            sql
+        }
+        "coalesce" if !argument_display_names.is_empty() => {
+            format!("coalesce({})", argument_display_names.join(", "))
+        }
+        "if" if argument_display_names.len() == 3 => {
+            format!("(IF({}))", argument_display_names.join(", "))
+        }
+        _ => function_name.to_string(),
+    };
+    let data_types = data_types
+        .iter()
+        .map(|data_type| format!("\"{}\"", spark_type_name(data_type)))
+        .collect::<Vec<_>>()
+        .join(", ");
     PlanError::analysis(format!(
-        "[DATATYPE_MISMATCH.DATA_DIFF_TYPES] cannot resolve '{name}' with operand types {} and {}. SQLSTATE: 42K09",
-        spark_type_name(left),
-        spark_type_name(right)
+        "[DATATYPE_MISMATCH.DATA_DIFF_TYPES] Cannot resolve \"{sql_expr}\" due to data type mismatch: Input to `{function_name}` should all be the same type, but it's [{data_types}]. SQLSTATE: 42K09"
     ))
+}
+
+fn data_diff_types_pair_error(name: &str, left: &DataType, right: &DataType) -> PlanError {
+    data_diff_types_error(name, &[left.clone(), right.clone()], &[])
 }
 
 /// Refuses a branch set Spark refuses to type. `CaseWhenCoercion` and `IfCoercion` take the branches
@@ -64,9 +104,15 @@ fn rejects_incompatible_branches(
             let legacy_string_promotion =
                 !function_context.plan_config.ansi_mode && data_types.iter().any(is_string_type);
             struct_pair_spark_refuses(left, right, function_context.plan_config.case_sensitive)
+                || spark_map_pair_refuses(
+                    left,
+                    right,
+                    function_context.plan_config.ansi_mode,
+                    function_context.plan_config.case_sensitive,
+                )
                 || (numeric_datetime && !legacy_string_promotion)
         })
-        .map(|(left, right)| data_diff_types_error(name, left, right))
+        .map(|_| data_diff_types_error(name, &data_types, function_context.argument_display_names))
 }
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -138,6 +184,52 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn map_value_interval_metadata(
+    data_type: DataType,
+    metadata: SparkIntervalMetadata,
+) -> PlanResult<DataType> {
+    let DataType::Map(entries, sorted) = data_type else {
+        return Ok(data_type);
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return Ok(DataType::Map(entries, sorted));
+    };
+    let metadata = metadata
+        .to_json()
+        .map_err(|error| PlanError::analysis(error.to_string()))?;
+    let fields = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            if index != 1 {
+                return Arc::clone(field);
+            }
+            if !matches!(
+                field.data_type(),
+                DataType::Duration(TimeUnit::Microsecond)
+                    | DataType::Interval(IntervalUnit::YearMonth)
+            ) {
+                return Arc::clone(field);
+            }
+            let mut field_metadata = field.metadata().clone();
+            field_metadata.insert(
+                SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                metadata.clone(),
+            );
+            Arc::new(field.as_ref().clone().with_metadata(field_metadata))
+        })
+        .collect();
+    let entries = Arc::new(
+        Field::new(
+            entries.name(),
+            DataType::Struct(fields),
+            entries.is_nullable(),
+        )
+        .with_metadata(entries.metadata().clone()),
+    );
+    Ok(DataType::Map(entries, sorted))
+}
+
 /// `nvl`/`ifnull` are `Coalesce(Seq(left, right))` in Spark (`nullExpressions.scala:246`).
 /// DataFusion's `nvl` coerces every container to `Utf8` -- `nvl(array, array)` is a STRING, and so
 /// is `nvl(NULL, array('2'))` -- and a STRING is an arithmetic operand, so
@@ -154,6 +246,15 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = function_context.schema;
     let data_type = |expr: &expr::Expr| expr.get_type(schema).ok();
     let (left_type, right_type) = (data_type(&left), data_type(&right));
+    // `nvl`/`ifnull` are Spark `RuntimeReplaceable` expressions over `Coalesce`; reject before
+    // DataFusion's separate nvl coercion leaks its internal type-resolution error.
+    if let Some(error) = rejects_incompatible_branches(
+        "coalesce",
+        &[left.clone(), right.clone()],
+        &function_context,
+    ) {
+        return Err(error);
+    }
     let is_container = |expr: &expr::Expr| {
         matches!(
             expr.get_type(schema),
@@ -178,22 +279,22 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 function_context.plan_config.case_sensitive,
             )
         {
-            return Err(data_diff_types_error("nvl", left_type, right_type));
+            return Err(data_diff_types_pair_error("nvl", left_type, right_type));
         }
         // `findTypeForComplex` rejects MAP pairs when the common key needs a cast that can return
         // NULL. Do not let DataFusion subsequently coerce that rejected pair to STRING.
-        if let (Some(left_type @ DataType::Map(_, _)), Some(right_type @ DataType::Map(_, _))) =
-            (&left_type, &right_type)
-            && left_type != right_type
-            && spark_wider_type(
-                left_type,
-                right_type,
+        if let (
+            Some(left_type @ DataType::Map(left, _)),
+            Some(right_type @ DataType::Map(right, _)),
+        ) = (&left_type, &right_type)
+            && spark_map_key_cast_can_be_null(
+                left,
+                right,
                 function_context.plan_config.ansi_mode,
                 function_context.plan_config.case_sensitive,
             )
-            .is_none()
         {
-            return Err(data_diff_types_error("nvl", left_type, right_type));
+            return Err(data_diff_types_pair_error("nvl", left_type, right_type));
         }
         // `coalesce` alone cannot type two containers whose leaves differ -- an array of structs
         // whose leaves widen, a map whose values need a promotion, two structs whose field names
@@ -208,6 +309,26 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 function_context.plan_config.case_sensitive,
             )
         {
+            let mut interval_metadata = None::<SparkIntervalMetadata>;
+            for expression in [&left, &right] {
+                if let Some(candidate) =
+                    spark_nested_interval_metadata_for_expression(expression, schema)
+                        .map_err(|error| PlanError::analysis(error.to_string()))?
+                {
+                    interval_metadata = Some(match interval_metadata {
+                        Some(current) => current.wider(candidate).ok_or_else(|| {
+                            PlanError::analysis(
+                                "incompatible Spark interval metadata in nvl".to_string(),
+                            )
+                        })?,
+                        None => candidate,
+                    });
+                }
+            }
+            let common = match interval_metadata {
+                Some(metadata) => map_value_interval_metadata(common, metadata)?,
+                None => common,
+            };
             let to_common = |expr: expr::Expr, from: &DataType| {
                 let expr = if needs_struct_field_rename(from, &common) {
                     ScalarUDF::new_from_impl(SparkStructRename::new(build_rename_target_type(
@@ -393,6 +514,9 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments,
         function_context,
     } = input;
+    if let Some(error) = rejects_incompatible_branches("coalesce", &arguments, &function_context) {
+        return Err(error);
+    }
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
 }
@@ -469,6 +593,22 @@ fn coerce_string_temporal_values(
                     })
                     .collect()
             }
+        } else if let Some(common) = spark_wider_type_of(
+            &data_types,
+            function_context.plan_config.ansi_mode,
+            function_context.plan_config.case_sensitive,
+        ) {
+            arguments
+                .into_iter()
+                .zip(data_types)
+                .map(|(arg, data_type)| {
+                    if data_type == common {
+                        arg
+                    } else {
+                        cast(arg, common.clone())
+                    }
+                })
+                .collect()
         } else {
             arguments
         }

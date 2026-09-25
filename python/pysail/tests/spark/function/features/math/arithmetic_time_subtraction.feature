@@ -88,6 +88,24 @@ Feature: TIME subtraction result parity
       | added      | reversed   | subtracted | millis        | result_type |
       | 12:00:00.5 | 12:00:00.5 | 11:59:59.5 | 12:00:00.0005 | time(6)     |
 
+  # `TimeAddInterval` takes max(TIME precision, interval precision). An interval whose end
+  # field is coarser than SECOND has precision 0, so it must not manufacture fractional digits.
+  @spark-4.1
+  Scenario Outline: a TIME(<precision>) shifted by a whole-hour interval keeps its precision
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT typeof(CAST(TIME '12:00:00' AS TIME(<precision>)) + INTERVAL '1' HOUR) AS result_type
+      """
+    Then query result
+      | result_type |
+      | time(<precision>) |
+
+    Examples:
+      | precision |
+      | 0         |
+      | 3         |
+
   @spark-4.1
   Scenario: a TIME(0) column shifted by a fractional interval keeps the fraction on every row
     Given config spark.sql.timeType.enabled = true

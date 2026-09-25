@@ -571,9 +571,10 @@ fn stringify_non_ansi_expression(
         return Ok(expression);
     }
     if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
-        let metadata = interval
-            .to_json()
-            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+        let metadata =
+            sail_common::spec::SparkIntervalMetadataTree::Interval { metadata: interval }
+                .to_json()
+                .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
         return Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression, lit(metadata)]));
     }
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);

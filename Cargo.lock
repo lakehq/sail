@@ -8023,6 +8023,7 @@ dependencies = [
  "educe",
  "either",
  "half",
+ "icu_casemap",
  "indexmap 2.14.2",
  "lazy_static",
  "log",

@@ -1,5 +1,41 @@
 Feature: coalesce returns the first non-null argument
 
+  Rule: MAP keys cannot require a nullable implicit cast
+
+    # Decimal keys widen when the target retains both the source's integral digits and scale
+    # (`Cast.canNullSafeCastToDecimal`, `Cast.scala:413-420`). This must remain a valid MAP.
+    Scenario: coalesce widens compatible decimal map keys
+      When query
+        """
+        SELECT CAST(coalesce(map(1.5, 'a'), map(1.555, 'b')) AS STRING) AS result
+        """
+      Then query result
+        | result       |
+        | {1.500 -> a} |
+
+    Scenario: coalesce widens timestamp and timestamp_ntz map keys to timestamp
+      When query
+        """
+        SELECT CAST(
+          coalesce(
+            map(to_timestamp('2020-01-01 00:00:00'), 1),
+            map(to_timestamp_ntz('2020-01-01 00:00:00'), 2)
+          ) AS STRING
+        ) AS result
+        """
+      Then query result
+        | result                     |
+        | {2020-01-01 00:00:00 -> 1} |
+
+    # `findTypeForComplex` filters the common MAP key if either implicit cast can return NULL
+    # (`TypeCoercionHelper.scala:149-163`). Coalesce then rejects the complete argument list.
+    Scenario: coalesce refuses maps with incompatible keys
+      When query
+        """
+        SELECT coalesce(map('1', 1), map(2, 2)) AS result
+        """
+      Then query error (?i)DATA_DIFF_TYPES
+
   Rule: Spark-compatible coercion for mixed string and temporal arguments
 
     Scenario Outline: Coercion: <case>

@@ -284,6 +284,42 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+def _stored_numbers(array) -> list[str] | None:
+    """Return the physical integer values in an Arrow array, if it has one per row."""
+    for width in ("int64", "int32"):
+        try:
+            return [str(value) for value in array.cast(width).to_pylist()]
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return None
+
+
+@then("interval result")
+def interval_result(datatable, query, spark):
+    """Assert an interval's Arrow storage, published type, show output, and CAST output."""
+    header, *rows = datatable
+    assert header == ["stored", "type", "shown", "cast"], (
+        "the table of `interval result` is | stored | type | shown | cast |"
+    )
+    assert len(rows) == 1, "`interval result` asserts a single row"
+    [expected_stored, expected_type, expected_shown, expected_cast] = rows[0]
+
+    df = spark.sql(query)
+    column = df.schema[0].name
+    if expected_stored != "-":
+        stored = _stored_numbers(df.toArrow().column(0))
+        assert stored is not None, "the value stores no single integer"
+        assert stored == [expected_stored], f"stored: {stored} != [{expected_stored}]"
+    if expected_type != "-":
+        assert df.schema[0].dataType.simpleString() == expected_type
+    if expected_shown != "-":
+        [_, *shown] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+        assert shown == [[expected_shown]]
+    if expected_cast != "-":
+        rendered = df.selectExpr(f"CAST(`{column}` AS STRING)").collect()[0][0]
+        assert _format_collected_value(rendered) == expected_cast
+
+
 def _format_collected_value(value) -> str:
     if value is None:
         return "NULL"

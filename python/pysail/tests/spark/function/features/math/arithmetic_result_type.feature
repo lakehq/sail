@@ -238,7 +238,7 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT CAST(2 AS DECIMAL(10,2)) <operator> CAST(2 AS FLOAT) AS result
+        SELECT CAST(2 AS DECIMAL(12,2)) <operator> CAST(2 AS FLOAT) AS result
         """
       Then query schema
         """
@@ -248,6 +248,8 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
 
       # `BinaryArithmetic.nullable` follows the children for +, - and *, while `DivModLike`
       # overrides it to true for / and % because a zero divisor can yield NULL in legacy mode.
+      # DECIMAL(12,2) keeps 10 integral digits, so `Cast.forceNullable(INT, _)` is false and the
+      # children are non-nullable -- otherwise every row would read true and prove nothing.
       Examples:
         | operator | nullable |
         | +        | false    |
@@ -255,6 +257,28 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
         | *        | false    |
         | /        | true     |
         | %        | true     |
+
+    # A decimal target that cannot hold the source's integral digits makes the cast itself
+    # nullable (`Cast.forceNullable` -> `canNullSafeCastToDecimal`, `Cast.scala:413-419`), and the
+    # arithmetic inherits it. DECIMAL(10,2) leaves 8 integral digits where an INT needs 10.
+    @function(nullability)
+    Scenario Outline: an overflowing decimal cast makes the arithmetic nullable: <operator>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(2 AS DECIMAL(10,2)) <operator> CAST(2 AS FLOAT) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+      Examples:
+        | operator |
+        | +        |
+        | -        |
+        | *        |
 
     @function(nullability)
     Scenario: decimal division keeps Spark's precision, scale, and nullability

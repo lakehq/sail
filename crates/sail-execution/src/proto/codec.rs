@@ -248,6 +248,7 @@ use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_overlay::SparkOverlay;
 use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
     SparkRegexpExtract, SparkRegexpExtractAll,
@@ -3262,6 +3263,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
             }
+            UdfKind::SparkConv(r#gen::SparkConvUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkConv::new(ansi_mode))));
+            }
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
@@ -3314,8 +3318,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_integral_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastIntegralToBinary::new())))
             }
-            "spark_binary_substring" => Ok(Arc::new(ScalarUDF::from(SparkBinarySubstring::new()))),
+            "spark_binary_substring" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBinarySubstring::new(false))))
+            }
             "spark_binary_overlay" => Ok(Arc::new(ScalarUDF::from(SparkBinaryOverlay::new()))),
+            "spark_overlay_nonnullable" => Ok(Arc::new(ScalarUDF::from(SparkOverlay::new(false)))),
+            "spark_overlay_nullable" => Ok(Arc::new(ScalarUDF::from(SparkOverlay::new(true)))),
             "spark_to_local_time" => Ok(Arc::new(ScalarUDF::from(SparkToLocalTime::new()))),
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
@@ -3355,6 +3363,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
+            "spark_array_force_nullable" => Ok(Arc::new(ScalarUDF::from(
+                SparkArray::new_with_force_element_nullable(true),
+            ))),
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
@@ -3418,7 +3429,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bitwise_not" | "bitwise_not" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
             }
-            "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_date_part" | "date_part" | "datepart" | "extract" => {
@@ -3535,6 +3545,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastIntegralToBinary>()
             || node_inner.is::<SparkBinarySubstring>()
             || node_inner.is::<SparkBinaryOverlay>()
+            || node_inner.is::<SparkOverlay>()
             || node_inner.is::<SparkToLocalTime>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
@@ -3583,7 +3594,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkConcat>()
-            || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
@@ -3821,6 +3831,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkConv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkConv(r#gen::SparkConvUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode })

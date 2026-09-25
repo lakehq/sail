@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StringArray, as_primitive_array};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{
@@ -13,19 +13,25 @@ use crate::error::{
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConv {
     signature: Signature,
+    ansi_mode: bool,
 }
 
 impl Default for SparkConv {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkConv {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -38,13 +44,8 @@ impl ScalarUDFImpl for SparkConv {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.first() {
-            Some(DataType::Utf8) => Ok(DataType::Utf8),
-            Some(DataType::Utf8View) => Ok(DataType::Utf8View),
-            Some(DataType::LargeUtf8) => Ok(DataType::LargeUtf8),
-            _ => Ok(DataType::Utf8),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -66,11 +67,17 @@ impl ScalarUDFImpl for SparkConv {
                 ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len),
             });
             let [num, from_base, to_base] = arrays;
-            return invoke_vectorized(num?, from_base?, to_base?);
+            return invoke_vectorized(num?, from_base?, to_base?, self.ansi_mode);
         }
 
         let num_str = match num {
-            ColumnarValue::Scalar(scalar) => scalar.to_string(),
+            ColumnarValue::Scalar(ScalarValue::Utf8(value))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(value))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(value)) => value.clone(),
+            ColumnarValue::Scalar(ScalarValue::Int32(value)) => {
+                value.map(|value| value.to_string())
+            }
+            ColumnarValue::Scalar(scalar) if scalar.is_null() => None,
             _ => {
                 return Err(unsupported_data_type_exec_err(
                     "spark_conv",
@@ -85,10 +92,11 @@ impl ScalarUDFImpl for SparkConv {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
             ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(convert(
-                Some(&num_str),
+                num_str.as_deref(),
                 Some(*from),
                 Some(*to),
-            )))),
+                self.ansi_mode,
+            )?))),
             _ => {
                 let types = vec![num.data_type(), from_base.data_type(), to_base.data_type()];
                 Err(unsupported_data_types_exec_err(
@@ -109,19 +117,15 @@ impl ScalarUDFImpl for SparkConv {
             ));
         };
 
-        let valid_string: bool = matches!(
-            input_type,
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Int32
-        );
-        let valid_from: bool = matches!(from_base_type, DataType::Int32);
-        let valid_to: bool = matches!(to_base_type, DataType::Int32);
+        // Spark declares `ImplicitCastInputTypes(STRING, INT, INT)`: the kernel only receives
+        // UTF8 and INT32, while analysis accepts an input numeric value and bases which can be
+        // implicitly cast to INT (`mathExpressions.scala:477-505`).
+        let valid_input = input_type.is_string() || input_type.is_numeric();
+        let valid_from = from_base_type.is_string() || from_base_type.is_numeric();
+        let valid_to = to_base_type.is_string() || to_base_type.is_numeric();
 
-        if valid_string && valid_from && valid_to {
-            Ok(vec![
-                input_type.clone(),
-                from_base_type.clone(),
-                to_base_type.clone(),
-            ])
+        if valid_input && valid_from && valid_to {
+            Ok(vec![DataType::Utf8, DataType::Int32, DataType::Int32])
         } else {
             Err(unsupported_data_types_exec_err(
                 "spark_conv",
@@ -136,6 +140,7 @@ fn invoke_vectorized(
     num: ArrayRef,
     from_base: ArrayRef,
     to_base: ArrayRef,
+    ansi_mode: bool,
 ) -> Result<ColumnarValue> {
     let from = as_primitive_array::<Int32Type>(&from_base);
     let to = as_primitive_array::<Int32Type>(&to_base);
@@ -146,7 +151,9 @@ fn invoke_vectorized(
                 .iter()
                 .zip(from.iter())
                 .zip(to.iter())
-                .map(|((number, from), to)| convert(number, from, to))
+                .map(|((number, from), to)| convert(number, from, to, ansi_mode))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .collect()
         }
         DataType::LargeUtf8 => {
@@ -155,7 +162,9 @@ fn invoke_vectorized(
                 .iter()
                 .zip(from.iter())
                 .zip(to.iter())
-                .map(|((number, from), to)| convert(number, from, to))
+                .map(|((number, from), to)| convert(number, from, to, ansi_mode))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .collect()
         }
         DataType::Utf8View => {
@@ -164,7 +173,9 @@ fn invoke_vectorized(
                 .iter()
                 .zip(from.iter())
                 .zip(to.iter())
-                .map(|((number, from), to)| convert(number, from, to))
+                .map(|((number, from), to)| convert(number, from, to, ansi_mode))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .collect()
         }
         DataType::Int32 => {
@@ -173,8 +184,15 @@ fn invoke_vectorized(
                 .zip(from.iter())
                 .zip(to.iter())
                 .map(|((number, from), to)| {
-                    convert(number.map(|number| number.to_string()).as_deref(), from, to)
+                    convert(
+                        number.map(|number| number.to_string()).as_deref(),
+                        from,
+                        to,
+                        ansi_mode,
+                    )
                 })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .collect()
         }
         _ => {
@@ -193,35 +211,77 @@ fn invoke_vectorized(
     Ok(ColumnarValue::Array(Arc::new(result)))
 }
 
-fn convert(number: Option<&str>, from: Option<i32>, to: Option<i32>) -> Option<String> {
-    let (number, from, to) = (number?, from?, to?);
+fn convert(
+    number: Option<&str>,
+    from: Option<i32>,
+    to: Option<i32>,
+    ansi_mode: bool,
+) -> Result<Option<String>> {
+    let (Some(number), Some(from), Some(to)) = (number, from, to) else {
+        return Ok(None);
+    };
     if !(2..=36).contains(&from) || !(2..=36).contains(&to.unsigned_abs()) {
-        return None;
+        return Ok(None);
     }
-    let number = number.trim();
-    let (negative, number) = match number.strip_prefix('-') {
+    // `UTF8String.trim` removes ASCII spaces only. Rust's `str::trim` would also accept Unicode
+    // whitespace that Spark leaves in the digit stream (`NumberConverter.scala:155-165`).
+    let number = number.trim_matches(' ');
+    if number.is_empty() {
+        return Ok(None);
+    }
+    let (mut negative, number) = match number.strip_prefix('-') {
         Some(number) => (true, number),
         None => (false, number),
     };
-    let number = u64::from_str_radix(number, from as u32).ok()?;
+    // `char2byte` stops at the first invalid digit and `encode` accumulates an unsigned Long.
+    // A checked operation is equivalent to Spark's unsigned overflow checks; non-ANSI returns
+    // all ones, which `decode` renders as the largest unsigned 64-bit value.
+    let mut value = 0_u64;
+    for byte in number.bytes() {
+        let digit = match byte {
+            b'0'..=b'9' => u64::from(byte - b'0'),
+            b'a'..=b'z' => u64::from(byte - b'a' + 10),
+            b'A'..=b'Z' => u64::from(byte - b'A' + 10),
+            _ => break,
+        };
+        if digit >= from as u64 {
+            break;
+        }
+        let Some(next) = value
+            .checked_mul(from as u64)
+            .and_then(|value| value.checked_add(digit))
+        else {
+            if ansi_mode {
+                return Err(DataFusionError::Execution(
+                    "[ARITHMETIC_OVERFLOW] Overflow in function conv(). If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003".to_string(),
+                ));
+            }
+            value = u64::MAX;
+            break;
+        };
+        value = next;
+    }
     if to > 0 {
-        let number = if negative {
-            if number > i64::MAX as u64 {
+        let value = if negative {
+            if (value as i64) < 0 {
                 u64::MAX
             } else {
-                (-(number as i64)) as u64
+                value.wrapping_neg()
             }
         } else {
-            number
+            value
         };
-        Some(to_radix_u64(number, to as u32))
+        Ok(Some(to_radix_u64(value, to as u32)))
     } else {
-        let value = if negative {
-            -(number as i128)
-        } else {
-            number as i128
-        };
-        Some(to_radix_signed(value, to.unsigned_abs()))
+        if (value as i64) < 0 {
+            value = value.wrapping_neg();
+            negative = true;
+        }
+        let mut result = to_radix_u64(value, to.unsigned_abs());
+        if negative {
+            result.insert(0, '-');
+        }
+        Ok(Some(result))
     }
 }
 
@@ -238,41 +298,30 @@ fn to_radix_u64(mut value: u64, radix: u32) -> String {
     digits.iter().rev().collect()
 }
 
-fn to_radix_signed(value: i128, radix: u32) -> String {
-    let negative = value < 0;
-    let mut result = to_radix_u64(value.unsigned_abs() as u64, radix);
-    if negative {
-        result.insert(0, '-');
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn test_to_radix_signed_basic_cases() {
-        assert_eq!(to_radix_signed(10, 2), "1010");
-        assert_eq!(to_radix_signed(10, 8), "12");
-        assert_eq!(to_radix_signed(10, 10), "10");
-        assert_eq!(to_radix_signed(10, 16), "A");
-        assert_eq!(to_radix_signed(255, 16), "FF");
-        assert_eq!(to_radix_signed(31, 16), "1F");
-        assert_eq!(to_radix_signed(36, 36), "10");
-    }
 
     #[test]
-    fn test_to_radix_signed_negative_values() {
-        assert_eq!(to_radix_signed(-10, 2), "-1010");
-        assert_eq!(to_radix_signed(-10, 8), "-12");
-        assert_eq!(to_radix_signed(-10, 10), "-10");
-        assert_eq!(to_radix_signed(-10, 16), "-A");
-    }
-
-    #[test]
-    fn test_to_radix_signed_zero() {
-        assert_eq!(to_radix_signed(0, 2), "0");
-        assert_eq!(to_radix_signed(0, 10), "0");
-        assert_eq!(to_radix_signed(0, 36), "0");
+    fn test_convert_number_converter_branches() -> Result<()> {
+        assert_eq!(convert(Some("   "), Some(2), Some(10), false)?, None);
+        assert_eq!(
+            convert(Some("11z"), Some(2), Some(10), false)?,
+            Some("3".to_string())
+        );
+        assert_eq!(
+            convert(Some("+10"), Some(10), Some(10), false)?,
+            Some("0".to_string())
+        );
+        assert_eq!(
+            convert(Some("8000000000000000"), Some(16), Some(-10), false)?,
+            Some("-9223372036854775808".to_string())
+        );
+        assert_eq!(
+            convert(Some("FFFFFFFFFFFFFFFFF"), Some(16), Some(10), false)?,
+            Some("18446744073709551615".to_string())
+        );
+        assert!(convert(Some("FFFFFFFFFFFFFFFFF"), Some(16), Some(10), true).is_err());
+        Ok(())
     }
 }

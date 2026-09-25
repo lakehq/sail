@@ -48,6 +48,7 @@ indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 regex-syntax = { workspace = true }
+icu_casemap = { workspace = true }
 parquet-variant-compute = { workspace = true }
 
 [build-dependencies]

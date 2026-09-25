@@ -463,13 +463,212 @@ fn spark_string_cast_arguments(
     expr: expr::Expr,
     schema: &DFSchemaRef,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let tree = spark_interval_metadata_tree(&expr, schema)?;
     let mut arguments = vec![expr];
-    if let Some(interval) = interval {
-        // Physical expression serialization does not preserve intermediate field metadata.
-        arguments.push(lit(interval.to_json()?));
+    if let Some(tree) = tree {
+        // Physical expression serialization drops nested Arrow field metadata. Preserve the
+        // complete field tree for the string UDF without changing the physical input type.
+        arguments.push(lit(tree.to_json()?));
     }
     Ok(arguments)
+}
+
+fn spark_interval_metadata_tree(
+    expression: &expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    let data_type = expression.to_field(schema.as_ref())?.1.data_type().clone();
+    spark_interval_metadata_tree_for_type(expression, &data_type, schema)
+}
+
+fn spark_interval_metadata_tree_for_type(
+    expression: &expr::Expr,
+    data_type: &DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    use spec::SparkIntervalMetadataTree as Tree;
+
+    match data_type {
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth) => {
+            Ok(spark_interval_metadata_for_expression(expression, schema)?
+                .map(|metadata| Tree::Interval { metadata }))
+        }
+        DataType::List(element) => {
+            let Some(arguments) = array_arguments(expression) else {
+                return Ok(None);
+            };
+            let children = arguments
+                .iter()
+                .map(|argument| {
+                    spark_interval_metadata_tree_for_type(argument, element.data_type(), schema)
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            Ok(
+                merge_interval_metadata_trees(children)?.map(|element| Tree::List {
+                    element: Box::new(element),
+                }),
+            )
+        }
+        DataType::Map(entries, _) => {
+            let DataType::Struct(fields) = entries.data_type() else {
+                return Ok(None);
+            };
+            let (Some(key), Some(value)) = (fields.first(), fields.get(1)) else {
+                return Ok(None);
+            };
+            if let Some((keys, values)) = map_arguments(expression) {
+                let key = list_element_tree(keys, key.data_type(), schema)?;
+                let value = list_element_tree(values, value.data_type(), schema)?;
+                return Ok((key.is_some() || value.is_some()).then(|| Tree::Map {
+                    key: key.map(Box::new),
+                    value: value.map(Box::new),
+                }));
+            }
+            let Some(branches) = conditional_branches(expression) else {
+                return Ok(None);
+            };
+            let branches = branches
+                .iter()
+                .map(|branch| spark_interval_metadata_tree_for_type(branch, data_type, schema))
+                .collect::<PlanResult<Vec<_>>>()?;
+            merge_interval_metadata_trees(branches)
+        }
+        DataType::Struct(fields) => {
+            let Some(arguments) = struct_arguments(expression) else {
+                return Ok(None);
+            };
+            if arguments.len() != fields.len() {
+                return Ok(None);
+            }
+            let fields = arguments
+                .iter()
+                .zip(fields.iter())
+                .map(|(argument, field)| {
+                    spark_interval_metadata_tree_for_type(argument, field.data_type(), schema)
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            if fields.iter().all(Option::is_none) {
+                Ok(None)
+            } else {
+                Ok(Some(Tree::Struct { fields }))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn array_arguments(expression: &expr::Expr) -> Option<&[expr::Expr]> {
+    let function = scalar_function(expression)?;
+    matches!(function.name(), "array" | "make_array" | "spark_array")
+        .then_some(function.args.as_slice())
+}
+
+fn scalar_function(expression: &expr::Expr) -> Option<&expr::ScalarFunction> {
+    match expression {
+        expr::Expr::ScalarFunction(function) => Some(function),
+        expr::Expr::Alias(alias) => scalar_function(alias.expr.as_ref()),
+        expr::Expr::Cast(cast) => scalar_function(cast.expr.as_ref()),
+        expr::Expr::TryCast(cast) => scalar_function(cast.expr.as_ref()),
+        _ => None,
+    }
+}
+
+fn map_arguments(expression: &expr::Expr) -> Option<(&expr::Expr, &expr::Expr)> {
+    let function = scalar_function(expression)?;
+    (function.name() == "map_from_arrays").then(|| {
+        let [keys, values] = function.args.as_slice() else {
+            return None;
+        };
+        Some((keys, values))
+    })?
+}
+
+fn conditional_branches(expression: &expr::Expr) -> Option<Vec<&expr::Expr>> {
+    let function = scalar_function(expression)?;
+    match function.name() {
+        "coalesce" | "nvl" => Some(function.args.iter().collect()),
+        "if" if function.args.len() == 3 => Some(function.args.iter().skip(1).collect()),
+        _ => None,
+    }
+}
+
+fn list_element_tree(
+    expression: &expr::Expr,
+    element_type: &DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    let Some(arguments) = array_arguments(expression) else {
+        return Ok(None);
+    };
+    let children = arguments
+        .iter()
+        .map(|argument| spark_interval_metadata_tree_for_type(argument, element_type, schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    merge_interval_metadata_trees(children)
+}
+
+fn struct_arguments(expression: &expr::Expr) -> Option<Vec<&expr::Expr>> {
+    let expr::Expr::ScalarFunction(function) = expression else {
+        return None;
+    };
+    match function.name() {
+        "struct" => Some(function.args.iter().collect()),
+        "named_struct" if function.args.len().is_multiple_of(2) => {
+            Some(function.args.iter().skip(1).step_by(2).collect())
+        }
+        _ => None,
+    }
+}
+
+fn merge_interval_metadata_trees(
+    trees: Vec<Option<spec::SparkIntervalMetadataTree>>,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    use spec::SparkIntervalMetadataTree as Tree;
+
+    let mut trees = trees.into_iter().flatten();
+    let Some(first) = trees.next() else {
+        return Ok(None);
+    };
+    trees
+        .try_fold(first, |current, next| match (current, next) {
+            (Tree::Interval { metadata: left }, Tree::Interval { metadata: right }) => left
+                .wider(right)
+                .map(|metadata| Tree::Interval { metadata })
+                .ok_or_else(|| PlanError::analysis("incompatible Spark interval metadata")),
+            (Tree::List { element: left }, Tree::List { element: right }) => {
+                merge_interval_metadata_trees(vec![Some(*left), Some(*right)])?
+                    .map(|element| Tree::List {
+                        element: Box::new(element),
+                    })
+                    .ok_or_else(|| PlanError::analysis("incompatible Spark interval list metadata"))
+            }
+            (
+                Tree::Map {
+                    key: left_key,
+                    value: left_value,
+                },
+                Tree::Map {
+                    key: right_key,
+                    value: right_value,
+                },
+            ) => Ok(Tree::Map {
+                key: merge_interval_metadata_trees(vec![
+                    left_key.map(|tree| *tree),
+                    right_key.map(|tree| *tree),
+                ])?
+                .map(Box::new),
+                value: merge_interval_metadata_trees(vec![
+                    left_value.map(|tree| *tree),
+                    right_value.map(|tree| *tree),
+                ])?
+                .map(Box::new),
+            }),
+            (left, right) if left == right => Ok(left),
+            _ => Err(PlanError::analysis(
+                "incompatible Spark nested interval metadata",
+            )),
+        })
+        .map(Some)
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
