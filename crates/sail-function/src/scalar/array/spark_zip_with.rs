@@ -19,8 +19,8 @@ use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_V
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
 use crate::scalar::array::lambda_utils::coerce_single_list_arg;
 
-/// Spark's ZipWith and MapZipWith in higherOrderFunctions.scala. Both evaluate
-/// their inputs left-to-right, then invoke a lambda over aligned element pairs.
+// Spark's ZipWith and MapZipWith in higherOrderFunctions.scala. Both evaluate
+// their inputs left-to-right, then invoke a lambda over aligned element pairs.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkZipWith {
     signature: HigherOrderSignature,
@@ -448,8 +448,8 @@ fn map_type(key: DataType, value: DataType, nullable: bool) -> DataType {
     )
 }
 
-/// Find Spark's wider key type before applying the outer map-key nullability
-/// restriction. Nested array elements and struct fields can become nullable.
+// Find Spark's wider key type before applying the outer map-key nullability
+// restriction. Nested array elements and struct fields can become nullable.
 fn common_key_type(
     left: &DataType,
     right: &DataType,
@@ -562,7 +562,7 @@ fn common_key_type(
     }
 }
 
-/// Spark Cast.forceNullable for the widening casts admitted by common_key_type.
+// Spark Cast.forceNullable for the widening casts admitted by common_key_type.
 fn key_cast_nullable(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         _ if from == to || from.is_null() => false,
@@ -589,8 +589,8 @@ fn decimal_key_parts(data_type: &DataType) -> Option<(i16, i16)> {
     }
 }
 
-/// ScalarValue hashes float bits, whereas Spark equates all NaNs and both
-/// signed zeros, including inside array/struct keys. Normalize only for lookup.
+// ScalarValue hashes float bits, whereas Spark equates all NaNs and both
+// signed zeros, including inside array/struct keys. Normalize only for lookup.
 fn normalize_keys(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(match array.data_type() {
         DataType::Float32 => Arc::new(Float32Array::from_iter(

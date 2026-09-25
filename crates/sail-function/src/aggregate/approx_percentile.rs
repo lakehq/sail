@@ -31,7 +31,7 @@ impl Default for ApproxPercentile {
 }
 
 impl ApproxPercentile {
-    /// Validate foldable parameters both during planning and when constructing an accumulator.
+    // Validate foldable parameters both during planning and when constructing an accumulator.
     pub fn validate_parameters(
         percentage: ScalarValue,
         accuracy: ScalarValue,
@@ -244,13 +244,13 @@ struct Sample {
     delta: u64,
 }
 
-/// Spark's QuantileSummaries (Greenwald–Khanna), including its head-buffer and
-/// compression thresholds. A t-digest or an exact rank calculation produces
-/// different results, particularly at low accuracy and after partial merges.
-/// TODO: Match Spark's scan and partial-aggregation partition topology. Sail may
-/// repartition even explicit single-partition ranges, changing approximate ranks.
-/// IEEE NaN comparisons also make summary merges order-dependent, so differing
-/// LocalRelation partitions can select different NaN results.
+// Spark's QuantileSummaries (Greenwald–Khanna), including its head-buffer and
+// compression thresholds. A t-digest or an exact rank calculation produces
+// different results, particularly at low accuracy and after partial merges.
+// TODO: Match Spark's scan and partial-aggregation partition topology. Sail may
+//  repartition even explicit single-partition ranges, changing approximate ranks.
+//  IEEE NaN comparisons also make summary merges order-dependent, so differing
+//  LocalRelation partitions can select different NaN results.
 #[derive(Debug)]
 struct QuantileSummary {
     relative_error: f64,
