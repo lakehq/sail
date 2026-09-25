@@ -10,13 +10,13 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::TemporaryViewSource;
+use sail_common_datafusion::catalog::{
+    TemporaryViewSource, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
+    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
-use crate::config::{
-    VIEW_CONDITIONAL_ANSI_MODE_PROPERTY, VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
-};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;

@@ -11,7 +11,10 @@ use datafusion_expr::{
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseOperation, TableColumnStatus, TableKind, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
+    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -21,9 +24,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
-use crate::config::{
-    VIEW_CONDITIONAL_ANSI_MODE_PROPERTY, VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
-};
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;

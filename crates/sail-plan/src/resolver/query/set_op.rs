@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, TimeUnit};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
@@ -111,32 +111,30 @@ impl PlanResolver<'_> {
                 let mut union =
                     Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
                 // Conditional coercion needs the common UNION schema.
-                // TODO: Match Spark's ANSI string coercion for UNION inputs. DataFusion
-                //  widens numeric/STRING inputs to STRING, so typeof also reports STRING.
+                // TODO: Match Spark's ANSI string coercion for UNION inputs, including nested
+                //  leaves. Preserving supported consumers does not repair raw UNION output.
                 // TODO: Widen DECIMAL with FLOAT/DOUBLE, and ANSI BIGINT with FLOAT, to DOUBLE
                 //  like Spark. DataFusion keeps DECIMAL or FLOAT for these UNION inputs.
                 let coerced = coerce_union_schema(&union.inputs)?;
                 // Take only types and nullability from the coerced schema, since DataFusion lets
                 // the last input's field metadata (such as a Spark interval qualifier) win.
                 // Columns keep the loose type where DataFusion's common type differs from Spark:
-                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP, DOUBLE with DECIMAL
+                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP, FLOAT/DOUBLE with DECIMAL
                 // becomes DECIMAL, and ANSI numeric with STRING becomes STRING, which store
                 // assignment rejects.
                 // TODO: Widen these columns and interval qualifiers like Spark.
                 // TODO: Coerce TIMESTAMP/STRING UNION columns to microseconds; raw UNION
-                //  output currently retains unsupported nanosecond units.
+                //  output currently retains unsupported nanosecond units, and STRING-first
+                //  inputs also break UTC conversion consumers.
+                let ansi_mode = self
+                    .config
+                    .view_conditional_ansi_mode
+                    .unwrap_or(self.config.ansi_mode);
                 let fields = union
                     .schema
                     .iter()
                     .zip(coerced.fields())
-                    .enumerate()
-                    .map(|(i, ((qualifier, field), coerced_field))| {
-                        let types = union
-                            .inputs
-                            .iter()
-                            .map(|input| input.schema().field(i).data_type())
-                            .collect::<Vec<_>>();
-                        let has = |f: fn(&DataType) -> bool| types.iter().any(|t| f(t));
+                    .map(|((qualifier, field), coerced_field)| {
                         // TODO: Widen nested UNION types while preserving their field metadata.
                         // Keep the existing type until coercion can retain interval qualifiers.
                         let has_nested_metadata = Schema::new(vec![Arc::clone(field)])
@@ -144,24 +142,18 @@ impl PlanResolver<'_> {
                             .iter()
                             .skip(1)
                             .any(|field| !field.metadata().is_empty());
-                        let keep_loose_type = has_nested_metadata
-                            || (field.data_type() == &DataType::Float64
-                                && coerced_field.data_type().is_decimal())
-                            || (has(|t| matches!(t, DataType::Date32 | DataType::Date64))
-                                && has(|t| matches!(t, DataType::Timestamp(_, _))))
-                            || (matches!(field.data_type(), DataType::Timestamp(_, _))
-                                && has(DataType::is_string))
-                            || (self.config.ansi_mode
-                                && has(DataType::is_string)
-                                && has(DataType::is_numeric));
-                        let field = if keep_loose_type {
+                        let field = if has_nested_metadata {
                             Arc::clone(field)
                         } else {
                             Arc::new(
                                 field
                                     .as_ref()
                                     .clone()
-                                    .with_data_type(coerced_field.data_type().clone())
+                                    .with_data_type(repair_union_type(
+                                        field.data_type(),
+                                        coerced_field.data_type(),
+                                        ansi_mode,
+                                    ))
                                     .with_nullable(coerced_field.is_nullable()),
                             )
                         };
@@ -282,5 +274,64 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+}
+
+// Keep the pre-analyzer type only at leaves where exposing DataFusion's common
+// type would change existing consumers. Preserve widened types in sibling fields.
+fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: bool) -> DataType {
+    if (data_type.is_floating() && coerced_type.is_decimal())
+        || (ansi_mode && data_type.is_numeric() && coerced_type.is_string())
+        || matches!(
+            (data_type, coerced_type),
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            )
+        )
+    {
+        return data_type.clone();
+    }
+    let repair_field = |field: &FieldRef, coerced_field: &FieldRef| {
+        Arc::new(
+            coerced_field
+                .as_ref()
+                .clone()
+                .with_data_type(repair_union_type(
+                    field.data_type(),
+                    coerced_field.data_type(),
+                    ansi_mode,
+                )),
+        )
+    };
+    match (data_type, coerced_type) {
+        (
+            DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _),
+            coerced_type,
+        ) => match coerced_type {
+            DataType::List(coerced_field) => DataType::List(repair_field(field, coerced_field)),
+            DataType::LargeList(coerced_field) => {
+                DataType::LargeList(repair_field(field, coerced_field))
+            }
+            DataType::FixedSizeList(coerced_field, size) => {
+                DataType::FixedSizeList(repair_field(field, coerced_field), *size)
+            }
+            _ => coerced_type.clone(),
+        },
+        (DataType::Map(field, _), DataType::Map(coerced_field, sorted)) => {
+            DataType::Map(repair_field(field, coerced_field), *sorted)
+        }
+        (DataType::Struct(fields), DataType::Struct(coerced_fields))
+            if fields.len() == coerced_fields.len() =>
+        {
+            DataType::Struct(
+                fields
+                    .iter()
+                    .zip(coerced_fields)
+                    .map(|(field, coerced_field)| repair_field(field, coerced_field))
+                    .collect(),
+            )
+        }
+        _ => coerced_type.clone(),
     }
 }

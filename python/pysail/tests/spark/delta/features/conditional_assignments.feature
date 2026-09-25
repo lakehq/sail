@@ -172,3 +172,34 @@ Feature: Conditional row-level assignments
       SET n = CAST(CASE WHEN id = 1 THEN 1 ELSE '7' END AS STRING)
       """
     Then query error CANNOT_SAFELY_CAST
+
+  Scenario Outline: MERGE preserves nested numeric assignments from a UNION source: <kind>, <operator>
+    Given statement
+      """
+      MERGE INTO conditional_assignments AS t
+      USING (
+        SELECT 1 AS id, <first> AS v
+        <operator>
+        SELECT 3 AS id, <second> AS v
+      ) AS s
+      ON t.id = s.id
+      WHEN MATCHED THEN UPDATE SET <target> = s.v
+      WHEN NOT MATCHED THEN INSERT (id, <target>) VALUES (s.id, s.v)
+      """
+    When query
+      """
+      SELECT id, <access> AS result FROM conditional_assignments ORDER BY id
+      """
+    Then query result ordered
+      | id | result |
+      | 1  | 1      |
+      | 2  | 20     |
+      | 3  | 7      |
+
+    Examples:
+      | kind   | operator  | target  | first                | second                 | access       |
+      | STRUCT | UNION ALL | r       | named_struct('a', 1) | named_struct('a', '7') | r.a          |
+      | STRUCT | UNION     | r       | named_struct('a', 1) | named_struct('a', '7') | r.a          |
+      | ARRAY  | UNION ALL | a       | array(1)             | array('7')             | a[0]         |
+      | ARRAY  | UNION     | a       | array(1)             | array('7')             | a[0]         |
+      | MAP    | UNION ALL | mapping | map('a', 1)          | map('a', '7')          | mapping['a'] |

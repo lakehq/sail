@@ -392,3 +392,262 @@ Feature: Set operations (INTERSECT, EXCEPT)
         root
          |-- v: timestamp (nullable = true)
         """
+
+  Rule: UNION preserves existing consumers while widening its declared types
+
+    Scenario Outline: Floating-point UNION inputs retain DOUBLE division results: <operator>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          scalar_value / 2 AS scalar_result,
+          typeof(scalar_value / 2) AS scalar_type,
+          struct_value.n / 2 AS struct_result,
+          typeof(struct_value.n / 2) AS struct_type,
+          array_value[0] / 2 AS array_result,
+          typeof(array_value[0] / 2) AS array_type
+        FROM (
+          SELECT 0 AS id, CAST(1.25 AS FLOAT) AS scalar_value,
+            struct(CAST(1.25 AS DOUBLE) AS n) AS struct_value,
+            array(CAST(1.25 AS FLOAT)) AS array_value
+          <operator>
+          SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS scalar_value,
+            struct(CAST(2.5 AS DECIMAL(2,1)) AS n) AS struct_value,
+            array(CAST(2.5 AS DECIMAL(2,1))) AS array_value
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | scalar_result | scalar_type | struct_result | struct_type | array_result | array_type |
+        | 0.625         | double      | 0.625         | double      | 0.625        | double     |
+        | 1.25          | double      | 1.25          | double      | 1.25         | double     |
+
+      Examples:
+        | operator  | ansi  |
+        | UNION ALL | false |
+        | UNION     | false |
+        | UNION ALL | true  |
+        | UNION     | true  |
+
+    Scenario Outline: UNION preserves floating-point map value division: ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT v['n'] / 2 AS result, typeof(v['n'] / 2) AS result_type
+        FROM (
+          SELECT 0 AS id, map('n', CAST(1.25 AS DOUBLE)) AS v
+          UNION ALL
+          SELECT 1 AS id, map('n', CAST(2.5 AS DECIMAL(2,1))) AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | result | result_type |
+        | 0.625  | double      |
+        | 1.25   | double      |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: UNION preserves UTC conversion of TIMESTAMP-first nested inputs: <operator>, <kind>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          from_utc_timestamp(scalar_value, 'America/Los_Angeles') AS scalar_from_utc,
+          to_utc_timestamp(scalar_value, 'America/Los_Angeles') AS scalar_to_utc,
+          from_utc_timestamp(struct_value.n, 'America/Los_Angeles') AS struct_from_utc,
+          to_utc_timestamp(array_value[0], 'America/Los_Angeles') AS array_to_utc
+        FROM (
+          SELECT 0 AS id, CAST('2024-06-15 12:00:00' AS <kind>) AS scalar_value,
+            struct(CAST('2024-06-15 12:00:00' AS <kind>) AS n) AS struct_value,
+            array(CAST('2024-06-15 12:00:00' AS <kind>)) AS array_value
+          <operator>
+          SELECT 1 AS id, '2024-06-16 12:00:00' AS scalar_value,
+            struct('2024-06-16 12:00:00' AS n) AS struct_value,
+            array('2024-06-16 12:00:00') AS array_value
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | scalar_from_utc     | scalar_to_utc       | struct_from_utc     | array_to_utc        |
+        | 2024-06-15 05:00:00 | 2024-06-15 19:00:00 | 2024-06-15 05:00:00 | 2024-06-15 19:00:00 |
+        | 2024-06-16 05:00:00 | 2024-06-16 19:00:00 | 2024-06-16 05:00:00 | 2024-06-16 19:00:00 |
+      And query schema
+        """
+        root
+         |-- scalar_from_utc: timestamp (nullable = true)
+         |-- scalar_to_utc: timestamp (nullable = true)
+         |-- struct_from_utc: timestamp (nullable = true)
+         |-- array_to_utc: timestamp (nullable = true)
+        """
+
+      Examples:
+        | operator  | kind          | ansi  |
+        | UNION ALL | TIMESTAMP     | true  |
+        | UNION ALL | TIMESTAMP     | false |
+        | UNION     | TIMESTAMP     | true  |
+        | UNION     | TIMESTAMP     | false |
+        | UNION ALL | TIMESTAMP_NTZ | true  |
+        | UNION ALL | TIMESTAMP_NTZ | false |
+        | UNION     | TIMESTAMP_NTZ | true  |
+        | UNION     | TIMESTAMP_NTZ | false |
+
+    Scenario Outline: UNION preserves UTC conversion of map values: <kind>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          from_utc_timestamp(v['n'], 'America/Los_Angeles') AS from_utc,
+          to_utc_timestamp(v['n'], 'America/Los_Angeles') AS to_utc
+        FROM (
+          SELECT 0 AS id, map('n', CAST('2024-06-15 12:00:00' AS <kind>)) AS v
+          UNION ALL
+          SELECT 1 AS id, map('n', '2024-06-16 12:00:00') AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | from_utc            | to_utc              |
+        | 2024-06-15 05:00:00 | 2024-06-15 19:00:00 |
+        | 2024-06-16 05:00:00 | 2024-06-16 19:00:00 |
+      And query schema
+        """
+        root
+         |-- from_utc: timestamp (nullable = true)
+         |-- to_utc: timestamp (nullable = true)
+        """
+
+      Examples:
+        | kind          | ansi  |
+        | TIMESTAMP     | true  |
+        | TIMESTAMP     | false |
+        | TIMESTAMP_NTZ | true  |
+        | TIMESTAMP_NTZ | false |
+
+    Scenario Outline: Persistent views retain non-ANSI UNION conditional values: <expression>, <operator>
+      Given config spark.sql.ansi.enabled = false
+      And statement
+        """
+        CREATE OR REPLACE VIEW union_conditional_legacy_view AS
+        SELECT id, <expression> AS result
+        FROM (
+          SELECT 0 AS id, 1 AS v
+          <operator>
+          SELECT 1 AS id, 'x' AS v
+        ) AS q
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS union_conditional_legacy_view
+        """
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, result
+        FROM union_conditional_legacy_view
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 0  | 2      |
+        | 1  | x      |
+
+      Examples:
+        | expression                                                 | operator  |
+        | IF(id = 0, CAST(2 AS BIGINT), v)                             | UNION ALL |
+        | IF(id = 0, CAST(2 AS BIGINT), v)                             | UNION     |
+        | CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE v END            | UNION ALL |
+        | CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE v END            | UNION     |
+        | nvl2(nullif(id, 1), CAST(2 AS BIGINT), v)                     | UNION ALL |
+        | nvl2(nullif(id, 1), CAST(2 AS BIGINT), v)                     | UNION     |
+
+    @sail-bug
+    Scenario: UNION widens raw FLOAT and DECIMAL output to DOUBLE
+      When query
+        """
+        SELECT CAST(1.25 AS FLOAT) AS v
+        UNION ALL
+        SELECT CAST(2.5 AS DECIMAL(2,1)) AS v
+        """
+      Then query schema
+        """
+        root
+         |-- v: double (nullable = false)
+        """
+      And query result
+        | v    |
+        | 1.25 |
+        | 2.5  |
+
+    Scenario Outline: UNION preserves widened sibling precision in <container>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, CAST(result AS BIGINT) AS value, typeof(result) AS result_type
+        FROM (
+          SELECT id, if(id = 0, CAST(2 AS FLOAT), <access>) AS result
+          FROM (
+            SELECT 0 AS id, <first> AS v
+            UNION ALL
+            SELECT 1 AS id, <second> AS v
+          ) AS inputs
+        ) AS results
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | result_type |
+        | 0  | 2        | double      |
+        | 1  | 16777217 | double      |
+
+      Examples:
+        | container           | first                                                      | second                                                                               | access      |
+        | a struct            | named_struct('a', CAST(1 AS FLOAT), 'b', 1)                 | named_struct('a', CAST(1 AS DECIMAL(5,2)), 'b', CAST(16777217 AS DOUBLE))                 | v.b         |
+        | an array of structs | array(named_struct('a', CAST(1 AS FLOAT), 'b', 1))          | array(named_struct('a', CAST(1 AS DECIMAL(5,2)), 'b', CAST(16777217 AS DOUBLE)))          | v[0].b      |
+        | a map of arrays     | map('k', array(named_struct('a', CAST(1 AS FLOAT), 'b', 1))) | map('k', array(named_struct('a', CAST(1 AS DECIMAL(5,2)), 'b', CAST(16777217 AS DOUBLE)))) | v['k'][0].b |
+
+    @sail-bug
+    Scenario: STRING-first UNION inputs support UTC conversion
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT from_utc_timestamp(v, 'America/Los_Angeles') AS result
+        FROM (
+          SELECT '2024-06-15 12:00:00' AS v
+          UNION ALL
+          SELECT TIMESTAMP '2024-06-16 12:00:00' AS v
+        ) AS q
+        ORDER BY result
+        """
+      Then query result ordered
+        | result              |
+        | 2024-06-15 05:00:00 |
+        | 2024-06-16 05:00:00 |
+      And query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: ANSI UNION widens nested numeric and STRING leaves to BIGINT
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT v.n AS value, typeof(v) AS result_type
+        FROM (
+          SELECT 0 AS id, named_struct('n', 1) AS v
+          UNION ALL
+          SELECT 1 AS id, named_struct('n', '7') AS v
+        ) AS inputs
+        ORDER BY id
+        """
+      Then query result ordered
+        | value | result_type      |
+        | 1     | struct<n:bigint> |
+        | 7     | struct<n:bigint> |

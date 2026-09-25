@@ -206,3 +206,29 @@ def test_predicate_negation(spark):
     assert spark.sql("SELECT NOT (1 NOT IN (1, 2))").collect() == [(True,)]
     with pytest.raises(Exception, match="NOT"):
         assert spark.sql("SELECT 1 NOT NOT IN (1, 2)").collect() == [(True,)]
+
+
+@pytest.mark.parametrize("with_properties", [False, True])
+def test_persistent_view_hides_conditional_config_properties(spark, with_properties):
+    view_name = "view_conditional_config_metadata"
+    properties = "TBLPROPERTIES ('review.owner' = 'team')" if with_properties else ""
+    try:
+        spark.sql(f"CREATE VIEW {view_name} {properties} AS SELECT 1 AS id")
+
+        describe = {row.col_name: row.data_type for row in spark.sql(f"DESCRIBE EXTENDED {view_name}").collect()}
+        information = spark.sql(f"SHOW TABLE EXTENDED LIKE '{view_name}'").collect()[0].information
+        for key in (
+            "view.sqlConfig.spark.sql.ansi.enabled",
+            "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate",
+        ):
+            assert key not in describe.get("Table Properties", "")
+            assert key not in information
+
+        if with_properties:
+            assert describe["Table Properties"] == "[review.owner=team]"
+            assert "Table Properties: [review.owner=team]" in information
+        else:
+            assert "Table Properties" not in describe
+            assert "Table Properties:" not in information
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {view_name}")

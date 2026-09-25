@@ -6,10 +6,6 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
 
-pub const VIEW_CONDITIONAL_ANSI_MODE_PROPERTY: &str = "view.sqlConfig.spark.sql.ansi.enabled";
-pub const VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY: &str =
-    "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub enum DefaultTimestampType {
     TimestampLtz,

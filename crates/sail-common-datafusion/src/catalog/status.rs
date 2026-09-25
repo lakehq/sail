@@ -17,6 +17,10 @@ use crate::session::plan::PlanFormatter;
 /// protocol layer.
 pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
 
+pub const VIEW_CONDITIONAL_ANSI_MODE_PROPERTY: &str = "view.sqlConfig.spark.sql.ansi.enabled";
+pub const VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY: &str =
+    "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate";
+
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
     pub catalog: String,
@@ -280,14 +284,25 @@ impl TableStatus {
             rows.push(("View Text".to_string(), definition.to_string()));
         }
 
-        let properties = self.kind.properties();
+        let properties = self
+            .kind
+            .properties()
+            .iter()
+            .filter(|(key, _)| {
+                !matches!(&self.kind, TableKind::View { .. })
+                    || !matches!(
+                        key.as_str(),
+                        VIEW_CONDITIONAL_ANSI_MODE_PROPERTY
+                            | VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY
+                    )
+            })
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>();
         if !properties.is_empty() {
-            let props_str = properties
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            rows.push(("Table Properties".to_string(), format!("[{props_str}]")));
+            rows.push((
+                "Table Properties".to_string(),
+                format!("[{}]", properties.join(", ")),
+            ));
         }
 
         if let Some(loc) = self.kind.location() {
