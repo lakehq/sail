@@ -290,6 +290,24 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | timestamp   |
         | timestamp   |
 
+    @sail-bug
+    Scenario: ANSI STRING-first DECIMAL UNION conditional consumers retain fractional values
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(IF(id = 0, 0, v) AS DOUBLE) AS value
+        FROM (
+          SELECT 0 AS id, '2.5' AS v
+          UNION ALL
+          SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
   Rule: UNION nested field metadata
 
     Scenario Outline: UNION preserves nested interval qualifiers: <operator>
@@ -313,7 +331,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | UNION ALL |
         | UNION     |
 
-    @sail-bug
     Scenario: UNION widens numeric fields beside nested interval metadata
       When query
         """
@@ -651,3 +668,142 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | value | result_type      |
         | 1     | struct<n:bigint> |
         | 7     | struct<n:bigint> |
+
+    Scenario Outline: UNION widens numeric siblings without losing interval metadata: <container>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CAST(<access>.v AS INT) AS years,
+          CAST(IF(id = 0, CAST(2 AS FLOAT), <access>.n) AS BIGINT) AS if_value,
+          CAST(CASE WHEN id = 0 THEN CAST(2 AS FLOAT) ELSE <access>.n END AS BIGINT) AS case_value,
+          CAST(NVL2(NULLIF(id, 1), CAST(2 AS FLOAT), <access>.n) AS BIGINT) AS nvl2_value
+        FROM (
+          SELECT 0 AS id, <first> AS v
+          <operator>
+          SELECT 1 AS id, <second> AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | years | if_value | case_value | nvl2_value |
+        | 0  | 1     | 2        | 2          | 2          |
+        | 1  | 2     | 16777217 | 16777217   | 16777217   |
+
+      Examples:
+        | container | operator  | first                                                                 | second                                                                          | access  |
+        | struct    | UNION ALL | struct(INTERVAL '1' YEAR AS v, CAST(1 AS INT) AS n)                 | struct(INTERVAL '2' YEAR AS v, CAST(16777217 AS DOUBLE) AS n)                 | v       |
+        | struct    | UNION     | struct(INTERVAL '1' YEAR AS v, CAST(1 AS INT) AS n)                 | struct(INTERVAL '2' YEAR AS v, CAST(16777217 AS DOUBLE) AS n)                 | v       |
+        | array     | UNION ALL | array(struct(INTERVAL '1' YEAR AS v, CAST(1 AS INT) AS n))          | array(struct(INTERVAL '2' YEAR AS v, CAST(16777217 AS DOUBLE) AS n))          | v[0]    |
+        | map       | UNION ALL | map('k', struct(INTERVAL '1' YEAR AS v, CAST(1 AS INT) AS n))       | map('k', struct(INTERVAL '2' YEAR AS v, CAST(16777217 AS DOUBLE) AS n))       | v['k']  |
+
+  Rule: Timestamp conversions over UNION results
+
+    Scenario Outline: <function> preserves nonnullable timestamps from <operator> in <timezone>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = <timezone>
+      When query
+        """
+        SELECT id, <function>(v) AS result
+        FROM (
+          SELECT 0 AS id, TIMESTAMP_NTZ '2024-06-15 12:30:00' AS v
+          <operator>
+          SELECT 1 AS id, TIMESTAMP '2024-06-16 12:30:00' AS v
+        ) AS timestamps
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 0  | 2024-06-15 12:30:00 |
+        | 1  | 2024-06-16 12:30:00 |
+      And query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- result: timestamp (nullable = false)
+        """
+
+      Examples:
+        | function         | operator  | timezone            | ansi  |
+        | to_timestamp     | UNION ALL | UTC                 | false |
+        | to_timestamp     | UNION     | America/Los_Angeles | true  |
+        | to_timestamp_ltz | UNION ALL | America/Los_Angeles | false |
+        | to_timestamp_ltz | UNION     | UTC                 | true  |
+
+    Scenario: Timestamp conversion preserves nullable UNION input
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, to_timestamp(v) AS result
+        FROM (
+          SELECT 0 AS id, CAST(NULL AS TIMESTAMP_NTZ) AS v
+          UNION ALL
+          SELECT 1 AS id, TIMESTAMP '2024-06-16 12:30:00' AS v
+        ) AS timestamps
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 0  | NULL                |
+        | 1  | 2024-06-16 12:30:00 |
+      And query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- result: timestamp (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: Mixed NTZ and LTZ UNION inputs expose their common timestamp type
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, typeof(v) AS result_type
+        FROM (
+          SELECT 0 AS id, TIMESTAMP_NTZ '2024-06-15 12:30:00' AS v
+          UNION ALL
+          SELECT 1 AS id, TIMESTAMP '2024-06-16 12:30:00' AS v
+        ) AS timestamps
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result_type |
+        | 0  | timestamp   |
+        | 1  | timestamp   |
+
+    @sail-bug
+    Scenario: Casting a mixed NTZ and LTZ UNION preserves instants in the session timezone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT id, CAST(v AS TIMESTAMP) AS result
+        FROM (
+          SELECT 0 AS id, TIMESTAMP_NTZ '2024-06-15 12:30:00' AS v
+          UNION ALL
+          SELECT 1 AS id, TIMESTAMP '2024-06-16 12:30:00' AS v
+        ) AS timestamps
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 0  | 2024-06-15 12:30:00 |
+        | 1  | 2024-06-16 12:30:00 |
+
+    @sail-bug
+    Scenario: Timezone conversion consumers accept mixed NTZ and LTZ UNION input
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT id, convert_timezone('UTC', 'America/Los_Angeles', v) AS result
+        FROM (
+          SELECT 0 AS id, TIMESTAMP_NTZ '2024-06-15 12:30:00' AS v
+          UNION ALL
+          SELECT 1 AS id, TIMESTAMP '2024-06-16 12:30:00' AS v
+        ) AS timestamps
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 0  | 2024-06-15 05:30:00 |
+        | 1  | 2024-06-16 05:30:00 |

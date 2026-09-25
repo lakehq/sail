@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, FieldRef, TimeUnit};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
@@ -112,7 +112,8 @@ impl PlanResolver<'_> {
                     Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
                 // Conditional coercion needs the common UNION schema.
                 // TODO: Match Spark's ANSI string coercion for UNION inputs, including nested
-                //  leaves. Preserving supported consumers does not repair raw UNION output.
+                //  leaves. STRING-first DECIMAL unions remain STRING, so an enclosing
+                //  numeric conditional can request an invalid integral cast of fractional values.
                 // TODO: Widen DECIMAL with FLOAT/DOUBLE, and ANSI BIGINT with FLOAT, to DOUBLE
                 //  like Spark. DataFusion keeps DECIMAL or FLOAT for these UNION inputs.
                 let coerced = coerce_union_schema(&union.inputs)?;
@@ -135,28 +136,17 @@ impl PlanResolver<'_> {
                     .iter()
                     .zip(coerced.fields())
                     .map(|((qualifier, field), coerced_field)| {
-                        // TODO: Widen nested UNION types while preserving their field metadata.
-                        // Keep the existing type until coercion can retain interval qualifiers.
-                        let has_nested_metadata = Schema::new(vec![Arc::clone(field)])
-                            .flattened_fields()
-                            .iter()
-                            .skip(1)
-                            .any(|field| !field.metadata().is_empty());
-                        let field = if has_nested_metadata {
-                            Arc::clone(field)
-                        } else {
-                            Arc::new(
-                                field
-                                    .as_ref()
-                                    .clone()
-                                    .with_data_type(repair_union_type(
-                                        field.data_type(),
-                                        coerced_field.data_type(),
-                                        ansi_mode,
-                                    ))
-                                    .with_nullable(coerced_field.is_nullable()),
-                            )
-                        };
+                        let field = Arc::new(
+                            field
+                                .as_ref()
+                                .clone()
+                                .with_data_type(repair_union_type(
+                                    field.data_type(),
+                                    coerced_field.data_type(),
+                                    ansi_mode,
+                                ))
+                                .with_nullable(coerced_field.is_nullable()),
+                        );
                         (qualifier.cloned(), field)
                     })
                     .collect();
@@ -279,6 +269,8 @@ impl PlanResolver<'_> {
 
 // Keep the pre-analyzer type only at leaves where exposing DataFusion's common
 // type would change existing consumers. Preserve widened types in sibling fields.
+// TODO: Expose the LTZ common type of mixed NTZ/LTZ UNION inputs after timestamp
+//  consumers preserve nullability and apply timezone conversions to that common type.
 fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: bool) -> DataType {
     if (data_type.is_floating() && coerced_type.is_decimal())
         || (ansi_mode && data_type.is_numeric() && coerced_type.is_string())
@@ -287,6 +279,9 @@ fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: b
             (
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) | (
+                DataType::Timestamp(_, None),
+                DataType::Timestamp(_, Some(_))
             )
         )
     {
@@ -297,6 +292,7 @@ fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: b
             coerced_field
                 .as_ref()
                 .clone()
+                .with_metadata(field.metadata().clone())
                 .with_data_type(repair_union_type(
                     field.data_type(),
                     coerced_field.data_type(),
