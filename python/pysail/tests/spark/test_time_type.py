@@ -43,11 +43,19 @@ RESOLVING_TIME_EXPRESSIONS = [
 
 @contextlib.contextmanager
 def time_type_enabled(spark, value):
+    # Restore rather than unset: other modules set this key for a whole session
+    # (`test_to_arrow.py`, `test_arithmetic_matrix_types.py`, `test_result_type_parity.py`), so
+    # unsetting on exit would silently drop their setting. The explicit `None` default is the
+    # only way to tell "unset" from "set to the default" -- same reasoning as the `config` step.
+    previous = spark.conf.get("spark.sql.timeType.enabled", None)
     spark.conf.set("spark.sql.timeType.enabled", value)
     try:
         yield
     finally:
-        spark.conf.unset("spark.sql.timeType.enabled")
+        if previous is None:
+            spark.conf.unset("spark.sql.timeType.enabled")
+        else:
+            spark.conf.set("spark.sql.timeType.enabled", previous)
 
 
 @pytest.mark.parametrize("expression", TIME_EXPRESSIONS)

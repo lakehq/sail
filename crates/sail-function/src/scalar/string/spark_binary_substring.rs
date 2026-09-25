@@ -48,7 +48,13 @@ impl Default for SparkBinaryOverlay {
 
 impl ScalarUDFImpl for SparkBinarySubstring {
     fn name(&self) -> &str {
-        "spark_binary_substring"
+        // The flag has to survive the physical codec, which reconstructs a UDF from its name,
+        // so it is part of the name -- the same encoding `SparkOverlay` uses for its own.
+        if self.force_nullable {
+            "spark_binary_substring_nullable"
+        } else {
+            "spark_binary_substring"
+        }
     }
     fn signature(&self) -> &Signature {
         &self.signature

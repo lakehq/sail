@@ -3321,6 +3321,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_binary_substring" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBinarySubstring::new(false))))
             }
+            "spark_binary_substring_nullable" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBinarySubstring::new(true))))
+            }
             "spark_binary_overlay" => Ok(Arc::new(ScalarUDF::from(SparkBinaryOverlay::new()))),
             "spark_overlay_nonnullable" => Ok(Arc::new(ScalarUDF::from(SparkOverlay::new(false)))),
             "spark_overlay_nullable" => Ok(Arc::new(ScalarUDF::from(SparkOverlay::new(true)))),
@@ -6640,10 +6643,22 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_binary_substring_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkBinarySubstring::new()))?;
+        // Both values, because the flag rides in the name: decoding either one as `false`
+        // would silently make a nullable `substr` non-nullable in cluster mode.
+        for force_nullable in [false, true] {
+            let decoded =
+                round_trip_udf(ScalarUDF::from(SparkBinarySubstring::new(force_nullable)))?;
 
-        downcast_udf::<SparkBinarySubstring>(&decoded, "SparkBinarySubstring")?;
-        assert_eq!(decoded.name(), "spark_binary_substring");
+            downcast_udf::<SparkBinarySubstring>(&decoded, "SparkBinarySubstring")?;
+            assert_eq!(
+                decoded.name(),
+                if force_nullable {
+                    "spark_binary_substring_nullable"
+                } else {
+                    "spark_binary_substring"
+                }
+            );
+        }
 
         Ok(())
     }

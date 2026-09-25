@@ -4,7 +4,9 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use sail_common::spec::{SAIL_INTERNAL_METADATA_PREFIX, SPARK_METADATA_JSON_KEY};
+use sail_common::spec::{
+    SAIL_INTERNAL_METADATA_PREFIX, SAIL_SPARK_INTERVAL_METADATA_KEY, SPARK_METADATA_JSON_KEY,
+};
 use sail_common::utils::string::escape_meta_characters;
 
 use crate::error::{SparkError, SparkResult};
@@ -35,7 +37,14 @@ pub(crate) fn to_client_metadata(metadata: &HashMap<String, String>) -> HashMap<
         .unwrap_or_default();
     let mut output = HashMap::with_capacity(metadata.len());
     for (key, value) in metadata {
-        if key == SPARK_METADATA_JSON_KEY || key.starts_with(SAIL_INTERNAL_METADATA_PREFIX) {
+        // TODO: `SAIL_SPARK_INTERVAL_METADATA_KEY` is the one internal key that does not carry
+        //  `SAIL_INTERNAL_METADATA_PREFIX`, so the prefix check alone does not cover it. Renaming
+        //  it to `SAIL::spark::interval` would make this arm unnecessary and would cover every
+        //  future key too, but it touches every producer and consumer.
+        if key == SPARK_METADATA_JSON_KEY
+            || key == SAIL_SPARK_INTERVAL_METADATA_KEY
+            || key.starts_with(SAIL_INTERNAL_METADATA_PREFIX)
+        {
             continue;
         }
         if LOOSE_SPARK_METADATA_KEYS.contains(&key.as_str()) {
