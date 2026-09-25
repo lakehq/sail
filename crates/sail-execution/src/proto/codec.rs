@@ -101,6 +101,7 @@ use sail_common_datafusion::schema_evolution::{
     StructFieldMatching,
 };
 use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;
@@ -3274,6 +3275,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
             "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
+            "spark_get_field" => Ok(Arc::new(ScalarUDF::from(SparkGetField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -3479,6 +3481,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
+            || node_inner.is::<SparkGetField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()

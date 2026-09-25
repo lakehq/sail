@@ -14,6 +14,7 @@ use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 
 use crate::datasource::simplify_expr;
 use crate::physical_plan::DeltaMetadataStatsExec;
@@ -467,7 +468,10 @@ impl ExprTemplate {
 fn extract_column_path(expr: &Expr) -> Option<Vec<String>> {
     match expr {
         Expr::Column(column) => Some(vec![column.name.clone()]),
-        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
+        Expr::ScalarFunction(function)
+            if function.func.inner().is::<GetFieldFunc>()
+                || function.func.inner().is::<SparkGetField>() =>
+        {
             let [base, field] = function.args.as_slice() else {
                 return None;
             };

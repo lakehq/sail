@@ -31,6 +31,7 @@ use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     Column as PhysicalColumn, Literal as PhysicalLiteral,
 };
+use sail_common_datafusion::udf::get_field::SparkGetField;
 
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{ColumnMappingMode, DeltaResult};
@@ -153,7 +154,9 @@ fn rewrite_expr_for_column_mapping(
         return Ok((rewritten, Some(Arc::clone(field))));
     }
 
-    if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() {
+    if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some()
+        || ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expr.as_ref()).is_some()
+    {
         let children = expr.children();
         let Some((source_expr, path_exprs)) = children.split_first() else {
             return Ok((expr, None));

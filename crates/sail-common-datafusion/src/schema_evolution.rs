@@ -22,6 +22,7 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
+use crate::udf::get_field::SparkGetField;
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 pub const FIELD_DEFAULT_METADATA_KEY: &str = "sail.schema_evolution.default";
@@ -383,7 +384,9 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let get_field_expr =
-            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
+            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+                .or_else(|| ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expr.as_ref()))
+            {
                 Some(expr) => expr,
                 None => return Ok(None),
             };

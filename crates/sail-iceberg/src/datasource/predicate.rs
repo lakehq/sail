@@ -5,6 +5,7 @@ use datafusion::functions::math::nans::IsNanFunc;
 use datafusion::functions::string::starts_with::StartsWithFunc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::manifest_list::FieldSummary;
@@ -421,7 +422,10 @@ fn source_field<'a>(
         Expr::Column(column) => schema
             .field_by_name(&column.name)
             .filter(|field| schema.field_path_by_id(field.id).is_some()),
-        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
+        Expr::ScalarFunction(function)
+            if function.func.inner().is::<GetFieldFunc>()
+                || function.func.inner().is::<SparkGetField>() =>
+        {
             let [parent, Expr::Literal(value, _)] = function.args.as_slice() else {
                 return None;
             };

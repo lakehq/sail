@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
+use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::{ScalarUDF, col, expr, lit};
-use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
@@ -42,10 +42,8 @@ impl PlanResolver<'_> {
                 .to_string();
             let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
             for part in rest {
-                expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
-                    get_field(),
-                    vec![expr, lit(part.as_ref().to_string())],
-                ));
+                expr = ScalarUDF::from(SparkGetField::new())
+                    .call(vec![expr, lit(part.as_ref().to_string())]);
             }
             return Ok(NamedExpr::new(vec![display], expr));
         }
@@ -257,8 +255,7 @@ impl PlanResolver<'_> {
                     .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                     .and_then(|field| {
                         let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                        let expr = ScalarUDF::from(SparkGetField::new()).call(args);
                         Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
                 DataType::List(field)

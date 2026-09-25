@@ -215,17 +215,27 @@ impl PlanResolver<'_> {
                 subquery,
                 negated,
             } => {
-                // Detect multi-column IN subquery: (a, b) IN (SELECT x, y FROM ...)
-                // The SQL parser produces a Tuple which the analyzer converts to
-                // UnresolvedFunction("struct", [a, b]).
+                // Spark expands struct constructors into IN-subquery values, even
+                // when there is only one value (which may itself be a struct).
                 if let Expr::UnresolvedFunction(ref f) = *expr
                     && f.function_name.parts() == [spec::Identifier::from("struct")]
-                    && f.arguments.len() > 1
+                    && !f.arguments.is_empty()
                 {
                     let arguments = match *expr {
                         Expr::UnresolvedFunction(f) => f.arguments,
                         _ => unreachable!(),
                     };
+                    if arguments.len() == 1 {
+                        return self
+                            .resolve_expression_in_subquery(
+                                arguments.one()?,
+                                *subquery,
+                                negated,
+                                schema,
+                                state,
+                            )
+                            .await;
+                    }
                     return self
                         .resolve_multi_column_in_subquery(
                             arguments, *subquery, negated, schema, state,

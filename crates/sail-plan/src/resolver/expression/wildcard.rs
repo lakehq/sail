@@ -2,11 +2,10 @@ use std::collections::VecDeque;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, TableReference};
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
 use datafusion_expr::{ScalarUDF, col, expr, lit};
-use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
@@ -125,10 +124,7 @@ impl PlanResolver<'_> {
                     .map(|field| {
                         let name = field.name().to_string();
                         let args = vec![expr.clone(), lit(name.clone())];
-                        (
-                            name,
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args)),
-                        )
+                        (name, ScalarUDF::from(SparkGetField::new()).call(args))
                     })
                     .unzip();
                 Some(NamedExpr::new(
@@ -141,8 +137,7 @@ impl PlanResolver<'_> {
                 .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                 .and_then(|field| {
                     let args = vec![expr, lit(field.name().to_string())];
-                    let expr =
-                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    let expr = ScalarUDF::from(SparkGetField::new()).call(args);
                     Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)
                 }),
         }
