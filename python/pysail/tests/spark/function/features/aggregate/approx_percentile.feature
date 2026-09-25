@@ -318,3 +318,14 @@ Feature: Approximate percentiles follow Spark's rank summary and preserve input 
     Then query result
       | p   |
       | [1] |
+
+  @sail-bug
+  Scenario: Approximate percentiles preserve explicit range partitioning
+    When query
+      """
+      SELECT percentile_approx(id, array(0.25D, 0.5D, 0.75D), 7) AS p
+      FROM range(0, 100003, 1, 1)
+      """
+    Then query result
+      | p                     |
+      | [10966, 49999, 63265] |

@@ -9,6 +9,7 @@ use datafusion::functions_aggregate::{
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
@@ -51,7 +52,7 @@ use crate::function::common::{
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
     theta_args_with_default_lg,
 };
-use crate::function::transform_count_star_wildcard_expr;
+use crate::function::{is_higher_order_function, transform_count_star_wildcard_expr};
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -832,7 +833,23 @@ pub(super) fn approx_percentile_arguments(
         ));
     }
     for (argument, name) in arguments.iter().skip(1).zip(["percentage", "accuracy"]) {
-        if argument.any_column_refs() || argument.is_volatile() {
+        // Spark's higher-order functions are non-foldable even with literal inputs.
+        let has_higher_order_function = argument.exists(|expression| {
+            Ok(match expression {
+                expr::Expr::HigherOrderFunction(function) => {
+                    is_higher_order_function(function.func.name())
+                }
+                // Only no-comparator array_sort lowers to ASC/NULLS LAST.
+                // Spark's foldable sort_array uses ASC/FIRST or DESC/LAST.
+                expr::Expr::ScalarFunction(function) if function.func.name() == "array_sort" => {
+                    function.args.len() == 3
+                        && function.args.get(1) == Some(&lit("ASC"))
+                        && function.args.get(2) == Some(&lit("NULLS LAST"))
+                }
+                _ => false,
+            })
+        })?;
+        if argument.any_column_refs() || argument.is_volatile() || has_higher_order_function {
             return Err(PlanError::invalid(format!(
                 "{name} must be a foldable expression"
             )));

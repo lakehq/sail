@@ -247,9 +247,10 @@ struct Sample {
 /// Spark's QuantileSummaries (Greenwald–Khanna), including its head-buffer and
 /// compression thresholds. A t-digest or an exact rank calculation produces
 /// different results, particularly at low accuracy and after partial merges.
-/// TODO: Match Spark's scan partition topology for VALUES inputs. Its IEEE NaN
-/// comparisons make summary merges order-dependent; equal explicit partitions
-/// agree, but differing LocalRelation partitions can select different NaN results.
+/// TODO: Match Spark's scan and partial-aggregation partition topology. Sail may
+/// repartition even explicit single-partition ranges, changing approximate ranks.
+/// IEEE NaN comparisons also make summary merges order-dependent, so differing
+/// LocalRelation partitions can select different NaN results.
 #[derive(Debug)]
 struct QuantileSummary {
     relative_error: f64,

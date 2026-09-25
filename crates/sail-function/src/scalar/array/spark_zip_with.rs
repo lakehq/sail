@@ -78,7 +78,7 @@ impl SparkZipWith {
         let key = common_key_type(left_key, right_key, self.ansi_mode, self.case_sensitive)
             // Spark checks Cast.forceNullable on the outer key. The same cast is
             // allowed inside array/struct keys, whose nested fields become nullable.
-            .filter(|_| !is_date_ntz_pair(left_key, right_key))
+            .filter(|key| !key_cast_nullable(left_key, key) && !key_cast_nullable(right_key, key))
             .ok_or_else(|| {
                 datafusion_common::plan_datafusion_err!(
                     "map_zip_with requires compatible map key types, got {} and {}",
@@ -98,6 +98,9 @@ impl SparkZipWith {
             .collect())
     }
 
+    // TODO: Preserve supplied interval qualifiers after shared nested-lambda
+    // rebinding retains field metadata through optimization; see the Sail-only
+    // cases in zip_with_interval_qualifiers.feature.
     fn parameters(&self, left: &FieldRef, right: &FieldRef) -> Result<Vec<FieldRef>> {
         let types =
             self.coerce_collection_types(&[left.data_type().clone(), right.data_type().clone()])?;
@@ -445,8 +448,8 @@ fn map_type(key: DataType, value: DataType, nullable: bool) -> DataType {
     )
 }
 
-/// MapZipWithTypeCoercion permits widening only when key casts cannot create
-/// nulls. In particular, ANSI string-to-numeric/date casts are not permitted.
+/// Find Spark's wider key type before applying the outer map-key nullability
+/// restriction. Nested array elements and struct fields can become nullable.
 fn common_key_type(
     left: &DataType,
     right: &DataType,
@@ -460,16 +463,18 @@ fn common_key_type(
         (DataType::Date32, timestamp @ DataType::Timestamp(..))
         | (timestamp @ DataType::Timestamp(..), DataType::Date32) => Some(timestamp.clone()),
         (DataType::List(left), DataType::List(right)) => {
+            let key = common_key_type(
+                left.data_type(),
+                right.data_type(),
+                ansi_mode,
+                case_sensitive,
+            )?;
+            let nullable = left.is_nullable()
+                || right.is_nullable()
+                || key_cast_nullable(left.data_type(), &key)
+                || key_cast_nullable(right.data_type(), &key);
             Some(DataType::List(Arc::new(Field::new_list_field(
-                common_key_type(
-                    left.data_type(),
-                    right.data_type(),
-                    ansi_mode,
-                    case_sensitive,
-                )?,
-                left.is_nullable()
-                    || right.is_nullable()
-                    || is_date_ntz_pair(left.data_type(), right.data_type()),
+                key, nullable,
             ))))
         }
         (DataType::Struct(left), DataType::Struct(right)) if left.len() == right.len() => {
@@ -484,18 +489,17 @@ fn common_key_type(
                     } {
                         return None;
                     }
-                    Some(Field::new(
-                        left.name(),
-                        common_key_type(
-                            left.data_type(),
-                            right.data_type(),
-                            ansi_mode,
-                            case_sensitive,
-                        )?,
-                        left.is_nullable()
-                            || right.is_nullable()
-                            || is_date_ntz_pair(left.data_type(), right.data_type()),
-                    ))
+                    let key = common_key_type(
+                        left.data_type(),
+                        right.data_type(),
+                        ansi_mode,
+                        case_sensitive,
+                    )?;
+                    let nullable = left.is_nullable()
+                        || right.is_nullable()
+                        || key_cast_nullable(left.data_type(), &key)
+                        || key_cast_nullable(right.data_type(), &key);
+                    Some(Field::new(left.name(), key, nullable))
                 })
                 .collect::<Option<Vec<_>>>()?;
             Some(DataType::Struct(fields.into()))
@@ -504,9 +508,18 @@ fn common_key_type(
         _ if left.is_null() => Some(right.clone()),
         _ if left.is_string() != right.is_string() => {
             let other = if left.is_string() { right } else { left };
-            if !ansi_mode
-                && (other.is_numeric()
-                    || matches!(other, DataType::Date32 | DataType::Timestamp(..)))
+            if ansi_mode {
+                match other {
+                    _ if other.is_integer() => Some(DataType::Int64),
+                    _ if other.is_floating() || other.is_decimal() => Some(DataType::Float64),
+                    _ if other.is_binary() => Some(other.clone()),
+                    DataType::Boolean | DataType::Date32 | DataType::Timestamp(..) => {
+                        Some(other.clone())
+                    }
+                    _ => None,
+                }
+            } else if other.is_numeric()
+                || matches!(other, DataType::Date32 | DataType::Timestamp(..))
             {
                 Some(DataType::Utf8)
             } else {
@@ -540,16 +553,24 @@ fn common_key_type(
                 comparison_coercion(left, right)
             }
         }
+        // DataFusion comparison coercion accepts date/integer and mixed
+        // interval families, which Spark's wider-type coercion rejects.
+        _ if left.is_temporal() != right.is_temporal() => None,
+        (DataType::Interval(_), DataType::Duration(_))
+        | (DataType::Duration(_), DataType::Interval(_)) => None,
         _ => comparison_coercion(left, right),
     }
 }
 
-fn is_date_ntz_pair(left: &DataType, right: &DataType) -> bool {
-    matches!(
-        (left, right),
-        (DataType::Date32, DataType::Timestamp(_, None))
-            | (DataType::Timestamp(_, None), DataType::Date32)
-    )
+/// Spark Cast.forceNullable for the widening casts admitted by common_key_type.
+fn key_cast_nullable(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        _ if from == to || from.is_null() => false,
+        _ if from.is_string() => !to.is_string() && !to.is_binary(),
+        (DataType::Date32, DataType::Timestamp(_, Some(_))) => false,
+        (DataType::Date32, _) => !to.is_string(),
+        _ => false,
+    }
 }
 
 fn decimal_key_parts(data_type: &DataType) -> Option<(i16, i16)> {
