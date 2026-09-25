@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::Expr;
 use educe::Educe;
@@ -181,7 +181,11 @@ impl StreamUDF for PySparkUDTF {
         self.output_schema.clone()
     }
 
-    fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
+    fn invoke(
+        &self,
+        input: SendableRecordBatchStream,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
             let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
             let udtf = match self.kind {

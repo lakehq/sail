@@ -1,4 +1,84 @@
-Feature: Iceberg v3 copy-on-write row lineage
+Feature: Iceberg v3 row lineage
+
+  Scenario Outline: MERGE after positional skips preserves inherited and stored lineage
+    Given variable location for temporary directory iceberg_selected_lineage
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_selected_lineage
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_selected_lineage (id BIGINT, value BIGINT) USING iceberg
+      LOCATION {{ location.uri }} TBLPROPERTIES (
+        'format-version' = '3', 'write.merge.mode' = 'merge-on-read',
+        'write.parquet.row-group-size-bytes' = '16384')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_selected_lineage SELECT /*+ COALESCE(1) */ id, id AS value FROM range(18000)
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_selected_lineage t
+      USING (SELECT id FROM range(18000) WHERE id < 128 OR id IN (8191, 8192, 16383)) s
+      ON t.id = s.id WHEN MATCHED THEN DELETE
+      """
+    Given remember current iceberg row lineage
+    Given statement
+      """
+      ALTER TABLE iceberg_selected_lineage SET TBLPROPERTIES ('write.merge.mode' = '<mode>')
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_selected_lineage t
+      USING (SELECT * FROM VALUES (8193L, -1L), (17999L, -2L) AS s(id, value)) s
+      ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = s.value
+      """
+    Then iceberg row lineage preserves IDs and only changes these sequences
+      | id    | sequence |
+      | 8193  | 3        |
+      | 17999 | 3        |
+    Given statement
+      """
+      MERGE INTO iceberg_selected_lineage t USING (SELECT 8193L AS id) s
+      ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = -3
+      """
+    Then iceberg row lineage preserves IDs and only changes these sequences
+      | id    | sequence |
+      | 8193  | 4        |
+      | 17999 | 3        |
+    When query
+      """
+      SELECT count(*) AS total, count(DISTINCT id) AS ids FROM iceberg_selected_lineage
+      """
+    Then query result
+      | total | ids   |
+      | 17869 | 17869 |
+    When query
+      """
+      SELECT * FROM iceberg_selected_lineage WHERE id IN (8190, 8191, 8192, 8193, 16383, 17999) ORDER BY id
+      """
+    Then query result ordered
+      | id    | value |
+      | 8190  | 8190  |
+      | 8193  | -3    |
+      | 17999 | -2    |
+    Given variable snapshot_ids for iceberg snapshot ids in location
+    When query template
+      """
+      SELECT * FROM iceberg_selected_lineage VERSION AS OF {{ snapshot_ids[1] }}
+      WHERE id IN (8193, 17999) ORDER BY id
+      """
+    Then query result ordered
+      | id    | value |
+      | 8193  | 8193  |
+      | 17999 | 17999 |
+    Then iceberg snapshot count is 4
+
+    Examples:
+      | mode          |
+      | merge-on-read |
+      | copy-on-write |
 
   Scenario: Partitioned COW preserves file-local row IDs across input batches
     Given variable location for temporary directory iceberg_lineage_batches

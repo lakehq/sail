@@ -21,6 +21,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
@@ -298,7 +299,10 @@ use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_scalar_iter_udf::PySparkScalarPandasIterUDF;
+use sail_python_udf::udf::pyspark_udaf::{
+    PySparkAggregateMode, PySparkGroupAggKind, PySparkGroupAggregateUDF,
+};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use sail_system_store::catalog::SystemTable;
@@ -634,9 +638,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_partitioning,
                 struct_field_matching,
                 timezone_mode,
+                virtual_columns,
             }) => {
-                let base_config = try_decode_message(&base_config)?;
+                let mut base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
+                let virtual_columns = virtual_columns
+                    .iter()
+                    .map(|column| try_decode_field_ref(column))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut names = table_schema
+                    .table_schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect::<std::collections::HashSet<_>>();
+                for field in &virtual_columns {
+                    datafusion::datasource::physical_plan::parquet::ParquetVirtualColumn::try_from(
+                        field,
+                    )?;
+                    if !names.insert(field.name().clone()) {
+                        return plan_err!("Duplicate Parquet virtual column '{}'", field.name());
+                    }
+                }
+                let table_schema = TableSchema::builder(Arc::clone(table_schema.file_schema()))
+                    .with_table_partition_cols(table_schema.table_partition_cols().clone())
+                    .with_virtual_columns(virtual_columns)
+                    .build();
+                // DataFusion's base config omits virtual fields, but expression
+                // decoding needs the complete file/partition/virtual schema.
+                base_config.schema = Some(table_schema.table_schema().as_ref().try_into()?);
                 let predicate_schema = Arc::clone(table_schema.table_schema());
                 let options =
                     try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
@@ -1706,7 +1736,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 file_column_name,
                 row_index_column_name,
                 data_file_partition_spec_id,
-                data_file_partition_json,
+                data_file_metadata_json,
                 row_lineage,
                 file_lineage,
             }) => {
@@ -1743,7 +1773,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                                 "Iceberg merge metadata plan is missing partition spec id"
                             )
                         })?,
-                        data_file_partition_json.ok_or_else(|| {
+                        data_file_metadata_json.ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Iceberg merge metadata plan is missing partition values"
                             )
@@ -2208,6 +2238,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         timezone_mode: Self::try_encode_schema_evolution_timezone_mode(
                             timezone_mode,
                         ),
+                        virtual_columns: parquet_source
+                            .table_schema()
+                            .virtual_columns()
+                            .iter()
+                            .map(try_encode_field_ref)
+                            .collect::<Result<Vec<_>>>()?,
                     })
                 } else if file_source.is::<JsonSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -2854,8 +2890,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         data_sequence_number: lineage.data_sequence_number,
                     }),
                 data_file_partition_spec_id: merge_metadata.data_file_partition_spec_id(),
-                data_file_partition_json: merge_metadata
-                    .data_file_partition_json()
+                data_file_metadata_json: merge_metadata
+                    .data_file_metadata_json()
                     .map(ToString::to_string),
             })
         } else if let Some(equality_writer) = node.downcast_ref::<IcebergEqualityDeleteWriterExec>()
@@ -3848,6 +3884,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 config,
                 kind,
                 actual_arg_count,
+                mode,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -3859,11 +3896,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
                 let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
+                let mode = match r#gen::PySparkAggregateMode::try_from(mode)
+                    .map_err(|e| plan_datafusion_err!("invalid Python aggregate mode: {e}"))?
+                {
+                    r#gen::PySparkAggregateMode::Grouped => PySparkAggregateMode::Grouped,
+                    r#gen::PySparkAggregateMode::Window => PySparkAggregateMode::Window,
+                };
                 let actual_arg_count = actual_arg_count
                     .map(|c| c as usize)
                     .unwrap_or(input_types.len()); // backward compat: all inputs are real
                 let udaf = PySparkGroupAggregateUDF::new(
                     kind,
+                    mode,
                     name,
                     payload,
                     deterministic,
@@ -3962,6 +4006,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let output_type = self.try_encode_data_type(func.output_type())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
             let kind = self.try_encode_pyspark_group_agg_kind(func.kind())?;
+            let mode = match func.mode() {
+                PySparkAggregateMode::Grouped => r#gen::PySparkAggregateMode::Grouped,
+                PySparkAggregateMode::Window => r#gen::PySparkAggregateMode::Window,
+            };
             UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
@@ -3972,6 +4020,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 config: Some(config),
                 kind,
                 actual_arg_count: Some(func.actual_arg_count() as u64),
+                mode: mode as i32,
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupMapUDF>() {
             let input_types = func
@@ -4795,6 +4844,22 @@ impl RemoteExecutionCodec {
             None => return plan_err!("ExtendedStreamUdf: no UDF found"),
         };
         let udf: Arc<dyn StreamUDF> = match stream_udf_kind {
+            StreamUdfKind::PySparkScalarPandasIter(r#gen::PySparkScalarPandasIterUdf {
+                name,
+                payload,
+                output_schema,
+                config,
+            }) => {
+                let config = config.as_ref().ok_or_else(|| {
+                    plan_datafusion_err!("missing config for PySparkScalarPandasIterUDF")
+                })?;
+                Arc::new(PySparkScalarPandasIterUDF::try_new(
+                    name.clone(),
+                    payload.clone(),
+                    Arc::new(try_decode_schema(output_schema)?),
+                    Arc::new(self.try_decode_pyspark_udf_config(config)?),
+                )?)
+            }
             StreamUdfKind::PySparkMapIter(r#gen::PySparkMapIterUdf {
                 kind,
                 name,
@@ -4864,7 +4929,14 @@ impl RemoteExecutionCodec {
 
     fn try_encode_stream_udf(&self, udf: &dyn StreamUDF) -> Result<ExtendedStreamUdf> {
         let udf = udf as &dyn Any;
-        let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
+        let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkScalarPandasIterUDF>() {
+            StreamUdfKind::PySparkScalarPandasIter(r#gen::PySparkScalarPandasIterUdf {
+                name: func.name().to_string(),
+                payload: func.payload().to_vec(),
+                output_schema: try_encode_schema(func.output_schema().as_ref())?,
+                config: Some(self.try_encode_pyspark_udf_config(func.config())?),
+            })
+        } else if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
             let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
             let output_schema = try_encode_schema(func.output_schema().as_ref())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
@@ -6226,6 +6298,81 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_parquet_virtual_row_positions() -> Result<()> {
+        use datafusion::datasource::listing::PartitionedFile;
+        use datafusion::datasource::physical_plan::FileGroup;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::parquet::arrow::RowNumber;
+
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let position =
+            Arc::new(Field::new("position", DataType::Int64, false).with_extension_type(RowNumber));
+        let table_schema = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new("part", DataType::Int32, false))])
+            .with_virtual_columns(vec![position.clone()])
+            .build();
+        let mut file = PartitionedFile::new("unused.parquet", 0);
+        file.partition_values = vec![ScalarValue::Int32(Some(3))];
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(table_schema)),
+        )
+        .with_file_groups(vec![FileGroup::from(vec![file])])
+        .with_projection_indices(Some(vec![2, 0, 1]))?
+        .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let codec = RemoteExecutionCodec;
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, Arc::clone(&plan))?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        assert_eq!(decoded.schema(), plan.schema());
+        let scan = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet scan"))?;
+        let config = scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .ok_or_else(|| plan_datafusion_err!("decoded source is not a file scan"))?;
+        let schema = config.file_source.table_schema();
+        assert_eq!(schema.file_schema(), &file_schema);
+        assert_eq!(schema.virtual_columns().as_ref(), &[position]);
+        assert_eq!(schema.table_partition_cols()[0].name(), "part");
+        assert_eq!(
+            config.file_groups[0].files()[0].partition_values,
+            vec![ScalarValue::Int32(Some(3))]
+        );
+        let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
+        let mut bytes = Vec::new();
+        let remote = Arc::new(RemoteDataSourceExec::new(
+            plan.downcast_ref::<DataSourceExec>()
+                .ok_or_else(|| plan_datafusion_err!("original plan is not a Parquet scan"))?,
+        ));
+        codec.try_encode(remote, &mut bytes, &converter)?;
+        let mut node = try_decode_message::<ExtendedPhysicalPlanNode>(&bytes)?;
+        let Some(NodeKind::Parquet(parquet)) = node.node_kind.as_mut() else {
+            return plan_err!("Expected Parquet codec node");
+        };
+        parquet
+            .virtual_columns
+            .push(parquet.virtual_columns[0].clone());
+        assert!(
+            codec
+                .try_decode(
+                    &node.encode_to_vec(),
+                    &[],
+                    &TaskContext::default(),
+                    &converter
+                )
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_iceberg_merge_lineage() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
         use sail_iceberg::physical_plan::RowLineage;
@@ -6234,6 +6381,8 @@ mod tests {
             let input = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
                 Field::new("_row_id", DataType::Int64, true),
                 Field::new("_last_updated_sequence_number", DataType::Int64, true),
+                Field::new("position", DataType::Int64, false)
+                    .with_extension_type(datafusion::parquet::arrow::RowNumber),
             ]))));
             let plan = IcebergMergeMetadataExec::try_new(
                 input,

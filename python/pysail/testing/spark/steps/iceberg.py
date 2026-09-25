@@ -7,6 +7,7 @@ import json
 import re
 import time
 import uuid
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from pyiceberg.manifest import (
     ManifestEntryStatus,
     PartitionFieldSummary,
 )
+from pyiceberg.table.puffin import PuffinFile
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then
@@ -859,11 +861,62 @@ def check_iceberg_schema_history_matches_snapshot(variables, snapshot: SnapshotA
     assert snapshot == schema_history_info
 
 
+def _current_deletion_vectors(table_path: Path) -> dict[str, set[int]]:
+    metadata = _find_latest_metadata(table_path)
+    io = PyArrowFileIO()
+    schema = MANIFEST_ENTRY_SCHEMAS[3]
+    fields = schema.find_field("data_file").field_type.fields
+    vectors = {}
+    for manifest in _current_manifest_list(metadata)["manifests"]:
+        if manifest["content"] != "deletes":
+            continue
+        with AvroFile(_pyarrow_input_file(io, manifest["manifest-path"]), schema) as entries:
+            for entry in entries:
+                if entry[0] == ManifestEntryStatus.DELETED:
+                    continue
+                data = {field.name: entry[4][index] for index, field in enumerate(fields)}
+                if data["file_format"] != "PUFFIN":
+                    continue
+                path = data["referenced_data_file"]
+                assert path
+                assert path not in vectors, "Only one deletion vector may reference a data file"
+                payload = Path(url2pathname(urlparse(data["file_path"]).path)).read_bytes()
+                assert len(payload) == data["file_size_in_bytes"]
+                offset, length = data["content_offset"], data["content_size_in_bytes"]
+                blob = payload[offset : offset + length]
+                assert int.from_bytes(blob[:4], "big") == length - 8
+                assert blob[4:8] == bytes.fromhex("d1d33964")
+                assert int.from_bytes(blob[-4:], "big") == zlib.crc32(blob[4:-4])
+                puffin = PuffinFile(payload)
+                footer = next(blob for blob in puffin.footer.blobs if blob.offset == offset)
+                assert footer.length == length
+                assert footer.fields == [2147483645]
+                assert footer.snapshot_id == footer.sequence_number == -1
+                assert footer.compression_codec is None
+                assert footer.properties == {"referenced-data-file": path, "cardinality": str(data["record_count"])}
+                positions = set(puffin.to_vector()[path].to_pylist())
+                assert len(positions) == data["record_count"]
+                vectors[path] = positions
+    return vectors
+
+
+@then(parsers.parse("iceberg deletion vectors delete {rows:d} rows across {files:d} files"))
+def check_iceberg_deletion_vectors(variables, rows: int, files: int):
+    table_path = Path(variables["location"].path)
+    vectors = _current_deletion_vectors(table_path)
+    assert len(vectors) == files
+    assert sum(map(len, vectors.values())) == rows
+    for path, positions in vectors.items():
+        parquet = pq.ParquetFile(Path(url2pathname(urlparse(path).path)))
+        assert all(0 <= position < parquet.metadata.num_rows for position in positions)
+
+
 def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
     metadata = _find_latest_metadata(table_path)
     assert metadata["format-version"] == 3  # noqa: PLR2004
     io = PyArrowFileIO()
     result = {}
+    vectors = _current_deletion_vectors(table_path)
     schema = MANIFEST_ENTRY_SCHEMAS[3]
     file_fields = schema.find_field("data_file").field_type.fields
     for manifest in _current_manifest_list(metadata)["manifests"]:
@@ -886,6 +939,8 @@ def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
                 parquet = pq.ParquetFile(file_path)
                 rows = parquet.read().to_pylist()
                 for position, row in enumerate(rows):
+                    if position in vectors.get(data_file["file_path"], set()):
+                        continue
                     row_id = row.get("_row_id")
                     if row_id is None:
                         assert first_row_id is not None

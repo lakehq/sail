@@ -26,10 +26,53 @@ pub struct DeleteFileRef {
 impl DeleteFileRef {
     /// Whether this ref describes a v3 deletion vector (Puffin blob).
     pub fn is_deletion_vector(&self) -> bool {
-        self.data_file.content == DataContentType::PositionDeletes
-            && self.data_file.file_format == DataFileFormat::Puffin
-            && self.data_file.content_offset.is_some()
-            && self.data_file.content_size_in_bytes.is_some()
+        self.data_file.is_deletion_vector()
+    }
+}
+
+/// The read descriptor after snapshot, sequence, and partition matching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PositionDeleteFile {
+    Parquet {
+        path: String,
+        size: u64,
+    },
+    DeletionVector {
+        path: String,
+        range: std::ops::Range<u64>,
+        cardinality: u64,
+    },
+}
+
+impl TryFrom<&DataFile> for PositionDeleteFile {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(file: &DataFile) -> Result<Self, Self::Error> {
+        if file.is_deletion_vector() {
+            file.validate_deletion_vector()
+                .map_err(Self::Error::Execution)?;
+            let (Some(offset), Some(size)) = (file.content_offset, file.content_size_in_bytes)
+            else {
+                return datafusion_common::exec_err!("Missing Iceberg deletion vector range");
+            };
+            Ok(Self::DeletionVector {
+                path: file.file_path.clone(),
+                range: offset as u64..(offset + size) as u64,
+                cardinality: file.record_count,
+            })
+        } else if file.content == DataContentType::PositionDeletes
+            && file.file_format == DataFileFormat::Parquet
+        {
+            Ok(Self::Parquet {
+                path: file.file_path.clone(),
+                size: file.file_size_in_bytes,
+            })
+        } else {
+            datafusion_common::exec_err!(
+                "Unsupported Iceberg position delete file: {}",
+                file.file_path
+            )
+        }
     }
 }
 
@@ -41,7 +84,7 @@ pub struct PartitionKey {
 }
 
 impl PartitionKey {
-    /// Build a [`PartitionKey`] for a delete file or data file's partition values.
+    /// Build a key with the same encoding before and after numeric type promotion.
     pub fn new(spec_id: i32, values: &[Option<Literal>]) -> Self {
         let mut bytes: Vec<u8> = Vec::with_capacity(values.len() * 8);
         for v in values {
@@ -110,21 +153,14 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
             out.push(u8::from(*b));
         }
         PrimitiveLiteral::Int(i) => {
-            out.push(0x02);
-            out.extend_from_slice(&i.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Long(i64::from(*i)), out);
         }
         PrimitiveLiteral::Long(l) => {
             out.push(0x03);
             out.extend_from_slice(&l.to_le_bytes());
         }
         PrimitiveLiteral::Float(OrderedFloat(f)) => {
-            out.push(0x04);
-            let bits = if f.is_nan() {
-                f32::NAN.to_bits()
-            } else {
-                f.to_bits()
-            };
-            out.extend_from_slice(&bits.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Double(OrderedFloat(f64::from(*f))), out);
         }
         PrimitiveLiteral::Double(OrderedFloat(f)) => {
             out.push(0x05);
@@ -196,13 +232,23 @@ impl DeleteFileIndex {
             && self.pos_by_path.is_empty()
     }
 
-    /// Register a delete file reference into the index. Returns `Err` if the ref is a
-    /// deletion vector (v3) — callers handle DV support separately.
+    /// Register a delete file, rejecting malformed or duplicate deletion vectors.
     pub fn insert(&mut self, file_ref: DeleteFileRef) -> Result<(), DeleteIndexError> {
         if file_ref.is_deletion_vector() {
-            return Err(DeleteIndexError::DeletionVectorUnsupported(
-                file_ref.data_file.file_path.clone(),
-            ));
+            file_ref
+                .data_file
+                .validate_deletion_vector()
+                .map_err(DeleteIndexError::InvalidDeletionVector)?;
+            if let Some(path) = &file_ref.data_file.referenced_data_file
+                && self
+                    .pos_by_path
+                    .get(path)
+                    .is_some_and(|files| files.iter().any(DeleteFileRef::is_deletion_vector))
+            {
+                return Err(DeleteIndexError::InvalidDeletionVector(format!(
+                    "Multiple Iceberg deletion vectors reference {path}"
+                )));
+            }
         }
         match file_ref.data_file.content {
             DataContentType::Data => Err(DeleteIndexError::NotADeleteFile(
@@ -244,7 +290,9 @@ impl DeleteFileIndex {
         // Positional deletes that reference this path.
         if let Some(refs) = self.pos_by_path.get(&data_file.file_path) {
             for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
+                if data_sequence_number <= r.data_sequence_number
+                    && key == PartitionKey::new(r.partition_spec_id, &r.data_file.partition)
+                {
                     matched.positional.push(r.clone());
                 }
             }
@@ -257,6 +305,14 @@ impl DeleteFileIndex {
                     matched.positional.push(r.clone());
                 }
             }
+        }
+
+        if matched
+            .positional
+            .iter()
+            .any(DeleteFileRef::is_deletion_vector)
+        {
+            matched.positional.retain(DeleteFileRef::is_deletion_vector);
         }
 
         // Equality deletes scoped to the same partition.
@@ -286,17 +342,14 @@ impl DeleteFileIndex {
 /// Errors surfaced when building a [`DeleteFileIndex`].
 #[derive(Debug)]
 pub enum DeleteIndexError {
-    DeletionVectorUnsupported(String),
+    InvalidDeletionVector(String),
     NotADeleteFile(String),
 }
 
 impl std::fmt::Display for DeleteIndexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DeletionVectorUnsupported(path) => write!(
-                f,
-                "v3 deletion vectors are not yet supported (file: {path})"
-            ),
+            Self::InvalidDeletionVector(message) => write!(f, "{message}"),
             Self::NotADeleteFile(path) => {
                 write!(f, "attempted to index a non-delete file: {path}")
             }
@@ -637,6 +690,43 @@ mod tests {
     }
 
     #[test]
+    fn partition_keys_preserve_numeric_promotions() {
+        let key = |value| PartitionKey::new(0, &[Some(Literal::Primitive(value))]);
+        for value in [i32::MIN, -1, 0, 1, i32::MAX] {
+            assert_eq!(
+                key(PrimitiveLiteral::Int(value)),
+                key(PrimitiveLiteral::Long(i64::from(value)))
+            );
+        }
+        for value in [
+            f32::NEG_INFINITY,
+            -0.0,
+            0.0,
+            0.1,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            assert_eq!(
+                key(PrimitiveLiteral::Float(OrderedFloat(value))),
+                key(PrimitiveLiteral::Double(OrderedFloat(f64::from(value))))
+            );
+        }
+        assert_ne!(
+            key(PrimitiveLiteral::Int(-1)),
+            key(PrimitiveLiteral::Long(i64::MAX))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Float(OrderedFloat(0.1))),
+            key(PrimitiveLiteral::Double(OrderedFloat(0.1)))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Int(1)),
+            key(PrimitiveLiteral::Double(OrderedFloat(1.0)))
+        );
+    }
+
+    #[test]
     fn floating_point_partition_key_matches_iceberg_equality() {
         let pos_zero = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
             OrderedFloat(0.0f32),
@@ -680,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn deletion_vector_rejected_at_insert() {
+    fn deletion_vector_supersedes_position_deletes_and_rejects_duplicates() {
         let mut dv = make_delete(
             DataContentType::PositionDeletes,
             "s3://t/dv.puffin",
@@ -695,12 +785,22 @@ mod tests {
         dv.data_file.content_size_in_bytes = Some(128);
         assert!(dv.is_deletion_vector());
 
+        dv.data_file.file_size_in_bytes = 256;
         let mut idx = DeleteFileIndex::new();
-        let err = idx.insert(dv).unwrap_err();
-        assert!(matches!(
-            err,
-            DeleteIndexError::DeletionVectorUnsupported(_)
-        ));
+        idx.insert(dv.clone()).unwrap();
+        let mut older = dv.clone();
+        older.data_file.file_format = DataFileFormat::Parquet;
+        older.data_file.content_offset = None;
+        older.data_file.content_size_in_bytes = None;
+        idx.insert(older).unwrap();
+        let mut data = dv.data_file.clone();
+        data.content = DataContentType::Data;
+        data.file_path = "s3://t/d.parquet".to_string();
+        assert_eq!(idx.for_data_file(&data, 5).positional, vec![dv.clone()]);
+        assert!(idx.for_data_file(&data, 6).is_empty());
+        data.partition_spec_id = 1;
+        assert!(idx.for_data_file(&data, 5).is_empty());
+        assert!(idx.insert(dv).is_err());
     }
 
     #[test]
