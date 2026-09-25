@@ -86,6 +86,24 @@ def test_list_functions_includes_built_ins(spark):
     }.issubset(names)
 
 
+def test_function_exists_checks_built_ins_and_registered_udfs(spark):
+    function_name = "catalog_exists_add_one"
+    spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
+    try:
+        assert spark.catalog.functionExists("to_date") is True
+        assert spark.catalog.functionExists("no_such_function") is False
+
+        spark.udf.register(
+            function_name,
+            lambda value: value + 1 if value is not None else None,
+            "long",
+        )
+
+        assert spark.catalog.functionExists(function_name) is True
+    finally:
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
+
+
 def test_list_functions_includes_spark_4_2_version_update_built_ins(spark):
     names = {f.name for f in spark.catalog.listFunctions()}
     assert SPARK_4_2_VERSION_UPDATE_BUILT_INS.issubset(names)

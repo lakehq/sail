@@ -47,7 +47,7 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "functionExists",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.Catalog",
