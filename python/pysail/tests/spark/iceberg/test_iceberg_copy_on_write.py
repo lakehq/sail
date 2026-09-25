@@ -219,6 +219,11 @@ def test_cow_applies_existing_equality_and_position_deletes(spark, tmp_path):
             entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DELETES)
         }
         assert len(deletes_before) == 2  # noqa: PLR2004
+        assert [tuple(row) for row in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [
+            (1, 10),
+            (5, 50),
+            (6, 60),
+        ]
         spark.sql(f"UPDATE {name} SET id = 3 WHERE id = 1").collect()
         assert [tuple(row) for row in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [
             (3, 10),

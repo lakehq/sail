@@ -17,6 +17,7 @@ use parquet::file::statistics::{Statistics, ValueStatistics};
 
 use crate::operations::write::WriteOutcome;
 use crate::operations::write::arrow_parquet::ParquetFileMeta;
+use crate::operations::write::metrics::{MetricsConfig, MetricsMode};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Datum, Schema};
@@ -43,13 +44,14 @@ impl DataFileWriter {
     /// Finish a delete-file write without collecting column bounds.
     pub fn finish_without_bounds(self, meta: ParquetFileMeta) -> Result<WriteOutcome, String> {
         let empty_schema = Schema::builder().with_schema_id(0).build()?;
-        self.finish_with_schema(meta, &empty_schema)
+        self.finish_with_schema(meta, &empty_schema, &MetricsConfig::counts())
     }
 
     pub fn finish_with_schema(
         self,
         meta: ParquetFileMeta,
         iceberg_schema: &Schema,
+        metrics: &MetricsConfig,
     ) -> Result<WriteOutcome, String> {
         let (
             column_sizes,
@@ -58,7 +60,7 @@ impl DataFileWriter {
             lower_bounds,
             upper_bounds,
             split_offsets,
-        ) = aggregate_from_parquet_metadata(&meta.parquet_metadata, iceberg_schema)?;
+        ) = aggregate_from_parquet_metadata(&meta.parquet_metadata, iceberg_schema, metrics)?;
 
         let data_file = DataFile {
             content: DataContentType::Data,
@@ -241,9 +243,8 @@ fn update_bound(
 fn aggregate_from_parquet_metadata(
     parquet_meta: &parquet::file::metadata::ParquetMetaData,
     iceberg_schema: &Schema,
+    metrics: &MetricsConfig,
 ) -> Result<AggregatedMetadata, String> {
-    // TODO: Apply `write.metadata.metrics.*` modes and inferred-column limits when
-    // producing Iceberg data-file metrics.
     let row_groups = parquet_meta.row_groups();
     let schema_descr = parquet_meta.file_metadata().schema_descr();
     let metric_fields = schema_descr
@@ -298,6 +299,10 @@ fn aggregate_from_parquet_metadata(
             let Some((field_id, count_values)) = metric_fields[column_index] else {
                 continue;
             };
+            let mode = metrics.mode(field_id);
+            if mode == MetricsMode::None {
+                continue;
+            }
             *col_sizes.entry(field_id).or_insert(0) += column.compressed_size() as u64;
             if !count_values {
                 continue;
@@ -316,6 +321,9 @@ fn aggregate_from_parquet_metadata(
                 }
             }
 
+            if !mode.has_bounds() {
+                continue;
+            }
             let Some(primitive_type) = iceberg_schema.field_by_id(field_id).and_then(|field| {
                 match field.field_type.as_ref() {
                     Type::Primitive(primitive_type) => Some(primitive_type),
@@ -344,12 +352,23 @@ fn aggregate_from_parquet_metadata(
         }
     }
 
+    let truncate = |bounds: HashMap<i32, Datum>, upper| {
+        bounds
+            .into_iter()
+            .filter_map(|(id, bound)| {
+                metrics
+                    .mode(id)
+                    .truncate_bound(bound, upper)
+                    .map(|bound| (id, bound))
+            })
+            .collect()
+    };
     Ok((
         col_sizes,
         val_counts,
         null_counts,
-        lower_bounds,
-        upper_bounds,
+        truncate(lower_bounds, false),
+        truncate(upper_bounds, true),
         split_offsets,
     ))
 }
@@ -419,7 +438,15 @@ mod tests {
                 .build()?;
 
             let outcome = DataFileWriter::new(0, "data.parquet".to_string(), vec![])
-                .finish_with_schema(metadata, &iceberg_schema)?;
+                .finish_with_schema(
+                    metadata,
+                    &iceberg_schema,
+                    &MetricsConfig::from_properties(
+                        &iceberg_schema,
+                        &crate::spec::SortOrder::unsorted_order(),
+                        &HashMap::new(),
+                    )?,
+                )?;
 
             assert_eq!(
                 outcome.data_file.lower_bounds.get(&1),
@@ -515,7 +542,15 @@ mod tests {
                 ])
                 .build()?;
             let outcome = DataFileWriter::new(0, "data.parquet".to_string(), vec![])
-                .finish_with_schema(metadata, &iceberg_schema)?;
+                .finish_with_schema(
+                    metadata,
+                    &iceberg_schema,
+                    &MetricsConfig::from_properties(
+                        &iceberg_schema,
+                        &crate::spec::SortOrder::unsorted_order(),
+                        &HashMap::new(),
+                    )?,
+                )?;
             assert_eq!(outcome.data_file.record_count, 2);
             assert_eq!(outcome.data_file.value_counts, HashMap::from([(1, 2)]));
             assert_eq!(outcome.data_file.null_value_counts, HashMap::from([(1, 1)]));
