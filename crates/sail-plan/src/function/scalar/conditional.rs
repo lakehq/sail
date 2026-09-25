@@ -120,6 +120,8 @@ fn argument_types(
 /// Preserves DataFusion's existing nested and string/numeric coercion.
 // TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
 //  common type as well.
+// TODO: In ANSI mode, promote STRING branches to BIGINT or DOUBLE like Spark,
+//  so that UPDATE and MERGE can store mixed INT/STRING results in numeric columns.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -243,6 +245,8 @@ fn integral_decimal_precision(data_type: &DataType) -> Option<u8> {
     }
 }
 
+// TODO: Coerce DATE and TIMESTAMP branches to Spark's microsecond TIMESTAMP.
+//  DataFusion's common type is Timestamp(Nanosecond, None), which cannot be returned.
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,

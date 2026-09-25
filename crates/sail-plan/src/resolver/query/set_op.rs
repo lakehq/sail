@@ -113,6 +113,8 @@ impl PlanResolver<'_> {
                 // Conditional coercion needs the common UNION schema.
                 // TODO: Match Spark's ANSI string coercion for UNION inputs. DataFusion
                 //  widens numeric/STRING inputs to STRING, so typeof also reports STRING.
+                // TODO: Widen DECIMAL with FLOAT/DOUBLE, and ANSI BIGINT with FLOAT, to DOUBLE
+                //  like Spark. DataFusion keeps DECIMAL or FLOAT for these UNION inputs.
                 let coerced = coerce_union_schema(&union.inputs)?;
                 // Take only types and nullability from the coerced schema, since DataFusion lets
                 // the last input's field metadata (such as a Spark interval qualifier) win.

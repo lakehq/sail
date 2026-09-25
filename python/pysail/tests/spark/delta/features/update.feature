@@ -216,6 +216,24 @@ Feature: Delta Lake Update
         """
       Then query plan matches snapshot
 
+    @sail-bug
+    Scenario: UPDATE assigns a CASE mixing INT and STRING values with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      Given statement
+        """
+        UPDATE delta_update_basic
+        SET value = CASE WHEN id = 1 THEN 1 ELSE '7' END
+        """
+      When query
+        """
+        SELECT id, value FROM delta_update_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | 1     |
+        | 2  | 7     |
+        | 3  | 7     |
+
   Rule: Partitioned copy-on-write updates
 
     Scenario: UPDATE rewrites only the matching partition and preserves partition values

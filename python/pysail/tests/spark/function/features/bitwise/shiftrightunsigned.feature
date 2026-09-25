@@ -222,3 +222,29 @@ Feature: shiftrightunsigned output schema
         | kind   |
         | INT    |
         | BIGINT |
+
+    @sail-bug
+    Scenario Outline: shiftrightunsigned implicitly casts <kind> inputs to INT
+      When query
+        """
+        SELECT result, typeof(result) AS result_type
+        FROM (SELECT shiftrightunsigned(CAST(-8 AS <kind>), 1) AS result) AS q
+        """
+      Then query result
+        | result     | result_type |
+        | 2147483644 | int         |
+
+      Examples:
+        | kind     |
+        | TINYINT  |
+        | SMALLINT |
+
+    @sail-bug
+    Scenario: shiftrightunsigned shifts the BIGINT minimum
+      When query
+        """
+        SELECT shiftrightunsigned(CAST(-9223372036854775808 AS BIGINT), 1) AS result
+        """
+      Then query result
+        | result              |
+        | 4611686018427387904 |

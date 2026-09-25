@@ -168,6 +168,46 @@ Feature: if output schema
         | bigint      |
         | bigint      |
 
+    @sail-bug
+    Scenario: ANSI UNION widens INT with STRING to BIGINT
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(v) AS result_type
+        FROM (
+          SELECT CAST(8 AS INT) AS v
+          UNION ALL
+          SELECT '4' AS v
+        ) AS q
+        """
+      Then query result
+        | result_type |
+        | bigint      |
+        | bigint      |
+
+    @sail-bug
+    Scenario Outline: UNION exposes the Spark numeric common type to typeof: <case>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(v) AS result_type
+        FROM (
+          SELECT <first> AS v
+          UNION ALL
+          SELECT CAST(2.5 AS FLOAT) AS v
+        ) AS q
+        """
+      Then query result
+        | result_type |
+        | double      |
+        | double      |
+
+      Examples:
+        | case              | ansi  | first                      |
+        | DECIMAL and FLOAT | false | CAST(0.5 AS DECIMAL(11,1)) |
+        | DECIMAL and FLOAT | true  | CAST(0.5 AS DECIMAL(11,1)) |
+        | BIGINT and FLOAT  | true  | CAST(1 AS BIGINT)          |
+
   Rule: Nested numeric and STRING branches
 
     Scenario: IF preserves nested STRING values with ANSI disabled

@@ -32,6 +32,8 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         input_type => (value, input_type),
     };
 
+    // TODO: Implicitly cast TINYINT and SMALLINT inputs to INT like Spark.
+    // TODO: Support the BIGINT minimum, whose absolute value overflows below.
     let (unsigned_type, max_const) = match input_type.clone() {
         DataType::Int32 => Ok((DataType::UInt32, u32::MAX as u64)),
         DataType::Int64 => Ok((DataType::UInt64, u64::MAX)),

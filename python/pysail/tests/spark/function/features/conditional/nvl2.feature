@@ -101,6 +101,16 @@ Feature: nvl2 output schema
         | TIMESTAMP_NTZ and LTZ  | true  | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | STRING and BINARY     | true  | 'a'                                | X'62'                              | binary        |
 
+    @sail-bug
+    Scenario: nvl2 returns a DATE branch as TIMESTAMP_NTZ
+      When query
+        """
+        SELECT nvl2(1, DATE '2024-01-01', TIMESTAMP_NTZ '2024-02-03 04:05:06') AS result
+        """
+      Then query result collected
+        | result              |
+        | 2024-01-01 00:00:00 |
+
     Scenario: nvl2 declares the common timestamp type in its output schema
       When query
         """

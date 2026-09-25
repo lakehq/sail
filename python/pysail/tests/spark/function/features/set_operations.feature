@@ -242,3 +242,27 @@ Feature: Set operations (INTERSECT, EXCEPT)
       Then query result ordered
         | d          |
         | 2024-06-15 |
+
+    @sail-bug
+    Scenario: UNION widens interval qualifiers like Spark
+      When query
+        """
+        SELECT v FROM (SELECT INTERVAL '1' DAY AS v UNION ALL SELECT INTERVAL '1 02' DAY TO HOUR AS v)
+        """
+      Then query schema
+        """
+        root
+         |-- v: interval day to hour (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: UNION widens DATE with TIMESTAMP to TIMESTAMP
+      When query
+        """
+        SELECT typeof(v) AS result_type
+        FROM (SELECT DATE '2024-06-15' AS v UNION ALL SELECT TIMESTAMP '2000-01-01 00:00:00' AS v)
+        """
+      Then query result
+        | result_type |
+        | timestamp   |
+        | timestamp   |
