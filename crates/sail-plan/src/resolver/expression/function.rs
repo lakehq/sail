@@ -1,7 +1,8 @@
 use datafusion_common::DFSchemaRef;
+use datafusion_common::arrow::datatypes::DataType;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -95,7 +96,7 @@ impl PlanResolver<'_> {
 
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
-        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
+        let (mut argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
         } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
@@ -110,6 +111,25 @@ impl PlanResolver<'_> {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        if !has_spec_lambda_argument
+            && matches!(
+                canonical_function_name.as_str(),
+                "zip_with" | "map_zip_with"
+            )
+            && argument_display_names.len() == 3
+        {
+            let arity = if canonical_function_name == "map_zip_with" {
+                3
+            } else {
+                2
+            };
+            argument_display_names[2] = format!(
+                "lambdafunction({}, {})",
+                argument_display_names[2],
+                vec!["namedlambdavariable()"; arity].join(", ")
+            );
+        }
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
@@ -275,11 +295,26 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            &function_name,
-            argument_display_names.iter().map(|x| x.as_str()).collect(),
-            is_distinct,
-        )?;
+        let name = if canonical_function_name == "struct" && state.config().anonymous_lambda_display
+        {
+            let DataType::Struct(fields) = func.get_type(schema)? else {
+                return Err(PlanError::internal("struct function has a non-struct type"));
+            };
+            let arguments = fields
+                .iter()
+                .zip(&argument_display_names)
+                .flat_map(|(field, value)| [field.name().as_str(), value.as_str()])
+                .collect();
+            service
+                .plan_formatter()
+                .function_to_string("named_struct", arguments, false)?
+        } else {
+            service.plan_formatter().function_to_string(
+                &function_name,
+                argument_display_names.iter().map(|x| x.as_str()).collect(),
+                is_distinct,
+            )?
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {

@@ -124,6 +124,7 @@ use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
 };
+use sail_function::aggregate::approx_percentile::ApproxPercentile;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -3788,6 +3789,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
+                "percentile_approx" => {
+                    Ok(Arc::new(AggregateUDF::from(ApproxPercentile::default())))
+                }
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
@@ -3952,6 +3956,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<MaxByFunction>()
             || node.inner().is::<MinByFunction>()
             || node.inner().is::<ModeFunction>()
+            || node.inner().is::<ApproxPercentile>()
             || node.inner().is::<PercentileFunction>()
             || node.inner().is::<ProductFunction>()
             || node.inner().is::<Regr>()

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, grouping, median, min_max, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -21,6 +21,7 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::approx_percentile::ApproxPercentile;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -41,7 +42,7 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::aggregate::coerce_string_sum_arguments;
+use crate::function::aggregate::{approx_percentile_arguments, coerce_string_sum_arguments};
 use crate::function::common::{
     WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
@@ -633,6 +634,34 @@ fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn approx_percentile(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    if input.distinct {
+        return Err(PlanError::invalid(
+            "DISTINCT window functions are not supported",
+        ));
+    }
+    let arguments = approx_percentile_arguments(
+        input.arguments,
+        input.function_context.schema,
+        input.function_context.plan_config.ansi_mode,
+        None,
+    )?;
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            ApproxPercentile::default(),
+        ))),
+        params: WindowFunctionParams {
+            args: arguments,
+            partition_by: input.partition_by,
+            order_by: input.order_by,
+            window_frame: input.window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+            distinct: input.distinct,
+        },
+    })))
+}
+
 fn percentile_exact_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let WinFunctionInput {
         arguments,
@@ -707,10 +736,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("any", F::aggregate(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(approx_percentile)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("array_join", F::custom(listagg)),
         ("avg", F::custom(avg)),
@@ -777,10 +803,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             F::aggregate(|| Arc::new(AggregateUDF::from(ModeFunction::new()))),
         ),
         ("percentile", F::custom(percentile_exact_agg)),
-        (
-            "percentile_approx",
-            F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(approx_percentile)),
         ("percentile_cont", F::unknown("percentile_cont")),
         ("percentile_disc", F::unknown("percentile_disc")),
         ("product", F::custom(product)),

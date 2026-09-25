@@ -7,7 +7,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, Tre
 use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, cast, expr, lit,
 };
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -17,6 +17,7 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_zip_with::SparkZipWith;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
 
@@ -77,6 +78,8 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
             | "exists"
             | "forall"
             | "array_sort"
+            | "zip_with"
+            | "map_zip_with"
     )
 }
 
@@ -86,9 +89,12 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
 /// before resolving lambda bodies.
 pub(crate) fn get_lambda_parameters(
     function_name: &str,
+    ansi_mode: bool,
+    case_sensitive: bool,
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
-    let udf = match function_name.trim().to_lowercase().as_str() {
+    let zip_udf;
+    let udf: &Arc<HigherOrderUDF> = match function_name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
         "map_filter" => &SPARK_MAP_FILTER_UDF,
@@ -96,6 +102,14 @@ pub(crate) fn get_lambda_parameters(
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
         "array_sort" => &SPARK_ARRAY_SORT_UDF,
+        name @ ("zip_with" | "map_zip_with") => {
+            zip_udf = Arc::new(HigherOrderUDF::new_from_impl(SparkZipWith::new(
+                name == "map_zip_with",
+                ansi_mode,
+                case_sensitive,
+            )));
+            &zip_udf
+        }
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -462,6 +476,62 @@ fn array_sort(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
+fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    zip_collections(input, false)
+}
+
+fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    zip_collections(input, true)
+}
+
+fn zip_collections(input: ScalarFunctionInput, map: bool) -> PlanResult<expr::Expr> {
+    let (mut left, mut right, function) = input.arguments.three()?;
+    let name = if map { "map_zip_with" } else { "zip_with" };
+    expect_lambda_arity(name, &function, if map { 3 } else { 2 })?;
+    let udf = SparkZipWith::new(
+        map,
+        input.function_context.plan_config.ansi_mode,
+        input.function_context.plan_config.case_sensitive,
+    );
+    let schema = input.function_context.schema;
+    if !matches!(function, expr::Expr::Lambda(_)) {
+        // Spark can coerce NullType collections once an ordinary (hidden lambda)
+        // body is resolved. An explicit lambda with an untyped NULL still errors.
+        for argument in [&mut left, &mut right] {
+            if argument.get_type(schema)? == DataType::Null {
+                let data_type = if map {
+                    map_type_from_key_value_types(&DataType::Null, &DataType::Null)
+                } else {
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)))
+                };
+                *argument = cast(argument.clone(), data_type);
+            }
+        }
+    }
+    let types = udf.coerce_collection_types(&[left.get_type(schema)?, right.get_type(schema)?])?;
+    let mut arguments = [left, right]
+        .into_iter()
+        .zip(types)
+        .map(|(argument, data_type)| {
+            let argument = if argument.get_type(schema)? == data_type {
+                argument
+            } else {
+                cast(argument, data_type)
+            };
+            lambda_with_fresh_parameter(argument, "__zip_collection")
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    arguments.push(if matches!(function, expr::Expr::Lambda(_)) {
+        function
+    } else {
+        lambda_with_fresh_parameter(function, "__zip_element")?
+    });
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::new(HigherOrderUDF::new_from_impl(udf)),
+        arguments,
+    )))
+}
+
 pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -472,11 +542,11 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
         ("map_filter", F::custom(map_filter)),
-        ("map_zip_with", F::unknown("map_zip_with")),
+        ("map_zip_with", F::custom(map_zip_with)),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
         ("transform_keys", F::unknown("transform_keys")),
         ("transform_values", F::unknown("transform_values")),
-        ("zip_with", F::unknown("zip_with")),
+        ("zip_with", F::custom(zip_with)),
     ]
 }

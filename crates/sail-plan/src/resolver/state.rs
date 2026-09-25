@@ -51,6 +51,8 @@ pub(super) struct PlanResolverStateConfig {
     /// Keep source columns in COUNT arguments while resolving SQL PIVOT aggregates.
     /// Implicit pivot grouping needs those references before the aggregate is rewritten.
     pub preserve_count_argument_columns: bool,
+    /// Use Spark's anonymous lambda display names while resolving zip functions.
+    pub anonymous_lambda_display: bool,
 }
 
 #[derive(Debug, Default)]
