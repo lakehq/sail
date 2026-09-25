@@ -178,3 +178,36 @@ Feature: ANSI numeric and STRING conditional results
       | 0  | 16777217 | double      | 16777217             | double             |
       | 1  | 1        | double      | 0                    | double             |
       | 2  | 0        | double      | 0                    | double             |
+
+  @sail-bug
+  Scenario Outline: Conditional numeric casts accept Spark STRING syntax: <syntax>
+    When query
+      """
+      SELECT if(id = 0, <number>, <text>) AS result FROM range(2) ORDER BY id
+      """
+    Then query result ordered
+      | result   |
+      | <first>  |
+      | <result> |
+
+    Examples:
+      | syntax                  | number            | text                          | first | result |
+      | integral control bytes  | 1                 | concat(chr(0), '7', chr(0))    | 1     | 7      |
+      | floating control bytes  | CAST(1 AS DOUBLE) | concat(chr(0), '7', chr(0))    | 1.0   | 7.0    |
+      | floating type suffix    | CAST(1 AS DOUBLE) | '1.5D'                        | 1.0   | 1.5    |
+      | hexadecimal floating    | CAST(1 AS DOUBLE) | '0x1.8p1'                     | 1.0   | 3.0    |
+
+  @sail-bug
+  Scenario: Conditional DECIMAL casts accept a STRING exponent
+    When query
+      """
+      SELECT CASE WHEN id = 0 THEN 1
+                  WHEN id = 1 THEN '1E1'
+                  ELSE CAST(1.25 AS DECIMAL(5,2)) END AS result
+      FROM range(3) ORDER BY id
+      """
+    Then query result ordered
+      | result |
+      | 1.00   |
+      | 10.00  |
+      | 1.25   |

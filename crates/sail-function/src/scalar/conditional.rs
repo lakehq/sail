@@ -68,6 +68,9 @@ impl ScalarUDFImpl for SparkConditionalCast {
                 args.args.len(),
             ));
         };
+        // TODO: Match Spark's numeric STRING grammar when shared cast support is available:
+        // control-character trimming, floating-point suffixes/hex literals, and DECIMAL exponents.
+        // Arrow's parser currently rejects these forms, as it does for ordinary CAST expressions.
         let options = CastOptions {
             safe: false,
             ..Default::default()
