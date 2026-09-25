@@ -9,6 +9,7 @@ use datafusion::functions_aggregate::{
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
@@ -813,6 +814,7 @@ pub(super) fn approx_percentile_arguments(
     schema: &DFSchema,
     ansi_mode: bool,
     filter: Option<&expr::Expr>,
+    session_context: &SessionContext,
 ) -> PlanResult<Vec<expr::Expr>> {
     if !(2..=3).contains(&arguments.len()) {
         return Err(PlanError::invalid(
@@ -887,9 +889,12 @@ pub(super) fn approx_percentile_arguments(
         .map(|argument| argument.get_type(schema))
         .collect::<Result<Vec<_>, _>>()?;
     let coerced_types = ApproxPercentile::default().coerce_types(&argument_types)?;
+    let state = session_context.state();
     let simplifier = ExprSimplifier::new(
         SimplifyContextBuilder::default()
             .with_schema(Arc::new(schema.clone()))
+            .with_config_options(Arc::clone(state.config_options()))
+            .with_query_execution_start_time(state.execution_props().query_execution_start_time)
             .build(),
     );
     let evaluator = LiteralEvaluator::new();
@@ -913,6 +918,7 @@ fn approx_percentile(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
         input.filter.as_deref(),
+        input.function_context.session_context,
     )?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ApproxPercentile::default())),

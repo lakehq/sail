@@ -645,6 +645,7 @@ fn approx_percentile(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
         None,
+        input.function_context.session_context,
     )?;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(

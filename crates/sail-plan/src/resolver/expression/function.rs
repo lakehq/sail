@@ -96,6 +96,18 @@ impl PlanResolver<'_> {
 
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
+        if !has_spec_lambda_argument
+            && matches!(
+                canonical_function_name.as_str(),
+                "zip_with" | "map_zip_with"
+            )
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            state.config_mut().anonymous_lambda_display = true;
+        }
+
         let (mut argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?

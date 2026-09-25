@@ -114,3 +114,42 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       FROM VALUES (1), (2), (3), (4) AS t(v)
       """
     Then query error (?i)foldable
+
+  Scenario Outline: Approximate percentile parameters use the current query time
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) AS p
+      FROM VALUES (1), (2), (3), (4) AS t(v)
+      """
+    Then query result
+      | p |
+      | 2 |
+
+    Examples:
+      | function          | percentage                                                     | accuracy                           |
+      | percentile_approx | dayofmonth(current_date()) / (2D * dayofmonth(current_date())) | 10000                              |
+      | approx_percentile | 0.5D                                                           | dayofmonth(current_date()) * 10000 |
+      | percentile_approx | 0.5D                                                           | year(current_timestamp()) - 1970   |
+
+  Scenario: Foldable current-date parameters work in window aggregates
+    When query
+      """
+      SELECT v, percentile_approx(v,
+                 dayofmonth(current_date()) / (2D * dayofmonth(current_date())),
+                 dayofmonth(current_date()) * 10000) OVER () AS p
+      FROM VALUES (1), (2) AS t(v) ORDER BY v
+      """
+    Then query result
+      | v | p |
+      | 1 | 1 |
+      | 2 | 1 |
+
+  Scenario: Foldable current-date parameters retain empty grouped results
+    When query
+      """
+      SELECT percentile_approx(v,
+                 dayofmonth(current_date()) / (2D * dayofmonth(current_date()))) AS p
+      FROM (SELECT 1 AS v WHERE false) AS t GROUP BY v
+      """
+    Then query result
+      | p |

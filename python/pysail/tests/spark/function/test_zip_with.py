@@ -191,6 +191,38 @@ def test_zip_functions_default_names_for_plain_body(spark, map_input):
         assert result.first()[0] == [7]
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT zip_with(array(1), array(2), (1, 2))",
+            "zip_with(array(1), array(2), lambdafunction(named_struct(col1, 1, col2, 2), "
+            "namedlambdavariable(), namedlambdavariable()))",
+        ),
+        (
+            "SELECT map_zip_with(map(1, 2), map(1, 3), (1, 2))",
+            "map_zip_with(map(1, 2), map(1, 3), lambdafunction(named_struct(col1, 1, col2, 2), "
+            "namedlambdavariable(), namedlambdavariable(), namedlambdavariable()))",
+        ),
+        (
+            "SELECT zip_with(transform(array(1), x -> x), array(2), 7)",
+            "zip_with(transform(array(1), lambdafunction(namedlambdavariable(), namedlambdavariable())), "
+            "array(2), lambdafunction(7, namedlambdavariable(), namedlambdavariable()))",
+        ),
+        (
+            "SELECT zip_with(array(1), array(2), transform(array(3), x -> x))",
+            "zip_with(array(1), array(2), lambdafunction(transform(array(3), "
+            "lambdafunction(namedlambdavariable(), namedlambdavariable())), "
+            "namedlambdavariable(), namedlambdavariable()))",
+        ),
+    ],
+)
+def test_zip_functions_plain_body_names_resolve_like_explicit_lambdas(spark, query, expected):
+    result = spark.sql(query)
+    assert result.select(expected).collect() == result.collect()
+    assert result.columns == [expected]
+
+
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="The existing named_struct constructor marks literal fields nullable before map_zip_with receives them",
