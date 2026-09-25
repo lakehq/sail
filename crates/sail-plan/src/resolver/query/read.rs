@@ -208,8 +208,8 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
-    // FIXME: Spark resolves the view with the SQL configuration captured when the view
-    //  was created (e.g. `spark.sql.ansi.enabled`), but the current session configuration is used here.
+    // FIXME: Capture and restore the view's creation-time SQL configuration. Until then,
+    //  retain existing integral/FLOAT conditional coercion when re-resolving the view.
     async fn resolve_table_view(
         &self,
         definition: String,
@@ -219,8 +219,13 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        let mut config = self.config.as_ref().clone();
+        config.preserve_view_conditional_float_type = true;
+        // Preserve the existing decimal rule until the creation-time setting is available.
+        config.legacy_decimal_retain_fraction_digits = false;
+        let resolver = Self::new(self.ctx, Arc::new(config));
         let plan = match spec_plan {
-            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
                 return Err(PlanError::invalid("view definition must be a query"));
             }

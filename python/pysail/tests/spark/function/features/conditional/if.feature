@@ -298,3 +298,41 @@ Feature: if output schema
         root
          |-- result: string (nullable = false)
         """
+
+  Rule: Numeric conditionals over parsed decimal values
+
+    Scenario Outline: Numeric conditionals preserve parsed decimal values with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          id,
+          if_result,
+          case_result,
+          nvl2_result,
+          typeof(if_result) AS if_type,
+          typeof(case_result) AS case_type,
+          typeof(nvl2_result) AS nvl2_type
+        FROM (
+          SELECT
+            id,
+            if(id = 0, CAST(2 AS BIGINT), if(id = 1, 1, to_number('1.25', '9.99'))) AS if_result,
+            CASE WHEN id = 0 THEN CAST(2 AS DECIMAL(5,1))
+              ELSE CASE WHEN id = 1 THEN CAST(1 AS DECIMAL(3,1))
+                ELSE try_to_number('1.25', '9.99') END
+              END AS case_result,
+            nvl2(nullif(id, 2), CAST(1.5 AS FLOAT), to_number('1.25', '9.99')) AS nvl2_result
+          FROM VALUES (0), (1), (2) AS t(id)
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | if_result | case_result | nvl2_result | if_type       | case_type    | nvl2_type |
+        | 0  | 2.00      | 2.00        | 1.5         | decimal(22,2) | decimal(6,2) | double    |
+        | 1  | 1.00      | 1.00        | 1.5         | decimal(22,2) | decimal(6,2) | double    |
+        | 2  | 1.25      | 1.25        | 1.25        | decimal(22,2) | decimal(6,2) | double    |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
@@ -134,12 +134,19 @@ impl PlanResolver<'_> {
                             .map(|input| input.schema().field(i).data_type())
                             .collect::<Vec<_>>();
                         let has = |f: fn(&DataType) -> bool| types.iter().any(|t| f(t));
-                        let keep_loose_type =
-                            (has(|t| matches!(t, DataType::Date32 | DataType::Date64))
+                        // TODO: Widen nested UNION types while preserving their field metadata.
+                        // Keep the existing type until coercion can retain interval qualifiers.
+                        let has_nested_metadata = Schema::new(vec![Arc::clone(field)])
+                            .flattened_fields()
+                            .iter()
+                            .skip(1)
+                            .any(|field| !field.metadata().is_empty());
+                        let keep_loose_type = has_nested_metadata
+                            || (has(|t| matches!(t, DataType::Date32 | DataType::Date64))
                                 && has(|t| matches!(t, DataType::Timestamp(_, _))))
-                                || (self.config.ansi_mode
-                                    && has(DataType::is_string)
-                                    && has(DataType::is_numeric));
+                            || (self.config.ansi_mode
+                                && has(DataType::is_string)
+                                && has(DataType::is_numeric));
                         let field = if keep_loose_type {
                             Arc::clone(field)
                         } else {

@@ -271,6 +271,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_DECIMAL_RETAIN_FRACTION_DIGITS_ON_TRUNCATE)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_decimal_retain_fraction_digits = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
             .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?

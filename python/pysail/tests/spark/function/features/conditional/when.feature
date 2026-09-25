@@ -256,9 +256,9 @@ Feature: when output schema
 
   Rule: Legacy DECIMAL truncation
 
-    @sail-bug
-    Scenario: CASE keeps DECIMAL fraction digits with the legacy truncation config
-      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+    @spark-4.0
+    Scenario Outline: CASE honors the legacy DECIMAL truncation config: <retain_fraction_digits>
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = <retain_fraction_digits>
       When query
         """
         SELECT
@@ -268,13 +268,17 @@ Feature: when output schema
         FROM VALUES (0), (1) AS t(id)
         """
       Then query result
-        | id | result        | result_type    |
-        | 0  | -2.5000000000 | decimal(38,10) |
-        | 1  | 1.0000000000  | decimal(38,10) |
+        | id | result         | result_type   |
+        | 0  | <first_value>  | <result_type> |
+        | 1  | <second_value> | <result_type> |
+
+      Examples:
+        | retain_fraction_digits | first_value   | second_value | result_type    |
+        | false                  | -3            | 1            | decimal(38,0)  |
+        | true                   | -2.5000000000 | 1.0000000000 | decimal(38,10) |
 
   Rule: Persistent views
 
-    @sail-bug
     Scenario: CASE in a persistent view keeps the type resolved with ANSI disabled
       Given config spark.sql.ansi.enabled = false
       And statement
@@ -295,6 +299,75 @@ Feature: when output schema
         | id | v   | v_type |
         | 0  | 1.5 | float  |
         | 1  | 3.0 | float  |
+
+    @sail-bug
+    Scenario: CASE in a persistent view keeps the type resolved with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_float_bigint_ansi_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(1.5 AS FLOAT) ELSE CAST(3 AS BIGINT) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_float_bigint_ansi_view
+        """
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_float_bigint_ansi_view
+        """
+      Then query result
+        | id | v   | v_type |
+        | 0  | 1.5 | double |
+        | 1  | 3.0 | double |
+
+    @spark-4.0
+    Scenario: CASE in a persistent view keeps its nonlegacy DECIMAL truncation policy
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_decimal_nonlegacy_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10))
+          ELSE CAST(1 AS DECIMAL(38,0)) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_decimal_nonlegacy_view
+        """
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_decimal_nonlegacy_view
+        """
+      Then query result
+        | id | v  | v_type        |
+        | 0  | -3 | decimal(38,0) |
+        | 1  | 1  | decimal(38,0) |
+
+    @spark-4.0
+    @sail-bug
+    Scenario: CASE in a persistent view keeps its legacy DECIMAL truncation policy
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_decimal_legacy_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10))
+          ELSE CAST(1 AS DECIMAL(38,0)) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_decimal_legacy_view
+        """
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_decimal_legacy_view
+        """
+      Then query result
+        | id | v             | v_type         |
+        | 0  | -2.5000000000 | decimal(38,10) |
+        | 1  | 1.0000000000  | decimal(38,10) |
 
   @function(nullability)
   Rule: Output schema

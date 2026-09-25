@@ -14,6 +14,20 @@ Feature: nvl2 output schema
          |-- result: integer (nullable = false)
         """
 
+    Scenario: nvl2 preserves a nullable result branch when the tested value is a non-null literal
+      When query
+        """
+        SELECT nvl2(1, 2, CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+      And query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
     Scenario: nvl2 preserves the declared nullability of its result branches
       When query
         """

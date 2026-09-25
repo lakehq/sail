@@ -266,3 +266,42 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | result_type |
         | timestamp   |
         | timestamp   |
+
+  Rule: UNION nested field metadata
+
+    Scenario Outline: UNION preserves nested interval qualifiers: <operator>
+      When query
+        """
+        SELECT k, CAST(s.v AS INT) AS years
+        FROM (
+          SELECT 1 AS k, struct(INTERVAL '1' YEAR AS v) AS s
+          <operator>
+          SELECT 2 AS k, struct(CAST(NULL AS INTERVAL YEAR) AS v) AS s
+        ) AS q
+        ORDER BY k
+        """
+      Then query result ordered
+        | k | years |
+        | 1 | 1     |
+        | 2 | NULL  |
+
+      Examples:
+        | operator  |
+        | UNION ALL |
+        | UNION     |
+
+    @sail-bug
+    Scenario: UNION widens numeric fields beside nested interval metadata
+      When query
+        """
+        SELECT typeof(s.n) AS number_type
+        FROM (
+          SELECT struct(INTERVAL '1' YEAR AS v, CAST(1 AS INT) AS n) AS s
+          UNION ALL
+          SELECT struct(CAST(NULL AS INTERVAL YEAR) AS v, CAST(2 AS BIGINT) AS n) AS s
+        ) AS q
+        """
+      Then query result
+        | number_type |
+        | bigint      |
+        | bigint      |

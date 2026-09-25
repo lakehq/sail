@@ -77,13 +77,17 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         if_non_null = if_non_null.cast_to(&common_type, function_context.schema)?;
         if_null = if_null.cast_to(&common_type, function_context.schema)?;
     }
-    // Testing for NULL with the non-null result in ELSE preserves Spark's branch-based
-    // nullability for NVL2. A simple CASE would too, but DataFusion treats it as a
-    // constant in IN lists, so every row would get the NULL result.
+    // Keep a nullable result in ELSE so DataFusion's predicate-based inference
+    // preserves Spark's branch-based nullability even when the test is constant.
+    let (condition, then_expr, else_expr) = if if_null.nullable(function_context.schema)? {
+        (tested.is_not_null(), if_non_null, if_null)
+    } else {
+        (tested.is_null(), if_null, if_non_null)
+    };
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
-        when_then_expr: vec![(Box::new(tested.is_null()), Box::new(if_null))],
-        else_expr: Some(Box::new(if_non_null)),
+        when_then_expr: vec![(Box::new(condition), Box::new(then_expr))],
+        else_expr: Some(Box::new(else_expr)),
     }))
 }
 
@@ -127,9 +131,15 @@ fn coerce_numeric_values(
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
     let data_types = argument_types(&arguments, function_context)?;
-    let ansi_mode = function_context.plan_config.ansi_mode;
+    let ansi_mode = function_context.plan_config.ansi_mode
+        && !function_context
+            .plan_config
+            .preserve_view_conditional_float_type;
+    let retain_fraction_digits = function_context
+        .plan_config
+        .legacy_decimal_retain_fraction_digits;
     let common_type = data_types.iter().try_fold(DataType::Null, |left, right| {
-        wider_numeric_type(&left, right, ansi_mode)
+        wider_numeric_type(&left, right, ansi_mode, retain_fraction_digits)
     });
     let common_type = common_type.or_else(|| {
         if (data_types.iter().any(is_string_type)
@@ -167,20 +177,37 @@ fn coerce_numeric_values(
 
 /// Returns Spark's wider type of two numeric (or NULL) types,
 /// following `findWiderTypeForTwo` in `TypeCoercion` and `AnsiTypeCoercion`.
-fn wider_numeric_type(left: &DataType, right: &DataType, ansi_mode: bool) -> Option<DataType> {
+fn wider_numeric_type(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+    retain_fraction_digits: bool,
+) -> Option<DataType> {
     match (left, right) {
         (DataType::Null, other) | (other, DataType::Null) => {
             (other.is_null() || is_numeric_type(other)).then(|| other.clone())
         }
-        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            Some(wider_decimal_type((*p1, *s1), (*p2, *s2)))
-        }
-        (DataType::Decimal128(precision, scale), other)
-        | (other, DataType::Decimal128(precision, scale)) => match other {
+        (
+            DataType::Decimal128(p1, s1) | DataType::Decimal256(p1, s1),
+            DataType::Decimal128(p2, s2) | DataType::Decimal256(p2, s2),
+        ) => Some(wider_decimal_type(
+            (*p1, *s1),
+            (*p2, *s2),
+            retain_fraction_digits,
+        )),
+        (
+            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
+            other,
+        )
+        | (
+            other,
+            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
+        ) => match other {
             DataType::Float32 | DataType::Float64 => Some(DataType::Float64),
             _ => Some(wider_decimal_type(
                 (integral_decimal_precision(other)?, 0),
                 (*precision, *scale),
+                retain_fraction_digits,
             )),
         },
         _ => {
@@ -200,16 +227,22 @@ fn wider_numeric_type(left: &DataType, right: &DataType, ansi_mode: bool) -> Opt
     }
 }
 
-/// Follows `DecimalPrecisionTypeCoercion.widerDecimalType` in Spark,
-/// which keeps the integral digits when the precision exceeds the maximum.
-// TODO: Support `spark.sql.legacy.decimal.retainFractionDigitsOnTruncate`,
-//  which keeps the fraction digits instead.
-fn wider_decimal_type((p1, s1): (u8, i8), (p2, s2): (u8, i8)) -> DataType {
+/// Follows `DecimalPrecisionTypeCoercion.widerDecimalType` in Spark.
+fn wider_decimal_type(
+    (p1, s1): (u8, i8),
+    (p2, s2): (u8, i8),
+    retain_fraction_digits: bool,
+) -> DataType {
     let scale = i16::from(s1.max(s2));
     let range = (i16::from(p1) - i16::from(s1)).max(i16::from(p2) - i16::from(s2));
     let precision = scale + range;
     let max_precision = i16::from(DECIMAL128_MAX_PRECISION);
-    if precision <= max_precision {
+    if retain_fraction_digits {
+        DataType::Decimal128(
+            precision.min(max_precision) as u8,
+            scale.min(max_precision) as i8,
+        )
+    } else if precision <= max_precision {
         DataType::Decimal128(precision as u8, scale as i8)
     } else {
         let scale = (scale - (precision - max_precision)).max(0);
@@ -218,7 +251,10 @@ fn wider_decimal_type((p1, s1): (u8, i8), (p2, s2): (u8, i8)) -> DataType {
 }
 
 fn is_numeric_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Decimal128(_, _)) || numeric_precedence(data_type).is_some()
+    matches!(
+        data_type,
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+    ) || numeric_precedence(data_type).is_some()
 }
 
 /// Follows `UpCastRule.numericPrecedence` in Spark.
