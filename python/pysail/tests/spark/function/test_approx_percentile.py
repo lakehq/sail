@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import ArrayType, DayTimeIntervalType, DecimalType, LongType, YearMonthIntervalType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -38,7 +38,7 @@ def test_approx_percentile_partial_merge(spark):
         ("123456789012345678901.1234567890", 38, 10, Decimal("123456789012345680000.0000000000")),
         ("99999999999999999999999999999999999999", 38, 0, None),
         # Spark on Java 17 uses Double.toString's representation at this tie.
-        ("100000000000000000000000", 38, 0, Decimal("99999999999999990000000")),
+        ("100000000000000000000000", 38, 0, Decimal(99999999999999990000000)),
     ],
 )
 def test_approx_percentile_decimal_materialization(spark, value, precision, scale, expected):
@@ -81,10 +81,11 @@ def test_approx_percentile_decimal_array_type(spark):
     [("MONTH", YearMonthIntervalType(1, 1)), ("SECOND", DayTimeIntervalType(3, 3))],
 )
 def test_approx_percentile_interval_qualifiers(spark, function, qualifier, expected_type):
+    # Function names and interval qualifiers are fixed pytest parameters.
     result = spark.sql(f"""
         SELECT {function}(v, 0.5) AS scalar, {function}(v, array(0.5)) AS array
         FROM VALUES (INTERVAL '1' {qualifier}), (INTERVAL '2' {qualifier}) AS t(v)
-    """)
+    """)  # noqa: S608
     assert result.schema["scalar"].dataType == expected_type
     assert result.schema["array"].dataType == ArrayType(expected_type, containsNull=False)
     assert result.select(F.size("array")).first()[0] == 1

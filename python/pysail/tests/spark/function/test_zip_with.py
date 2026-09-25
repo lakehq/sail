@@ -8,7 +8,7 @@ from pyspark.sql import types as T  # noqa: N812
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
-@pytest.mark.parametrize("left_nullable,right_nullable", [(False, False), (False, True), (True, False)])
+@pytest.mark.parametrize(("left_nullable", "right_nullable"), [(False, False), (False, True), (True, False)])
 @pytest.mark.parametrize("constant", [False, True])
 def test_zip_with_schema(spark, left_nullable, right_nullable, constant):
     source = spark.createDataFrame(
@@ -27,7 +27,7 @@ def test_zip_with_schema(spark, left_nullable, right_nullable, constant):
     assert result.collect()[0].result == ([7, 7] if constant else [3, None])
 
 
-@pytest.mark.parametrize("left_nullable,right_nullable", [(False, False), (False, True), (True, False)])
+@pytest.mark.parametrize(("left_nullable", "right_nullable"), [(False, False), (False, True), (True, False)])
 @pytest.mark.parametrize("body", ["key", "value", "constant"])
 def test_map_zip_with_schema(spark, left_nullable, right_nullable, body):
     input_type = T.MapType(T.StringType(), T.IntegerType(), valueContainsNull=False)
@@ -122,9 +122,9 @@ def test_map_zip_with_float_key_equality(spark):
         .collect()[0]
         .entries
     )
-    assert len(entries) == 2
-    assert entries[0].key == 0.0 and entries[0].value == 4
-    assert math.isnan(entries[1].key) and entries[1].value == 6
+    assert [entry.value for entry in entries] == [4, 6]
+    assert entries[0].key == 0.0
+    assert math.isnan(entries[1].key)
 
 
 def test_zip_with_default_column_names_preserve_captures_and_literals(spark):
