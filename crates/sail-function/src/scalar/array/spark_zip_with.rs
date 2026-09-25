@@ -485,6 +485,8 @@ fn common_key_type(
                 .iter()
                 .zip(right)
                 .map(|(left, right)| {
+                    // TODO: Match Spark's Unicode field-name comparison once shared
+                    // name resolution supports Java's equalsIgnoreCase semantics.
                     if if case_sensitive {
                         left.name() != right.name()
                     } else {

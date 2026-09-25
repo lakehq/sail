@@ -270,6 +270,15 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.ansi_mode = value;
         }
 
+        let subquery_key = SparkConfigKey::SPARK_SQL_ANALYZER_ALLOW_SUBQUERY_EXPRESSIONS_IN_LAMBDAS_OR_HIGHER_ORDER_FUNCTIONS;
+        // Spark 3.5 has no restriction, even if this later configuration key is set.
+        output.allow_subquery_expressions_in_lambdas = !config.entries.contains_key(subquery_key)
+            || config
+                .get_option(subquery_key)
+                .map(|x| x.trim().to_lowercase().parse::<bool>())
+                .transpose()?
+                .unwrap_or(false);
+
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
             .map(|x| x.trim().to_lowercase().parse::<bool>())

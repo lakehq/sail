@@ -106,6 +106,20 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
 
+        if state.config().reject_zip_subqueries
+            && matches!(
+                expr,
+                Expr::ScalarSubquery { .. }
+                    | Expr::Exists { .. }
+                    | Expr::InSubquery { .. }
+                    | Expr::Subquery { .. }
+            )
+        {
+            return Err(PlanError::AnalysisError(
+                "Subquery expressions are not supported within higher-order functions".to_string(),
+            ));
+        }
+
         match expr {
             Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
             Expr::UnresolvedAttribute {

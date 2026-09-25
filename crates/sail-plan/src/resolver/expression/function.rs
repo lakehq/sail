@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
 use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::DataType;
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::utils::quote_name_if_needed;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -96,16 +99,18 @@ impl PlanResolver<'_> {
 
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
-        if !has_spec_lambda_argument
-            && matches!(
-                canonical_function_name.as_str(),
-                "zip_with" | "map_zip_with"
-            )
-            && catalog_manager
-                .get_function(&canonical_function_name)?
-                .is_none()
+        if matches!(
+            canonical_function_name.as_str(),
+            "zip_with" | "map_zip_with"
+        ) && catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_none()
         {
-            state.config_mut().anonymous_lambda_display = true;
+            state.config_mut().reject_zip_subqueries |=
+                !self.config.allow_subquery_expressions_in_lambdas;
+            if !has_spec_lambda_argument {
+                state.config_mut().anonymous_lambda_display = true;
+            }
         }
 
         let (mut argument_display_names, arguments) = if canonical_function_name == "struct" {
@@ -416,9 +421,38 @@ impl PlanResolver<'_> {
                 }
                 _ => None,
             };
-            let NamedExpr { name, expr, .. } = self
+            // Zip display names retain aliased expressions while struct fields
+            // continue to use their declared aliases.
+            let mut aliases = Vec::new();
+            let mut expression = expression;
+            let expression = loop {
+                match expression {
+                    spec::Expr::Alias {
+                        expr,
+                        name,
+                        metadata,
+                    } if state.config().anonymous_lambda_display && name.len() == 1 => {
+                        let alias: String = name.one()?.into();
+                        aliases.push((alias, metadata));
+                        expression = *expr;
+                    }
+                    other => break other,
+                }
+            };
+            let mut named = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
+            for (alias, metadata) in aliases.into_iter().rev() {
+                let display = format!("{} AS {}", named.name.one()?, quote_name_if_needed(&alias));
+                let metadata = metadata.unwrap_or(named.metadata);
+                let metadata = (!metadata.is_empty())
+                    .then(|| FieldMetadata::from(metadata.into_iter().collect::<HashMap<_, _>>()));
+                named = NamedExpr::new(
+                    vec![display],
+                    named.expr.alias_with_metadata(alias, metadata),
+                );
+            }
+            let NamedExpr { name, expr, .. } = named;
             // A string map key is not a struct field name in the Column API.
             let field_name = if is_named_reference
                 || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())

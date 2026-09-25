@@ -12,3 +12,6 @@ def test_zip_function_udf_default_column_names(spark, function):
     assert result.columns == [expected_name]
     assert result.first()[0] == expected_value
     assert result.select(expected_name).first()[0] == expected_value
+
+    result = spark.sql(f"SELECT {function}((SELECT 1), 2, 3) AS result")
+    assert result.first().result == expected_value

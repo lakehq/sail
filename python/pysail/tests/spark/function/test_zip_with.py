@@ -338,3 +338,61 @@ def test_zip_functions_skip_native_errors_around_python_udfs_after_null_input(sp
         )
 
     assert spark.range(1).select(expression.alias("result")).first().result is None
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_name", "expected_fields"),
+    [
+        (
+            "SELECT zip_with(array(1), array(2), (x, y) -> (x AS first, y AS second))",
+            "zip_with(array(1), array(2), lambdafunction(named_struct(first, "
+            "namedlambdavariable() AS first, second, namedlambdavariable() AS second), "
+            "namedlambdavariable(), namedlambdavariable()))",
+            {"first": 1, "second": 2},
+        ),
+        (
+            "SELECT map_zip_with(map(1, 2), map(1, 3), (k, x, y) -> (x AS first, y AS second))",
+            "map_zip_with(map(1, 2), map(1, 3), lambdafunction(named_struct(first, "
+            "namedlambdavariable() AS first, second, namedlambdavariable() AS second), "
+            "namedlambdavariable(), namedlambdavariable(), namedlambdavariable()))",
+            {"first": 2, "second": 3},
+        ),
+        (
+            "SELECT zip_with(array(1), array(2), (x, y) -> struct(x AS first, y AS second))",
+            "zip_with(array(1), array(2), lambdafunction(struct(namedlambdavariable() AS first, "
+            "namedlambdavariable() AS second), namedlambdavariable(), namedlambdavariable()))",
+            {"first": 1, "second": 2},
+        ),
+        (
+            "SELECT zip_with(array(1), array(2), (7 AS `a b`, 8 AS `c``d`))",
+            "zip_with(array(1), array(2), lambdafunction(named_struct(a b, 7 AS `a b`, "
+            "c`d, 8 AS `c``d`), namedlambdavariable(), namedlambdavariable()))",
+            {"a b": 7, "c`d": 8},
+        ),
+    ],
+)
+def test_zip_functions_preserve_aliased_struct_column_names(spark, query, expected_name, expected_fields):
+    result = spark.sql(query)
+    assert result.columns == [expected_name]
+    quoted_name = "`" + expected_name.replace("`", "``") + "`"
+    assert result.select(F.col(quoted_name)).collect() == result.collect()
+    collection = result.first()[0]
+    structs = list(collection.values()) if isinstance(collection, dict) else collection
+    assert [value.asDict() for value in structs] == [expected_fields]
+
+
+def test_zip_with_preserves_chained_struct_alias_display(spark):
+    result = spark.range(1).select(
+        F.zip_with(
+            F.array(F.lit(1)),
+            F.array(F.lit(2)),
+            lambda x, y: F.struct(x.alias("inner").alias("outer"), y.alias("right")),
+        )
+    )
+    expected_name = (
+        "zip_with(array(1), array(2), lambdafunction(struct(namedlambdavariable() AS inner AS outer, "
+        "namedlambdavariable() AS right), namedlambdavariable(), namedlambdavariable()))"
+    )
+    assert result.columns == [expected_name]
+    assert result.select(F.col("`" + expected_name + "`")).collect() == result.collect()
+    assert result.first()[0][0].asDict() == {"outer": 1, "right": 2}

@@ -53,6 +53,8 @@ pub(super) struct PlanResolverStateConfig {
     pub preserve_count_argument_columns: bool,
     /// Use Spark's anonymous lambda display names while resolving zip functions.
     pub anonymous_lambda_display: bool,
+    /// Reject subqueries while resolving built-in zip function arguments.
+    pub reject_zip_subqueries: bool,
 }
 
 #[derive(Debug, Default)]

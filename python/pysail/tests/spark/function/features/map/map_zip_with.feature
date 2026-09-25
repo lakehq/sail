@@ -227,6 +227,18 @@ Feature: map_zip_with merges the union of keys
         | result |
         | [5]    |
 
+    @sail-bug
+    Scenario: Case-insensitive map key field names use Unicode case folding
+      When query
+        """
+        SELECT map_values(map_zip_with(map(named_struct('é', 1), 2),
+                                       map(named_struct('É', 1), 3),
+                                       (k, v1, v2) -> v1 + v2)) AS result
+        """
+      Then query result
+        | result |
+        | [5]    |
+
     Scenario: Case-sensitive map keys reject differently named fields
       Given config spark.sql.caseSensitive = true
       When query
