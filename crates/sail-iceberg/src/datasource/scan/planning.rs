@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use datafusion::catalog::Session;
-use datafusion::common::{Result, plan_err};
+use datafusion::common::Result;
 use datafusion::logical_expr::Expr;
 use url::Url;
 
@@ -14,7 +14,7 @@ use crate::datasource::pruning::{
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
-use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef, MatchedDeletes};
+use crate::spec::delete_index::{DeleteFileIndex, MatchedDeletes};
 use crate::spec::{DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec};
 use crate::utils::get_object_store_from_session;
 
@@ -247,65 +247,17 @@ impl IcebergScan {
         Ok(out)
     }
 
-    /// Build a [`DeleteFileIndex`] scoped to the current snapshot.
     pub(super) async fn build_delete_file_index(
         &self,
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
     ) -> Result<DeleteFileIndex> {
-        let spec_map: HashMap<i32, PartitionSpec> = self
-            .partition_specs
-            .iter()
-            .map(|s| (s.spec_id(), s.clone()))
-            .collect();
-
-        let mut index = DeleteFileIndex::new();
-        for manifest_file in manifest_list
-            .entries()
-            .iter()
-            .filter(|mf| mf.content == ManifestContentType::Deletes)
-        {
-            let manifest_path_str = manifest_file.manifest_path.as_str();
-            let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
-            let partition_spec_id = manifest_file.partition_spec_id;
-            let is_unpartitioned = spec_map
-                .get(&partition_spec_id)
-                .map(|s| s.is_unpartitioned())
-                .unwrap_or(false);
-            let parent_seq = manifest_file.sequence_number;
-
-            for entry_ref in manifest.entries().iter() {
-                let entry = entry_ref.as_ref();
-                if !matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                ) {
-                    continue;
-                }
-                let mut df = entry.data_file.clone();
-                df.partition_spec_id = partition_spec_id;
-                let seq = entry.sequence_number.unwrap_or(parent_seq);
-                let file_ref = DeleteFileRef {
-                    data_file: df,
-                    data_sequence_number: seq,
-                    partition_spec_id,
-                    is_unpartitioned_spec: is_unpartitioned,
-                };
-                // TODO: Read and apply v3 Puffin deletion vectors before enabling DV tables.
-                if file_ref.is_deletion_vector() {
-                    return plan_err!(
-                        "Iceberg v3 deletion vectors are not yet supported \
-                         (delete file: {})",
-                        file_ref.data_file.file_path
-                    );
-                }
-                index.insert(file_ref).map_err(|e| {
-                    datafusion::common::DataFusionError::Plan(format!(
-                        "failed to index Iceberg delete file: {e}"
-                    ))
-                })?;
-            }
-        }
-        Ok(index)
+        crate::io::load_delete_file_index(
+            &self.partition_specs,
+            self.format_version,
+            store_ctx,
+            manifest_list,
+        )
+        .await
     }
 }

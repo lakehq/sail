@@ -162,6 +162,7 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
         let table_schema =
             TableSchema::builder(defaults.schema(parquet.table_schema().file_schema())?)
                 .with_table_partition_cols(parquet.table_schema().table_partition_cols().to_vec())
+                .with_virtual_columns(parquet.table_schema().virtual_columns().clone())
                 .build();
         // Preserve whole-file partitions without advertising compatible hash
         // partitioning: interleaving these scans would reset file-local row offsets.

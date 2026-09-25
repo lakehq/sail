@@ -403,56 +403,6 @@ def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
         _drop_table(spark, table_name)
 
 
-def test_iceberg_merge_rejects_position_deletes_on_v3_table_without_metadata_commit(spark, tmp_path):
-    table_name = "iceberg_merge_v3_position_delete"
-    table_path = tmp_path / table_name
-
-    _drop_table(spark, table_name)
-    try:
-        spark.sql(
-            f"""
-            CREATE TABLE {table_name} (
-              id INT,
-              value STRING
-            )
-            USING iceberg
-            LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES (
-              'format-version' = '3',
-              'write.merge.mode' = 'merge-on-read'
-            )
-            """
-        )
-        spark.sql("INSERT INTO iceberg_merge_v3_position_delete VALUES (1, 'old')")
-        spark.sql(
-            """
-            CREATE OR REPLACE TEMP VIEW iceberg_merge_v3_source AS
-            SELECT * FROM VALUES (1, 'new') AS src(id, value)
-            """
-        )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
-
-        with pytest.raises(Exception, match=r"deletion vectors|v3 MERGE MOR position delete"):
-            spark.sql(
-                f"""
-                MERGE INTO {table_name} AS t
-                USING iceberg_merge_v3_source AS s
-                ON t.id = s.id
-                WHEN MATCHED THEN
-                  UPDATE SET value = s.value
-                """
-            ).collect()
-
-        rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_v3_position_delete").collect()]
-        assert rows == [(1, "old")]
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
-        assert len(_find_latest_metadata(table_path)["snapshots"]) == 1
-    finally:
-        _drop_table(spark, table_name)
-
-
 def test_iceberg_merge_with_schema_evolution_is_rejected_without_side_effects(spark, tmp_path):
     table_name = "iceberg_merge_schema_evolution_reject"
     table_path = tmp_path / table_name
@@ -575,7 +525,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
     table_identifier = f"default.{table_name}"
     row_count = 4
     row_group_rows = 2
-    target_id = row_count - 1
+    target_id = 0
     repartition_file_min_size = 10 * 1024 * 1024
     padding_size = 3 * 1024 * 1024
 
@@ -599,7 +549,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         table.append(
             pa.table(
                 {
-                    "id": pa.array(range(row_count), type=pa.int64()),
+                    "id": pa.array(reversed(range(row_count)), type=pa.int64()),
                     "value": pa.array(["old"] * row_count, type=pa.string()),
                     # Cross the file-repartition threshold without making MERGE process millions of rows.
                     "padding": pa.array(
@@ -623,7 +573,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         assert data_file.stat().st_size > repartition_file_min_size
         assert parquet_file.metadata.num_row_groups == row_count // row_group_rows
         assert parquet_file.metadata.row_group(0).num_rows == row_group_rows
-        assert expected_position == target_id
+        assert expected_position == row_count - 1
 
         spark.sql(
             f"""
@@ -643,6 +593,10 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         target_row_sql = f"SELECT id, value FROM {table_name} WHERE id = {target_id}"  # noqa: S608
         rows = [tuple(row) for row in spark.sql(target_row_sql).collect()]
         assert rows == [(target_id, "updated")]
+        assert [
+            tuple(row)
+            for row in spark.sql("SELECT id, value FROM iceberg_merge_split_file_position ORDER BY id").collect()
+        ] == [(row, "updated" if row == target_id else "old") for row in range(row_count)]
 
         delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
         positions = sorted(

@@ -36,8 +36,8 @@ pub fn encode_remote_physical_plan(
     let plan = plan
         .transform(|node| {
             if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
-                // TODO: Preserve `TableSchema` virtual columns in the remote source payload
-                // before exposing DataFusion's `file_row_index()` through Sail.
+                // TODO: Add SQL planner support and distributed SQL tests for
+                // DataFusion's `file_row_index()`.
                 let node =
                     Arc::new(RemoteDataSourceExec::new(data_source)) as Arc<dyn ExecutionPlan>;
                 Ok(Transformed::yes(node))
