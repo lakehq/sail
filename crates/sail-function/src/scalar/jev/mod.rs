@@ -125,7 +125,7 @@ impl Jev {
                 is_variant_storage_field(field)
                     || match self.kind {
                         JevKind::Score => {
-                            matches!(ty, DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) if string_type(item.data_type()))
+                            matches!(ty, DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) | DataType::ListView(item) | DataType::LargeListView(item) if string_type(item.data_type()))
                         }
                         _ => string_map(ty),
                     }
@@ -436,6 +436,18 @@ fn json_value(array: &dyn Array, _field: &Field, index: usize) -> Result<Option<
         }
         ScalarValue::FixedSizeList(value) => {
             let DataType::FixedSizeList(field, _) = value.data_type() else {
+                return exec_err!("invalid Jev array argument");
+            };
+            json_list(value.value(0), field)?
+        }
+        ScalarValue::ListView(value) => {
+            let DataType::ListView(field) = value.data_type() else {
+                return exec_err!("invalid Jev array argument");
+            };
+            json_list(value.value(0), field)?
+        }
+        ScalarValue::LargeListView(value) => {
+            let DataType::LargeListView(field) = value.data_type() else {
                 return exec_err!("invalid Jev array argument");
             };
             json_list(value.value(0), field)?

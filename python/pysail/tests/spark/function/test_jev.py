@@ -138,6 +138,26 @@ def test_score_accepts_parquet_string_arrays(spark, jev, tmp_path, list_type):
     assert sorted(criteria) == [["bad", "good"], ["low", "high"]]
 
 
+@pytest.mark.parametrize("array_type", [pa.ListViewArray, pa.LargeListViewArray], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("ipc_writer", [pa.ipc.new_file, pa.ipc.new_stream], ids=["file", "stream"])
+def test_score_accepts_arrow_list_views(spark, jev, tmp_path, array_type, ipc_writer):
+    levels = array_type.from_arrays(
+        [2, 0, 1], [2, 1, 3], pa.array(["unused", "low", "medium", "high", "tail"])
+    )
+    table = pa.table({"id": [0, 1, 2], "state": ["text", None, "text"], "levels": levels})
+    path = tmp_path / "score_levels.arrow"
+    with path.open("wb") as sink, ipc_writer(sink, table.schema) as writer:
+        writer.write_table(table)
+
+    frame = spark.read.format("arrow").load(str(path))
+    assert frame.schema["levels"].dataType.simpleString() == "array<string>"
+    rows = frame.selectExpr("id", "jev_score(state, 'rate', levels).score AS score").orderBy("id").collect()
+
+    assert [(row.id, row.score) for row in rows] == [(0, 0.5), (1, None), (2, 1.0)]
+    criteria = [question["criteria"] for request in jev.requests for question in request["body"]["questions"].values()]
+    assert sorted(criteria) == [["low", "medium", "high"], ["medium", "high"]]
+
+
 def test_string_state_is_literal_and_json_null_instructions_are_preserved(spark, jev):
     assert spark.sql("SELECT jev_noul('{\"text\": 1}', parse_json('null')) AS j").first().j.noul == EXPECTED_NOUL
     body = jev.requests[0]["body"]
