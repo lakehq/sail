@@ -118,3 +118,18 @@ Feature: nvl2 output schema
         root
          |-- result: timestamp (nullable = false)
         """
+
+  Rule: Row evaluation
+
+    Scenario: nvl2 inside an IN list is evaluated for each row
+      When query
+        """
+        SELECT k
+        FROM VALUES (0, 'a'), (1, 'b'), (2, CAST(NULL AS STRING)) AS t(k, s)
+        WHERE k IN (nvl2(s, 0, 2), 5, 6, 7)
+        ORDER BY k
+        """
+      Then query result ordered
+        | k |
+        | 0 |
+        | 2 |

@@ -77,11 +77,13 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         if_non_null = if_non_null.cast_to(&common_type, function_context.schema)?;
         if_null = if_null.cast_to(&common_type, function_context.schema)?;
     }
-    // A simple CASE preserves Spark's branch-based nullability for NVL2.
+    // Testing for NULL with the non-null result in ELSE preserves Spark's branch-based
+    // nullability for NVL2. A simple CASE would too, but DataFusion treats it as a
+    // constant in IN lists, so every row would get the NULL result.
     Ok(expr::Expr::Case(expr::Case {
-        expr: Some(Box::new(tested.is_not_null())),
-        when_then_expr: vec![(Box::new(lit(true)), Box::new(if_non_null))],
-        else_expr: Some(Box::new(if_null)),
+        expr: None,
+        when_then_expr: vec![(Box::new(tested.is_null()), Box::new(if_null))],
+        else_expr: Some(Box::new(if_non_null)),
     }))
 }
 
