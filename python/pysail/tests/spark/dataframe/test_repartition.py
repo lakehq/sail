@@ -2,6 +2,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.utils import AnalysisException
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -181,10 +182,11 @@ def test_repartition_hint(spark):
     """Apply an integer REPARTITION hint without changing the rows."""
     df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
 
-    actual = df.hint("REPARTITION", 2).orderBy("id").toPandas()
+    actual = df.hint("REPARTITION", 6).orderBy("id").toPandas()
     expected = df.orderBy("id").toPandas()
 
     assert partition_count(df.hint("REPARTITION", 2)) == 2  # noqa: PLR2004
+    assert partition_count(df.hint("REPARTITION", 6)) == 6  # noqa: PLR2004
     assert_frame_equal(actual, expected)
 
 
@@ -197,7 +199,7 @@ def test_repartition_hint(spark):
 )
 def test_repartition_hint_rejects_invalid_parameters(spark, parameters):
     """Reject invalid REPARTITION hint parameter values and combinations."""
-    with pytest.raises(Exception, match=r"."):
+    with pytest.raises(AnalysisException):
         spark.range(0, 10, 1, 2).hint("REPARTITION", *parameters).collect()
 
 
