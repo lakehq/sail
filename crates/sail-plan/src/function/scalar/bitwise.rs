@@ -16,8 +16,12 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (value, shift) = arguments.two()?;
 
     let input_type = value.clone().get_type(function_context.schema)?;
+    let ansi_mode = function_context
+        .plan_config
+        .view_conditional_ansi_mode
+        .unwrap_or(function_context.plan_config.ansi_mode);
     let (value, input_type) = match input_type {
-        DataType::Decimal128(_, _) if !function_context.plan_config.ansi_mode => (
+        DataType::Decimal128(_, _) if !ansi_mode => (
             // Preserve decimal values supported by the existing unsigned conversion.
             // TODO: Support full DECIMAL-to-INT wrapping beyond that range.
             value.cast_to(&DataType::Int64, function_context.schema)?,
@@ -67,7 +71,8 @@ fn signed_shift(op: Operator) -> ScalarFunction {
         let shift = if shift.get_type(function_context.schema)? == DataType::Int64 {
             // Only the low six bits select the shift, so masking first keeps the result
             // and avoids casting a count outside the INT range.
-            // TODO: Reject BIGINT shift counts outside the INT range in ANSI mode.
+            // TODO: Check BIGINT-to-INT overflow before masking in ANSI mode;
+            //  overflowing counts are currently accepted instead of rejected.
             (shift & lit(63_i64)).cast_to(&DataType::Int32, function_context.schema)?
         } else {
             shift

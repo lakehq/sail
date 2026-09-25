@@ -58,3 +58,17 @@ Feature: shiftleft output schema
         | ansi_mode |
         | false     |
         | true      |
+
+    @sail-bug
+    Scenario Outline: <function> rejects an overflowing BIGINT shift count with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <function>(1, CAST(2147483648 AS BIGINT)) AS result
+        """
+      Then query error CAST_OVERFLOW
+
+      Examples:
+        | function   |
+        | shiftleft  |
+        | shiftright |

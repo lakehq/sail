@@ -248,3 +248,56 @@ Feature: shiftrightunsigned output schema
       Then query result
         | result              |
         | 4611686018427387904 |
+
+  Rule: Persistent views
+
+    Scenario Outline: shiftrightunsigned retains non-ANSI decimal conversion in a persistent view
+      Given config spark.sql.ansi.enabled = false
+      And final statement
+        """
+        DROP VIEW IF EXISTS unsigned_decimal_legacy_view
+        """
+      And statement
+        """
+        CREATE OR REPLACE VIEW unsigned_decimal_legacy_view AS
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 8 ELSE CAST(<value> AS DECIMAL(11,1)) END, 1
+        ) AS result
+        FROM range(2)
+        """
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, result, typeof(result) AS result_type
+        FROM unsigned_decimal_legacy_view ORDER BY id
+        """
+      Then query result ordered
+        | id | result   | result_type |
+        | 0  | 4        | int         |
+        | 1  | <result> | int         |
+
+      Examples:
+        | value       | result     |
+        | 3000000000  | 1500000000 |
+        | -3000000000 | 647483648  |
+
+    Scenario: shiftrightunsigned retains ANSI decimal overflow errors in a persistent view
+      Given config spark.sql.ansi.enabled = true
+      And final statement
+        """
+        DROP VIEW IF EXISTS unsigned_decimal_ansi_view
+        """
+      And statement
+        """
+        CREATE OR REPLACE VIEW unsigned_decimal_ansi_view AS
+        SELECT id, shiftrightunsigned(
+          CASE WHEN id = 0 THEN 8 ELSE CAST(3000000000 AS DECIMAL(11,1)) END, 1
+        ) AS result
+        FROM range(2)
+        """
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, result FROM unsigned_decimal_ansi_view ORDER BY id
+        """
+      Then query error (CAST_OVERFLOW|out of range Int32)
