@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, TimeUnit};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::SparkConditionalCast;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
@@ -121,21 +123,21 @@ fn argument_types(
 }
 
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
-/// Preserves DataFusion's existing nested and string/numeric coercion.
-// TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
-//  common type as well.
-// TODO: Match Spark ANSI STRING/numeric coercion, including nested results and
-//  projected/cached sources. Eager STRING typing regresses supported numeric
-//  UPDATE/MERGE assignments; preserve store-assignment policy when fixing this.
+/// Preserves DataFusion's existing nested coercion except ANSI STRING/numeric leaves.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
     let data_types = argument_types(&arguments, function_context)?;
-    let ansi_mode = function_context.plan_config.ansi_mode
-        && !function_context
-            .plan_config
-            .preserve_view_conditional_float_type;
+    let ansi_mode = function_context
+        .plan_config
+        .view_conditional_ansi_mode
+        .unwrap_or(
+            function_context.plan_config.ansi_mode
+                && !function_context
+                    .plan_config
+                    .preserve_view_conditional_float_type,
+        );
     let retain_fraction_digits = function_context
         .plan_config
         .legacy_decimal_retain_fraction_digits;
@@ -160,6 +162,17 @@ fn coerce_numeric_values(
     let Some(common_type) = common_type else {
         return Ok(arguments);
     };
+    let repaired_type = if function_context
+        .plan_config
+        .view_conditional_ansi_mode
+        .unwrap_or(function_context.plan_config.ansi_mode)
+    {
+        ansi_string_numeric_type(&data_types, &common_type, function_context.plan_config)
+    } else {
+        common_type.clone()
+    };
+    let ansi_string_coercion = repaired_type != common_type;
+    let common_type = repaired_type;
     arguments
         .into_iter()
         .zip(data_types)
@@ -172,10 +185,172 @@ fn coerce_numeric_values(
                 // Retaining fractional digits can narrow the integral range.
                 // Like DataFusion's type coercion, this keeps values of the common type unchanged
                 // and casts a scalar subquery inside the subquery.
-                Ok(arg.cast_to(&common_type, function_context.schema)?)
+                if ansi_string_coercion && data_type != common_type {
+                    // Keep invalid literals lazy: DataFusion eagerly rejects literal CASTs
+                    // even in an unselected CASE branch, but defers errors from this UDF.
+                    Ok(
+                        ScalarUDF::from(SparkConditionalCast::new(common_type.clone()))
+                            .call(vec![arg]),
+                    )
+                } else {
+                    Ok(arg.cast_to(&common_type, function_context.schema)?)
+                }
             }
         })
         .collect()
+}
+
+/// Repairs only ANSI STRING/numeric leaves in the existing common type. In particular,
+/// source projections must expose the numeric result before store-assignment validation.
+fn ansi_string_numeric_type(
+    data_types: &[DataType],
+    common_type: &DataType,
+    config: &PlanConfig,
+) -> DataType {
+    if is_string_type(common_type)
+        && data_types.iter().any(is_string_type)
+        && data_types.iter().any(is_numeric_type)
+        && data_types
+            .iter()
+            .all(|t| t.is_null() || is_string_type(t) || is_numeric_type(t))
+    {
+        // ANSI findWiderCommonType folds in branch order; STRING/INT/DECIMAL
+        // does not necessarily have the same result as DECIMAL/INT/STRING.
+        return data_types
+            .iter()
+            .try_fold(DataType::Null, |left, right| {
+                if left.is_null() {
+                    Some(right.clone())
+                } else if right.is_null() || left == *right {
+                    Some(left)
+                } else if is_string_type(&left) || is_string_type(right) {
+                    let other = if is_string_type(&left) { right } else { &left };
+                    if integral_decimal_precision(other).is_some() {
+                        Some(DataType::Int64)
+                    } else if is_numeric_type(other) {
+                        Some(DataType::Float64)
+                    } else {
+                        Some(common_type.clone())
+                    }
+                } else {
+                    wider_numeric_type(
+                        &left,
+                        right,
+                        true,
+                        config.legacy_decimal_retain_fraction_digits,
+                    )
+                }
+            })
+            .unwrap_or_else(|| common_type.clone());
+    }
+    match common_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            let element_types = data_types
+                .iter()
+                .map(|t| match t {
+                    DataType::Null => Some(DataType::Null),
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _) => Some(field.data_type().clone()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(element_types) = element_types else {
+                return common_type.clone();
+            };
+            let field = ansi_string_numeric_field(field, &element_types, config);
+            if matches!(common_type, DataType::List(_)) {
+                DataType::List(field)
+            } else {
+                DataType::LargeList(field)
+            }
+        }
+        DataType::Map(field, sorted) => {
+            let DataType::Struct(entries) = field.data_type() else {
+                return common_type.clone();
+            };
+            if entries.len() != 2 {
+                return common_type.clone();
+            }
+            let value_types = data_types
+                .iter()
+                .map(|t| match t {
+                    DataType::Null => Some(DataType::Null),
+                    DataType::Map(field, _) => match field.data_type() {
+                        DataType::Struct(entries) if entries.len() == 2 => {
+                            Some(entries[1].data_type().clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(value_types) = value_types else {
+                return common_type.clone();
+            };
+            // Spark does not allow map-key coercions that can introduce NULL.
+            // Repair only values and keep the existing key type unchanged.
+            let value = ansi_string_numeric_field(&entries[1], &value_types, config);
+            DataType::Map(
+                Arc::new(field.as_ref().clone().with_data_type(DataType::Struct(
+                    vec![Arc::clone(&entries[0]), value].into(),
+                ))),
+                *sorted,
+            )
+        }
+        DataType::Struct(fields) => {
+            let compatible = data_types.iter().all(|t| match t {
+                DataType::Null => true,
+                DataType::Struct(source) if source.len() == fields.len() => {
+                    source.iter().zip(fields).all(|(source, target)| {
+                        if config.case_sensitive {
+                            source.name() == target.name()
+                        } else {
+                            source.name().eq_ignore_ascii_case(target.name())
+                        }
+                    })
+                }
+                _ => false,
+            });
+            if !compatible {
+                return common_type.clone();
+            }
+            DataType::Struct(
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        let field_types = data_types
+                            .iter()
+                            .map(|t| match t {
+                                DataType::Struct(source) => source[index].data_type().clone(),
+                                _ => DataType::Null,
+                            })
+                            .collect::<Vec<_>>();
+                        ansi_string_numeric_field(field, &field_types, config)
+                    })
+                    .collect(),
+            )
+        }
+        _ => common_type.clone(),
+    }
+}
+
+fn ansi_string_numeric_field(
+    field: &FieldRef,
+    data_types: &[DataType],
+    config: &PlanConfig,
+) -> FieldRef {
+    let data_type = ansi_string_numeric_type(data_types, field.data_type(), config);
+    let nullable = field.is_nullable()
+        || (is_numeric_type(&data_type) && data_types.iter().any(is_string_type));
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(nullable),
+    )
 }
 
 /// Returns Spark's wider type of two numeric (or NULL) types,

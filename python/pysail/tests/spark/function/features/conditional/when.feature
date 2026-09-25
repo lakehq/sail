@@ -190,10 +190,7 @@ Feature: when output schema
 
   Rule: Spark-compatible coercion for non-numeric branches
 
-    # TODO: Coerce these non-numeric branches to Spark's wider common type.
-    #  Existing DataFusion coercion does not cover Spark's nested ANSI string rules.
-    @sail-bug
-    Scenario Outline: CASE widens non-numeric branches to the Spark common type: <case>
+    Scenario Outline: CASE widens numeric STRING branches to the Spark common type: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -208,7 +205,20 @@ Feature: when output schema
         | case                         | first_branch                        | second_branch                   | result_type   |
         | INT then STRING              | 1                                   | '2'                             | bigint        |
         | ARRAY INT then ARRAY STRING  | array(1)                            | array('2')                      | array<bigint> |
-        | TIMESTAMP_NTZ then TIMESTAMP | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP '2024-01-01 00:00:00' | timestamp     |
+
+    # TODO: Coerce mixed timestamp branches to Spark's wider common type.
+    @sail-bug
+    Scenario: CASE widens TIMESTAMP_NTZ with TIMESTAMP
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(CASE WHEN id = 0 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'
+                           ELSE TIMESTAMP '2024-01-01 00:00:00' END) AS result_type
+        FROM VALUES (0) AS t(id)
+        """
+      Then query result
+        | result_type |
+        | timestamp   |
 
     Scenario: CASE declares the existing common type of nested integral branches
       Given config spark.sql.ansi.enabled = true
@@ -318,7 +328,6 @@ Feature: when output schema
         | 0  | 1.5 | float  |
         | 1  | 3.0 | float  |
 
-    @sail-bug
     Scenario: CASE in a persistent view keeps the type resolved with ANSI enabled
       Given config spark.sql.ansi.enabled = true
       And statement

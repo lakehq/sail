@@ -218,7 +218,6 @@ Feature: round with an argument coming from a column
         | 2.0    |
         | 1.3    |
 
-    @sail-bug
     Scenario: round respects ANSI coercion inside a mixed CASE
       Given config spark.sql.ansi.enabled = true
       When query

@@ -14,6 +14,7 @@ use sail_common_datafusion::catalog::TemporaryViewSource;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
+use crate::config::VIEW_CONDITIONAL_ANSI_MODE_PROPERTY;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -32,7 +33,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             replace,
             comment,
-            properties,
+            mut properties,
         } = definition;
         // Resolve the query plan to register fields in state and extract column types.
         let resolved_input = self.resolve_query_plan(*input, state).await?;
@@ -71,6 +72,12 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
+        // Preserve only the ANSI setting used by conditional coercion.
+        properties.retain(|(key, _)| key != VIEW_CONDITIONAL_ANSI_MODE_PROPERTY);
+        properties.push((
+            VIEW_CONDITIONAL_ANSI_MODE_PROPERTY.to_string(),
+            self.config.ansi_mode.to_string(),
+        ));
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {

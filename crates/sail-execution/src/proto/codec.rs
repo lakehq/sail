@@ -155,6 +155,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::conditional::SparkConditionalCast;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
@@ -3227,6 +3228,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
+            UdfKind::SparkConditionalCast(r#gen::SparkConditionalCastUdf { target_type }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(SparkConditionalCast::new(
+                    target_type,
+                ))));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -3750,6 +3757,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 classic,
                 null_short_circuit,
             })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkConditionalCast>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkConditionalCast(r#gen::SparkConditionalCastUdf { target_type })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
@@ -6425,6 +6435,24 @@ mod tests {
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_conditional_cast_udf() -> Result<()> {
+        for target_type in [
+            DataType::Int64,
+            DataType::Float64,
+            DataType::Decimal128(22, 2),
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+        ] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkConditionalCast::new(
+                target_type.clone(),
+            )))?;
+            let decoded = downcast_udf::<SparkConditionalCast>(&decoded, "SparkConditionalCast")?;
+            assert_eq!(decoded.target_type(), &target_type);
+        }
         Ok(())
     }
 

@@ -216,7 +216,6 @@ Feature: Delta Lake Update
         """
       Then query plan matches snapshot
 
-    @sail-bug
     Scenario: UPDATE assigns a CASE mixing INT and STRING values with ANSI enabled
       Given config spark.sql.ansi.enabled = true
       Given statement
