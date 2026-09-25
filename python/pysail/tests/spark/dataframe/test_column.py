@@ -1,5 +1,6 @@
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
 
@@ -7,6 +8,17 @@ def test_get_item_ignore_case(spark):
     df = spark.sql("SELECT struct(1 AS b) AS a")
     assert df.select(df.a.getItem("b")).collect() == [Row(**{"a.b": 1})]
     assert df.select(df.a.getItem("B")).collect() == [Row(**{"a.B": 1})]
+
+
+@pytest.mark.parametrize("computed", [False, True])
+def test_struct_field_selector_kind(spark, computed):
+    df = spark.createDataFrame([((1,), "selector")], "payload struct<selector:int>, selector string")
+    payload = F.coalesce(F.col("payload"), F.col("payload")) if computed else F.col("payload")
+
+    assert df.select(payload.getField("selector").alias("value")).collect() == [Row(value=1)]
+    assert df.select(payload["selector"].alias("value")).collect() == [Row(value=1)]
+    with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
+        df.select(payload[F.col("selector")]).collect()
 
 
 def test_struct_wildcard_after_join(spark):

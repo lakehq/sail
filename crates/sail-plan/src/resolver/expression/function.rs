@@ -1,13 +1,15 @@
+use arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::Explode;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -275,11 +277,22 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            &function_name,
-            argument_display_names.iter().map(|x| x.as_str()).collect(),
-            is_distinct,
-        )?;
+        // A single-field inline uses the scalar rewrite path, so preserve its
+        // default field name here. Explicit aliases are applied by the caller.
+        let name = if matches!(canonical_function_name.as_str(), "inline" | "inline_outer")
+            && let Expr::ScalarFunction(function) = &func
+            && function.func.inner().is::<Explode>()
+            && let DataType::Struct(fields) = func.get_type(schema)?
+            && let [field] = fields.as_ref()
+        {
+            field.name().to_string()
+        } else {
+            service.plan_formatter().function_to_string(
+                &function_name,
+                argument_display_names.iter().map(|x| x.as_str()).collect(),
+                is_distinct,
+            )?
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {

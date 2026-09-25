@@ -145,11 +145,43 @@ Feature: struct function
 
   Rule: Struct field extraction
 
-    @sail-bug
-    Scenario: struct field extraction rejects a column selector
+    Scenario Outline: struct field extraction rejects a column selector on <child>
       When query
         """
-        SELECT named_struct('selector', 1)[selector]
-        FROM VALUES ('selector') AS t(selector)
+        SELECT <child>[selector]
+        FROM VALUES (named_struct('selector', 1), 'selector') AS t(payload, selector)
         """
       Then query error (?i)(INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal)
+
+      Examples:
+        | child                       |
+        | payload                     |
+        | named_struct('selector', 1)  |
+        | coalesce(payload, payload)  |
+
+    Scenario Outline: struct field extraction preserves a literal selector in <expression>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+      Examples:
+        | expression                                                 |
+        | named_struct('a', 1).a                                      |
+        | named_struct('a', 1)['a']                                   |
+        | named_struct('nested', named_struct('a', 1)).nested.a        |
+        | named_struct('a.b', 1).`a.b`                                |
+
+    Scenario: map extraction distinguishes literal fields from column selectors
+      When query
+        """
+        SELECT map('selector', 1, 'other', 2).selector AS literal_key,
+               map('selector', 1, 'other', 2)[selector] AS column_key
+        FROM VALUES ('other') AS t(selector)
+        """
+      Then query result
+        | literal_key | column_key |
+        | 1           | 2          |

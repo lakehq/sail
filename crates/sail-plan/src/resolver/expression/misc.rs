@@ -268,20 +268,30 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        fn recovered_filter_input_index(
+            expr: &expr::Expr,
+            schema: &DFSchemaRef,
+            state: &PlanResolverState,
+        ) -> Option<usize> {
+            state
+                .get_filter_schemas(schema)
+                .and_then(|schemas| {
+                    expr.column_refs()
+                        .into_iter()
+                        .filter_map(|column| {
+                            schemas.iter().position(|schema| schema.has_column(column))
+                        })
+                        .max()
+                })
+                .filter(|index| *index > 0)
+        }
+
         fn discard_failed_filter_input(
             expr: &expr::Expr,
             schema: &DFSchemaRef,
             state: &mut PlanResolverState,
         ) -> bool {
-            let index = state.get_filter_schemas(schema).and_then(|schemas| {
-                expr.column_refs()
-                    .into_iter()
-                    .filter_map(|column| {
-                        schemas.iter().position(|schema| schema.has_column(column))
-                    })
-                    .max()
-            });
-            if let Some(index) = index.filter(|index| *index > 0) {
+            if let Some(index) = recovered_filter_input_index(expr, schema, state) {
                 // Spark discards tentative descendant bindings when extracting a
                 // struct field fails, then retries earlier outputs and outer references.
                 state.discard_filter_schemas_from(index);
@@ -313,19 +323,25 @@ impl PlanResolver<'_> {
         }
 
         // For other types (List, Struct), extraction must be a literal.
-        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
-        // literal field name so that the spec can keep the attribute unresolved.
+        // SQL dot selectors are represented as literals; an attribute selector
+        // is a column expression and cannot select a struct field.
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
-                if is_attribute
-                    && matches!(data_type, DataType::Struct(_))
-                    && discard_failed_filter_input(&expr, schema, state)
+                if matches!(data_type, DataType::Struct(_))
+                    && (is_attribute
+                        || recovered_filter_input_index(&expr, schema, state).is_none())
                 {
-                    return Err(PlanError::invalid("extraction must be a literal"));
+                    if is_attribute {
+                        discard_failed_filter_input(&expr, schema, state);
+                    }
+                    return Err(PlanError::AnalysisError(
+                        "extraction must be a literal".to_string(),
+                    ));
                 }
-                // TODO: Reject dynamic struct selectors outside recovered attributes once
-                // the spec distinguishes SQL field selectors from column expressions.
+                // TODO: Reject column selectors on computed recovered structs after
+                // staged name resolution can preserve Spark's descendant rollback.
+                // Until then, retain their existing resolution behavior.
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),

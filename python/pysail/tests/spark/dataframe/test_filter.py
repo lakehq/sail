@@ -744,6 +744,62 @@ def test_filter_correlated_extract_preserves_selector_kind(spark, selector):
     assert result.collect() == expected
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("predicate_kind", ["column", "sql", "case-column"])
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Rejecting selectors on computed recovered structs requires staged name resolution",
+    strict=True,
+)
+def test_filter_correlated_computed_struct_rejects_column_selector(spark, predicate_kind):
+    outer = spark.createDataFrame([({"selector": 1}, "selector")], "payload map<string,int>, selector string")
+    inner = spark.range(1).select(F.struct(F.lit(42).alias("selector")).alias("payload")).select(F.lit(1).alias("keep"))
+    if predicate_kind == "sql":
+        predicate = "coalesce(payload, payload)[selector] = 1"
+    else:
+        payload = F.col("payload").outer()
+        child = (
+            F.when(F.lit(True), payload).otherwise(payload)
+            if predicate_kind == "case-column"
+            else F.coalesce(payload, payload)
+        )
+        predicate = child[F.col("selector").outer()] == 1
+    with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
+        outer.where(inner.where(predicate).exists()).collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("child_kind", ["nested", "aliased"])
+def test_filter_correlated_computed_selector_preserves_outer_fallback(spark, child_kind):
+    outer = spark.createDataFrame(
+        [(Row(nested={"selector": 1}), "selector"), (Row(nested={"selector": 2}), "selector")],
+        "payload struct<nested:map<string,int>>, selector string",
+    )
+    inner = (
+        spark.range(1)
+        .select(F.struct(F.struct(F.lit(42).alias("other")).alias("nested")).alias("payload"))
+        .select(F.lit(1).alias("keep"))
+    )
+    child = F.col("payload").outer()["nested"]
+    if child_kind == "aliased":
+        child = child.alias("item")
+    predicate = child[F.col("selector").outer()] == 1
+    assert outer.where(inner.where(predicate).exists()).collect() == [
+        Row(payload=Row(nested={"selector": 1}), selector="selector")
+    ]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+def test_filter_correlated_sql_case_selector_preserves_outer_fallback(spark):
+    outer = spark.createDataFrame(
+        [({"selector": 1}, "selector"), ({"selector": 2}, "selector")],
+        "payload map<string,int>, selector string",
+    )
+    inner = spark.range(1).select(F.struct(F.lit(42).alias("other")).alias("payload")).select(F.lit(1).alias("keep"))
+    predicate = "(CASE WHEN true THEN payload ELSE payload END)[selector] = 1"
+    assert outer.where(inner.where(predicate).exists()).collect() == [Row(payload={"selector": 1}, selector="selector")]
+
+
 @pytest.mark.parametrize("with_cte", [False, True], ids=["without-cte", "with-cte"])
 @pytest.mark.parametrize("operation", ["project", "limit", "sorted-window"])
 def test_filter_empty_with_query_preserves_resolution_boundary(spark, with_cte, operation):
