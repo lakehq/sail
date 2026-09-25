@@ -79,6 +79,21 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        // These source functions lose their non-foldable identity during lowering.
+        // The same lowered expressions also implement valid foldable functions.
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && matches!(
+                canonical_function_name.as_str(),
+                "array_compact" | "array_prepend" | "current_timezone"
+            )
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            return Err(PlanError::invalid(format!(
+                "{parameter} must be a foldable expression"
+            )));
+        }
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
@@ -113,7 +128,16 @@ impl PlanResolver<'_> {
             }
         }
 
-        let (mut argument_display_names, arguments) = if canonical_function_name == "struct" {
+        let (mut argument_display_names, arguments) = if matches!(
+            canonical_function_name.as_str(),
+            "approx_percentile" | "percentile_approx"
+        ) && catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_none()
+        {
+            self.resolve_approx_percentile_expressions_and_names(arguments, schema, state)
+                .await?
+        } else if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
         } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
@@ -353,6 +377,29 @@ impl PlanResolver<'_> {
         } else {
             Ok(NamedExpr::new(vec![name], func))
         }
+    }
+
+    pub(super) async fn resolve_approx_percentile_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut names = Vec::with_capacity(expressions.len());
+        let mut exprs = Vec::with_capacity(expressions.len());
+        for (index, expression) in expressions.into_iter().enumerate() {
+            let mut scope = state.enter_config_scope();
+            if matches!(index, 1 | 2) {
+                scope.state().config_mut().approx_percentile_parameter =
+                    Some(if index == 1 { "percentage" } else { "accuracy" });
+            }
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, scope.state())
+                .await?;
+            names.push(name.one()?);
+            exprs.push(expr);
+        }
+        Ok((names, exprs))
     }
 
     pub(super) async fn resolve_expression_call_function(

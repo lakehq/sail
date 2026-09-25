@@ -924,6 +924,9 @@ pub(super) fn approx_percentile_arguments(
                 // TODO: Match ENCODE's version-dependent foldability: foldable with constant
                 // arguments in Spark 3.5, non-foldable in Spark 4+. This checker currently
                 // has no Spark-version information to distinguish those behaviors.
+                // TODO: Match ARRAY_APPEND's version-dependent foldability: foldable with
+                // constants in Spark 3.5, non-foldable in Spark 4+. Preserve legacy acceptance
+                // until this checker has Spark-version information.
                 _ => false,
             })
         })?;

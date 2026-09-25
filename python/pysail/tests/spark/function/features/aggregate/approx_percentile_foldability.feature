@@ -317,3 +317,88 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       FROM VALUES (1), (2) AS t(v)
       """
     Then query error (?i)foldable
+
+  Scenario Outline: Source collection wrappers remain non-foldable percentile parameters
+    When query
+      """
+      SELECT <function>(v, <percentage>) AS p
+      FROM (SELECT 1 AS v WHERE <keep>) AS t GROUP BY v
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage                         | keep  |
+      | percentile_approx | array_compact(array(0D, NULL, 1D)) | true  |
+      | percentile_approx | array_prepend(array(0.5D), 1D)     | true  |
+      | approx_percentile | array_compact(array(0D, NULL, 1D)) | false |
+      | approx_percentile | array_prepend(array(0.5D), 1D)     | false |
+
+  Scenario: Source collection wrappers remain non-foldable with all-null observations
+    When query
+      """
+      SELECT percentile_approx(CAST(NULL AS INT), array_prepend(array(0.5D), 1D)) AS p
+      """
+    Then query error (?i)foldable
+
+  Scenario Outline: Source functions remain non-foldable inside percentile accuracy
+    Given config spark.sql.session.timeZone = UTC
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D, <accuracy>) AS p
+      FROM VALUES (1), (2), (3), (4) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | accuracy                                  |
+      | length(current_timezone()) * 100          |
+      | size(array_compact(array(1, NULL))) * 100 |
+
+  Scenario Outline: Source function foldability is checked in percentile windows
+    Given config spark.sql.session.timeZone = UTC
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, <accuracy>) OVER () AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                         | accuracy                         |
+      | array_compact(array(0D, NULL, 1D)) | 100                              |
+      | 0.5D                               | length(current_timezone()) * 100 |
+
+  Scenario: Percentile source foldability checks do not leak to observations or siblings
+    Given config spark.sql.session.timeZone = UTC
+    When query
+      """
+      SELECT percentile_approx(size(array_compact(array(v, NULL))), 0.5D) AS p,
+             length(current_timezone()) AS timezone_length,
+             array_append(array(1), 2) AS appended
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p | timezone_length | appended |
+      | 1 | 3               | [1, 2]   |
+
+  Scenario: Foldable functions sharing collection implementations remain valid in windows
+    When query
+      """
+      SELECT v, approx_percentile(v, array_insert(array(0.5D), 1, 1D),
+                 IF(arrays_overlap(array(1), array(1)), 100, 200)) OVER () AS p
+      FROM VALUES (1), (2) AS t(v) ORDER BY v
+      """
+    Then query result
+      | v | p      |
+      | 1 | [2, 1] |
+      | 2 | [2, 1] |
+
+  @spark-4
+  @sail-bug
+  Scenario: Array append retains its non-foldable Spark 4 wrapper in percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, array_append(array(0.5D), 1D)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable

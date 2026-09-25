@@ -144,9 +144,18 @@ impl PlanResolver<'_> {
                     }));
                     (window, function_name, argument_display_names, is_distinct)
                 } else {
-                    let (argument_display_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, schema, state)
-                        .await?;
+                    let (argument_display_names, arguments) = if matches!(
+                        canonical_function_name.as_str(),
+                        "approx_percentile" | "percentile_approx"
+                    ) {
+                        self.resolve_approx_percentile_expressions_and_names(
+                            arguments, schema, state,
+                        )
+                        .await?
+                    } else {
+                        self.resolve_expressions_and_names(arguments, schema, state)
+                            .await?
+                    };
                     let function = get_built_in_window_function(&canonical_function_name)?;
                     let input = WinFunctionInput {
                         arguments,

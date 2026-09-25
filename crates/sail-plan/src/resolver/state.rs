@@ -55,6 +55,8 @@ pub(super) struct PlanResolverStateConfig {
     pub anonymous_lambda_display: bool,
     /// Reject subqueries while resolving built-in zip function arguments.
     pub reject_zip_subqueries: bool,
+    /// Approximate-percentile parameter whose source functions must be foldable.
+    pub approx_percentile_parameter: Option<&'static str>,
 }
 
 #[derive(Debug, Default)]

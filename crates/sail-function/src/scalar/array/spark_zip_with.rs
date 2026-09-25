@@ -465,20 +465,30 @@ fn common_key_type(
         // date/timestamp comparison coercion, which produces nanoseconds.
         (DataType::Date32, timestamp @ DataType::Timestamp(..))
         | (timestamp @ DataType::Timestamp(..), DataType::Date32) => Some(timestamp.clone()),
-        (DataType::List(left), DataType::List(right)) => {
+        (
+            DataType::List(left_field)
+            | DataType::LargeList(left_field)
+            | DataType::FixedSizeList(left_field, _),
+            DataType::List(right_field)
+            | DataType::LargeList(right_field)
+            | DataType::FixedSizeList(right_field, _),
+        ) => {
             let key = common_key_type(
-                left.data_type(),
-                right.data_type(),
+                left_field.data_type(),
+                right_field.data_type(),
                 ansi_mode,
                 case_sensitive,
             )?;
-            let nullable = left.is_nullable()
-                || right.is_nullable()
-                || key_cast_nullable(left.data_type(), &key)
-                || key_cast_nullable(right.data_type(), &key);
-            Some(DataType::List(Arc::new(Field::new_list_field(
-                key, nullable,
-            ))))
+            let nullable = left_field.is_nullable()
+                || right_field.is_nullable()
+                || key_cast_nullable(left_field.data_type(), &key)
+                || key_cast_nullable(right_field.data_type(), &key);
+            let field = Arc::new(Field::new_list_field(key, nullable));
+            if matches!(left, DataType::LargeList(_)) || matches!(right, DataType::LargeList(_)) {
+                Some(DataType::LargeList(field))
+            } else {
+                Some(DataType::List(field))
+            }
         }
         (DataType::Struct(left), DataType::Struct(right)) if left.len() == right.len() => {
             let fields = left
@@ -509,8 +519,9 @@ fn common_key_type(
                 .collect::<Option<Vec<_>>>()?;
             Some(DataType::Struct(fields.into()))
         }
-        _ if left == right || right.is_null() => Some(left.clone()),
-        _ if left.is_null() => Some(right.clone()),
+        _ if left == right => Some(left.clone()),
+        _ if right.is_null() => common_key_type(left, left, ansi_mode, case_sensitive),
+        _ if left.is_null() => common_key_type(right, right, ansi_mode, case_sensitive),
         _ if left.is_string() != right.is_string() => {
             let other = if left.is_string() { right } else { left };
             if ansi_mode {

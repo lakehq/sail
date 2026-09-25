@@ -1,10 +1,11 @@
 from decimal import Decimal
 
 import pytest
+from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import ArrayType, DayTimeIntervalType, DecimalType, LongType, YearMonthIntervalType
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @pytest.mark.parametrize("function", [F.approx_percentile, F.percentile_approx])
@@ -89,3 +90,20 @@ def test_approx_percentile_interval_qualifiers(spark, function, qualifier, expec
     assert result.schema["scalar"].dataType == expected_type
     assert result.schema["array"].dataType == ArrayType(expected_type, containsNull=False)
     assert result.select(F.size("array")).first()[0] == 1
+
+
+@pytest.mark.parametrize("window", [False, True])
+def test_approx_percentile_column_parameter_foldability(spark, window):
+    percentage = F.array_compact(F.array(F.lit(0.0), F.lit(None).cast("double"), F.lit(1.0)))
+    aggregate = F.percentile_approx("value", percentage)
+    if window:
+        aggregate = aggregate.over(Window.partitionBy())
+    with pytest.raises(Exception, match=r"(?i)foldable"):
+        spark.createDataFrame([(1,), (2,)], ["value"]).select(aggregate).collect()
+
+
+@pytest.mark.skipif(pyspark_version() >= (4,), reason="ARRAY_APPEND is foldable with constants only before Spark 4")
+def test_approx_percentile_legacy_array_append_parameter(spark):
+    percentages = F.array_append(F.array(F.lit(0.5)), F.lit(1.0))
+    result = spark.createDataFrame([(1,), (2,)], ["value"]).select(F.percentile_approx("value", percentages))
+    assert result.first()[0] == [1, 2]
