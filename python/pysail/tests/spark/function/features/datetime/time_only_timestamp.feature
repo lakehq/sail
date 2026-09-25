@@ -263,8 +263,6 @@ Feature: Time-only strings as timestamps
       | 01:58:00+19:00    |
       | 01:58:00+18:01    |
 
-  # TODO: Resolve Java short timezone aliases such as PST before using Arrow's timezone parser.
-  @sail-bug
   Scenario: Time-only timestamp with a Java timezone alias uses the aliased region date
     When query
       """
@@ -313,8 +311,6 @@ Feature: Time-only strings as timestamps
       | result |
       | true   |
 
-  # TODO: Resolve Java offset and GMT/UT prefix spellings before using Arrow's timezone parser.
-  @sail-bug
   Scenario Outline: Time-only timestamp resolves Java zone spelling <suffix>
     When query
       """

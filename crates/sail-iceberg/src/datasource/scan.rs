@@ -10,11 +10,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -22,16 +20,12 @@ use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{
-    BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
-};
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -51,28 +45,26 @@ use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
-use crate::datasource::pruning::{
-    prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
-};
+use crate::datasource::predicate::Predicate;
 use crate::datasource::type_converter::{iceberg_field_id, iceberg_schema_to_arrow};
-use crate::io::{
-    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
-};
+use crate::io::StoreContext;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
-use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
+use crate::physical_plan::manifest_scan_exec::{IcebergManifestScanExec, ManifestPruning};
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
     MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
 };
-use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
+use crate::spec::delete_index::DeleteFileRef;
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
-use crate::spec::{
-    DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
-};
+use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
+
+mod planning;
+pub(crate) use planning::IcebergScanPlan;
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
     Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
@@ -80,9 +72,9 @@ fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
     ))
 }
 
-/// Iceberg table provider for DataFusion
+/// A fixed Iceberg read snapshot and its scan refinements.
 #[derive(Debug, Clone)]
-pub struct IcebergTableProvider {
+pub struct IcebergScan {
     pub(crate) row_level_options: crate::logical::row_level::IcebergRowLevelOptions,
     /// The table location (URI)
     table_uri: String,
@@ -111,7 +103,26 @@ pub struct IcebergTableProvider {
     metadata_as_data_read: bool,
 }
 
-impl IcebergTableProvider {
+impl IcebergScan {
+    pub(crate) fn metadata_aggregate_enabled(&self) -> bool {
+        !self.metadata_as_data_read
+            && self.file_column_name.is_none()
+            && self.row_index_column_name.is_none()
+            && self.copy_on_write_predicate.is_none()
+    }
+
+    pub(crate) fn exact_statistics(&self, planned: &IcebergScanPlan) -> Option<Statistics> {
+        if planned.limit.is_some()
+            || planned
+                .tasks
+                .iter()
+                .any(|task| !task.deletes.is_empty() || !task.residual.is_empty())
+        {
+            return None;
+        }
+        Some(self.aggregate_statistics(planned.tasks.iter().map(|task| &task.data_file)))
+    }
+
     fn statistic_scalar(
         &self,
         data_file: &DataFile,
@@ -143,7 +154,7 @@ impl IcebergTableProvider {
         .ok()
     }
 
-    /// Create a new Iceberg table provider
+    /// Create a new Iceberg table scan
     pub fn new(
         table_uri: impl ToString,
         schema: Schema,
@@ -152,7 +163,7 @@ impl IcebergTableProvider {
         default_spec_id: i32,
     ) -> Result<Self> {
         let table_uri_str = table_uri.to_string();
-        log::trace!("Creating table provider for: {}", table_uri_str);
+        log::trace!("Creating table scan for: {}", table_uri_str);
 
         let arrow_schema = iceberg_schema_to_arrow(&schema).map_err(|e| {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
@@ -189,7 +200,7 @@ impl IcebergTableProvider {
         })
     }
 
-    /// Create a provider for an Iceberg table that has metadata but no current
+    /// Create a scan for an Iceberg table that has metadata but no current
     /// snapshot yet, such as a table created by plain `CREATE TABLE`.
     pub fn new_empty(
         table_uri: impl ToString,
@@ -198,7 +209,7 @@ impl IcebergTableProvider {
         default_spec_id: i32,
     ) -> Result<Self> {
         let table_uri_str = table_uri.to_string();
-        log::trace!("Creating empty table provider for: {}", table_uri_str);
+        log::trace!("Creating empty table scan for: {}", table_uri_str);
 
         let arrow_schema = iceberg_schema_to_arrow(&schema).map_err(|e| {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
@@ -384,10 +395,8 @@ impl IcebergTableProvider {
     pub(crate) async fn metadata_delete_paths(
         &self,
         session: &dyn Session,
+        predicate: &Expr,
     ) -> Result<Option<Vec<String>>> {
-        let Some(predicate) = &self.copy_on_write_predicate else {
-            return Ok(None);
-        };
         if self.snapshot.is_none() {
             return Ok(Some(Vec::new()));
         }
@@ -397,16 +406,14 @@ impl IcebergTableProvider {
         let store_ctx = StoreContext::new(object_store, &table_url)?;
         let manifests = self.load_manifest_list(&store_ctx).await?;
         let files = self
-            .load_data_files_with_seq(session, &[], &store_ctx, &manifests)
+            .load_data_files_with_seq(&[], &store_ctx, &manifests)
             .await?;
         let selected = crate::datasource::copy_on_write::select_copy_on_write_files(
-            session,
             predicate,
-            Arc::clone(&self.arrow_schema),
             &self.schema,
             &self.partition_specs,
             files,
-        )?;
+        );
         Ok(selected.all_rows_match.then(|| {
             selected
                 .candidates
@@ -473,7 +480,7 @@ impl IcebergTableProvider {
             );
         }
         let files = self
-            .load_data_files_with_seq(session, &[], &store_ctx, &manifest_list)
+            .load_data_files_with_seq(&[], &store_ctx, &manifest_list)
             .await?
             .into_iter()
             .map(|(file, _)| file)
@@ -542,204 +549,6 @@ impl IcebergTableProvider {
         }
     }
 
-    /// Load manifest list from snapshot
-    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
-        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
-            datafusion::common::DataFusionError::Plan(
-                "Iceberg table has no current snapshot".to_string(),
-            )
-        })?;
-        let manifest_list_str = snapshot.manifest_list();
-        log::trace!("Manifest list path: {}", manifest_list_str);
-        let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
-        Ok(ml)
-    }
-
-    /// Load data files from manifests, preserving per-file data sequence numbers.
-    async fn load_data_files_with_seq(
-        &self,
-        session: &dyn Session,
-        filters: &[Expr],
-        store_ctx: &StoreContext,
-        manifest_list: &ManifestList,
-    ) -> Result<Vec<(DataFile, i64)>> {
-        let spec_map: HashMap<i32, PartitionSpec> = self
-            .partition_specs
-            .iter()
-            .map(|s| (s.spec_id(), s.clone()))
-            .collect();
-        let candidate_filters = self.copy_on_write_predicate.as_ref().map(|predicate| {
-            datafusion_expr::utils::split_conjunction(predicate)
-                .into_iter()
-                .filter(|expr| {
-                    crate::datasource::copy_on_write::can_prune(expr)
-                        && expr.column_refs().iter().all(|column| {
-                            self.schema
-                                .field_by_name(&column.name)
-                                .is_some_and(|field| {
-                                    !matches!(
-                                        field.field_type.as_ref(),
-                                        crate::spec::types::Type::Primitive(
-                                            crate::spec::types::PrimitiveType::Float
-                                                | crate::spec::types::PrimitiveType::Double
-                                        )
-                                    )
-                                })
-                        })
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        let manifest_files = prune_manifests_by_partition_summaries(
-            manifest_list,
-            &self.schema,
-            &spec_map,
-            candidate_filters.as_deref().unwrap_or(filters),
-        );
-
-        let mut out: Vec<(DataFile, i64)> = Vec::new();
-        for manifest_file in manifest_files {
-            if manifest_file.content != ManifestContentType::Data {
-                continue;
-            }
-
-            let manifest_path_str = manifest_file.manifest_path.as_str();
-            log::trace!("Loading manifest: {}", manifest_path_str);
-            let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
-
-            let partition_spec_id = manifest_file.partition_spec_id;
-            let parent_seq = manifest_file.sequence_number;
-            let mut inherited_next_row_id = manifest_file.first_row_id;
-
-            // Collect (DataFile, seq) pairs preserving inheritance.
-            let mut manifest_pairs: Vec<(DataFile, i64)> = Vec::new();
-            for entry_ref in manifest.entries().iter() {
-                let entry = entry_ref.as_ref();
-                if !matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                ) {
-                    continue;
-                }
-                let mut df = entry.data_file.clone();
-                df.partition_spec_id = partition_spec_id;
-                if df.first_row_id.is_none() {
-                    df.first_row_id = inherited_next_row_id;
-                    if let Some(next_row_id) = &mut inherited_next_row_id {
-                        let count = i64::try_from(df.record_count).map_err(|error| {
-                            datafusion_common::plan_datafusion_err!(
-                                "Iceberg row count overflow: {error}"
-                            )
-                        })?;
-                        *next_row_id = next_row_id.checked_add(count).ok_or_else(|| {
-                            datafusion_common::plan_datafusion_err!("Iceberg row ID overflow")
-                        })?;
-                    }
-                }
-                let seq = entry.sequence_number.unwrap_or(parent_seq);
-                manifest_pairs.push((df, seq));
-            }
-
-            // Early prune at manifest entry level using DataFusion predicate over metrics.
-            if !filters.is_empty() && !manifest_pairs.is_empty() {
-                // Preserve pairing by keying on file_path before/after prune.
-                let (mut files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
-                    manifest_pairs.iter().cloned().unzip();
-                let seq_by_path: HashMap<String, i64> = files_only
-                    .iter()
-                    .map(|f| f.file_path.clone())
-                    .zip(seq_only)
-                    .collect();
-                if let Some(spec) = spec_map.get(&partition_spec_id) {
-                    files_only = prune_data_files_by_partition_values(
-                        files_only,
-                        &self.schema,
-                        spec,
-                        filters,
-                    );
-                }
-                let (kept, _mask) = crate::datasource::pruning::prune_files(
-                    session,
-                    filters,
-                    None,
-                    self.arrow_schema.clone(),
-                    files_only,
-                    &self.schema,
-                )?;
-                for df in kept {
-                    let seq = *seq_by_path.get(&df.file_path).unwrap_or(&parent_seq);
-                    out.push((df, seq));
-                }
-            } else {
-                out.extend(manifest_pairs);
-            }
-        }
-
-        Ok(out)
-    }
-
-    /// Build a [`DeleteFileIndex`] scoped to the current snapshot.
-    async fn build_delete_file_index(
-        &self,
-        store_ctx: &StoreContext,
-        manifest_list: &ManifestList,
-    ) -> Result<DeleteFileIndex> {
-        let spec_map: HashMap<i32, PartitionSpec> = self
-            .partition_specs
-            .iter()
-            .map(|s| (s.spec_id(), s.clone()))
-            .collect();
-
-        let mut index = DeleteFileIndex::new();
-        for manifest_file in manifest_list
-            .entries()
-            .iter()
-            .filter(|mf| mf.content == ManifestContentType::Deletes)
-        {
-            let manifest_path_str = manifest_file.manifest_path.as_str();
-            let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
-            let partition_spec_id = manifest_file.partition_spec_id;
-            let is_unpartitioned = spec_map
-                .get(&partition_spec_id)
-                .map(|s| s.is_unpartitioned())
-                .unwrap_or(false);
-            let parent_seq = manifest_file.sequence_number;
-
-            for entry_ref in manifest.entries().iter() {
-                let entry = entry_ref.as_ref();
-                if !matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                ) {
-                    continue;
-                }
-                let mut df = entry.data_file.clone();
-                df.partition_spec_id = partition_spec_id;
-                let seq = entry.sequence_number.unwrap_or(parent_seq);
-                let file_ref = DeleteFileRef {
-                    data_file: df,
-                    data_sequence_number: seq,
-                    partition_spec_id,
-                    is_unpartitioned_spec: is_unpartitioned,
-                };
-                // TODO: Read and apply v3 Puffin deletion vectors before enabling DV tables.
-                if file_ref.is_deletion_vector() {
-                    return plan_err!(
-                        "Iceberg v3 deletion vectors are not yet supported \
-                         (delete file: {})",
-                        file_ref.data_file.file_path
-                    );
-                }
-                index.insert(file_ref).map_err(|e| {
-                    datafusion::common::DataFusionError::Plan(format!(
-                        "failed to index Iceberg delete file: {e}"
-                    ))
-                })?;
-            }
-        }
-        Ok(index)
-    }
-
     fn create_partitioned_files(
         &self,
         store_ctx: &StoreContext,
@@ -783,7 +592,17 @@ impl IcebergTableProvider {
                 object_meta,
                 partition_values,
                 range: None,
-                statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
+                statistics: Some(Arc::new({
+                    let mut statistics = self.create_file_statistics(&data_file);
+                    // Physical expression propagation cannot prove that casts preserve
+                    // extrema or null counts. Exact aggregation uses the source facts.
+                    statistics.column_statistics = statistics
+                        .column_statistics
+                        .into_iter()
+                        .map(ColumnStatistics::to_inexact)
+                        .collect();
+                    statistics
+                })),
                 ordering: None,
                 extensions: Default::default(),
                 metadata_size_hint: None,
@@ -858,30 +677,30 @@ impl IcebergTableProvider {
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
     }
 
-    fn equality_scan_provider(&self, deletes: &[DeleteFileRef]) -> Result<Self> {
-        let mut provider = self.clone();
-        provider.schema = crate::equality_schema::equality_read_schema(
+    fn equality_scan(&self, deletes: &[DeleteFileRef]) -> Result<Self> {
+        let mut read_scan = self.clone();
+        read_scan.schema = crate::equality_schema::equality_read_schema(
             &self.schema,
             &self.schema_history,
             deletes
                 .iter()
                 .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
         )?;
-        let schema = iceberg_schema_to_arrow(&provider.schema)?;
+        let schema = iceberg_schema_to_arrow(&read_scan.schema)?;
         let schema = Self::reorder_arrow_schema_for_identity_partitions(
-            &provider.schema,
+            &read_scan.schema,
             &self.partition_specs,
             self.default_spec_id,
             &schema,
         );
-        provider.arrow_schema = Arc::new(match &self.name_mapping {
+        read_scan.arrow_schema = Arc::new(match &self.name_mapping {
             Some(mapping) => {
                 crate::datasource::type_converter::apply_name_mapping(&schema, mapping)?
             }
             None => schema,
         });
-        provider.rebuild_output_schema()?;
-        Ok(provider)
+        read_scan.rebuild_output_schema()?;
+        Ok(read_scan)
     }
 
     fn project_scan_schema(
@@ -916,30 +735,34 @@ impl IcebergTableProvider {
         Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
     }
 
+    fn nan_free(&self, files: &[DataFile]) -> bool {
+        self.arrow_schema
+            .flattened_fields()
+            .iter()
+            .filter(|field| field.data_type().is_floating())
+            .all(|field| {
+                iceberg_field_id(field).ok().flatten().is_some_and(|id| {
+                    files
+                        .iter()
+                        .all(|file| file.nan_value_counts.get(&id) == Some(&0))
+                })
+            })
+    }
+
     fn build_parquet_source(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        parquet_pushdown_filters: &[Expr],
-        enable_pushdown: bool,
-    ) -> Result<Arc<dyn datafusion::datasource::physical_plan::FileSource>> {
-        let file_schema = self.arrow_schema.clone();
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
-        let mut parquet_source = ParquetSource::new(Arc::clone(&file_schema))
-            .with_table_parquet_options(parquet_options);
-        if enable_pushdown && !parquet_pushdown_filters.is_empty() {
-            let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
-            let df_schema = logical_schema.to_dfschema()?;
-            if let Some(pushdown_expr) = conjunction(parquet_pushdown_filters.iter().cloned()) {
-                let simplified = simplify_expr(session, &df_schema, pushdown_expr)?;
-                parquet_source = parquet_source.with_predicate(simplified);
-            }
-        }
-        Ok(Arc::new(parquet_source))
+        nan_free: bool,
+    ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
+        let parquet_options = crate::datasource::parquet::parquet_options(
+            &self.arrow_schema,
+            nan_free,
+            session.config().options().execution.parquet.clone(),
+        );
+        Arc::new(
+            ParquetSource::new(self.arrow_schema.clone())
+                .with_table_parquet_options(parquet_options),
+        )
     }
 
     fn build_merge_parquet_source(
@@ -947,10 +770,11 @@ impl IcebergTableProvider {
         session: &dyn Session,
         file_column_name: &str,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options = crate::datasource::parquet::parquet_options(
+            &self.arrow_schema,
+            false,
+            session.config().options().execution.parquet.clone(),
+        );
         let table_schema = TableSchema::builder(self.arrow_schema.clone())
             .with_table_partition_cols(vec![
                 Arc::new(Field::new(file_column_name, DataType::Utf8, false)),
@@ -988,111 +812,15 @@ impl IcebergTableProvider {
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files
-    fn aggregate_statistics(&self, data_files: &[DataFile]) -> Statistics {
-        if data_files.is_empty() {
-            return Statistics::new_unknown(&self.arrow_schema);
-        }
-
-        let mut total_rows: usize = 0;
-        let mut total_bytes: usize = 0;
-
-        let field_ids: Vec<Option<i32>> = self
-            .arrow_schema
-            .fields()
-            .iter()
-            .map(|field| iceberg_field_id(field).unwrap_or_default())
-            .collect();
-
-        // Initialize accumulators per column
-        let mut min_scalars: Vec<Option<ScalarValue>> =
-            vec![None; self.arrow_schema.fields().len()];
-        let mut max_scalars: Vec<Option<ScalarValue>> =
-            vec![None; self.arrow_schema.fields().len()];
-        let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
-        let mut missing_min = vec![false; field_ids.len()];
-        let mut missing_max = vec![false; field_ids.len()];
-        let mut missing_null_count = vec![false; field_ids.len()];
-
-        for df in data_files {
-            total_rows = total_rows.saturating_add(df.record_count() as usize);
-            total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
-
-            for (col_idx, field_id) in field_ids.iter().enumerate() {
-                let Some(field_id) = field_id else {
-                    missing_min[col_idx] = true;
-                    missing_max[col_idx] = true;
-                    missing_null_count[col_idx] = true;
-                    continue;
-                };
-                // null counts
-                if let Some(c) = df.null_value_counts().get(field_id) {
-                    null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
-                } else {
-                    missing_null_count[col_idx] = true;
-                }
-
-                // min
-                if let Some(d) = df.lower_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
-                {
-                    min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
-                        (None, s) => Some(s.clone()),
-                        (Some(existing), s) => Some(if s < existing {
-                            s.clone()
-                        } else {
-                            existing.clone()
-                        }),
-                    };
-                } else {
-                    missing_min[col_idx] = true;
-                }
-
-                // max
-                if let Some(d) = df.upper_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
-                {
-                    max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
-                        (None, s) => Some(s.clone()),
-                        (Some(existing), s) => Some(if s > existing {
-                            s.clone()
-                        } else {
-                            existing.clone()
-                        }),
-                    };
-                } else {
-                    missing_max[col_idx] = true;
-                }
-            }
-        }
-
-        let column_statistics = (0..self.arrow_schema.fields().len())
-            .map(|i| ColumnStatistics {
-                null_count: if missing_null_count[i] {
-                    Precision::Absent
-                } else {
-                    Precision::Exact(null_counts[i])
-                },
-                max_value: max_scalars[i]
-                    .clone()
-                    .filter(|_| !missing_max[i])
-                    .map(Self::bound_precision)
-                    .unwrap_or(Precision::Absent),
-                min_value: min_scalars[i]
-                    .clone()
-                    .filter(|_| !missing_min[i])
-                    .map(Self::bound_precision)
-                    .unwrap_or(Precision::Absent),
-                distinct_count: Precision::Absent,
-                sum_value: Precision::Absent,
-                byte_size: Precision::Absent,
-            })
-            .collect();
-
-        Statistics {
-            num_rows: Precision::Exact(total_rows),
-            total_byte_size: Precision::Exact(total_bytes),
-            column_statistics,
-        }
+    fn aggregate_statistics<'a>(
+        &self,
+        data_files: impl IntoIterator<Item = &'a DataFile>,
+    ) -> Statistics {
+        let statistics = data_files
+            .into_iter()
+            .map(|file| self.create_file_statistics(file))
+            .collect::<Vec<_>>();
+        sail_common_datafusion::statistics::aggregate_statistics(&self.arrow_schema, &statistics)
     }
 
     /// Create file statistics from Iceberg data file metadata
@@ -1109,6 +837,35 @@ impl IcebergTableProvider {
                 let Some(field_id) = iceberg_field_id(field).unwrap_or_default() else {
                     return ColumnStatistics::new_unknown();
                 };
+
+                if let Some(spec) = self
+                    .partition_specs
+                    .iter()
+                    .find(|spec| spec.spec_id() == data_file.partition_spec_id)
+                    && let Some(index) = spec.fields().iter().position(|partition| {
+                        partition.source_id == field_id
+                            && partition.transform == Transform::Identity
+                    })
+                    && let Some(value) = data_file.partition.get(index)
+                    && let Some(source) = self.schema.field_by_id(field_id)
+                {
+                    let scalar = match value {
+                        Some(value) => to_scalar(value, &source.field_type).ok(),
+                        None => ScalarValue::try_new_null(field.data_type()).ok(),
+                    };
+                    if let Some(scalar) = scalar {
+                        return ColumnStatistics {
+                            null_count: Precision::Exact(if scalar.is_null() {
+                                data_file.record_count() as usize
+                            } else {
+                                0
+                            }),
+                            min_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar.clone()) },
+                            max_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar) },
+                            ..ColumnStatistics::new_unknown()
+                        };
+                    }
+                }
 
                 let null_count = data_file
                     .null_value_counts()
@@ -1150,6 +907,86 @@ impl IcebergTableProvider {
         }
     }
 
+    fn constant_projection_scan(
+        &self,
+        files: &[DataFile],
+        projection: Option<&Vec<usize>>,
+        limit: Option<usize>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let projection = projection
+            .cloned()
+            .unwrap_or_else(|| (0..self.arrow_schema.fields().len()).collect());
+        let mut scans = Vec::with_capacity(files.len());
+        for file in files {
+            let statistics = self.create_file_statistics(file);
+            let Some(values) = projection
+                .iter()
+                .map(|index| {
+                    let column = &statistics.column_statistics[*index];
+                    if column.null_count == Precision::Exact(file.record_count as usize) {
+                        return ScalarValue::try_new_null(
+                            self.arrow_schema.field(*index).data_type(),
+                        )
+                        .ok();
+                    }
+                    if column.null_count == Precision::Exact(0)
+                        && let (Precision::Exact(lower), Precision::Exact(upper)) =
+                            (&column.min_value, &column.max_value)
+                        && lower == upper
+                    {
+                        return Some(lower.clone());
+                    }
+                    None
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Ok(None);
+            };
+            let Ok(end) = i64::try_from(file.record_count) else {
+                return Ok(None);
+            };
+            let source: Arc<dyn ExecutionPlan> =
+                Arc::new(sail_physical_plan::range::RangeExec::try_new(
+                    sail_logical_plan::range::Range {
+                        start: 0,
+                        end,
+                        step: 1,
+                    },
+                    1,
+                    Arc::new(ArrowSchema::empty()),
+                    vec![],
+                )?);
+            let expressions = projection
+                .iter()
+                .zip(values.iter().cloned())
+                .map(|(index, value)| {
+                    (
+                        datafusion::physical_expr::expressions::lit(value),
+                        self.arrow_schema.field(*index).name().clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            scans.push((
+                values,
+                Arc::new(ProjectionExec::try_new(expressions, source)?) as Arc<dyn ExecutionPlan>,
+            ));
+        }
+        scans.sort_by(|(left, _), (right, _)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut scans = scans.into_iter().map(|(_, scan)| scan).collect::<Vec<_>>();
+        let scan = if scans.len() == 1 {
+            scans.remove(0)
+        } else {
+            UnionExec::try_new(scans)?
+        };
+        let scan = match limit {
+            Some(limit) => Arc::new(GlobalLimitExec::new(scan, 0, Some(limit))),
+            None => scan,
+        };
+        Ok(Some(Arc::new(IcebergMetadataScanExec::new(scan))))
+    }
+
     fn bound_precision(value: ScalarValue) -> Precision<ScalarValue> {
         // Bounds from older files may be truncated regardless of the current metrics mode.
         if matches!(
@@ -1168,34 +1005,22 @@ impl IcebergTableProvider {
     }
 }
 
-#[async_trait]
-impl TableProvider for IcebergTableProvider {
-    fn schema(&self) -> Arc<ArrowSchema> {
+impl IcebergScan {
+    pub fn schema(&self) -> Arc<ArrowSchema> {
         self.output_schema.clone()
     }
 
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    fn get_table_definition(&self) -> Option<&str> {
-        None
-    }
-
-    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
-        None
-    }
-
-    async fn scan(
+    pub(crate) async fn create_physical_plan(
         &self,
         session: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
+        prepared: Option<Arc<IcebergScanPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
-        let Some(snapshot) = self.snapshot.as_ref() else {
+        let Some(_snapshot) = self.snapshot.as_ref() else {
             return Ok(Arc::new(EmptyExec::new(
                 self.projected_arrow_schema(projection)?,
             )));
@@ -1227,106 +1052,57 @@ impl TableProvider for IcebergTableProvider {
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
 
-        log::trace!("Loading manifest list from: {}", snapshot.manifest_list());
-        let manifest_list = self.load_manifest_list(&store_ctx).await?;
-        log::trace!("Loaded {} manifest files", manifest_list.entries().len());
-
-        // Classify & split filters for pruning vs parquet pushdown
-        let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);
-
-        log::trace!("Loading data files from manifests...");
-        let mut data_files_with_seq = self
-            .load_data_files_with_seq(session, &pruning_filters, &store_ctx, &manifest_list)
-            .await?;
-        log::trace!("Loaded {} data files", data_files_with_seq.len());
-
-        // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
-        // Preserve per-file sequence numbers through the prune.
-        let filter_expr = conjunction(pruning_filters.iter().cloned());
-        let file_limit = limit.filter(|_| {
-            filters.is_empty()
-                && !manifest_list
-                    .entries()
-                    .iter()
-                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
-        });
-        if filter_expr.is_some() || file_limit.is_some() {
-            let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
-                data_files_with_seq.iter().cloned().unzip();
-            let seq_by_path: HashMap<String, i64> = files_only
-                .iter()
-                .map(|f| f.file_path.clone())
-                .zip(seqs_only)
-                .collect();
-            let (kept, _mask) = prune_files(
-                session,
-                &pruning_filters,
-                file_limit,
-                self.rebuild_logical_schema_for_filters(projection, filters),
-                files_only,
-                &self.schema,
-            )?;
-            data_files_with_seq = kept
-                .into_iter()
-                .map(|df| {
-                    let seq = seq_by_path.get(&df.file_path).copied().unwrap_or(0);
-                    (df, seq)
-                })
-                .collect();
-            log::trace!(
-                "Pruned data files, remaining: {}",
-                data_files_with_seq.len()
-            );
+        let planned = match prepared {
+            Some(planned) if planned.matches(filters, limit) => planned,
+            _ => Arc::new(self.plan_files(session, filters, limit).await?),
+        };
+        if planned.tasks.is_empty() {
+            return Ok(Arc::new(EmptyExec::new(
+                self.projected_arrow_schema(projection)?,
+            )));
         }
-
-        // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
-        log::trace!("Building delete file index...");
-        let delete_index = self
-            .build_delete_file_index(&store_ctx, &manifest_list)
-            .await?;
-
-        // Partition each data file into "clean" (no matching deletes) vs "dirty"
-        // (one or more matching deletes) buckets. We only pay the cost of
-        // `IcebergDeleteApplyExec` for dirty files.
-        let mut clean_files: Vec<DataFile> = Vec::new();
-        let mut dirty_units: Vec<(DataFile, Vec<DeleteFileRef>, Vec<DeleteFileRef>)> = Vec::new();
-        for (df, seq) in data_files_with_seq.iter().cloned() {
-            let matched = delete_index.for_data_file(&df, seq);
-            if matched.is_empty() {
-                clean_files.push(df);
+        let (_, parquet_pushdown_filters) = self.separate_filters(&planned.residual_filters());
+        let mut clean_files = Vec::new();
+        let mut dirty_units = Vec::new();
+        let mut all_data_files = Vec::new();
+        for task in &planned.tasks {
+            let file = task.data_file.clone();
+            all_data_files.push(file.clone());
+            if task.deletes.is_empty() {
+                clean_files.push(file);
             } else {
-                dirty_units.push((df, matched.positional, matched.equality));
+                dirty_units.push((
+                    file,
+                    task.deletes.positional.clone(),
+                    task.deletes.equality.clone(),
+                ));
             }
         }
-        log::trace!(
-            "Delete split: {} clean, {} dirty",
-            clean_files.len(),
-            dirty_units.len()
-        );
-
-        // Aggregate stats over ALL files (before split) for the planner.
-        let all_data_files: Vec<DataFile> = data_files_with_seq
-            .iter()
-            .map(|(df, _)| df.clone())
+        let mut table_stats = self.aggregate_statistics(&all_data_files);
+        table_stats.column_statistics = table_stats
+            .column_statistics
+            .into_iter()
+            .map(ColumnStatistics::to_inexact)
             .collect();
-        let table_stats = self.aggregate_statistics(&all_data_files);
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
         if dirty_units.is_empty() {
+            if parquet_pushdown_filters.is_empty()
+                && let Some(scan) =
+                    self.constant_projection_scan(&all_data_files, projection, limit)?
+            {
+                return Ok(scan);
+            }
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
+            let nan_free = self.nan_free(&all_data_files);
             let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(
-                session,
-                projection,
-                filters,
-                &parquet_pushdown_filters,
-                true,
-            )?;
-            let expanded_projection = self.expanded_projection(projection, filters);
+            let parquet_source = self.build_parquet_source(session, nan_free);
+            let expanded_projection =
+                self.expanded_projection(projection, &parquet_pushdown_filters);
             let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
                 .with_file_groups(if file_groups.is_empty() {
                     vec![FileGroup::from(vec![])]
@@ -1335,10 +1111,27 @@ impl TableProvider for IcebergTableProvider {
                 })
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
-                .with_limit(limit)
+                .with_limit(if parquet_pushdown_filters.is_empty() {
+                    limit
+                } else {
+                    None
+                })
                 .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
-            return create_data_scan(file_scan_config);
+            let mut plan = create_data_scan(file_scan_config)?;
+            if let Some(predicate) = conjunction(parquet_pushdown_filters.clone()) {
+                let schema = plan.schema().to_dfschema()?;
+                let predicate = simplify_expr(session, &schema, predicate)?;
+                plan = Arc::new(FilterExec::try_new(predicate, plan)?);
+            }
+            if let Some(projection) = projection {
+                let target = self.projected_arrow_schema(Some(projection))?;
+                plan = self.project_scan_schema(plan, &target)?;
+            }
+            if let Some(limit) = limit {
+                plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(limit)));
+            }
+            return Ok(plan);
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
@@ -1354,13 +1147,7 @@ impl TableProvider for IcebergTableProvider {
         if !clean_files.is_empty() {
             let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(
-                session,
-                projection,
-                filters,
-                &[], // no parquet-level predicate
-                false,
-            )?;
+            let parquet_source = self.build_parquet_source(session, false);
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
@@ -1371,12 +1158,10 @@ impl TableProvider for IcebergTableProvider {
 
         // Branch B: one branch per dirty file.
         for (df, pos_deletes, eq_deletes) in dirty_units {
-            let scan_provider = self.equality_scan_provider(&eq_deletes)?;
-            let partitioned =
-                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let delete_scan = self.equality_scan(&eq_deletes)?;
+            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
-            let parquet_source =
-                scan_provider.build_parquet_source(session, None, &[], &[], false)?;
+            let parquet_source = delete_scan.build_parquet_source(session, false);
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1394,7 +1179,7 @@ impl TableProvider for IcebergTableProvider {
                 pos_deletes,
                 eq_deletes,
                 self.table_uri.clone(),
-                scan_provider.schema.clone(),
+                delete_scan.schema.clone(),
             ));
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
@@ -1452,15 +1237,21 @@ impl TableProvider for IcebergTableProvider {
         Ok(final_plan)
     }
 
-    fn supports_filters_pushdown(
+    pub fn supports_filters_pushdown(
         &self,
         filter: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        if self.metadata_as_data_read
-            || self.file_column_name.is_some()
-            || self.row_index_column_name.is_some()
-        {
+        if self.file_column_name.is_some() || self.row_index_column_name.is_some() {
             return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
+        }
+        if self.metadata_as_data_read
+            && !self.partition_specs.iter().any(|spec| {
+                spec.fields()
+                    .iter()
+                    .any(|field| field.transform == Transform::Identity)
+            })
+        {
+            return Ok(vec![TableProviderFilterPushDown::Inexact; filter.len()]);
         }
         Ok(filter
             .iter()
@@ -1469,7 +1260,7 @@ impl TableProvider for IcebergTableProvider {
     }
 }
 
-impl IcebergTableProvider {
+impl IcebergScan {
     async fn scan_with_merge_metadata(
         &self,
         session: &dyn Session,
@@ -1479,7 +1270,7 @@ impl IcebergTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting merge-metadata scan for table: {}", self.table_uri);
 
-        let Some(snapshot) = self.snapshot.as_ref() else {
+        let Some(_snapshot) = self.snapshot.as_ref() else {
             return Ok(Arc::new(EmptyExec::new(
                 self.projected_arrow_schema(projection)?,
             )));
@@ -1490,66 +1281,13 @@ impl IcebergTableProvider {
         let base_store = get_object_store_from_session(session, &table_url)?;
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
 
-        let manifest_list = self.load_manifest_list(&store_ctx).await?;
-        let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);
-        let mut data_files_with_seq = self
-            .load_data_files_with_seq(session, &pruning_filters, &store_ctx, &manifest_list)
-            .await?;
-
-        if let Some(predicate) = &self.copy_on_write_predicate {
-            data_files_with_seq = crate::datasource::copy_on_write::select_copy_on_write_files(
-                session,
-                predicate,
-                Arc::clone(&self.arrow_schema),
-                &self.schema,
-                &self.partition_specs,
-                data_files_with_seq,
-            )?
-            .candidates;
-        }
-
-        let filter_expr = conjunction(pruning_filters.iter().cloned());
-        let file_limit = limit.filter(|_| {
-            filters.is_empty()
-                && !manifest_list
-                    .entries()
-                    .iter()
-                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
-        });
-        if filter_expr.is_some() || file_limit.is_some() {
-            let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
-                data_files_with_seq.iter().cloned().unzip();
-            let seq_by_path: HashMap<String, i64> = files_only
-                .iter()
-                .map(|f| f.file_path.clone())
-                .zip(seqs_only)
-                .collect();
-            let (kept, _mask) = prune_files(
-                session,
-                &pruning_filters,
-                file_limit,
-                self.rebuild_logical_schema_for_filters(None, filters),
-                files_only,
-                &self.schema,
-            )?;
-            data_files_with_seq = kept
-                .into_iter()
-                .map(|df| {
-                    let seq = seq_by_path.get(&df.file_path).copied().unwrap_or(0);
-                    (df, seq)
-                })
-                .collect();
-        }
-
-        if data_files_with_seq.is_empty() {
+        let planned = self.plan_files(session, filters, limit).await?;
+        let (_, parquet_pushdown_filters) = self.separate_filters(filters);
+        if planned.tasks.is_empty() {
             return Ok(Arc::new(EmptyExec::new(
                 self.projected_arrow_schema(projection)?,
             )));
         }
-
-        let delete_index = self
-            .build_delete_file_index(&store_ctx, &manifest_list)
-            .await?;
         let object_store_url = self.object_store_url()?;
         let file_column_name = self.file_column_name.as_ref().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
@@ -1560,8 +1298,10 @@ impl IcebergTableProvider {
         let mut file_lineage = HashMap::new();
         let mut dirty_units = Vec::new();
 
-        for (data_file, sequence_number) in data_files_with_seq {
-            let matched = delete_index.for_data_file(&data_file, sequence_number);
+        for task in planned.tasks {
+            let data_file = task.data_file;
+            let sequence_number = task.data_sequence_number;
+            let matched = task.deletes;
             if matched.is_empty() {
                 if self.has_row_lineage() {
                     file_lineage.insert(
@@ -1592,14 +1332,14 @@ impl IcebergTableProvider {
                 .into_iter()
                 .map(|file| FileGroup::from(vec![file]))
                 .collect::<Vec<_>>();
-            let mut scan_provider = self.clone();
+            let mut delete_scan = self.clone();
             if self.has_row_lineage() {
-                scan_provider.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
+                delete_scan.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
                     &self.arrow_schema,
                 )?);
             }
             let parquet_source =
-                scan_provider.build_merge_parquet_source(session, file_column_name.as_str());
+                delete_scan.build_merge_parquet_source(session, file_column_name.as_str());
             let output_partitioning = output_partitioning_from_partition_fields(
                 parquet_source.table_schema().table_schema(),
                 parquet_source.table_schema().table_partition_cols(),
@@ -1628,7 +1368,7 @@ impl IcebergTableProvider {
         }
 
         for (df, sequence_number, positional_deletes, equality_deletes) in dirty_units {
-            let mut scan_provider = self.equality_scan_provider(&equality_deletes)?;
+            let mut delete_scan = self.equality_scan(&equality_deletes)?;
             let row_lineage = self
                 .has_row_lineage()
                 .then_some(crate::row_lineage::RowLineage {
@@ -1636,14 +1376,12 @@ impl IcebergTableProvider {
                     data_sequence_number: sequence_number,
                 });
             if row_lineage.is_some() {
-                scan_provider.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
-                    &scan_provider.arrow_schema,
+                delete_scan.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
+                    &delete_scan.arrow_schema,
                 )?);
             }
-            let partitioned =
-                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
-            let parquet_source =
-                scan_provider.build_parquet_source(session, None, &[], &[], false)?;
+            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let parquet_source = delete_scan.build_parquet_source(session, false);
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1673,7 +1411,7 @@ impl IcebergTableProvider {
                 positional_deletes,
                 equality_deletes,
                 self.table_uri.clone(),
-                scan_provider.schema.clone(),
+                delete_scan.schema.clone(),
             ));
             branches.push(self.project_scan_schema(apply, &self.output_schema)?);
         }
@@ -1724,175 +1462,30 @@ impl IcebergTableProvider {
 
         log::trace!(
             "Built merge-metadata scan for snapshot {}",
-            snapshot.snapshot_id()
+            _snapshot.snapshot_id()
         );
         Ok(final_plan)
     }
 
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
-        use TableProviderFilterPushDown as FP;
-        // Partition pruning is inclusive. Keep the row predicate for nulls,
-        // missing metrics, and historical specs without the partition field.
-        match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
-                match op {
-                    Operator::Eq => {
-                        if let (Some(col), true) =
-                            (self.expr_as_column_name(l), self.expr_is_literal(r))
-                            && let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col)
-                        {
-                            return pushdown;
-                        }
-                        if let (Some(col), true) =
-                            (self.expr_as_column_name(r), self.expr_is_literal(l))
-                            && let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col)
-                        {
-                            return pushdown;
-                        }
-                        FP::Unsupported
-                    }
-                    Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq => {
-                        if let Some(col) = self.expr_as_column_name(l)
-                            && self.expr_is_literal(r)
-                            && self.is_partition_source_col(&col)
-                        {
-                            return FP::Inexact;
-                        }
-                        if let Some(col) = self.expr_as_column_name(r)
-                            && self.expr_is_literal(l)
-                            && self.is_partition_source_col(&col)
-                        {
-                            return FP::Inexact;
-                        }
-                        FP::Unsupported
-                    }
-                    _ => FP::Unsupported,
-                }
-            }
-            Expr::InList(in_list) if !in_list.negated => {
-                let e = Self::strip_expr(&in_list.expr);
-                if let Some(col) = self.expr_as_column_name(e) {
-                    let all_literals = in_list.list.iter().all(|it| self.expr_is_literal(it));
-                    if all_literals {
-                        self.eq_in_pushdown_for_partition_col(&col)
-                            .unwrap_or(TableProviderFilterPushDown::Unsupported)
-                    } else {
-                        TableProviderFilterPushDown::Unsupported
-                    }
-                } else {
-                    TableProviderFilterPushDown::Unsupported
-                }
-            }
-            _ => TableProviderFilterPushDown::Unsupported,
+        if Predicate::new(&self.schema, expr).supported() {
+            TableProviderFilterPushDown::Exact
+        } else {
+            TableProviderFilterPushDown::Inexact
         }
     }
 
     fn separate_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
-        let mut pruning_filters = Vec::new();
-        let mut parquet_pushdown_filters = Vec::new();
-        for f in filters.iter() {
-            match self.classify_pushdown_for_expr(f) {
-                TableProviderFilterPushDown::Exact => {
-                    Self::push_filter_once(&mut pruning_filters, f);
-                    // Even if partition pruning is "exact", we still must apply the filter at scan
-                    // time. Pruning is an optimization and can be conservative when stats are
-                    // missing; correctness requires retaining the predicate.
-                    Self::push_filter_once(&mut parquet_pushdown_filters, f);
-                }
-                TableProviderFilterPushDown::Inexact => {
-                    Self::push_filter_once(&mut pruning_filters, f);
-                }
-                TableProviderFilterPushDown::Unsupported => {}
-            }
-        }
-        (pruning_filters, parquet_pushdown_filters)
-    }
-
-    fn push_filter_once(filters: &mut Vec<Expr>, filter: &Expr) {
-        let filter_key = filter.to_string();
-        if !filters
-            .iter()
-            .any(|existing| existing.to_string() == filter_key)
-        {
-            filters.push(filter.clone());
-        }
-    }
-
-    fn strip_expr(expr: &Expr) -> &Expr {
-        match expr {
-            Expr::Alias(a) => Self::strip_expr(&a.expr),
-            _ => expr,
-        }
-    }
-
-    fn expr_as_column_name(&self, expr: &Expr) -> Option<String> {
-        if let Expr::Column(c) = expr {
-            return Some(c.name.clone());
-        }
-        None
-    }
-
-    fn expr_is_literal(&self, expr: &Expr) -> bool {
-        matches!(expr, Expr::Literal(_, _))
-    }
-
-    fn eq_in_pushdown_for_partition_col(
-        &self,
-        col_name: &str,
-    ) -> Option<TableProviderFilterPushDown> {
-        self.partition_source_col_only_uses_identity(col_name)
-            .map(|_| TableProviderFilterPushDown::Inexact)
-    }
-
-    fn is_partition_source_col(&self, col_name: &str) -> bool {
-        self.partition_source_col_only_uses_identity(col_name)
-            .is_some()
-    }
-
-    fn partition_source_col_only_uses_identity(&self, col_name: &str) -> Option<bool> {
-        let mut found = false;
-        let mut only_identity = true;
-        for spec in &self.partition_specs {
-            for pf in spec.fields().iter() {
-                if matches!(pf.transform, Transform::Void | Transform::Unknown) {
-                    continue;
-                }
-                if let Some(field) = self.schema.field_by_id(pf.source_id)
-                    && field.name == col_name
-                {
-                    found = true;
-                    only_identity &= matches!(pf.transform, Transform::Identity);
-                }
-            }
-        }
-        found.then_some(only_identity)
-    }
-
-    fn rebuild_logical_schema_for_filters(
-        &self,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-    ) -> Arc<ArrowSchema> {
-        if let Some(used) = projection {
-            let mut fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
-            for idx in used {
-                fields.push(Arc::new(self.arrow_schema.field(*idx).clone()));
-            }
-            if let Some(expr) = conjunction(filters.iter().cloned()) {
-                for c in expr.column_refs() {
-                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str())
-                        && !used.contains(&idx)
-                        && !fields.iter().any(|f| f.name() == c.name.as_str())
-                    {
-                        fields.push(Arc::new(self.arrow_schema.field(idx).clone()));
-                    }
-                }
-            }
-            Arc::new(ArrowSchema::new(fields))
-        } else {
-            self.arrow_schema.clone()
-        }
+        (
+            filters.to_vec(),
+            filters
+                .iter()
+                .filter(|filter| {
+                    self.classify_pushdown_for_expr(filter) == TableProviderFilterPushDown::Exact
+                })
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
@@ -1933,25 +1526,14 @@ impl IcebergTableProvider {
             .iter()
             .any(|mf| mf.content == ManifestContentType::Deletes)
         {
-            return plan_err!(
-                "metadata-as-data read path does not yet support tables with delete files; \
-                 disable the `metadataAsDataRead` option to use the driver-based read path"
-            );
+            let mut read_scan = self.clone();
+            read_scan.metadata_as_data_read = false;
+            return Box::pin(
+                read_scan.create_physical_plan(session, projection, filters, limit, None),
+            )
+            .await;
         }
 
-        if !filters.is_empty() || limit.is_some() {
-            log::debug!(
-                "metadata-as-data scan does not push down filters/limit \
-                 (num_filters={}, limit={:?}); relying on \
-                 the planner to apply them above the scan. Note: \
-                 `supports_filters_pushdown` returns Unsupported in this mode so \
-                 the planner does NOT drop filters from the outer plan.",
-                filters.len(),
-                limit,
-            );
-        }
-
-        // TODO: Apply transform-aware partition pruning here
         let snapshot = self.snapshot.as_ref().ok_or_else(|| {
             datafusion::common::DataFusionError::Plan(
                 "Iceberg table has no current snapshot".to_string(),
@@ -1960,6 +1542,18 @@ impl IcebergTableProvider {
         let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
             self.table_uri.clone(),
             snapshot.clone(),
+            ManifestPruning {
+                predicate: Predicate::conjunction(&self.schema, filters),
+                limit: limit.filter(|_| filters.is_empty()),
+                floating_field_ids: self
+                    .arrow_schema
+                    .flattened_fields()
+                    .iter()
+                    .filter(|field| field.data_type().is_floating())
+                    .map(|field| iceberg_field_id(field).ok().flatten())
+                    .collect(),
+                specs: self.partition_specs.clone(),
+            },
         ));
 
         let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
@@ -1969,15 +1563,27 @@ impl IcebergTableProvider {
             false, // full data file scan, not partition-only
         )?);
 
+        let predicate = conjunction(filters.iter().cloned())
+            .map(|predicate| {
+                simplify_expr(
+                    session,
+                    &self.arrow_schema.clone().to_dfschema()?,
+                    predicate,
+                )
+            })
+            .transpose()?;
         let scan_exec: Arc<dyn ExecutionPlan> = Arc::new(
             crate::physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec::new(
                 discovery,
                 self.table_uri.clone(),
                 self.arrow_schema.clone(),
-            ),
+                projection.cloned(),
+                predicate,
+                if filters.is_empty() { limit } else { None },
+            )?,
         );
 
-        self.project_scan_schema(scan_exec, &self.projected_arrow_schema(projection)?)
+        Ok(scan_exec)
     }
 }
 
@@ -1986,7 +1592,7 @@ mod tests {
     use super::*;
     use crate::spec::types::{NestedField, PrimitiveLiteral, PrimitiveType, Type};
 
-    fn statistics_fixture() -> Result<(IcebergTableProvider, DataFile)> {
+    fn statistics_fixture() -> Result<(IcebergScan, DataFile)> {
         let schema = Schema::builder()
             .with_schema_id(0)
             .with_fields([
@@ -2003,7 +1609,7 @@ mod tests {
             ])
             .build()
             .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
-        let provider = IcebergTableProvider::new_empty(
+        let read_scan = IcebergScan::new_empty(
             "file:///tmp/statistics/",
             schema,
             vec![PartitionSpec::unpartitioned_spec()],
@@ -2023,12 +1629,12 @@ mod tests {
         ]);
         file.upper_bounds = file.lower_bounds.clone();
         file.null_value_counts = HashMap::from([(1, 0), (2, 0)]);
-        Ok((provider, file))
+        Ok((read_scan, file))
     }
 
     #[test]
     fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
-        let (provider, mut file) = statistics_fixture()?;
+        let (read_scan, mut file) = statistics_fixture()?;
         for nan_count in [None, Some(1), Some(0)] {
             file.nan_value_counts = nan_count.map(|count| (2, count)).into_iter().collect();
             let expected = if nan_count == Some(0) {
@@ -2037,8 +1643,8 @@ mod tests {
                 Precision::Absent
             };
             for stats in [
-                provider.create_file_statistics(&file),
-                provider.aggregate_statistics(&[file.clone()]),
+                read_scan.create_file_statistics(&file),
+                read_scan.aggregate_statistics(&[file.clone()]),
             ] {
                 assert_eq!(stats.column_statistics[1].min_value, expected);
                 assert_eq!(stats.column_statistics[1].max_value, expected);
@@ -2049,19 +1655,289 @@ mod tests {
 
     #[test]
     fn aggregate_statistics_require_complete_optional_metrics() -> Result<()> {
-        let (provider, file) = statistics_fixture()?;
+        let (read_scan, file) = statistics_fixture()?;
         let mut missing = file.clone();
         missing.lower_bounds.clear();
         missing.upper_bounds.clear();
         missing.null_value_counts.clear();
         for files in [[file.clone(), missing.clone()], [missing, file]] {
-            let stats = provider.aggregate_statistics(&files);
+            let stats = read_scan.aggregate_statistics(&files);
             assert_eq!(stats.num_rows, Precision::Exact(4));
             for column in stats.column_statistics {
                 assert_eq!(column.null_count, Precision::Absent);
                 assert_eq!(column.min_value, Precision::Absent);
                 assert_eq!(column.max_value, Precision::Absent);
             }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn ineligible_metadata_aggregates_do_not_read_manifests() -> Result<()> {
+        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
+        use datafusion::logical_expr::expr::NullTreatment;
+        use datafusion::logical_expr::{ExprFunctionExt, LogicalPlan, LogicalPlanBuilder};
+        use datafusion::prelude::{SessionContext, col, lit};
+        use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+
+        use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
+        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
+
+        let (mut read_scan, _) = statistics_fixture()?;
+        read_scan.snapshot = Some(
+            SnapshotBuilder::new()
+                .with_snapshot_id(1)
+                .with_sequence_number(1)
+                .with_manifest_list("missing-list.avro")
+                .with_summary(Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot"),
+        );
+        let context = SessionContext::new();
+        context.register_object_store(
+            &Url::parse(read_scan.table_uri()).expect("table URL"),
+            Arc::new(object_store::memory::InMemory::new()),
+        );
+        let state = context.state();
+        assert!(read_scan.plan_files(&state, &[], None).await.is_err());
+        let source = Arc::new(IcebergTableSource::new(Arc::new(read_scan.clone())));
+        let input = LogicalPlanBuilder::scan("t", source, None)?.build()?;
+        let mut plans = vec![];
+        for (name, groups, expressions) in [
+            ("grouping", vec![col("id")], vec![count(lit(1))]),
+            ("unsupported function", vec![], vec![sum(col("id"))]),
+            (
+                "filtered aggregate",
+                vec![],
+                vec![count(lit(1)).filter(col("id").gt(lit(1))).build()?],
+            ),
+            (
+                "ordered aggregate",
+                vec![],
+                vec![
+                    min(col("id"))
+                        .order_by(vec![col("id").sort(true, true)])
+                        .build()?,
+                ],
+            ),
+            (
+                "null treatment",
+                vec![],
+                vec![
+                    min(col("id"))
+                        .null_treatment(NullTreatment::IgnoreNulls)
+                        .build()?,
+                ],
+            ),
+        ] {
+            plans.push((
+                name,
+                LogicalPlanBuilder::from(input.clone())
+                    .aggregate(groups, expressions)?
+                    .build()?,
+            ));
+        }
+        let mut limited = input.clone();
+        let LogicalPlan::TableScan(scan) = &mut limited else {
+            unreachable!("scan fixture");
+        };
+        scan.fetch = Some(1);
+        let filtered = LogicalPlanBuilder::from(input)
+            .filter(col("id").gt(lit(1)))?
+            .build()?;
+        for (name, input) in [("fetch", limited), ("logical filter", filtered)] {
+            plans.push((
+                name,
+                LogicalPlanBuilder::from(input)
+                    .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+                    .build()?,
+            ));
+        }
+        for (name, scan) in [
+            (
+                "lazy read",
+                read_scan.clone().with_metadata_as_data_read(true),
+            ),
+            (
+                "file metadata",
+                read_scan.clone().with_file_column("_file")?,
+            ),
+            (
+                "row metadata",
+                read_scan.clone().with_row_index_column("_row")?,
+            ),
+            (
+                "copy-on-write candidates",
+                read_scan.select_copy_on_write_candidates(col("id").gt(lit(1))),
+            ),
+        ] {
+            let source = Arc::new(IcebergTableSource::new(Arc::new(scan)));
+            plans.push((
+                name,
+                LogicalPlanBuilder::scan("t", source, None)?
+                    .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+                    .build()?,
+            ));
+        }
+        for (name, plan) in plans {
+            IcebergMetadataAggregateRewriter
+                .rewrite(plan, &state)
+                .await
+                .map_err(|error| error.context(name))?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn metadata_aggregate_reuses_file_plan_for_partial_and_fallback() -> Result<()> {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
+        use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+        use datafusion::prelude::{SessionContext, col, lit};
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+        use sail_common_datafusion::datasource::MergeCapableSource;
+        use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+
+        use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
+        use crate::spec::manifest::{ManifestMetadata, ManifestWriterBuilder};
+        use crate::spec::manifest_list::ManifestListWriter;
+        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
+        use crate::spec::{FormatVersion, ManifestContentType};
+
+        let (mut read_scan, file) = statistics_fixture()?;
+        let context = SessionContext::new();
+        let table_url = Url::parse(read_scan.table_uri()).expect("table URL");
+        let store = Arc::new(object_store::memory::InMemory::new());
+        context.register_object_store(&table_url, store.clone());
+        let store_context = StoreContext::new(store, &table_url)?;
+        let mut writer = ManifestWriterBuilder::new(
+            Some(1),
+            None,
+            ManifestMetadata::new(
+                Arc::new(read_scan.schema.clone()),
+                0,
+                PartitionSpec::unpartitioned_spec(),
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            ),
+        )
+        .build();
+        writer.add(file);
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        store_context
+            .prefixed
+            .put(&Path::from("manifest.avro"), bytes.into())
+            .await?;
+        let mut list = ManifestListWriter::new();
+        list.append(
+            writer
+                .into_manifest_file("manifest.avro".into(), 1, 1)
+                .expect("manifest file"),
+        );
+        let bytes = list.to_bytes(FormatVersion::V2).expect("manifest list");
+        store_context
+            .prefixed
+            .put(&Path::from("list.avro"), bytes.into())
+            .await?;
+        read_scan.snapshot = Some(
+            SnapshotBuilder::new()
+                .with_snapshot_id(1)
+                .with_sequence_number(1)
+                .with_manifest_list("list.avro")
+                .with_summary(Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot"),
+        );
+        let read_scan = Arc::new(read_scan);
+        let source = Arc::new(IcebergTableSource::new(Arc::clone(&read_scan)));
+        let state = context.state();
+        let mut rewritten_scans = vec![];
+        for expressions in [
+            vec![count(lit(1)), sum(col("score"))],
+            vec![min(col("score"))],
+        ] {
+            let plan = LogicalPlanBuilder::scan("t", source.clone(), None)?
+                .aggregate(Vec::<Expr>::new(), expressions)?
+                .build()?;
+            let rewritten = IcebergMetadataAggregateRewriter
+                .rewrite(plan, &state)
+                .await?;
+            rewritten.data.apply(|node| {
+                if let LogicalPlan::TableScan(scan) = node {
+                    rewritten_scans.push(scan.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        assert_eq!(rewritten_scans.len(), 2);
+        let aggregate = LogicalPlanBuilder::scan("t", source, None)?
+            .aggregate(Vec::<Expr>::new(), vec![min(col("score"))])?
+            .build()?;
+        let repeated = LogicalPlanBuilder::from(aggregate.clone())
+            .union(aggregate)?
+            .build()?;
+        let rewritten = IcebergMetadataAggregateRewriter
+            .rewrite(repeated, &state)
+            .await?;
+        let mut prepared_requests = vec![];
+        rewritten.data.apply(|node| {
+            if let LogicalPlan::TableScan(scan) = node {
+                let source = scan
+                    .source
+                    .downcast_ref::<IcebergTableSource>()
+                    .expect("Iceberg source");
+                prepared_requests.push(
+                    source
+                        .prepared(&scan.filters, scan.fetch)
+                        .expect("prepared request"),
+                );
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(prepared_requests.len(), 2);
+        assert!(Arc::ptr_eq(&prepared_requests[0], &prepared_requests[1]));
+        store_context
+            .prefixed
+            .delete(&Path::from("manifest.avro"))
+            .await?;
+        store_context
+            .prefixed
+            .delete(&Path::from("list.avro"))
+            .await?;
+        assert!(read_scan.plan_files(&state, &[], None).await.is_err());
+        for scan in rewritten_scans {
+            let source = scan
+                .source
+                .downcast_ref::<IcebergTableSource>()
+                .expect("Iceberg source");
+            let prepared = source
+                .prepared(&scan.filters, scan.fetch)
+                .expect("prepared file plan");
+            assert_eq!(prepared.tasks.len(), 1);
+            assert!(source.prepared(&[col("id").gt(lit(2))], None).is_none());
+            assert!(source.prepared(&[], Some(1)).is_none());
+            for refined in [
+                source.with_file_column("_file")?,
+                source.with_row_index_column("_row")?,
+            ] {
+                let refined = refined
+                    .downcast_ref::<IcebergTableSource>()
+                    .expect("refined Iceberg source");
+                assert!(refined.prepared(&scan.filters, scan.fetch).is_none());
+            }
+            source
+                .scan()
+                .create_physical_plan(
+                    &state,
+                    scan.projection.as_ref(),
+                    &scan.filters,
+                    scan.fetch,
+                    Some(prepared),
+                )
+                .await?;
         }
         Ok(())
     }
