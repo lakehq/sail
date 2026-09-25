@@ -220,3 +220,114 @@ Feature: Iceberg read path (driver vs metadata-as-data)
         | id | payload |
         | 3  | day2-a  |
         | 4  | day2-b  |
+
+  Rule: Positional deletes preserve read filters and file row numbers
+    Scenario Outline: Sorting unsorted files preserves physical delete positions
+      Given variable location for temporary directory iceberg_unsorted_positions
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_unsorted_positions
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_unsorted_positions (id BIGINT) USING iceberg
+        LOCATION {{ location.uri }} TBLPROPERTIES (
+          'format-version' = '<version>', 'write.merge.mode' = 'merge-on-read')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_unsorted_positions
+        SELECT /*+ COALESCE(1) */ id FROM VALUES (8L), (19L), (2L), (7L), (3L) AS data(id)
+        ORDER BY id DESC
+        """
+      Given statement
+        """
+        MERGE INTO iceberg_unsorted_positions t
+        USING (SELECT * FROM VALUES (2L), (7L) AS deleted(id)) s
+        ON t.id = s.id WHEN MATCHED THEN DELETE
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_unsorted_positions VALUES (30L)
+        """
+      When query
+        """
+        SELECT id FROM iceberg_unsorted_positions ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 3  |
+        | 8  |
+        | 19 |
+        | 30 |
+
+      Examples:
+        | version |
+        | 2       |
+        | 3       |
+
+    Scenario Outline: Positional deletes apply before projections and limits
+      Given variable location for temporary directory iceberg_position_selection
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_position_selection
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_position_selection (id BIGINT) USING iceberg
+        LOCATION {{ location.uri }} TBLPROPERTIES (
+          'format-version' = '<version>', 'write.merge.mode' = 'merge-on-read')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_position_selection
+        SELECT /*+ COALESCE(1) */ id FROM range(1024)
+        """
+      Given statement
+        """
+        MERGE INTO iceberg_position_selection t
+        USING (SELECT id FROM range(1024) WHERE id < 128 OR id IN (511, 512, 513, 600, 1023)) s
+        ON t.id = s.id WHEN MATCHED THEN DELETE
+        """
+      When query
+        """
+        SELECT count(*) AS total, sum(id) AS sum_ids FROM iceberg_position_selection
+        """
+      Then query result
+        | total | sum_ids |
+        | 891   | 512489  |
+      When query
+        """
+        SELECT id FROM iceberg_position_selection WHERE id >= 510 ORDER BY id LIMIT 3
+        """
+      Then query result ordered
+        | id  |
+        | 510 |
+        | 514 |
+        | 515 |
+      When query
+        """
+        SELECT count(*) AS total FROM (SELECT 1 FROM iceberg_position_selection LIMIT 3)
+        """
+      Then query result
+        | total |
+        | 3     |
+      Given statement
+        """
+        MERGE INTO iceberg_position_selection t USING (SELECT 514L AS id) s
+        ON t.id = s.id WHEN MATCHED THEN DELETE
+        """
+      When query
+        """
+        SELECT id FROM iceberg_position_selection WHERE id BETWEEN 510 AND 516 ORDER BY id
+        """
+      Then query result ordered
+        | id  |
+        | 510 |
+        | 515 |
+        | 516 |
+
+      Examples:
+        | version |
+        | 2       |
+        | 3       |

@@ -35,11 +35,8 @@ pub(crate) async fn plan_iceberg_row_level_write(
         (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_iceberg_delete(session, node, physical_inputs).await
         }
-        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge) => {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge | RowLevelCommand::Update) => {
             plan_iceberg_merge(session, node, physical_inputs).await
-        }
-        (RowLevelWriteMode::MergeOnRead, command) => {
-            not_impl_err!("Iceberg row-level {command:?} operations")
         }
         (RowLevelWriteMode::CopyOnWrite, _) => {
             plan_iceberg_copy_on_write(session, node, physical_inputs).await
@@ -126,6 +123,9 @@ async fn plan_iceberg_delete(
     ensure_current_row_level_mode(&table, node)?;
     if let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await? {
         return Ok(plan);
+    }
+    if table.metadata().format_version == crate::spec::FormatVersion::V3 {
+        return plan_iceberg_merge(session, node, physical_inputs).await;
     }
     let current_schema = table.metadata().current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())

@@ -257,3 +257,80 @@ Feature: Iceberg Basic IO
         | id | status |
         | 3  | new    |
         | 4  | new    |
+
+  Scenario Outline: Replacement preserves schema and partition IDs and allocates new partition IDs
+    Given variable location for temporary directory iceberg_replace_ids
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_replace_ids
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_replace_ids (id INT, p INT) USING iceberg PARTITIONED BY (p)
+      LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '<version>')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_replace_ids VALUES (1, 7)
+      """
+    Given variable snapshot_ids for iceberg snapshot ids in location
+    Given statement template
+      """
+      CREATE OR REPLACE TABLE iceberg_replace_ids (id INT, p INT) USING iceberg PARTITIONED BY (p)
+      LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '<version>')
+      """
+    Then iceberg metadata contains
+      | path                     | value |
+      | current-schema-id        | 0     |
+      | last-column-id           | 2     |
+      | default-spec-id          | 0     |
+      | last-partition-id        | 1000  |
+    When query
+      """
+      SELECT count(*) AS count FROM iceberg_replace_ids
+      """
+    Then query result ordered
+      | count |
+      | 0     |
+    Given statement template
+      """
+      CREATE OR REPLACE TABLE iceberg_replace_ids (id INT, p INT, q BIGINT) USING iceberg PARTITIONED BY (q)
+      LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '<version>')
+      """
+    Then iceberg metadata contains
+      | path                                      | value |
+      | current-schema-id                         | 1     |
+      | last-column-id                            | 3     |
+      | schemas[1].fields[0].id                    | 1     |
+      | schemas[1].fields[1].id                    | 2     |
+      | schemas[1].fields[2].id                    | 3     |
+      | default-spec-id                           | 1     |
+      | last-partition-id                         | 1001  |
+      | partition-specs[0].fields[0]['source-id']   | 2     |
+      | partition-specs[0].fields[0]['field-id']    | 1000  |
+      | partition-specs[1].fields[<partition_index>]['source-id']   | 3     |
+      | partition-specs[1].fields[<partition_index>]['field-id']    | 1001  |
+    Given statement
+      """
+      INSERT INTO iceberg_replace_ids VALUES (2, 8, 9)
+      """
+    When query
+      """
+      SELECT * FROM iceberg_replace_ids
+      """
+    Then query result ordered
+      | id | p | q |
+      | 2  | 8 | 9 |
+    When query template
+      """
+      SELECT id, p FROM iceberg_replace_ids VERSION AS OF {{ snapshot_ids[0] }}
+      """
+    Then query result ordered
+      | id | p |
+      | 1  | 7 |
+
+    Examples:
+      | version | partition_index |
+      | 1       | 1               |
+      | 2       | 0               |
+      | 3       | 0               |
