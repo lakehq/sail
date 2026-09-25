@@ -6,6 +6,20 @@ Feature: map_zip_with inherits deferred nested map cast behavior
     Given config spark.sql.session.timeZone = America/Los_Angeles
 
   @sail-bug
+  Scenario: Legacy floating keys use Spark string formatting
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT map_values(map_zip_with(
+               map(CAST(1E20 AS DOUBLE), 1, CAST('Infinity' AS DOUBLE), 3),
+               map('1.0E20', 2, 'Infinity', 4),
+               (k, x, y) -> coalesce(x, 0) + coalesce(y, 0))) AS result
+      """
+    Then query result
+      | result |
+      | [3, 7] |
+
+  @sail-bug
   Scenario: Legacy timestamp keys use Spark string formatting
     Given config spark.sql.ansi.enabled = false
     When query

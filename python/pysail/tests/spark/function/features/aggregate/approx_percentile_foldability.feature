@@ -153,3 +153,167 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       """
     Then query result
       | p |
+
+  Scenario Outline: TRY arithmetic parameters remain non-foldable for grouped aggregates
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) AS p
+      FROM (SELECT 1 AS v WHERE <keep>) AS t
+      GROUP BY v
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage           | accuracy               | keep  |
+      | percentile_approx | try_add(0, 1) * 0.5D | 100                    | true  |
+      | approx_percentile | try_divide(1, 2)     | 100                    | true  |
+      | percentile_approx | 0.5D                 | try_multiply(10, 10)   | true  |
+      | approx_percentile | 0.5D                 | try_subtract(200, 100) | true  |
+      | approx_percentile | try_add(0, 1) * 0.5D | 100                    | false |
+      | percentile_approx | 0.5D                 | try_multiply(10, 10)   | false |
+
+  Scenario Outline: TRY arithmetic parameters remain non-foldable for window aggregates
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) OVER () AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage           | accuracy               |
+      | percentile_approx | try_add(0, 1) * 0.5D | 100                    |
+      | approx_percentile | 0.5D                 | try_subtract(200, 100) |
+
+  @spark-4
+  Scenario Outline: New TRY wrappers remain non-foldable percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, <accuracy>) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                                     | accuracy          |
+      | try_url_decode('0.5')                          | 100               |
+      | try_parse_url('http://x/?p=0.5', 'QUERY', 'p') | 100               |
+      | 0.5D                                           | try_mod(100, 101) |
+
+  Scenario: TRY binary conversion remains non-foldable inside an accuracy expression
+    When query
+      """
+      SELECT percentile_approx(v, 0.5D, length(try_to_binary('abc', 'utf-8'))) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  Scenario: TRY AES decryption remains non-foldable inside an accuracy expression
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D,
+               length(try_aes_decrypt(
+                 unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'),
+                 '0000111122223333', 'GCM'))) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  Scenario: Foldable TRY expressions remain valid percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, try_to_number('0.5', '9.9'),
+               width_bucket(3, 0, 10, 100)) AS numeric_parameters,
+             approx_percentile(v, 0.5D,
+               year(TRY_CAST('2020-01-01' AS TIMESTAMP))) AS cast_parameter
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | numeric_parameters | cast_parameter |
+      | 1                  | 1              |
+
+  @spark-4
+  Scenario: Foldable TRY timestamp expressions remain valid percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, 0.5D,
+               year(try_make_timestamp_ntz(2020, 1, 1, 0, 0, 0))) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p |
+      | 1 |
+
+  Scenario Outline: Non-foldable URL and binary wrappers remain invalid percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, <accuracy>) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                                 | accuracy                          |
+      | url_encode('0.5')                          | 100                               |
+      | url_decode('0.5')                          | 100                               |
+      | parse_url('http://x/?p=0.5', 'QUERY', 'p') | 100                               |
+      | 0.5D                                       | length(to_binary('abc', 'utf-8')) |
+      | 0.5D                                       | regexp_count('abc', 'a')          |
+
+  Scenario: Foldable array functions remain valid percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, array_insert(array(0.5D), 1, 1D)) AS percentages,
+             approx_percentile(v, 0.5D,
+               IF(arrays_overlap(array(1), array(1)), 100, 200)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | percentages | p |
+      | [2, 1]      | 1 |
+
+  Scenario Outline: String wrappers remain non-foldable percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, 100) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                                                   |
+      | CAST(left('0.5', 3) AS DOUBLE)                               |
+      | CAST(right('0.5', 3) AS DOUBLE)                              |
+      | CAST(split_part('0.5,1', ',', 1) AS DOUBLE)                  |
+      | CAST(decode(unhex('302e35'), 'UTF-8') AS DOUBLE)             |
+      | CASE WHEN luhn_check('79927398713') THEN 0.5D ELSE 0.75D END |
+
+  Scenario: AES decryption remains non-foldable inside an accuracy expression
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D,
+               length(aes_decrypt(
+                 unbase64('2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo='),
+                 '1234567890abcdef', 'CBC'))) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  @spark-4
+  Scenario: UTF8 repair remains non-foldable inside a percentage expression
+    When query
+      """
+      SELECT percentile_approx(v, CAST(make_valid_utf8('0.5') AS DOUBLE)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  @spark-4
+  @sail-bug
+  Scenario: Encoding is non-foldable in Spark 4 percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, 0.5D, length(encode('abcd', 'UTF-8'))) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable

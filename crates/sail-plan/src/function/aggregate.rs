@@ -2,7 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion::functions::core::nvl::NVLFunc;
+use datafusion::functions::core::nvl2::NVL2Func;
 use datafusion::functions::expr_fn::coalesce;
+use datafusion::functions::regex::regexpcount::RegexpCountFunc;
+use datafusion::functions::string::split_part::SplitPartFunc;
+use datafusion::functions::unicode::left::LeftFunc;
+use datafusion::functions::unicode::right::RightFunc;
 use datafusion::functions_aggregate::{
     approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
     covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
@@ -20,6 +26,10 @@ use datafusion_expr::{
     lit, try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
+use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
+use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
+use datafusion_spark::function::url::url_decode::UrlDecode;
+use datafusion_spark::function::url::url_encode::UrlEncode;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -45,7 +55,18 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::math::spark_try_add::SparkTryAdd;
+use sail_function::scalar::math::spark_try_div::SparkTryDiv;
+use sail_function::scalar::math::spark_try_mod::SparkTryMod;
+use sail_function::scalar::math::spark_try_mult::SparkTryMult;
+use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
+use sail_function::scalar::misc::spark_aes::{SparkAESDecrypt, SparkTryAESDecrypt};
+use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::spark_encode_decode::SparkDecode;
+use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::url::parse_url::ParseUrl;
+use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -835,15 +856,40 @@ pub(super) fn approx_percentile_arguments(
         ));
     }
     for (argument, name) in arguments.iter().skip(1).zip(["percentage", "accuracy"]) {
-        // Spark's higher-order functions and NVL wrappers are non-foldable even
-        // with literal inputs. Check before simplification erases those wrappers.
+        // Spark's higher-order functions and these runtime-replaceable wrappers
+        // are non-foldable even with literal inputs. Check before simplification.
         let has_non_foldable_function = argument.exists(|expression| {
             Ok(match expression {
                 expr::Expr::HigherOrderFunction(function) => {
                     is_higher_order_function(function.func.name())
                 }
                 expr::Expr::ScalarFunction(function)
-                    if matches!(function.func.name(), "nvl" | "nvl2") =>
+                    if {
+                        let f = function.func.inner();
+                        f.is::<NVLFunc>()
+                            || f.is::<NVL2Func>()
+                            || f.is::<SparkTryAdd>()
+                            || f.is::<SparkTryDiv>()
+                            || f.is::<SparkTryMod>()
+                            || f.is::<SparkTryMult>()
+                            || f.is::<SparkTrySubtract>()
+                            || f.is::<SparkTryToBinary>()
+                            || f.is::<TryUrlDecode>()
+                            || f.is::<SparkTryParseUrl>()
+                            || f.is::<SparkTryAESDecrypt>()
+                            || f.is::<UrlEncode>()
+                            || f.is::<UrlDecode>()
+                            || f.is::<ParseUrl>()
+                            || f.is::<SparkToBinary>()
+                            || f.is::<RegexpCountFunc>()
+                            || f.is::<LeftFunc>()
+                            || f.is::<RightFunc>()
+                            || f.is::<SplitPartFunc>()
+                            || f.is::<SparkLuhnCheck>()
+                            || f.is::<SparkDecode>()
+                            || f.is::<SparkAESDecrypt>()
+                            || f.is::<MakeValidUtf8>()
+                    } =>
                 {
                     true
                 }
@@ -856,6 +902,9 @@ pub(super) fn approx_percentile_arguments(
                 }
                 // TODO: Reject NULLIF's non-foldable Spark wrapper; Sail currently
                 // treats its DataFusion implementation as foldable.
+                // TODO: Match ENCODE's version-dependent foldability: foldable with constant
+                // arguments in Spark 3.5, non-foldable in Spark 4+. This checker currently
+                // has no Spark-version information to distinguish those behaviors.
                 _ => false,
             })
         })?;
