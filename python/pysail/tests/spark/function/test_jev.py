@@ -618,10 +618,9 @@ def test_invalid_argument_diagnostics_do_not_include_environment_key(spark, jev)
     assert jev.request_count == 0
 
 
-def test_generated_column_name_redacts_options(spark, jev):
+def test_generated_column_name_includes_options(spark, jev):
     query = spark.sql("SELECT jev_noul('text', 'yes?', NULL, map('model', 'column-model'))")
-    assert "<redacted options>" in query.columns[0]
-    assert "column-model" not in query.columns[0]
+    assert query.columns == ["jev_noul(text, yes?, NULL, map(model, column-model))"]
     assert jev.request_count == 0
 
 
