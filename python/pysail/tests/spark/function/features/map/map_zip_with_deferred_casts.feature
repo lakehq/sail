@@ -34,3 +34,21 @@ Feature: map_zip_with inherits deferred nested map cast behavior
       | case    | local               | instant                   |
       | overlap | 2021-11-07 01:30:00 | 2021-11-07 01:30:00-07:00 |
       | gap     | 2021-03-14 02:30:00 | 2021-03-14 03:30:00-07:00 |
+
+
+  @sail-bug
+  Scenario Outline: Legacy <family> interval map keys widen to Spark strings
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT map_values(map_zip_with(map(<key>, 1), map(CAST(<key> AS STRING), 2),
+                                     (k, x, y) -> x + y)) AS result
+      """
+    Then query result
+      | result |
+      | [3]    |
+
+    Examples:
+      | family     | key                 |
+      | year-month | INTERVAL '1' MONTH  |
+      | day-time   | INTERVAL '1' SECOND |

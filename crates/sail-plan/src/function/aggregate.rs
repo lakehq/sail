@@ -833,11 +833,17 @@ pub(super) fn approx_percentile_arguments(
         ));
     }
     for (argument, name) in arguments.iter().skip(1).zip(["percentage", "accuracy"]) {
-        // Spark's higher-order functions are non-foldable even with literal inputs.
-        let has_higher_order_function = argument.exists(|expression| {
+        // Spark's higher-order functions and NVL wrappers are non-foldable even
+        // with literal inputs. Check before simplification erases those wrappers.
+        let has_non_foldable_function = argument.exists(|expression| {
             Ok(match expression {
                 expr::Expr::HigherOrderFunction(function) => {
                     is_higher_order_function(function.func.name())
+                }
+                expr::Expr::ScalarFunction(function)
+                    if matches!(function.func.name(), "nvl" | "nvl2") =>
+                {
+                    true
                 }
                 // Only no-comparator array_sort lowers to ASC/NULLS LAST.
                 // Spark's foldable sort_array uses ASC/FIRST or DESC/LAST.
@@ -846,10 +852,12 @@ pub(super) fn approx_percentile_arguments(
                         && function.args.get(1) == Some(&lit("ASC"))
                         && function.args.get(2) == Some(&lit("NULLS LAST"))
                 }
+                // TODO: Reject NULLIF's non-foldable Spark wrapper; Sail currently
+                // treats its DataFusion implementation as foldable.
                 _ => false,
             })
         })?;
-        if argument.any_column_refs() || argument.is_volatile() || has_higher_order_function {
+        if argument.any_column_refs() || argument.is_volatile() || has_non_foldable_function {
             return Err(PlanError::invalid(format!(
                 "{name} must be a foldable expression"
             )));
@@ -888,7 +896,8 @@ pub(super) fn approx_percentile_arguments(
     let mut parameters = Vec::with_capacity(arguments.len() - 1);
     for (argument, target_type) in arguments.iter().zip(coerced_types).skip(1) {
         let coerced = simplifier.coerce(argument.clone(), schema)?;
-        parameters.push(evaluator.evaluate(&coerced.cast_to(&target_type, schema)?)?);
+        let simplified = simplifier.simplify(coerced.cast_to(&target_type, schema)?)?;
+        parameters.push(evaluator.evaluate(&simplified)?);
     }
     let accuracy = parameters
         .get(1)

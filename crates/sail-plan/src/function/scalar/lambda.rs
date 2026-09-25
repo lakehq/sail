@@ -22,7 +22,7 @@ use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
@@ -508,7 +508,14 @@ fn zip_collections(input: ScalarFunctionInput, map: bool) -> PlanResult<expr::Ex
             }
         }
     }
+    if expr_contains_python_udf(&function)? {
+        return Err(PlanError::AnalysisError(format!(
+            "Lambda function with Python UDF is not supported in {name}"
+        )));
+    }
     let types = udf.coerce_collection_types(&[left.get_type(schema)?, right.get_type(schema)?])?;
+    // TODO: Extract Python UDF subexpressions from collection arguments before
+    // null short-circuiting while leaving their surrounding native expressions lazy.
     let mut arguments = [left, right]
         .into_iter()
         .zip(types)

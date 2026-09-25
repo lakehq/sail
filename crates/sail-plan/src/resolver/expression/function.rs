@@ -118,6 +118,9 @@ impl PlanResolver<'_> {
                 "zip_with" | "map_zip_with"
             )
             && argument_display_names.len() == 3
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
         {
             let arity = if canonical_function_name == "map_zip_with" {
                 3

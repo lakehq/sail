@@ -450,6 +450,8 @@ fn map_type(key: DataType, value: DataType, nullable: bool) -> DataType {
 
 // Find Spark's wider key type before applying the outer map-key nullability
 // restriction. Nested array elements and struct fields can become nullable.
+// TODO: Allow legacy interval/string keys once nested map casts preserve Spark's
+// interval formatting and qualifiers (map_zip_with_deferred_casts.feature).
 fn common_key_type(
     left: &DataType,
     right: &DataType,

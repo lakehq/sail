@@ -235,3 +235,74 @@ def test_zip_with_preserves_connect_struct_column_name(spark):
         "zip_with(array(1), array(2), lambdafunction(struct(namedlambdavariable(), "
         "namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))"
     ]
+
+
+@pytest.mark.parametrize("map_input", [False, True])
+@pytest.mark.parametrize("capture", [False, True])
+def test_zip_functions_reject_python_udfs_in_lambda_bodies(spark, map_input, capture):
+    @F.udf("long")
+    def identity(value):
+        return value
+
+    if map_input:
+        expression = F.map_zip_with(
+            F.create_map(F.lit(1), F.lit(1)),
+            F.create_map(F.lit(1), F.lit(2)),
+            lambda _key, left, _right: identity(F.col("id") if capture else left),
+        )
+    else:
+        expression = F.zip_with(
+            F.array(F.lit(1)),
+            F.array(F.lit(2)),
+            lambda left, _right: identity(F.col("id") if capture else left),
+        )
+
+    with pytest.raises(Exception, match=r"(?i)lambda function with (a )?python udf"):
+        spark.range(1).select(expression).collect()
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Python UDF subexpressions in collection arguments are not extracted before null short-circuiting",
+    strict=True,
+)
+@pytest.mark.parametrize("map_input", [False, True])
+def test_zip_functions_extract_collection_python_udfs_before_null_short_circuit(spark, map_input):
+    message = "zip collection Python UDF executed"
+
+    @F.udf("int")
+    def fail(_value):
+        raise RuntimeError(message)
+
+    if map_input:
+        left = F.when(F.col("id") == 0, F.lit(None)).otherwise(F.create_map(F.lit(1), F.lit(1)))
+        expression = F.map_zip_with(left, F.create_map(F.lit(1), fail("id")), lambda _key, left, right: left + right)
+    else:
+        left = F.when(F.col("id") == 0, F.lit(None)).otherwise(F.array(F.lit(1)))
+        expression = F.zip_with(left, F.array(fail("id")), lambda left, right: left + right)
+
+    with pytest.raises(Exception, match=message):
+        spark.range(1).select(expression).collect()
+
+
+@pytest.mark.parametrize("map_input", [False, True])
+def test_zip_functions_skip_native_errors_around_python_udfs_after_null_input(spark, map_input):
+    @F.udf("long")
+    def identity(value):
+        return value
+
+    right_value = F.lit(10) / F.col("id") + identity("id")
+    if map_input:
+        expression = F.map_zip_with(
+            F.lit(None).cast("map<int,double>"),
+            F.create_map(F.lit(1), right_value),
+            lambda _key, left, right: left + right,
+        )
+    else:
+        expression = F.zip_with(
+            F.lit(None).cast("array<double>"),
+            F.array(right_value),
+            lambda left, right: left + right,
+        )
+
+    assert spark.range(1).select(expression.alias("result")).first().result is None
