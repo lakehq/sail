@@ -1,11 +1,11 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
-use datafusion_expr::{ExprSchemable, Operator, cast, expr, lit, when};
+use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, cast, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionBuilder, ScalarFunctionInput};
 
 fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -54,6 +54,30 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(cast(cast(unsigned, unsigned_type) >> shift, input_type))
 }
 
+/// Shifts like Spark, which casts the count to INT so that the result keeps the value's type.
+fn signed_shift(op: Operator) -> ScalarFunction {
+    ScalarFunctionBuilder::custom(move |input| {
+        let ScalarFunctionInput {
+            arguments,
+            function_context,
+        } = input;
+        let (value, shift) = arguments.two()?;
+        let shift = if shift.get_type(function_context.schema)? == DataType::Int64 {
+            // Only the low six bits select the shift, so masking first keeps the result
+            // and avoids casting a count outside the INT range.
+            // TODO: Reject BIGINT shift counts outside the INT range in ANSI mode.
+            (shift & lit(63_i64)).cast_to(&DataType::Int32, function_context.schema)?
+        } else {
+            shift
+        };
+        Ok(expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(value),
+            op,
+            right: Box::new(shift),
+        }))
+    })
+}
+
 pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -64,10 +88,10 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("bitwise_not", F::unary(bitwise_fn::bitwise_not)),
         ("bit_get", F::binary(bitwise_fn::bit_get)),
         ("getbit", F::binary(bitwise_fn::bit_get)),
-        ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
-        ("<<", F::binary_op(Operator::BitwiseShiftLeft)),
-        ("shiftright", F::binary_op(Operator::BitwiseShiftRight)),
-        (">>", F::binary_op(Operator::BitwiseShiftRight)),
+        ("shiftleft", signed_shift(Operator::BitwiseShiftLeft)),
+        ("<<", signed_shift(Operator::BitwiseShiftLeft)),
+        ("shiftright", signed_shift(Operator::BitwiseShiftRight)),
+        (">>", signed_shift(Operator::BitwiseShiftRight)),
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
         (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
