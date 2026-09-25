@@ -21,7 +21,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
-use crate::config::VIEW_CONDITIONAL_ANSI_MODE_PROPERTY;
+use crate::config::{
+    VIEW_CONDITIONAL_ANSI_MODE_PROPERTY, VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -216,7 +218,7 @@ impl PlanResolver<'_> {
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
     // FIXME: Capture and restore the remaining creation-time SQL configuration;
-    //  only the ANSI setting for conditional coercion is currently retained.
+    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
@@ -229,16 +231,17 @@ impl PlanResolver<'_> {
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
         let mut config = self.config.as_ref().clone();
         config.preserve_view_conditional_float_type = true;
-        // Older views lack the creation-time setting; retain their existing conditional coercion.
-        config.view_conditional_ansi_mode = Some(
-            properties
-                .iter()
-                .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
-                .and_then(|(_, value)| value.parse::<bool>().ok())
-                .unwrap_or(false),
-        );
-        // Preserve the existing decimal rule until the creation-time setting is available.
-        config.legacy_decimal_retain_fraction_digits = false;
+        // Older views lack the creation-time setting; retain their existing coercion.
+        config.view_conditional_ansi_mode = properties
+            .iter()
+            .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
+            .and_then(|(_, value)| value.parse::<bool>().ok());
+        // Older views retain the existing nonlegacy decimal rule.
+        config.legacy_decimal_retain_fraction_digits = properties
+            .iter()
+            .find(|(key, _)| key == VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY)
+            .and_then(|(_, value)| value.parse::<bool>().ok())
+            .unwrap_or(false);
         let resolver = Self::new(self.ctx, Arc::new(config));
         let plan = match spec_plan {
             spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,

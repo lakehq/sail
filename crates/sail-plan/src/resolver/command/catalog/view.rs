@@ -14,7 +14,9 @@ use sail_common_datafusion::catalog::TemporaryViewSource;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
-use crate::config::VIEW_CONDITIONAL_ANSI_MODE_PROPERTY;
+use crate::config::{
+    VIEW_CONDITIONAL_ANSI_MODE_PROPERTY, VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -72,11 +74,20 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
-        // Preserve only the ANSI setting used by conditional coercion.
-        properties.retain(|(key, _)| key != VIEW_CONDITIONAL_ANSI_MODE_PROPERTY);
+        // Preserve the settings used by conditional coercion.
+        properties.retain(|(key, _)| {
+            key != VIEW_CONDITIONAL_ANSI_MODE_PROPERTY
+                && key != VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY
+        });
         properties.push((
             VIEW_CONDITIONAL_ANSI_MODE_PROPERTY.to_string(),
             self.config.ansi_mode.to_string(),
+        ));
+        properties.push((
+            VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY.to_string(),
+            self.config
+                .legacy_decimal_retain_fraction_digits
+                .to_string(),
         ));
         let command = CatalogCommand::CreateView {
             view: view.into(),

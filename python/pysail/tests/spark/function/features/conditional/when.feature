@@ -373,7 +373,6 @@ Feature: when output schema
         | 1  | 1  | decimal(38,0) |
 
     @spark-4.0
-    @sail-bug
     Scenario: CASE in a persistent view keeps its legacy DECIMAL truncation policy
       Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
       And statement

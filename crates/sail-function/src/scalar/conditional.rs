@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::array::new_empty_array;
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
@@ -51,6 +52,9 @@ impl ScalarUDFImpl for SparkConditionalCast {
                 args.arg_fields.len(),
             ));
         };
+        if source.data_type() == &self.target_type {
+            return Ok(Arc::new(source.as_ref().clone().with_name(self.name())));
+        }
         let nullable = source.is_nullable()
             || (source.data_type().is_string() && self.target_type.is_numeric());
         Ok(Arc::new(Field::new(
@@ -68,6 +72,11 @@ impl ScalarUDFImpl for SparkConditionalCast {
                 args.args.len(),
             ));
         };
+        // IN-list planning probes expressions with an empty batch. Keep a row-dependent
+        // NVL2 from looking constant when its CASE happens to return a scalar for that batch.
+        if args.number_rows == 0 {
+            return Ok(ColumnarValue::Array(new_empty_array(&self.target_type)));
+        }
         // TODO: Match Spark's numeric STRING grammar when shared cast support is available:
         // control-character trimming, floating-point suffixes/hex literals, and DECIMAL exponents.
         // Arrow's parser currently rejects these forms, as it does for ordinary CAST expressions.

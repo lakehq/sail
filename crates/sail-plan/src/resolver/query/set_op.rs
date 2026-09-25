@@ -119,10 +119,12 @@ impl PlanResolver<'_> {
                 // Take only types and nullability from the coerced schema, since DataFusion lets
                 // the last input's field metadata (such as a Spark interval qualifier) win.
                 // Columns keep the loose type where DataFusion's common type differs from Spark:
-                // DATE with TIMESTAMP becomes a nanosecond TIMESTAMP_NTZ, DOUBLE with DECIMAL
+                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP, DOUBLE with DECIMAL
                 // becomes DECIMAL, and ANSI numeric with STRING becomes STRING, which store
                 // assignment rejects.
                 // TODO: Widen these columns and interval qualifiers like Spark.
+                // TODO: Coerce TIMESTAMP/STRING UNION columns to microseconds; raw UNION
+                //  output currently retains unsupported nanosecond units.
                 let fields = union
                     .schema
                     .iter()
@@ -147,6 +149,8 @@ impl PlanResolver<'_> {
                                 && coerced_field.data_type().is_decimal())
                             || (has(|t| matches!(t, DataType::Date32 | DataType::Date64))
                                 && has(|t| matches!(t, DataType::Timestamp(_, _))))
+                            || (matches!(field.data_type(), DataType::Timestamp(_, _))
+                                && has(DataType::is_string))
                             || (self.config.ansi_mode
                                 && has(DataType::is_string)
                                 && has(DataType::is_numeric));

@@ -157,3 +157,86 @@ Feature: nvl2 output schema
         | k |
         | 0 |
         | 2 |
+
+    Scenario: nvl2 in an IN list evaluates its nullable column branch for each row
+      When query
+        """
+        SELECT id, nvl2(x, x, 0) AS result
+        FROM VALUES (0, 1), (1, CAST(NULL AS INT)), (2, 2) AS t(id, x)
+        WHERE id IN (nvl2(x, x, 0), 7, 8, 9)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 2  | 2      |
+      And query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: nvl2 in an IN list preserves a scalar branch beside a nonnullable column branch
+      When query
+        """
+        SELECT k
+        FROM VALUES (0, 'a'), (1, 'b'), (2, CAST(NULL AS STRING)) AS t(k, s)
+        WHERE k IN (nvl2(s, 0, k), 5, 6, 7)
+        ORDER BY k
+        """
+      Then query result ordered
+        | k |
+        | 0 |
+        | 2 |
+
+    Scenario: nvl2 in an IN list evaluates a scalar subquery branch for each row
+      When query
+        """
+        SELECT id
+        FROM VALUES (0, 1), (1, 1), (2, CAST(NULL AS INT)) AS t(id, x)
+        WHERE id IN (
+          nvl2(x, (SELECT max(v) FROM VALUES (0), (1) AS q(v)), 2), 5, 6, 7
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+
+    @sail-bug
+    Scenario: nvl2 with a scalar non-null result and nullable column null result stays row-dependent
+      When query
+        """
+        SELECT k
+        FROM VALUES (0, 0, CAST(NULL AS INT)), (1, 0, 1), (2, 1, 2) AS t(k, id, x)
+        WHERE id IN (nvl2(x, 0, x), 7, 8, 9)
+        ORDER BY k
+        """
+      Then query result ordered
+        | k |
+        | 1 |
+
+  Rule: Persistent views
+
+    Scenario: nvl2 in an ANSI persistent view retains its DATE result with ANSI disabled
+      Given config spark.sql.ansi.enabled = true
+      And final statement
+        """
+        DROP VIEW IF EXISTS nvl2_ansi_date_view
+        """
+      And statement
+        """
+        CREATE OR REPLACE VIEW nvl2_ansi_date_view AS
+        SELECT id, nvl2(nullif(id, 0), DATE '2024-01-01', '2024-02-03') AS v
+        FROM range(2)
+        """
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM nvl2_ansi_date_view ORDER BY id
+        """
+      Then query result ordered
+        | id | v          | v_type |
+        | 0  | 2024-02-03 | date   |
+        | 1  | 2024-01-01 | date   |

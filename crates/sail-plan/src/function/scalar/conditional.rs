@@ -70,6 +70,15 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
+    // NVL2 temporal branches use the same creation-time ANSI mode as numeric branches.
+    let mut config = Arc::clone(function_context.plan_config);
+    if let Some(ansi_mode) = config.view_conditional_ansi_mode {
+        Arc::make_mut(&mut config).ansi_mode = ansi_mode;
+    }
+    let function_context = FunctionContextInput {
+        plan_config: &config,
+        ..function_context
+    };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
     // Preserve NVL2's common result type before exposing a CASE to its callers.
     let common_type =
@@ -81,16 +90,27 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
     // Keep a nullable result in ELSE so DataFusion's predicate-based inference
     // preserves Spark's branch-based nullability even when the test is constant.
-    let (condition, then_expr, else_expr) = if if_null.nullable(function_context.schema)? {
+    let if_null_nullable = if_null.nullable(function_context.schema)?;
+    let (condition, then_expr, else_expr) = if if_null_nullable {
         (tested.is_not_null(), if_non_null, if_null)
     } else {
         (tested.is_null(), if_null, if_non_null)
     };
-    Ok(expr::Expr::Case(expr::Case {
+    let result = expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(condition), Box::new(then_expr))],
         else_expr: Some(Box::new(else_expr)),
-    }))
+    });
+    if if_null_nullable {
+        // TODO: Fix DataFusion's empty-batch constant detection for IN lists whose NVL2
+        //  has a scalar non-null result and a nullable column null result.
+        Ok(result)
+    } else {
+        // Swapping the branches can make an empty-batch IN-list probe return a scalar.
+        // An identity cast preserves this result's type and returns an empty array instead.
+        let data_type = result.get_type(function_context.schema)?;
+        Ok(ScalarUDF::from(SparkConditionalCast::new(data_type)).call(vec![result]))
+    }
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -162,11 +182,7 @@ fn coerce_numeric_values(
     let Some(common_type) = common_type else {
         return Ok(arguments);
     };
-    let repaired_type = if function_context
-        .plan_config
-        .view_conditional_ansi_mode
-        .unwrap_or(function_context.plan_config.ansi_mode)
-    {
+    let repaired_type = if ansi_mode {
         ansi_string_numeric_type(&data_types, &common_type, function_context.plan_config)
     } else {
         common_type.clone()

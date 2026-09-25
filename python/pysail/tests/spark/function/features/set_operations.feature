@@ -328,3 +328,67 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | number_type |
         | bigint      |
         | bigint      |
+
+  Rule: UNION timestamp consumers
+
+    Scenario Outline: UNION preserves timestamp units for UTC conversions: <operator>, <kind>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          from_utc_timestamp(v, 'America/Los_Angeles') AS from_utc,
+          to_utc_timestamp(v, 'America/Los_Angeles') AS to_utc
+        FROM (
+          SELECT v
+          FROM VALUES
+            (CAST('2024-06-15 12:00:00' AS <kind>)),
+            (CAST(NULL AS <kind>))
+            AS t(v)
+          <operator>
+          SELECT '2024-06-16 12:00:00' AS v
+        ) AS q
+        ORDER BY from_utc
+        """
+      Then query result ordered
+        | from_utc            | to_utc              |
+        | NULL                | NULL                |
+        | 2024-06-15 05:00:00 | 2024-06-15 19:00:00 |
+        | 2024-06-16 05:00:00 | 2024-06-16 19:00:00 |
+      And query schema
+        """
+        root
+         |-- from_utc: timestamp (nullable = true)
+         |-- to_utc: timestamp (nullable = true)
+        """
+
+      Examples:
+        | operator  | kind          | ansi  |
+        | UNION ALL | TIMESTAMP     | true  |
+        | UNION ALL | TIMESTAMP     | false |
+        | UNION     | TIMESTAMP     | true  |
+        | UNION     | TIMESTAMP     | false |
+        | UNION ALL | TIMESTAMP_NTZ | true  |
+        | UNION ALL | TIMESTAMP_NTZ | false |
+        | UNION     | TIMESTAMP_NTZ | true  |
+        | UNION     | TIMESTAMP_NTZ | false |
+
+    @sail-bug
+    Scenario: An ANSI TIMESTAMP and STRING UNION returns Spark timestamps
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT CAST(NULL AS TIMESTAMP) AS v
+        UNION ALL
+        SELECT CAST(NULL AS STRING) AS v
+        """
+      Then query result collected
+        | v    |
+        | NULL |
+        | NULL |
+      And query schema
+        """
+        root
+         |-- v: timestamp (nullable = true)
+        """
