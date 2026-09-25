@@ -267,7 +267,6 @@ _KNOWN_QUERY_FAILURES = {
         False,
     ),
     "semi_join": ("a correlated reference to a nested field cannot be resolved", False),
-    "higher_order": ("higher-order functions over an array of structs fail on partitioned Delta tables", True),
     "intersect": ("INTERSECT on array of struct columns fails to compare list values", False),
 }
 

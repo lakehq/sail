@@ -46,10 +46,6 @@ _KNOWN_QUERY_FAILURES = {
     "semi_join": ("a correlated reference to a nested field cannot be resolved", False),
     "intersect": ("INTERSECT on array of struct columns fails to compare list values", False),
     "select_casts": ("casting arrays and maps with null elements to STRING prints NULL instead of null", False),
-    "higher_order": (
-        "higher-order functions over an array of structs lose nested field metadata on partitioned tables",
-        True,
-    ),
 }
 
 
