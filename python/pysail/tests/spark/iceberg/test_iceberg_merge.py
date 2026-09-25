@@ -525,7 +525,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
     table_identifier = f"default.{table_name}"
     row_count = 4
     row_group_rows = 2
-    target_id = row_count - 1
+    target_id = 0
     repartition_file_min_size = 10 * 1024 * 1024
     padding_size = 3 * 1024 * 1024
 
@@ -549,7 +549,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         table.append(
             pa.table(
                 {
-                    "id": pa.array(range(row_count), type=pa.int64()),
+                    "id": pa.array(reversed(range(row_count)), type=pa.int64()),
                     "value": pa.array(["old"] * row_count, type=pa.string()),
                     # Cross the file-repartition threshold without making MERGE process millions of rows.
                     "padding": pa.array(
@@ -573,7 +573,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         assert data_file.stat().st_size > repartition_file_min_size
         assert parquet_file.metadata.num_row_groups == row_count // row_group_rows
         assert parquet_file.metadata.row_group(0).num_rows == row_group_rows
-        assert expected_position == target_id
+        assert expected_position == row_count - 1
 
         spark.sql(
             f"""
@@ -593,6 +593,10 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         target_row_sql = f"SELECT id, value FROM {table_name} WHERE id = {target_id}"  # noqa: S608
         rows = [tuple(row) for row in spark.sql(target_row_sql).collect()]
         assert rows == [(target_id, "updated")]
+        assert [
+            tuple(row)
+            for row in spark.sql("SELECT id, value FROM iceberg_merge_split_file_position ORDER BY id").collect()
+        ] == [(row, "updated" if row == target_id else "old") for row in range(row_count)]
 
         delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
         positions = sorted(

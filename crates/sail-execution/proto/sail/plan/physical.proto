@@ -711,6 +711,7 @@ message ParquetExecNode {
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
+  repeated bytes virtual_columns = 7;
 }
 
 message ArrowExecNode {

@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::ExtensionType;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::projection::ProjectionMapping;
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -15,6 +18,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
+use parquet::arrow::RowNumber;
 
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
@@ -30,6 +34,8 @@ pub struct IcebergMergeMetadataExec {
     row_index_column_name: Option<String>,
     row_lineage: Option<crate::row_lineage::RowLineage>,
     file_lineage: Arc<HashMap<String, crate::row_lineage::RowLineage>>,
+    row_position_index: usize,
+    data_projection: Vec<usize>,
     output_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
@@ -95,6 +101,26 @@ impl IcebergMergeMetadataExec {
         row_lineage: Option<crate::row_lineage::RowLineage>,
         file_lineage: HashMap<String, crate::row_lineage::RowLineage>,
     ) -> Result<Self> {
+        let input_schema = input.schema();
+        let position_indices = input_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.extension_type_name() == Some(RowNumber::NAME))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let [row_position_index] = position_indices.as_slice() else {
+            return Err(DataFusionError::Plan(
+                "Iceberg merge scan requires one Parquet physical row position column".to_string(),
+            ));
+        };
+        input_schema
+            .field(*row_position_index)
+            .try_extension_type::<RowNumber>()?;
+        let data_projection = (0..input_schema.fields().len())
+            .filter(|index| index != row_position_index)
+            .collect::<Vec<_>>();
+        let data_schema = Arc::new(input_schema.project(&data_projection)?);
         let appended_file_column = data_file_path
             .is_some()
             .then_some(file_column_name.as_deref())
@@ -106,16 +132,32 @@ impl IcebergMergeMetadataExec {
         } else {
             metadata_columns
         };
-        let output_schema = Arc::new(metadata_columns.append_to_schema(input.schema().as_ref())?);
+        let output_schema = Arc::new(metadata_columns.append_to_schema(&data_schema)?);
+        let projection = ProjectionMapping::try_new(
+            data_projection.iter().map(|index| {
+                let name = input_schema.field(*index).name();
+                (
+                    Arc::new(Column::new(name, *index)) as Arc<dyn PhysicalExpr>,
+                    name.clone(),
+                )
+            }),
+            &input_schema,
+        )?;
         let equivalence = EquivalenceProperties::new(output_schema.clone());
         let equivalence = if row_lineage.is_some() || !file_lineage.is_empty() {
             equivalence
         } else {
-            equivalence.extend(input.equivalence_properties().clone())?
+            equivalence.extend(
+                input
+                    .equivalence_properties()
+                    .project(&projection, data_schema),
+            )?
         };
         let cache = Arc::new(PlanProperties::new(
             equivalence,
-            input.output_partitioning().clone(),
+            input
+                .output_partitioning()
+                .project(&projection, input.equivalence_properties()),
             input.pipeline_behavior(),
             input.boundedness(),
         ));
@@ -128,6 +170,8 @@ impl IcebergMergeMetadataExec {
             row_index_column_name,
             row_lineage,
             file_lineage: Arc::new(file_lineage),
+            row_position_index: *row_position_index,
+            data_projection,
             output_schema,
             cache,
         })
@@ -259,12 +303,10 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
         let include_row_index = self.row_index_column_name.is_some();
         let row_lineage = self.row_lineage;
         let file_lineage = self.file_lineage.clone();
+        let row_position_index = self.row_position_index;
+        let data_projection = self.data_projection.clone();
 
         let stream = try_stream! {
-            // The provider keeps complete, naturally ordered files in each input
-            // partition, so this offset is file-absolute.
-            let mut row_offset = 0i64;
-            let mut current_file_path: Option<String> = None;
             let mut stream = child;
             while let Some(batch) = stream.try_next().await? {
                 let file_paths = if data_file_path.is_none() {
@@ -286,10 +328,6 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                         let path = paths.value(start);
                         end = (start + 1..batch.num_rows()).find(|index| paths.is_null(*index) || paths.value(*index) != path)
                             .unwrap_or(batch.num_rows());
-                        if current_file_path.as_deref() != Some(path) {
-                            current_file_path = Some(path.to_string());
-                            row_offset = 0;
-                        }
                         if file_lineage.is_empty() {
                             None
                         } else {
@@ -302,8 +340,15 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                     };
                     let rows = end - start;
                     let batch = batch.slice(start, rows);
+                    let position_column = Arc::clone(batch.column(row_position_index));
+                    let positions = position_column.as_any().downcast_ref::<Int64Array>()
+                        .ok_or_else(|| DataFusionError::Execution("Iceberg physical row positions must be long".to_string()))?;
+                    if positions.null_count() != 0 || positions.values().iter().any(|position| *position < 0) {
+                        Err(DataFusionError::Execution("Invalid Iceberg physical row positions".to_string()))?;
+                    }
+                    let batch = batch.project(&data_projection)?;
                     let mut columns = match lineage {
-                        Some(lineage) => crate::row_lineage::materialize_lineage(&batch, lineage, row_offset)?,
+                        Some(lineage) => crate::row_lineage::materialize_lineage(&batch, lineage, positions)?,
                         None => batch.columns().to_vec(),
                     };
                     if include_file {
@@ -311,12 +356,9 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                         columns.push(Arc::new(Int32Array::from(vec![data_file_partition_spec_id; rows])) as ArrayRef);
                         columns.push(Arc::new(StringArray::from(vec![data_file_metadata_json.as_deref(); rows])) as ArrayRef);
                     }
-                    let next_offset = i64::try_from(rows).ok().and_then(|rows| row_offset.checked_add(rows))
-                        .ok_or_else(|| DataFusionError::Execution("Iceberg row position overflow".to_string()))?;
                     if include_row_index {
-                        columns.push(Arc::new(Int64Array::from_iter_values(row_offset..next_offset)) as ArrayRef);
+                        columns.push(position_column);
                     }
-                    row_offset = next_offset;
                     yield RecordBatch::try_new(output_schema.clone(), columns)?;
                     start = end;
                 }
@@ -361,7 +403,7 @@ mod tests {
     use crate::row_lineage::{LINEAGE_COLUMNS, RowLineage, lineage_fields};
 
     #[tokio::test]
-    async fn partitioned_lineage_tracks_file_offsets_across_batches() -> Result<()> {
+    async fn partitioned_lineage_uses_reader_positions_across_batches() -> Result<()> {
         let mut fields = lineage_fields().to_vec();
         fields.extend([
             Arc::new(Field::new(MERGE_FILE_COLUMN, DataType::Utf8, false)),
@@ -376,8 +418,11 @@ mod tests {
                 false,
             )),
         ]);
+        fields.push(crate::row_level_metadata::parquet_row_position_field(
+            &Schema::new(fields.clone()),
+        ));
         let schema = Arc::new(Schema::new(fields));
-        let batch = |paths: Vec<&str>, ids: Vec<Option<i64>>| {
+        let batch = |paths: Vec<&str>, ids: Vec<Option<i64>>, positions: Vec<i64>| {
             let rows = paths.len();
             RecordBatch::try_new(
                 Arc::clone(&schema),
@@ -387,13 +432,18 @@ mod tests {
                     Arc::new(StringArray::from(paths)),
                     Arc::new(Int32Array::from(vec![0; rows])),
                     Arc::new(StringArray::from(vec!["[]"; rows])),
+                    Arc::new(Int64Array::from(positions)),
                 ],
             )
         };
         let input = MemorySourceConfig::try_new_exec(
             &[vec![
-                batch(vec!["a", "a", "b"], vec![None, None, Some(777)])?,
-                batch(vec!["b", "c"], vec![None, None])?,
+                batch(
+                    vec!["a", "a", "b"],
+                    vec![None, None, Some(777)],
+                    vec![0, 2, 3],
+                )?,
+                batch(vec!["b", "c", "a"], vec![None, None, None], vec![5, 8, 9])?,
             ]],
             schema,
             None,
@@ -432,15 +482,15 @@ mod tests {
         for (name, values) in [
             (
                 LINEAGE_COLUMNS[0],
-                vec![Some(100), Some(101), Some(777), Some(201), None],
+                vec![Some(100), Some(102), Some(777), Some(205), None, Some(109)],
             ),
             (
                 LINEAGE_COLUMNS[1],
-                vec![Some(2), Some(2), Some(3), Some(3), None],
+                vec![Some(2), Some(2), Some(3), Some(3), None, Some(2)],
             ),
             (
                 MERGE_ROW_INDEX_COLUMN,
-                vec![Some(0), Some(1), Some(0), Some(1), Some(0)],
+                vec![Some(0), Some(2), Some(3), Some(5), Some(8), Some(9)],
             ),
         ] {
             let index = output_schema.index_of(name)?;

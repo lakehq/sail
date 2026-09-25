@@ -12,20 +12,27 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, ParquetRowSelection};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
 };
+use datafusion_common::stats::Precision;
 use datafusion_common::{DataFusionError, Result};
 use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::ProjectionMask;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
@@ -34,6 +41,7 @@ use roaring::RoaringTreemap;
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 use crate::spec::Schema as IcebergSchema;
 use crate::spec::delete_index::{DeleteFileRef, PositionDeleteFile};
 
@@ -41,6 +49,118 @@ use crate::spec::delete_index::{DeleteFileRef, PositionDeleteFile};
 const POS_DELETE_FILE_PATH_COL: &str = "file_path";
 /// Column name used in Iceberg position-delete files for the row position.
 const POS_DELETE_POS_COL: &str = "pos";
+const MAX_SELECTION_RUNS: usize = 4096;
+
+/// Bound selector memory for fragmented deletes; the bitmap filter handles the rest.
+fn live_row_selection(positions: &RoaringTreemap, rows: usize) -> Option<RowSelection> {
+    if positions
+        .max()
+        .is_some_and(|position| position >= rows as u64)
+    {
+        return None;
+    }
+    if positions.len() == rows as u64 {
+        return Some(RowSelection::from(vec![RowSelector::skip(rows)]));
+    }
+    let mut selectors = Vec::new();
+    let mut offset = 0;
+    let mut deleted = positions.iter().peekable();
+    while let Some(start) = deleted.next() {
+        let start = start as usize;
+        if start > offset {
+            selectors.push(RowSelector::select(start - offset));
+        }
+        let mut end = start + 1;
+        while deleted.peek().is_some_and(|next| *next == end as u64) {
+            deleted.next();
+            end += 1;
+        }
+        selectors.push(RowSelector::skip(end - start));
+        if selectors.len() > MAX_SELECTION_RUNS {
+            return None;
+        }
+        offset = end;
+    }
+    if offset < rows {
+        selectors.push(RowSelector::select(rows - offset));
+    }
+    Some(RowSelection::from(selectors))
+}
+
+fn select_live_parquet_rows(
+    input: &Arc<dyn ExecutionPlan>,
+    positions: &RoaringTreemap,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // Delegated downcasts expose the wrapped plan, but replacing children acts
+    // on the wrapper. Traverse and rebuild its actual child to retain both.
+    let child = if let Some(delegate) = input.downcast_delegate() {
+        let children = input.children();
+        let [child] = children.as_slice() else {
+            return Ok(None);
+        };
+        if !std::ptr::addr_eq(delegate, child.as_ref()) {
+            return Ok(None);
+        }
+        Some(Arc::clone(child))
+    } else {
+        // Metadata uses the reader's physical positions, including after skips.
+        input
+            .downcast_ref::<ProjectionExec>()
+            .map(|projection| Arc::clone(projection.input()))
+            .or_else(|| {
+                input
+                    .downcast_ref::<IcebergMergeMetadataExec>()
+                    .map(|metadata| Arc::clone(metadata.input()))
+            })
+    };
+    if let Some(child) = child {
+        return select_live_parquet_rows(&child, positions)?
+            .map(|selected| {
+                Arc::clone(input).replace_children(
+                    vec![selected],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )
+            })
+            .transpose();
+    }
+    let Some(scan) = input.downcast_ref::<DataSourceExec>() else {
+        return Ok(None);
+    };
+    let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+        return Ok(None);
+    };
+    if !config.file_source.is::<ParquetSource>()
+        || config.file_source.filter().is_some()
+        || config.limit.is_some()
+    {
+        return Ok(None);
+    }
+    let [group] = config.file_groups.as_slice() else {
+        return Ok(None);
+    };
+    let [file] = group.files() else {
+        return Ok(None);
+    };
+    if file.range.is_some()
+        || file.extensions.get::<ParquetRowSelection>().is_some()
+        || file.extensions.get::<ParquetAccessPlan>().is_some()
+    {
+        return Ok(None);
+    }
+    let Some(Precision::Exact(rows)) = file.statistics.as_ref().map(|stats| stats.num_rows) else {
+        return Ok(None);
+    };
+    let Some(selection) = live_row_selection(positions, rows) else {
+        return Ok(None);
+    };
+    let mut file = file.clone();
+    file.extensions.insert(ParquetRowSelection::new(selection));
+    let mut config = config.clone();
+    config.file_groups = vec![FileGroup::from(vec![file])];
+    Ok(Some(Arc::new(
+        scan.clone().with_data_source(Arc::new(config)),
+    )))
+}
 
 #[derive(Clone)]
 struct ObjectStoreParquetReader {
@@ -116,6 +236,7 @@ pub struct IcebergDeleteApplyExec {
     iceberg_schema: IcebergSchema,
     /// Cached plan properties (derived from the child's schema).
     cache: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl IcebergDeleteApplyExec {
@@ -155,6 +276,7 @@ impl IcebergDeleteApplyExec {
             table_url,
             iceberg_schema,
             cache,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -226,7 +348,9 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true]
+        // Advertising order preservation allows sort pushdown, but positional
+        // filtering may fall back to counting rows in physical file order.
+        vec![self.positional_deletes.is_empty()]
     }
 
     #[expect(deprecated)]
@@ -257,6 +381,10 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         &self.cache
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -269,7 +397,11 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         }
 
         let output_schema = self.schema();
-        let child = self.input.execute(0, Arc::clone(&context))?;
+        let input = Arc::clone(&self.input);
+        let selections =
+            MetricBuilder::new(&self.metrics).counter("position_delete_row_selections", partition);
+        let fallbacks =
+            MetricBuilder::new(&self.metrics).counter("position_delete_fallbacks", partition);
         let data_file_path = self.data_file_path.clone();
         let positional_deletes = self.positional_deletes.clone();
         let equality_deletes = self.equality_deletes.clone();
@@ -290,8 +422,22 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             let positional_deletes = positional_deletes.iter()
                 .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
                 .collect::<Result<Vec<_>>>()?;
-            let deleted_positions =
+            let mut deleted_positions =
                 load_deleted_positions(&store_ctx, &positional_deletes, &data_file_path).await?;
+
+            // Materialize selections at the execution site, after worker decoding.
+            let input = if !deleted_positions.is_empty() {
+                if let Some(selected) = select_live_parquet_rows(&input, &deleted_positions)? {
+                    selections.add(1);
+                    deleted_positions.clear();
+                    selected
+                } else {
+                    fallbacks.add(1);
+                    input
+                }
+            } else {
+                input
+            };
 
             // Equality field IDs may differ between delete files, so each file is
             // loaded and matched independently.
@@ -299,8 +445,12 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 load_equality_deletes(&store_ctx, &equality_deletes, &iceberg_schema).await?;
 
             let mut row_offset: u64 = 0;
-            let mut stream = child;
+            let mut stream = input.execute(0, Arc::clone(&context))?;
             while let Some(batch) = stream.try_next().await? {
+                if deleted_positions.is_empty() && loaded_equality_deletes.is_empty() {
+                    yield batch;
+                    continue;
+                }
                 let batch_row_count = batch.num_rows() as u64;
                 let mask = compute_delete_mask(
                     &batch,
@@ -758,9 +908,364 @@ mod tests {
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
+    use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::physical_plan::FileScanConfigBuilder;
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::limit::GlobalLimitExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::Statistics;
+    use object_store::memory::InMemory;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
 
     use super::*;
+
+    #[test]
+    fn row_selection_preserves_positions_and_bounds_fragmentation() {
+        let positions = RoaringTreemap::from_iter([0, 1, 5, 6, 9]);
+        assert_eq!(
+            live_row_selection(&positions, 12),
+            Some(RowSelection::from(vec![
+                RowSelector::skip(2),
+                RowSelector::select(3),
+                RowSelector::skip(2),
+                RowSelector::select(2),
+                RowSelector::skip(1),
+                RowSelector::select(2),
+            ]))
+        );
+        assert!(live_row_selection(&positions, 9).is_none());
+        assert_eq!(
+            live_row_selection(&RoaringTreemap::from_iter(0..12), 12),
+            Some(RowSelection::from(vec![RowSelector::skip(12)]))
+        );
+        let fragmented = RoaringTreemap::from_iter((0..20_000).step_by(2));
+        assert!(live_row_selection(&fragmented, 20_000).is_none());
+    }
+
+    async fn scan_vector(
+        positions: RoaringTreemap,
+        known_rows: bool,
+        projection: Vec<usize>,
+        limit: Option<usize>,
+        merge_metadata: bool,
+        sort_rows: bool,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(17));
+        let store = Arc::new(InMemory::new());
+        let table_url = Url::parse("memory://iceberg/table/").unwrap();
+        ctx.register_object_store(&table_url, store.clone());
+        let store_ctx = StoreContext::new(store.clone(), &table_url)?;
+        let data_file_path = "memory://iceberg/table/data.parquet";
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values((0..1024).map(
+                |position| if sort_rows { 1023 - position } else { position },
+            )))],
+        )?;
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(128))
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(properties))?;
+        writer.write(&batch)?;
+        let bytes = writer.into_inner()?;
+        let size = bytes.len() as u64;
+        store
+            .put(&ObjectPath::from("table/data.parquet"), bytes.into())
+            .await?;
+        let schema = if merge_metadata {
+            Arc::new(crate::row_lineage::append_lineage_fields(&schema)?)
+        } else {
+            schema
+        };
+        let table_schema =
+            datafusion::datasource::table_schema::TableSchema::builder(schema.clone());
+        let table_schema = if merge_metadata {
+            table_schema.with_virtual_columns(vec![
+                crate::row_level_metadata::parquet_row_position_field(&schema),
+            ])
+        } else {
+            table_schema
+        };
+        let vectors = crate::io::deletion_vector::write_deletion_vectors(
+            &store_ctx,
+            &table_url,
+            vec![crate::io::deletion_vector::DeletionVector {
+                referenced_data_file: data_file_path.to_string(),
+                partition_spec_id: 0,
+                partition: vec![],
+                positions,
+            }],
+            crate::io::deletion_vector::TARGET_PUFFIN_SIZE,
+        )
+        .await?;
+        let mut file = PartitionedFile::new("table/data.parquet", size);
+        if known_rows {
+            let mut stats = Statistics::new_unknown(&schema);
+            stats.num_rows = Precision::Exact(1024);
+            file.statistics = Some(Arc::new(stats));
+        }
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("memory://iceberg")?,
+            Arc::new(ParquetSource::new(table_schema.build())),
+        )
+        .with_file_groups(vec![FileGroup::from(vec![file])])
+        .with_projection_indices(Some(projection))?
+        .with_preserve_order(true)
+        .build();
+        let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        // Identity/default projections must not prevent selection at the leaf scan.
+        let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    Arc::new(datafusion::physical_expr::expressions::Column::new(
+                        field.name(),
+                        index,
+                    )) as _,
+                    if field.name() == "id" {
+                        "selected_id".to_string()
+                    } else {
+                        field.name().clone()
+                    },
+                )
+            })
+            .collect();
+        let scan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(expressions, scan)?);
+        let scan = if merge_metadata {
+            Arc::new(IcebergMergeMetadataExec::try_new(
+                scan,
+                data_file_path.to_string(),
+                0,
+                "{}".to_string(),
+                Some("file".to_string()),
+                Some("position".to_string()),
+                Some(crate::row_lineage::RowLineage {
+                    first_row_id: Some(10_000),
+                    data_sequence_number: 7,
+                }),
+            )?) as Arc<dyn ExecutionPlan>
+        } else {
+            scan
+        };
+        let apply = Arc::new(IcebergDeleteApplyExec::new(
+            scan,
+            data_file_path.to_string(),
+            vectors
+                .into_iter()
+                .map(|data_file| DeleteFileRef {
+                    data_file,
+                    data_sequence_number: 2,
+                    partition_spec_id: 0,
+                    is_unpartitioned_spec: true,
+                })
+                .collect(),
+            vec![],
+            table_url.to_string(),
+            IcebergSchema::builder().build().unwrap(),
+        ));
+        let plan: Arc<dyn ExecutionPlan> = match limit {
+            Some(limit) => Arc::new(GlobalLimitExec::new(apply.clone(), 0, Some(limit))),
+            None => apply.clone(),
+        };
+        let plan = if sort_rows {
+            let ordering = datafusion::physical_expr::LexOrdering::new(vec![
+                datafusion::physical_expr::PhysicalSortExpr::new_default(Arc::new(
+                    datafusion::physical_expr::expressions::Column::new("selected_id", 0),
+                )),
+            ])
+            .unwrap();
+            datafusion::physical_planner::DefaultPhysicalPlanner::default().optimize_physical_plan(
+                Arc::new(SortExec::new(ordering, plan)),
+                &ctx.state(),
+                |_, _| {},
+            )?
+        } else {
+            plan
+        };
+        let plan = sail_telemetry::trace_execution_plan(plan, Default::default())?;
+        let batches = collect(plan, ctx.task_ctx()).await?;
+        Ok((batches, apply.metrics().unwrap()))
+    }
+
+    #[tokio::test]
+    async fn parquet_selection_preserves_traced_projections_across_row_groups() -> Result<()> {
+        let positions = RoaringTreemap::from_iter((0..128).chain([511, 512, 513, 600, 1023]));
+        for known_rows in [true, false] {
+            let (batches, metrics) =
+                scan_vector(positions.clone(), known_rows, vec![0], None, false, false).await?;
+            let actual = batches
+                .iter()
+                .flat_map(|batch| {
+                    assert_eq!(batch.schema().field(0).name(), "selected_id");
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual,
+                (0..1024)
+                    .filter(|id| !positions.contains(*id as u64))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_row_selections")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(known_rows)
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_fallbacks")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(!known_rows)
+            );
+            let (batches, _) =
+                scan_vector(positions.clone(), known_rows, vec![], Some(3), false, false).await?;
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+            assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+        }
+        let (batches, metrics) = scan_vector(
+            RoaringTreemap::from_iter(0..1024),
+            true,
+            vec![0],
+            None,
+            false,
+            false,
+        )
+        .await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert_eq!(
+            metrics
+                .sum_by_name("position_delete_row_selections")
+                .unwrap()
+                .as_usize(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_selection_retains_merge_positions_and_lineage() -> Result<()> {
+        let positions = RoaringTreemap::from_iter((128..256).chain([1, 511, 512, 513, 600, 1023]));
+        let expected = (0..1024i64)
+            .filter(|id| !positions.contains(*id as u64))
+            .collect::<Vec<_>>();
+        for known_rows in [true, false] {
+            let (batches, metrics) = scan_vector(
+                positions.clone(),
+                known_rows,
+                vec![0, 1, 2, 3],
+                None,
+                true,
+                false,
+            )
+            .await?;
+            for (name, values) in [
+                ("selected_id", expected.clone()),
+                ("position", expected.clone()),
+                (
+                    crate::row_lineage::ROW_ID_COLUMN,
+                    expected.iter().map(|position| 10_000 + position).collect(),
+                ),
+                (
+                    crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
+                    vec![7; expected.len()],
+                ),
+            ] {
+                let actual = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch
+                            .column_by_name(name)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .values()
+                            .iter()
+                            .copied()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, values, "{name}");
+            }
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_row_selections")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(known_rows)
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_fallbacks")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(!known_rows)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sorting_retains_physical_delete_positions() -> Result<()> {
+        let positions = RoaringTreemap::from_iter((128..256).chain([1, 511, 512, 600]));
+        let expected = (0..1024)
+            .filter(|id| !positions.contains((1023 - id) as u64))
+            .collect::<Vec<_>>();
+        for known_rows in [true, false] {
+            let (batches, metrics) =
+                scan_vector(positions.clone(), known_rows, vec![0], None, false, true).await?;
+            let actual = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_row_selections")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(known_rows)
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_fallbacks")
+                    .unwrap()
+                    .as_usize(),
+                usize::from(!known_rows)
+            );
+        }
+        Ok(())
+    }
 
     fn make_batch() -> RecordBatch {
         let schema = Arc::new(ArrowSchema::new(vec![

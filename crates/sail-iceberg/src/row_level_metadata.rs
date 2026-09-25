@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
 use datafusion_common::{Result, plan_err};
+use parquet::arrow::RowNumber;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::delete_index::{DeleteFileRef, PositionDeleteFile};
@@ -9,6 +10,17 @@ use crate::spec::{DataFile, Literal, PrimitiveLiteral};
 
 pub(crate) const MERGE_PARTITION_SPEC_ID_COLUMN: &str = "__sail_iceberg_partition_spec_id";
 pub(crate) const MERGE_FILE_METADATA_COLUMN: &str = "__sail_iceberg_file_metadata";
+
+pub(crate) fn parquet_row_position_field(schema: &ArrowSchema) -> FieldRef {
+    let base = "__sail_iceberg_row_position";
+    let mut name = base.to_string();
+    let mut suffix = 0;
+    while schema.field_with_name(&name).is_ok() {
+        suffix += 1;
+        name = format!("{base}_{suffix}");
+    }
+    Arc::new(Field::new(name, DataType::Int64, false).with_extension_type(RowNumber))
+}
 
 /// Metadata selected from the scan's pinned snapshot, carried only with its rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

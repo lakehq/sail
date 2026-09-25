@@ -55,7 +55,7 @@ use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
-    RowLevelMetadataColumns,
+    RowLevelMetadataColumns, parquet_row_position_field,
 };
 use crate::spec::delete_index::DeleteFileRef;
 use crate::spec::transform::Transform;
@@ -768,10 +768,13 @@ impl IcebergScan {
             nan_free,
             session.config().options().execution.parquet.clone(),
         );
-        Arc::new(
-            ParquetSource::new(self.arrow_schema.clone())
-                .with_table_parquet_options(parquet_options),
-        )
+        let schema = TableSchema::builder(self.arrow_schema.clone());
+        let schema = if self.file_column_name.is_some() {
+            schema.with_virtual_columns(vec![parquet_row_position_field(&self.arrow_schema)])
+        } else {
+            schema
+        };
+        Arc::new(ParquetSource::new(schema.build()).with_table_parquet_options(parquet_options))
     }
 
     fn build_merge_parquet_source(
@@ -798,6 +801,7 @@ impl IcebergScan {
                     false,
                 )),
             ])
+            .with_virtual_columns(vec![parquet_row_position_field(&self.output_schema)])
             .build();
         Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
     }
@@ -1362,9 +1366,7 @@ impl IcebergScan {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    // MERGE synthesizes file-local row positions before applying filters.
-                    // Keep every file group whole so DataFusion cannot split a Parquet file
-                    // into byte ranges whose streams would each start at position zero.
+                    // Keep whole-file units for delete routing and per-file metadata.
                     .with_output_partitioning(Some(output_partitioning))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))

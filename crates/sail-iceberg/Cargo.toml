@@ -67,5 +67,8 @@ crc32fast = { workspace = true }
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
 
+[dev-dependencies]
+sail-telemetry = { path = "../sail-telemetry" }
+
 [lints]
 workspace = true

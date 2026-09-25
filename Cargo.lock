@@ -7898,6 +7898,7 @@ dependencies = [
  "sail-logical-plan",
  "sail-physical-plan",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_arrow",
  "serde_bytes",
