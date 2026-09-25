@@ -257,7 +257,7 @@ impl PlanResolver<'_> {
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
         // to individual column names so the output header matches Spark JVM behavior
         // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
-        let mut argument_display_names =
+        let argument_display_names =
             if is_distinct && argument_display_names.iter().any(|n| n == "*") {
                 schema
                     .columns()
@@ -274,13 +274,6 @@ impl PlanResolver<'_> {
             } else {
                 argument_display_names
             };
-        if let expr::Expr::ScalarFunction(function) = &func
-            && function.func.as_async().is_some()
-            && let Some(kind) = sail_function::scalar::jev::JevKind::from_name(function.func.name())
-            && let Some(options) = argument_display_names.get_mut(kind.options_index())
-        {
-            *options = "<redacted options>".to_owned();
-        }
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
