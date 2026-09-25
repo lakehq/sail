@@ -1,8 +1,9 @@
 import gzip
+import json
 
 import pytest
 from pyspark.sql import Row
-from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
+from pyspark.sql.types import ArrayType, IntegerType, LongType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
@@ -60,9 +61,12 @@ def test_json_read_options(spark, sample_df, tmp_path):
 def test_json_read_drop_field_if_all_null(spark, tmp_path):
     """Drop fields containing only nulls from an inferred JSON schema."""
     data_path = tmp_path / "drop_field_if_all_null.json"
-    data_path.write_text(
-        '{"a": null, "b": 1, "c": 3.0}\n{"a": null, "b": null, "c": "string"}\n{"a": null, "b": null, "c": null}\n'
-    )
+    records = [
+        {"a": None, "b": 1, "c": 3.0},
+        {"a": None, "b": None, "c": "string"},
+        {"a": None, "b": None, "c": None},
+    ]
+    data_path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
 
     df = spark.read.option("dropFieldIfAllNull", True).json(str(data_path))
 
@@ -72,6 +76,89 @@ def test_json_read_drop_field_if_all_null(spark, tmp_path):
             StructField("c", StringType(), nullable=True),
         ]
     )
+
+
+def test_json_read_drop_field_if_all_null_nested(spark, tmp_path):
+    """Recursively drop null-only fields from nested JSON types."""
+    data_path = tmp_path / "drop_nested_field_if_all_null.json"
+    records = [
+        {
+            "id": 1,
+            "items": [{"keep": 1, "drop": None}],
+            "partial": {"name": "Alice", "unused": None},
+            "empty": {"unused": None},
+            "empty_items": [{"drop": None}],
+        },
+        {
+            "id": 2,
+            "items": [{"keep": 2, "drop": None}],
+            "partial": {"name": "Bob", "unused": None},
+            "empty": {"unused": None},
+            "empty_items": [{"drop": None}],
+        },
+    ]
+    data_path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+    df = spark.read.option("dropFieldIfAllNull", True).json(str(data_path))
+
+    assert df.schema == StructType(
+        [
+            StructField("id", LongType(), nullable=True),
+            StructField(
+                "items",
+                ArrayType(StructType([StructField("keep", LongType(), nullable=True)])),
+                nullable=True,
+            ),
+            StructField(
+                "partial",
+                StructType([StructField("name", StringType(), nullable=True)]),
+                nullable=True,
+            ),
+        ]
+    )
+    assert df.collect() == [
+        Row(id=1, items=[Row(keep=1)], partial=Row(name="Alice")),
+        Row(id=2, items=[Row(keep=2)], partial=Row(name="Bob")),
+    ]
+
+
+def test_json_read_drop_field_if_all_null_across_files(spark, tmp_path):
+    """Retain fields that have a concrete value in any input file."""
+    data_path = tmp_path / "drop_field_if_all_null_across_files"
+    data_path.mkdir()
+    null_record = {
+        "id": 1,
+        "nested": {
+            "value": None,
+            "unused": None,
+        },
+    }
+    concrete_record = {
+        "id": 2,
+        "nested": {
+            "value": "kept",
+            "unused": None,
+        },
+    }
+    (data_path / "part-1.json").write_text(json.dumps(null_record) + "\n")
+    (data_path / "part-2.json").write_text(json.dumps(concrete_record) + "\n")
+
+    df = spark.read.option("dropFieldIfAllNull", True).json(str(data_path))
+
+    assert df.schema == StructType(
+        [
+            StructField("id", LongType(), nullable=True),
+            StructField(
+                "nested",
+                StructType([StructField("value", StringType(), nullable=True)]),
+                nullable=True,
+            ),
+        ]
+    )
+    assert sorted(df.collect(), key=lambda row: row.id) == [
+        Row(id=1, nested=Row(value=None)),
+        Row(id=2, nested=Row(value="kept")),
+    ]
 
 
 def test_json_format_path(spark, tmp_path):
