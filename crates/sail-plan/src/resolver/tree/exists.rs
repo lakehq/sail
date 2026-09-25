@@ -8,7 +8,7 @@ use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
+use datafusion_common::{Column, Result, ScalarValue, not_impl_err, plan_datafusion_err};
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
@@ -18,6 +18,7 @@ use datafusion_expr::{
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::resolver::expression::is_null_literal_expression;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
@@ -107,13 +108,16 @@ impl ExistsRewriter<'_> {
         let column = subquery.subquery.schema().columns().one()?;
         let nullable = expr.nullable(self.plan.schema().as_ref())?
             || subquery.subquery.schema().field(0).is_nullable();
+        // TODO: Fold constant expressions and propagate constant input columns before
+        // this rewrite using the query's optimizer context.
+        let null_literal = is_null_literal_expression(&expr);
         let alias = self.state.register_field_name("");
         let query = LogicalPlanBuilder::from(subquery.subquery)
             .alias(alias.clone())?
             .build()?;
         let predicate = (*expr).eq(Expr::Column(Column::new(Some(alias.clone()), column.name)));
         // Spark's projected NOT IN also excludes rows with an unknown comparison.
-        let predicate = if negated {
+        let predicate = if negated || null_literal {
             predicate.clone().or(predicate.is_null())
         } else {
             predicate
@@ -123,6 +127,10 @@ impl ExistsRewriter<'_> {
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;
         let mark = Expr::Column(Column::new(Some(alias), "mark"));
+        if null_literal {
+            // Spark propagates a literal NULL before rewriting IN to an existence join.
+            return expr_fn::when(mark, lit(ScalarValue::Boolean(None))).otherwise(lit(negated));
+        }
         // Spark declares IN nullable from its operands, before rewriting it into
         // a non-null existence result. Keep that schema until optimization.
         let result = if nullable {

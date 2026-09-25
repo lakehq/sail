@@ -419,7 +419,7 @@ pub(super) fn coerce_timestamp_string_predicate(
     })
 }
 
-fn is_null_literal_expression(expression: &expr::Expr) -> bool {
+pub(in crate::resolver) fn is_null_literal_expression(expression: &expr::Expr) -> bool {
     match expression {
         expr::Expr::Literal(value, _) => value.is_null(),
         expr::Expr::Alias(alias) => is_null_literal_expression(&alias.expr),

@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -8,6 +9,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
@@ -710,3 +712,30 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="SparkGetField is not recognized by nested Parquet projection pruning",
+    strict=True,
+)
+def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path):
+    # EXPLAIN syntax and scan metrics differ between Spark and Sail, so use a Python test.
+    count = 100_000
+    values = pa.array(range(count), type=pa.int64())
+    payload = pa.StructArray.from_arrays([values] * 8, names=[f"f{i}" for i in range(8)])
+    path = tmp_path / "nested_projection.parquet"
+    pq.write_table(pa.table({"payload": payload}), path, compression=None, use_dictionary=False)
+    query = f"SELECT SUM(payload.f0) AS total FROM parquet.`{escape_sql_identifier(str(path))}`"  # noqa: S608
+    assert spark.sql(query).collect() == [Row(total=count * (count - 1) // 2)]
+
+    if is_jvm_spark():
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+        assert "ReadSchema: struct<payload:struct<f0:bigint>>" in plan
+    else:
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+        metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+        assert metric is not None
+        scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+        # One of eight equal-sized leaves should read well below half the file.
+        assert float(metric[1]) * scale < path.stat().st_size / 2

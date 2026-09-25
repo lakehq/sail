@@ -243,6 +243,84 @@ Feature: IN subquery support
         | 1    | false   | false  |
         | NULL | false   | false  |
 
+    Scenario Outline: projected IN propagates literal null operands for a nonempty subquery
+      When query
+        """
+        SELECT
+          <value> IN (SELECT x FROM VALUES (1) t(x)) AS present,
+          <value> NOT IN (SELECT x FROM VALUES (1) t(x)) AS absent,
+          NOT (<value> IN (SELECT x FROM VALUES (1) t(x))) AS negated,
+          NOT (NOT (<value> IN (SELECT x FROM VALUES (1) t(x)))) AS nested_not,
+          (<value> IN (SELECT x FROM VALUES (1) t(x))) IS NULL AS unknown
+        """
+      Then query result
+        | present | absent | negated | nested_not | unknown |
+        | NULL    | NULL   | NULL    | NULL       | true    |
+      Then query schema
+        """
+        root
+         |-- present: boolean (nullable = true)
+         |-- absent: boolean (nullable = true)
+         |-- negated: boolean (nullable = true)
+         |-- nested_not: boolean (nullable = true)
+         |-- unknown: boolean (nullable = false)
+        """
+
+      Examples:
+        | value                                 |
+        | NULL                                  |
+        | CAST(NULL AS INT)                      |
+        | CAST(CAST(NULL AS SMALLINT) AS BIGINT)  |
+        | STRUCT(NULL AS x)                     |
+
+    Scenario: projected literal null IN distinguishes an empty subquery from an empty scalar aggregate
+      When query
+        """
+        SELECT
+          NULL IN (SELECT x FROM VALUES (1) t(x) WHERE false) AS empty_present,
+          NULL NOT IN (SELECT x FROM VALUES (1) t(x) WHERE false) AS empty_absent,
+          NULL IN (SELECT MAX(x) FROM VALUES (1) t(x) WHERE false) AS aggregate_present,
+          NULL NOT IN (SELECT MAX(x) FROM VALUES (1) t(x) WHERE false) AS aggregate_absent
+        """
+      Then query result
+        | empty_present | empty_absent | aggregate_present | aggregate_absent |
+        | false         | true         | NULL              | NULL             |
+
+    Scenario: projected literal null IN still rejects incompatible operand types
+      When query
+        """
+        SELECT CAST(NULL AS INT) IN (SELECT array(1)) AS present
+        """
+      Then query error (?i)(cannot infer common argument type|data.?type.?mismatch)
+
+    Scenario: projected literal null IN still evaluates a nonempty subquery
+      When query
+        """
+        SELECT CAST(NULL AS INT) IN (
+          SELECT CAST(x AS INT) FROM VALUES ('invalid') t(x)
+        ) AS present
+        """
+      Then query error (?i)(cast_invalid_input|cannot cast string)
+
+    @sail-bug
+    Scenario Outline: projected IN propagates folded null operands before decorrelation
+      # TODO: Normalize foldable expressions and constant input columns in the query optimizer.
+      When query
+        """
+        SELECT
+          <value> IN (SELECT x FROM VALUES (1) t(x)) AS present,
+          <value> NOT IN (SELECT x FROM VALUES (1) t(x)) AS absent
+        FROM (SELECT CAST(NULL AS INT) AS id) u
+        """
+      Then query result
+        | present | absent |
+        | NULL    | NULL   |
+
+      Examples:
+        | value        |
+        | NULLIF(1, 1) |
+        | id           |
+
     @sail-bug
     Scenario Outline: projected IN normalizes indirect negation before decorrelation
       # TODO: Preserve Spark's optimizer ordering for wrappers that become NOT IN.
