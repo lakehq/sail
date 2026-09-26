@@ -185,3 +185,66 @@ Feature: struct function
       Then query result
         | literal_key | column_key |
         | 1           | 2          |
+
+    Scenario Outline: qualified field extraction ignores an ambiguous interpretation of the table alias
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT t.s.x AS result
+        FROM (
+          SELECT <value> AS s, named_struct('s', 2, 'S', 3) AS t
+        ) t
+        """
+      Then query result
+        | result     |
+        | <expected> |
+
+      Examples:
+        | value                                                 | expected |
+        | named_struct('x', 1)                                   | 1        |
+        | array(named_struct('x', 1), named_struct('x', 4))       | [1, 4]   |
+
+    Scenario Outline: field extraction preserves ambiguity in the selected root
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT <reference>
+        FROM (
+          SELECT named_struct('x', 1, 'X', 2) AS s,
+                 named_struct('s', named_struct('x', 9)) AS t
+        ) t
+        """
+      Then query error (?i)(AMBIGUOUS_REFERENCE_TO_FIELDS|ambiguous reference to the field)
+
+      Examples:
+        | reference |
+        | t.s.x     |
+        | s.x       |
+
+    @sail-bug
+    Scenario: qualified field extraction prefers the qualified root when both interpretations are valid
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT t.s.x AS result
+        FROM (
+          SELECT named_struct('x', 1) AS s,
+                 named_struct('s', named_struct('x', 9)) AS t
+        ) t
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    @sail-bug
+    Scenario: a missing qualified struct field prevents fallback to an unqualified root
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT t.s.x
+        FROM (
+          SELECT named_struct('y', 1) AS s,
+                 named_struct('s', named_struct('x', 9)) AS t
+        ) t
+        """
+      Then query error (?i)(FIELD_NOT_FOUND|cannot resolve attribute)

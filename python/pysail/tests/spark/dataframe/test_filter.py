@@ -1078,3 +1078,13 @@ def test_filter_nested_correlated_subquery_schema(spark):
     query = f"SELECT * FROM VALUES (1) t0(id) WHERE EXISTS ({query})"  # noqa: S608
 
     assert spark.sql(query).schema == StructType([StructField("id", IntegerType(), False)])
+
+
+def test_filter_missing_qualified_struct_ignores_ambiguous_alias_interpretation(spark):
+    source = spark.createDataFrame(
+        [((1,), (2, 3), 7), ((4,), (2, 3), 8)], "s struct<x:int>, t struct<s:int,S:int>, keep int"
+    ).alias("t")
+    projected = source.select("keep")
+    result = projected.where("t.s.x = 1")
+    assert result.collect() == [Row(keep=7)]
+    assert result.schema == projected.schema

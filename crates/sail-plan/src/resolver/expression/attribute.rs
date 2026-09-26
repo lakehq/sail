@@ -225,6 +225,23 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
+        // Extraction errors in a less-qualified interpretation must not reject
+        // a reference whose root matches a more-qualified interpretation.
+        // TODO: Apply qualification precedence to successful candidates too, and
+        // stop fallback when the preferred root lacks the requested nested field.
+        let preferred_qualifier = || {
+            candidates.iter().rev().find_map(|(q, root, _)| {
+                schema
+                    .iter()
+                    .any(|(qualifier, field)| {
+                        qualifier_matches(q.as_ref(), qualifier)
+                            && state.get_field_info(field.name()).is_ok_and(|info| {
+                                !info.is_hidden() && info.matches(root.as_ref(), plan_id)
+                            })
+                    })
+                    .then_some(q)
+            })
+        };
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
@@ -240,14 +257,17 @@ impl PlanResolver<'_> {
                         if qualifier_matches(q.as_ref(), qualifier)
                             && info.matches(name.as_ref(), plan_id)
                         {
-                            let expr = Self::resolve_potentially_nested_field(
+                            let expr = match Self::resolve_potentially_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
-                            )
-                            .transpose()?;
+                            ) {
+                                Ok(expr) => expr?,
+                                Err(_) if Some(q) != preferred_qualifier() => return None,
+                                Err(error) => return Some(Err(error)),
+                            };
                             let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some(expr.map(|expr| (name, expr)))
+                            Some(Ok((name, expr)))
                         } else {
                             None
                         }
