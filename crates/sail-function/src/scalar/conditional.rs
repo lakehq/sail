@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::new_empty_array;
-use datafusion::arrow::compute::{CastOptions, cast_with_options};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, StructArray, UInt64Array, make_array, new_empty_array,
+};
+use datafusion::arrow::compute::{CastOptions, cast_with_options, nullif, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion_common::{Result, internal_err, plan_datafusion_err};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_datafusion_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{
-    ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, cast, expr,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    expr,
 };
 
 use crate::error::invalid_arg_count_exec_err;
@@ -31,6 +33,17 @@ impl SparkNvl2 {
 
     pub fn session_timezone(&self) -> &str {
         &self.session_timezone
+    }
+
+    pub fn lower(tested: Expr, if_non_null: Expr, if_null: Expr) -> Expr {
+        // Simple CASE retains the OR of both branches' nullability, like Spark
+        // IF. Searched CASE can infer a nullable THEN branch is never NULL from
+        // its predicate, which would change NVL2's declared schema.
+        Expr::Case(expr::Case {
+            expr: Some(Box::new(tested.is_null())),
+            when_then_expr: vec![(Box::new(datafusion_expr::lit(true)), Box::new(if_null))],
+            else_expr: Some(Box::new(if_non_null)),
+        })
     }
 
     fn common_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -108,37 +121,16 @@ impl ScalarUDFImpl for SparkNvl2 {
         Ok(vec![arg_types[0].clone(), common_type.clone(), common_type])
     }
 
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+    fn simplify(&self, args: Vec<Expr>, _: &SimplifyContext) -> Result<ExprSimplifyResult> {
         let [tested, if_non_null, if_null]: [Expr; 3] =
             args.try_into().map_err(|args: Vec<Expr>| {
                 invalid_arg_count_exec_err(self.name(), (3, 3), args.len())
             })?;
-        // Keep a nullable branch in ELSE so CASE's predicate inference agrees
-        // with Spark's branch-based NVL2 nullability.
-        let if_null_nullable = if_null.nullable(info.schema().as_ref())?;
-        let (condition, then_expr, else_expr) = if if_null_nullable {
-            (tested.is_not_null(), if_non_null, if_null)
-        } else {
-            (tested.is_null(), if_null, if_non_null)
-        };
-        let result = Expr::Case(expr::Case {
-            expr: None,
-            when_then_expr: vec![(Box::new(condition), Box::new(then_expr))],
-            else_expr: Some(Box::new(else_expr)),
-        });
-        let result = if if_null_nullable {
-            // TODO: Fix DataFusion's empty-batch IN-list constant detection when
-            // the non-null result is scalar and the null result is a nullable column.
-            result
-        } else {
-            // The identity UDF prevents empty-batch IN-list probes from treating
-            // NVL2 as constant. Cache its type only after analysis establishes it.
-            let data_type = result.get_type(info.schema().as_ref())?;
-            let result =
-                ScalarUDF::from(SparkConditionalCast::new(data_type.clone())).call(vec![result]);
-            cast(result, data_type)
-        };
-        Ok(ExprSimplifyResult::Simplified(result))
+        Ok(ExprSimplifyResult::Simplified(Self::lower(
+            tested,
+            if_non_null,
+            if_null,
+        )))
     }
 
     fn short_circuits(&self) -> bool {
@@ -217,6 +209,9 @@ impl ScalarUDFImpl for SparkConditionalCast {
         if args.number_rows == 0 {
             return Ok(ColumnarValue::Array(new_empty_array(&self.target_type)));
         }
+        if arg.data_type() == self.target_type {
+            return Ok(arg.clone());
+        }
         // TODO: Match Spark's numeric STRING grammar when shared cast support is available:
         // control-character trimming, floating-point suffixes/hex literals, and DECIMAL exponents.
         // Arrow's parser currently rejects these forms, as it does for ordinary CAST expressions.
@@ -225,10 +220,16 @@ impl ScalarUDFImpl for SparkConditionalCast {
             ..Default::default()
         };
         match arg {
+            ColumnarValue::Scalar(value) if value.data_type().is_nested() => {
+                let array = cast_visible_values(&value.to_array()?, &self.target_type, &options)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &array, 0,
+                )?))
+            }
             ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(
                 value.cast_to_with_options(&self.target_type, &options)?,
             )),
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(cast_with_options(
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(cast_visible_values(
                 array,
                 &self.target_type,
                 &options,
@@ -237,7 +238,102 @@ impl ScalarUDFImpl for SparkConditionalCast {
     }
 }
 
+fn cast_visible_values(
+    array: &ArrayRef,
+    target: &DataType,
+    options: &CastOptions<'_>,
+) -> Result<ArrayRef> {
+    if array.data_type() == target {
+        return Ok(Arc::clone(array));
+    }
+    Ok(cast_with_options(
+        &visible_nested_values(array)?,
+        target,
+        options,
+    )?)
+}
+
+/// Spark casts only present nested values. Arrow casts every child slot, including
+/// values masked by a NULL parent or outside the offsets of a sliced list/map.
+fn visible_nested_values(array: &ArrayRef) -> Result<ArrayRef> {
+    if !array.data_type().is_nested() {
+        return Ok(Arc::clone(array));
+    }
+    let sliced_values = match array.data_type() {
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            list.value_offsets()[0] != 0
+                || list.value_offsets()[list.len()] as usize != list.values().len()
+        }
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            list.value_offsets()[0] != 0
+                || list.value_offsets()[list.len()] as usize != list.values().len()
+        }
+        DataType::Map(_, _) => {
+            let map = array.as_map();
+            map.value_offsets()[0] != 0
+                || map.value_offsets()[map.len()] as usize != map.entries().len()
+        }
+        _ => false,
+    };
+    let mask_struct = matches!(array.data_type(), DataType::Struct(_)) && array.null_count() > 0;
+    let array = if (array.null_count() > 0 && !mask_struct) || sliced_values {
+        // List/map take drops entries belonging to null parents and unused
+        // prefixes/suffixes without introducing NULLs into non-nullable entries.
+        let indices =
+            UInt64Array::from_iter((0..array.len()).map(|i| array.is_valid(i).then_some(i as u64)));
+        take(array, &indices, None)?
+    } else {
+        Arc::clone(array)
+    };
+    let data = array.to_data();
+    let parent_mask = if mask_struct {
+        array
+            .nulls()
+            .map(|nulls| BooleanArray::new(!nulls.inner(), None))
+    } else {
+        None
+    };
+    let mut changed = mask_struct;
+    let children = data
+        .child_data()
+        .iter()
+        .map(|child| {
+            let child = make_array(child.clone());
+            // The kernel changes only validity, without copying or revalidating
+            // value buffers (including potentially large STRING children).
+            let child = match &parent_mask {
+                Some(mask) => nullif(child.as_ref(), mask)?,
+                None => child,
+            };
+            let visible = visible_nested_values(&child)?;
+            changed |= !Arc::ptr_eq(&child, &visible);
+            Ok(visible)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if changed {
+        if let DataType::Struct(fields) = array.data_type() {
+            return Ok(Arc::new(StructArray::try_new(
+                fields.clone(),
+                children,
+                array.nulls().cloned(),
+            )?));
+        }
+        Ok(make_array(
+            data.into_builder()
+                .child_data(children.iter().map(|child| child.to_data()).collect())
+                .build()?,
+        ))
+    } else {
+        Ok(array)
+    }
+}
+
 pub fn preserve_nested_metadata(source: &DataType, target: &DataType) -> DataType {
+    if source == target {
+        return target.clone();
+    }
     let preserve_field = |source: &FieldRef, target: &FieldRef| {
         Arc::new(
             target

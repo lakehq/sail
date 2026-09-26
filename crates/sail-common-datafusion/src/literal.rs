@@ -40,6 +40,9 @@ impl LiteralEvaluator {
     }
 
     pub fn evaluate(&self, expr: &Expr) -> Result<ScalarValue> {
+        if let Expr::Literal(value, _) = expr {
+            return Ok(value.clone());
+        }
         // Logical functions such as NVL2 must lower to executable expressions
         // before physical planning, including in constant-only resolver paths.
         let context = SimplifyContext::builder()

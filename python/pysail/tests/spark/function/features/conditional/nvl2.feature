@@ -180,6 +180,36 @@ Feature: nvl2 output schema
 
   Rule: Row evaluation
 
+    Scenario Outline: nvl2 projected through a view stays row dependent in IN lists
+      Given final statement
+        """
+        DROP VIEW IF EXISTS nvl2_in_input
+        """
+      And statement
+        """
+        CREATE OR REPLACE TEMP VIEW nvl2_in_input AS
+        SELECT id, nvl2(x, <non_null>, <null>) AS v
+        FROM VALUES (0, 1), (1, CAST(NULL AS INT)), (2, 2) AS t(id, x)
+        """
+      When query
+        """
+        SELECT id, id IN (v, 7, 8, 9) AS included,
+          id NOT IN (v, 7, 8, 9) AS excluded
+        FROM nvl2_in_input
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | included | excluded |
+        | 0  | <first>  | <not_first> |
+        | 1  | <second> | <not_second> |
+        | 2  | <third>  | <not_third> |
+
+      Examples:
+        | non_null | null | first | not_first | second | not_second | third | not_third |
+        | x        | 0    | false | true      | false  | true       | true  | false     |
+        | 0        | x    | true  | false     | NULL   | NULL       | false | true      |
+        | 0        | 1    | true  | false     | true   | false      | false | true      |
+
     Scenario: nvl2 inside an IN list is evaluated for each row
       When query
         """
@@ -239,7 +269,6 @@ Feature: nvl2 output schema
         | 1  |
         | 2  |
 
-    @sail-bug
     Scenario: nvl2 with a scalar non-null result and nullable column null result stays row-dependent
       When query
         """

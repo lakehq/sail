@@ -4,7 +4,6 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
@@ -26,6 +25,7 @@ use crate::filter_pushdown::PostFilterPushdown;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::requirements::LimitSafeRequirements;
 
 mod barrier;
 mod collect_left;
@@ -33,6 +33,7 @@ mod explicit_repartition;
 mod filter_pushdown;
 mod join_reorder;
 mod projection_pushdown;
+mod requirements;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -59,7 +60,7 @@ pub fn get_physical_optimizers(
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.
     rules.push(Arc::new(WindowTopN::new()));
-    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(LimitSafeRequirements));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));

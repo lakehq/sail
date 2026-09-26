@@ -1,6 +1,41 @@
 import pytest
 
 
+@pytest.mark.parametrize("depth", [20, 80])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("nullable_default", [False, True])
+def test_nested_numeric_nvl2_preserves_values_and_schema(spark, depth, nullable, nullable_default):
+    if nullable:
+        frame = spark.createDataFrame([(None,), (7,)], "x long")
+        tested, value = "x", "x"
+        expected = [(1,), (7,)]
+    else:
+        frame = spark.range(2)
+        tested, value = "nullif(id, 0)", "0L"
+        expected = [(0,), (1,)]
+    default = tested if nullable_default else "1"
+    if nullable_default:
+        expected = [(None,), (7 if nullable else 0,)]
+    for _ in range(depth):
+        value = f"nvl2({tested}, {value}, {default})"
+    # A SQL expression avoids the client's protobuf nesting limit at depth 80.
+    result = frame.selectExpr(f"{value} AS v")
+    assert result.dtypes == [("v", "bigint")]
+    assert result.schema["v"].nullable is (nullable or nullable_default)
+    assert result.orderBy("v").collect() == expected
+
+
+@pytest.mark.parametrize("value", [1, None])
+def test_nvl2_retains_nullable_branch_after_binding_a_cast_parameter(spark, value):
+    result = spark.sql(
+        "SELECT nvl2(x, x, CAST(? AS BIGINT)) AS v FROM VALUES (CAST(NULL AS BIGINT)), (7L) AS t(x)",
+        args=[value],
+    )
+    assert result.dtypes == [("v", "bigint")]
+    assert result.schema["v"].nullable
+    assert result.collect() == [(value,), (7,)]
+
+
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
 

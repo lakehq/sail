@@ -344,6 +344,9 @@ fn promote_union_numeric_type(
     by_name: bool,
     allow_string_numeric: bool,
 ) -> DataType {
+    if data_type == other_type {
+        return data_type.clone();
+    }
     if ansi_mode
         && allow_string_numeric
         && ((data_type.is_string() && other_type.is_numeric())
@@ -503,6 +506,9 @@ fn union_field_names_equal_ignore_case(left: &str, right: &str) -> bool {
 // TODO: Expose the LTZ common type of mixed NTZ/LTZ UNION inputs after timestamp
 //  consumers preserve nullability and apply timezone conversions to that common type.
 fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: bool) -> DataType {
+    if data_type == coerced_type {
+        return data_type.clone();
+    }
     // Preserve existing types where DataFusion matches ambiguous nested names
     // differently from Spark's resolver. Supported STRING/numeric pairs are cast above.
     if (ansi_mode && data_type.is_numeric() && coerced_type.is_string())

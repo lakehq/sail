@@ -60,6 +60,10 @@ impl OptimizerRule for PushUnionConditional {
         }
         if let LogicalPlan::Limit(limit) = input {
             // Spark also pushes deterministic projections through LIMIT/OFFSET.
+            // TODO: Match Spark's eager errors from constant UNION casts below LIMIT.
+            // DataFusion defers failed UDF folding, so this can suppress errors that
+            // Spark raises before pushing through UNION. Preserve Spark's empty-input
+            // pruning and conditional error context when implementing shared folding.
             // Keep the limit above the projected UNION so row selection is unchanged.
             return Ok(Transformed::yes(LogicalPlan::Limit(Limit {
                 skip: limit.skip.clone(),

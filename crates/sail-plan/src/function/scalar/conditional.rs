@@ -4,7 +4,7 @@ use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::{
     SparkConditionalCast, SparkNvl2, preserve_nested_metadata,
@@ -83,10 +83,19 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
     let (if_non_null, if_null) = branches.two()?;
-    Ok(ScalarUDF::from(SparkNvl2::new(Arc::clone(
-        &function_context.plan_config.session_timezone,
-    )))
-    .call(vec![tested, if_non_null, if_null]))
+    let function = SparkNvl2::new(Arc::clone(&function_context.plan_config.session_timezone));
+    // Lower branches that already have their common type, avoiding repeated
+    // field derivation through nested logical NVL2 functions.
+    // Unresolved bindings and branches needing coercion retain the logical UDF.
+    let non_null_type = if_non_null.get_type(function_context.schema)?;
+    let null_type = if_null.get_type(function_context.schema)?;
+    let resolved = !null_type.is_null()
+        && non_null_type == null_type
+        && function.return_type(&[DataType::Null, non_null_type, null_type.clone()])? == null_type;
+    if resolved {
+        return Ok(SparkNvl2::lower(tested, if_non_null, if_null));
+    }
+    Ok(ScalarUDF::from(function).call(vec![tested, if_non_null, if_null]))
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -104,8 +113,13 @@ fn coerce_branch_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let arguments = coerce_string_temporal_values(arguments, function_context)?;
-    coerce_numeric_values(arguments, function_context)
+    let data_types = argument_types(&arguments, function_context)?;
+    if data_types.iter().any(is_temporal_type) {
+        // A temporal branch cannot have a numeric common type.
+        coerce_string_temporal_values(arguments, function_context)
+    } else {
+        coerce_numeric_values(arguments, data_types, function_context)
+    }
 }
 
 fn argument_types(
@@ -134,9 +148,9 @@ fn conditional_common_type(data_types: &[DataType]) -> Option<DataType> {
 /// Preserves DataFusion's existing nested coercion except ANSI STRING/numeric leaves.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
+    data_types: Vec<DataType>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let data_types = argument_types(&arguments, function_context)?;
     let ansi_mode = function_context
         .plan_config
         .view_conditional_ansi_mode
@@ -181,8 +195,9 @@ fn coerce_numeric_values(
         .into_iter()
         .zip(data_types)
         .map(|(arg, data_type)| {
-            if data_type.is_null() {
-                // NULL values are coerced to the common type by DataFusion.
+            if data_type.is_null() || data_type == common_type {
+                // Defer NULL coercion and avoid re-deriving an already common
+                // branch type in Expr::cast_to (important for nested conditionals).
                 Ok(arg)
             } else {
                 // TODO: Return NULL for overflowing implicit DECIMAL casts in non-ANSI mode.
@@ -191,7 +206,7 @@ fn coerce_numeric_values(
                 // casts support it; Arrow can currently return an adjacent floating value.
                 // Like DataFusion's type coercion, this keeps values of the common type unchanged
                 // and casts a scalar subquery inside the subquery.
-                if ansi_string_coercion && data_type != common_type {
+                if ansi_string_coercion {
                     // Keep invalid literals lazy: DataFusion eagerly rejects literal CASTs
                     // even in an unselected CASE branch, but defers errors from this UDF.
                     Ok(

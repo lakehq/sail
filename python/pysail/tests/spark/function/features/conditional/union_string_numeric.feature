@@ -151,6 +151,43 @@ Feature: Numeric STRING coercion in UNION inputs
       | OFFSET 1         | 9     |
       | LIMIT 2 OFFSET 1 | 2     |
 
+  @sail-bug
+  Scenario Outline: ANSI UNION retains constant cast errors below <clause>
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT IF(id = 0, 0, v) AS v
+      FROM (
+        SELECT id, 'bad' AS v FROM range(1)
+        UNION ALL
+        SELECT id, 2.5D AS v FROM range(1, 3)
+        <clause>
+      )
+      """
+    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
+
+    Examples:
+      | clause           |
+      | LIMIT 1          |
+      | OFFSET 1         |
+      | LIMIT 1 OFFSET 1 |
+
+  Scenario: Sorting a limited conditional UNION preserves OFFSET rows
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT IF(id = 0, 0, v) AS v
+      FROM (
+        SELECT id, concat('bad', id) AS v FROM range(1)
+        UNION ALL
+        SELECT id, 0D AS v FROM range(1, 2)
+        LIMIT 1 OFFSET 1
+      ) ORDER BY id
+      """
+    Then query result collected
+      | v   |
+      | 0.0 |
+
   Scenario: ANSI UNION retains a repeated expensive row-dependent cast
     Given config spark.sql.ansi.enabled = true
     When query
