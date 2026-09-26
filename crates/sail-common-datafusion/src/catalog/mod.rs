@@ -13,6 +13,13 @@ pub use status::*;
 
 use crate::datasource::BucketBy;
 
+pub const VIEW_PREFIX: &str = "view.";
+
+pub const VIEW_CONDITIONAL_ANSI_MODE_PROPERTY: &str = "view.sqlConfig.spark.sql.ansi.enabled";
+
+pub const VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY: &str =
+    "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate";
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableConstraint {
     Unique {

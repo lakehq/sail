@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    VIEW_PREFIX,
 };
 use crate::column_features::ColumnFeaturesBuilder;
 use crate::session::plan::PlanFormatter;
@@ -16,10 +17,6 @@ use crate::session::plan::PlanFormatter;
 /// engine's canonical [`crate::column_features::ColumnFeatureKey`] at the
 /// protocol layer.
 pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
-
-pub const VIEW_CONDITIONAL_ANSI_MODE_PROPERTY: &str = "view.sqlConfig.spark.sql.ansi.enabled";
-pub const VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY: &str =
-    "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -289,12 +286,8 @@ impl TableStatus {
             .properties()
             .iter()
             .filter(|(key, _)| {
-                !matches!(&self.kind, TableKind::View { .. })
-                    || !matches!(
-                        key.as_str(),
-                        VIEW_CONDITIONAL_ANSI_MODE_PROPERTY
-                            | VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY
-                    )
+                // Matches Spark's behavior
+                !matches!(&self.kind, TableKind::View { .. }) || !key.starts_with(VIEW_PREFIX)
             })
             .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>();
