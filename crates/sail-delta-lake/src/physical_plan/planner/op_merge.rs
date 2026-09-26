@@ -38,11 +38,11 @@ use super::commit::{
     assemble_commit_plan, build_adds_from_touched_files, build_remove_from_touched_files,
 };
 use super::context::PlannerContext;
-use super::utils::LogReplayOptions;
+use super::utils::{LogReplayOptions, prepare_delta_writer_input};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeltaCommitExec,
-    DeltaWriterExec, prepare_delta_write_context,
+    DeltaDecodePath, DeltaWriterExec, prepare_delta_write_context,
 };
 use crate::spec::DeltaOperation;
 
@@ -126,6 +126,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
     // DeltaWriterExec consumes operation/metric columns for MERGE metrics. Drop only
     // metadata already used for targeted rewrite before handing rows to the writer.
     let writer_input: Arc<dyn ExecutionPlan> = strip_internal_columns(writer_input)?;
+    let writer_input = prepare_delta_writer_input(writer_input, &partition_columns, None)?;
 
     // Build the remove source from the touched files, if any.
     let remove_source = if let Some(touched_plan) = &touched_plan_opt {
@@ -233,6 +234,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
     let deletion_vector_operation_mode = row_level_info.deletion_vector_operation_mode;
     let touched_file_plan = row_level_info.touched_file_plan.clone();
     let writer_input = strip_internal_columns(writer_input)?;
+    let writer_input = prepare_delta_writer_input(writer_input, &partition_columns, None)?;
     let writer_schema = writer_input.schema();
     let write_context = prepare_delta_write_context(
         ctx.table_url(),
@@ -291,8 +293,12 @@ pub(crate) async fn assemble_row_level_mor_plan(
             hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
         let deletion_vector_plan =
             sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
-        let touched_adds =
-            hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
+        // DV row paths are decoded, so metadata must hash the same representation.
+        let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &touched_adds.schema())?;
+        let touched_adds = Arc::new(RepartitionExec::try_new(
+            touched_adds,
+            Partitioning::Hash(vec![metadata_path], target_partitions),
+        )?);
         let dv_writer: Arc<dyn ExecutionPlan> =
             Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
                 deletion_vector_plan,
@@ -325,7 +331,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
     )))
 }
 
-fn hash_repartition_by_column(
+pub(super) fn hash_repartition_by_column(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
     partition_count: usize,
@@ -342,7 +348,7 @@ fn hash_repartition_by_column(
     )?))
 }
 
-fn sort_by_column_preserving_partitioning(
+pub(super) fn sort_by_column_preserving_partitioning(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
 ) -> Result<Arc<dyn ExecutionPlan>> {

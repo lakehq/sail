@@ -21,7 +21,7 @@ pub struct TaskDefinition {
 #[derive(Debug, Clone)]
 pub struct TaskInput {
     pub stage: usize,
-    pub locator: TaskInputLocator,
+    pub locator: Arc<TaskInputLocator>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +135,7 @@ impl From<TaskInput> for r#gen::TaskInput {
         let TaskInput { stage, locator } = value;
         r#gen::TaskInput {
             stage: stage as u64,
-            locator: Some(locator.into()),
+            locator: Some(locator.as_ref().clone().into()),
         }
     }
 }
@@ -154,7 +154,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         };
         Ok(TaskInput {
             stage: value.stage as usize,
-            locator,
+            locator: Arc::new(locator),
         })
     }
 }

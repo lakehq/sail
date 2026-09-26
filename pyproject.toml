@@ -225,7 +225,8 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.9",
     "ibis-framework[pyspark]>=12,<13",
-    "sqlglot>=23.4,!=26.32.0",
+    # Ibis 12 uses Drop(this=...), but SQLGlot 30.18 requires Drop(tables=[...]).
+    "sqlglot>=23.4,<30.18,!=26.32.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",

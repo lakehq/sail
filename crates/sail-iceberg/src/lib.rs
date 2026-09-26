@@ -12,6 +12,7 @@
 
 pub(crate) mod catalog_support;
 pub mod datasource;
+mod equality_schema;
 pub mod error;
 pub mod io;
 pub mod lake_source;
@@ -24,6 +25,8 @@ pub mod physical_plan;
 mod procedure;
 pub(crate) mod properties;
 pub(crate) mod row_level_metadata;
+mod row_lineage;
+mod schema_defaults;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;

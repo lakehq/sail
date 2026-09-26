@@ -209,6 +209,7 @@ pub struct ClusterConfig {
     pub worker_heartbeat_interval_secs: u64,
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
@@ -306,9 +307,15 @@ mod retry_strategy {
     from = "shuffle_backend::ShuffleBackend"
 )]
 pub enum ShuffleBackend {
-    Flight,
+    Flight(FlightShuffleBackend),
     Storage(StorageShuffleBackend),
     Celeborn(CelebornShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightShuffleBackend {
+    pub compression: ShuffleCompression,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,6 +447,7 @@ mod shuffle_backend {
     #[serde(deny_unknown_fields)]
     pub struct ShuffleBackend {
         pub r#type: Type,
+        pub flight: super::FlightShuffleBackend,
         pub storage: super::StorageShuffleBackend,
         pub celeborn: super::CelebornShuffleBackend,
     }
@@ -447,7 +455,7 @@ mod shuffle_backend {
     impl From<ShuffleBackend> for super::ShuffleBackend {
         fn from(value: ShuffleBackend) -> Self {
             match value.r#type {
-                Type::Flight => super::ShuffleBackend::Flight,
+                Type::Flight => super::ShuffleBackend::Flight(value.flight),
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
                 Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
             }
@@ -457,8 +465,9 @@ mod shuffle_backend {
     impl From<super::ShuffleBackend> for ShuffleBackend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
-                super::ShuffleBackend::Flight => ShuffleBackend {
+                super::ShuffleBackend::Flight(flight) => ShuffleBackend {
                     r#type: Type::Flight,
+                    flight,
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -475,6 +484,9 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                    },
                     storage,
                     celeborn: super::CelebornShuffleBackend {
                         master_endpoints: vec![],
@@ -487,6 +499,9 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
                     r#type: Type::Celeborn,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                    },
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -974,6 +989,13 @@ pub enum OtlpProtocol {
     HttpJson,
 }
 
+/// Environment variables for application execution configuration.
+pub struct ExecutionConfigEnv;
+
+impl ExecutionConfigEnv {
+    pub const BATCH_SIZE: &'static str = "SAIL_EXECUTION__BATCH_SIZE";
+}
+
 /// Environment variables for application cluster configuration.
 pub struct ClusterConfigEnv;
 
@@ -998,6 +1020,7 @@ impl ClusterConfigEnv {
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,

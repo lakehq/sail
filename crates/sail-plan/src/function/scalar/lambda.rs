@@ -1,10 +1,14 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion_common::ScalarValue;
-use datafusion_common::arrow::datatypes::FieldRef;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
+use datafusion_common::arrow::compute::can_cast_types;
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
+use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
+use datafusion_expr::{
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -13,12 +17,17 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::utils::map_type_from_key_value_types;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
+
+static SPARK_MAP_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new())));
 
 static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
@@ -60,7 +69,14 @@ static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
-        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
+        "aggregate"
+            | "reduce"
+            | "filter"
+            | "map_filter"
+            | "transform"
+            | "exists"
+            | "forall"
+            | "array_sort"
     )
 }
 
@@ -75,6 +91,7 @@ pub(crate) fn get_lambda_parameters(
     let udf = match function_name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
+        "map_filter" => &SPARK_MAP_FILTER_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
@@ -174,6 +191,96 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
 }
 
+fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // TODO: Defer shared literal-zero division validation so NullType operands
+    // containing 1 / 0 can reach the coercions below (see the sail-bug tests).
+    let (mut map, predicate) = input.arguments.two()?;
+    // Spark binds an ordinary expression as a hidden lambda whose parameters
+    // are unused. Avoid capturing variables from any enclosing lambda.
+    let mut predicate = if matches!(predicate, expr::Expr::Lambda(_)) {
+        predicate
+    } else {
+        // Spark coerces a null map only when the predicate is already resolved.
+        // An explicit lambda remains unresolved and must still reject this input.
+        if map.get_type(input.function_context.schema)? == DataType::Null {
+            validate_map_filter_null_expr(&map, input.function_context.schema)?;
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
+                &DataType::Null,
+                &DataType::Null,
+            ))?);
+        }
+        let mut params = Vec::with_capacity(2);
+        for base in ["__map_key", "__map_value"] {
+            let mut name = base.to_string();
+            while lambda_body_uses_param(&predicate, &name)? {
+                name.push('_');
+            }
+            params.push(name);
+        }
+        expr::Expr::Lambda(Lambda::new(params, predicate))
+    };
+    expect_lambda_arity("map_filter", &predicate, 2)?;
+    if let expr::Expr::Lambda(lambda) = &mut predicate
+        && lambda.body.get_type(input.function_context.schema)? == DataType::Null
+    {
+        // Preserve validation of lambdas outside higher-order function arguments.
+        let has_bare_lambda = matches!(lambda.body.as_ref(), expr::Expr::Lambda(_))
+            || lambda.body.exists(|expression| {
+                if matches!(expression, expr::Expr::HigherOrderFunction(_)) {
+                    return Ok(false);
+                }
+                let mut has_lambda_child = false;
+                expression.apply_children(|child| {
+                    has_lambda_child |= matches!(child, expr::Expr::Lambda(_));
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                Ok(has_lambda_child)
+            })?;
+        if !has_bare_lambda {
+            validate_map_filter_null_expr(&lambda.body, input.function_context.schema)?;
+            // Spark replaces NullType predicates with Boolean NULL before evaluation.
+            *lambda.body = lit(ScalarValue::Boolean(None));
+        }
+    }
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_MAP_FILTER_UDF),
+        vec![map, predicate],
+    )))
+}
+
+fn validate_map_filter_null_expr(expression: &expr::Expr, schema: &DFSchema) -> PlanResult<()> {
+    let mut rewriter = TypeCoercionRewriter::new(schema);
+    expression.clone().transform_up(|expression| {
+        // Spark may discard a nested higher-order function before checking its
+        // return type. Only run coercion when its input fields can be inferred.
+        let mut inputs_resolved = true;
+        expression.apply_children(|child| {
+            let child = match child {
+                expr::Expr::Lambda(lambda) => lambda.body.as_ref(),
+                child => child,
+            };
+            inputs_resolved &= child.to_field(schema).is_ok();
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if inputs_resolved {
+            // Type coercion does not validate explicit casts. Preserve their
+            // type errors before replacing a NullType operand with a literal.
+            if let expr::Expr::Cast(expr::Cast { expr, field })
+            | expr::Expr::TryCast(expr::TryCast { expr, field }) = &expression
+            {
+                let from = expr.get_type(schema)?;
+                if !can_cast_types(&from, field.data_type()) {
+                    return plan_err!("cannot cast {from} to {}", field.data_type());
+                }
+            }
+            rewriter.f_up(expression)
+        } else {
+            Ok(Transformed::no(expression))
+        }
+    })?;
+    Ok(())
+}
+
 fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     array_lambda_with_index(
         "transform",
@@ -199,8 +306,8 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
-/// Enforces the exact lambda arity Spark requires for a higher-order
-/// `aggregate`/`reduce` argument, but only on a direct `Expr::Lambda` match.
+/// Enforces the exact lambda arity Spark requires for a higher-order function
+/// argument, but only on a direct `Expr::Lambda` match.
 ///
 /// The UDF binding only rejects lambdas with too many parameters, so a `merge`
 /// lambda with fewer than 2 parameters would otherwise bind silently to a prefix
@@ -237,9 +344,14 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                     .unwrap_or_else(|| "acc".to_string()),
                 _ => "acc".to_string(),
             };
+            let finish_field = Arc::new(Field::new(
+                acc.clone(),
+                zero.get_type(input.function_context.schema)?,
+                true,
+            ));
             let finish = expr::Expr::Lambda(Lambda::new(
                 vec![acc.clone()],
-                expr::Expr::LambdaVariable(LambdaVariable::new(acc, None)),
+                expr::Expr::LambdaVariable(LambdaVariable::new(acc, Some(finish_field))),
             ));
             (array, zero, merge, finish)
         }
@@ -359,7 +471,7 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("exists", F::custom(exists)),
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
-        ("map_filter", F::unknown("map_filter")),
+        ("map_filter", F::custom(map_filter)),
         ("map_zip_with", F::unknown("map_zip_with")),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),

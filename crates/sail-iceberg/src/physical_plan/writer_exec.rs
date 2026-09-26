@@ -10,34 +10,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::compute::{SortOptions, concat_batches};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::expressions::{Column, Literal as PhysicalLiteral};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::expressions::{
+    CaseExpr, Column, IsNullExpr, Literal as PhysicalLiteral,
+};
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalExpr,
+    PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, ToDFSchema, internal_err};
 use futures::StreamExt;
 use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::{
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelWriteMode,
 };
 use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::write::config::WriterConfig;
+use crate::operations::write::metrics::MetricsConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
     CommitMeta, encode_add_data_files, encode_commit_meta, encode_delete_data_files,
@@ -48,7 +55,7 @@ use crate::physical_plan::partition_transform_expr::IcebergPartitionTransformExp
 use crate::physical_plan::position_delete_writer::PositionDeleteAccumulator;
 use crate::physical_plan::write_context::IcebergWriteContext;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
-use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 use crate::spec::FormatVersion;
 use crate::spec::transform::Transform;
 use crate::utils::get_object_store_from_context;
@@ -63,8 +70,12 @@ pub struct IcebergWriterExec {
     table_exists: bool,
     options: IcebergWriterExecOptions,
     write_context: IcebergWriteContext,
-    merge_row_intents: bool,
-    merge_distribution_keys: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    row_level_mode: Option<RowLevelWriteMode>,
+    distribution_keys: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    sort_order: Option<LexOrdering>,
+    parquet_properties: WriterProperties,
+    target_file_size_bytes: u64,
+    metrics: MetricsConfig,
     cache: Arc<PlanProperties>,
 }
 
@@ -88,6 +99,20 @@ impl IcebergWriterExec {
         };
         let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema.clone(), output_partitions);
+        let properties = write_context
+            .base_table
+            .as_ref()
+            .map(|base| base.properties.clone())
+            .unwrap_or_else(|| options.table_properties.iter().cloned().collect());
+        let parquet_properties = options.parquet_properties(&properties)?;
+        let target_file_size_bytes = options.target_file_size(&properties)?;
+        let sort_order = Self::data_sort_order(input.schema().as_ref(), &write_context)?;
+        let metrics = MetricsConfig::from_properties(
+            &write_context.writer_schema,
+            &write_context.sort_order,
+            &properties,
+        )
+        .map_err(DataFusionError::Plan)?;
         Ok(Self {
             input,
             table_url,
@@ -96,8 +121,12 @@ impl IcebergWriterExec {
             table_exists,
             options,
             write_context,
-            merge_row_intents: false,
-            merge_distribution_keys: None,
+            row_level_mode: None,
+            distribution_keys: None,
+            sort_order,
+            parquet_properties,
+            target_file_size_bytes,
+            metrics,
             cache,
         })
     }
@@ -111,8 +140,40 @@ impl IcebergWriterExec {
         options: IcebergWriterExecOptions,
         write_context: IcebergWriteContext,
     ) -> Result<Self> {
-        let merge_distribution_keys =
-            Self::merge_distribution_keys(input.schema().as_ref(), &partition_columns)?;
+        // All changes to a v3 data file must reach the same DV writer, even
+        // when updates move its rows to different destination partitions.
+        let merge_distribution_keys = if write_context
+            .base_table
+            .as_ref()
+            .is_some_and(|base| base.format_version == FormatVersion::V3)
+            && input.schema().index_of(MERGE_FILE_COLUMN).is_ok()
+        {
+            let source_file: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
+                MERGE_FILE_COLUMN,
+                input.schema().index_of(MERGE_FILE_COLUMN)?,
+            ));
+            let insert_row: Arc<dyn PhysicalExpr> = Arc::new(IsNullExpr::new(source_file.clone()));
+            let mut insert_keys =
+                Self::data_partition_keys(input.schema().as_ref(), &write_context)?;
+            if insert_keys.is_empty() {
+                // Unpartitioned inserts use their data values for distribution.
+                for field in write_context.writer_schema.fields() {
+                    let index = input.schema().index_of(&field.name)?;
+                    insert_keys.push(Arc::new(Column::new(&field.name, index)));
+                }
+            }
+            let mut keys = vec![source_file];
+            for key in insert_keys {
+                keys.push(Arc::new(CaseExpr::try_new(
+                    None,
+                    vec![(insert_row.clone(), key)],
+                    None,
+                )?));
+            }
+            keys
+        } else {
+            Self::merge_distribution_keys(input.schema().as_ref(), &partition_columns)?
+        };
         let mut writer = Self::new(
             input,
             table_url,
@@ -122,9 +183,122 @@ impl IcebergWriterExec {
             options,
             write_context,
         )?;
-        writer.merge_row_intents = true;
-        writer.merge_distribution_keys = Some(merge_distribution_keys);
+        writer.row_level_mode = Some(RowLevelWriteMode::MergeOnRead);
+        writer.distribution_keys = Some(merge_distribution_keys);
         Ok(writer)
+    }
+
+    pub fn new_copy_on_write(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        partition_columns: Vec<CatalogPartitionField>,
+        options: IcebergWriterExecOptions,
+        write_context: IcebergWriteContext,
+    ) -> Result<Self> {
+        let distribution_keys = Self::data_partition_keys(input.schema().as_ref(), &write_context)?;
+        let mut writer = Self::new(
+            input,
+            table_url,
+            partition_columns,
+            PhysicalSinkMode::Append,
+            true,
+            options,
+            write_context,
+        )?;
+        writer.row_level_mode = Some(RowLevelWriteMode::CopyOnWrite);
+        if writer.options.copy_on_write_partitioning && !distribution_keys.is_empty() {
+            writer.distribution_keys = Some(distribution_keys);
+        }
+        Ok(writer)
+    }
+
+    fn data_partition_keys(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        context
+            .writer_partition_spec
+            .iter()
+            .flat_map(|spec| spec.fields())
+            .filter(|field| field.transform != Transform::Void)
+            .map(|field| {
+                let source = Self::source_field_expr(schema, context, field.source_id)?;
+                Self::transform_key(source, field.transform, schema)
+            })
+            .collect()
+    }
+
+    fn source_field_expr(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+        source_id: i32,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let path = context
+            .writer_schema
+            .field_path_by_id(source_id)
+            .ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!(
+                    "Missing scalar Iceberg write field {source_id}"
+                )
+            })?;
+        let Some((root, children)) = path.split_first() else {
+            return internal_err!("Empty Iceberg write field path");
+        };
+        let mut expr =
+            datafusion_expr::Expr::Column(datafusion_common::Column::from_name(&root.name));
+        for field in children {
+            expr = datafusion::functions::core::expr_fn::get_field(expr, field.name.as_str());
+        }
+        datafusion::physical_expr::create_physical_expr(
+            &expr,
+            &schema.clone().to_dfschema()?,
+            &Default::default(),
+            &Default::default(),
+        )
+    }
+
+    fn transform_key(
+        source: Arc<dyn PhysicalExpr>,
+        transform: Transform,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if transform == Transform::Identity {
+            return Ok(source);
+        }
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(IcebergPartitionTransformExpr::new(source, transform));
+        expr.data_type(schema)?;
+        Ok(expr)
+    }
+
+    fn data_sort_order(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+    ) -> Result<Option<LexOrdering>> {
+        if context.sort_order.is_unsorted() {
+            return Ok(None);
+        }
+        context
+            .sort_order
+            .fields
+            .iter()
+            .map(|field| {
+                if !field.source_ids.is_empty() {
+                    return datafusion_common::not_impl_err!(
+                        "Iceberg multi-source sort transforms"
+                    );
+                }
+                let source = Self::source_field_expr(schema, context, field.source_id)?;
+                Ok(PhysicalSortExpr {
+                    expr: Self::transform_key(source, field.transform, schema)?,
+                    options: SortOptions {
+                        descending: field.direction == crate::spec::SortDirection::Descending,
+                        nulls_first: field.null_order == crate::spec::NullOrder::First,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(LexOrdering::new)
     }
 
     fn merge_distribution_keys(
@@ -141,13 +315,13 @@ impl IcebergWriterExec {
         }
 
         let spec_id_index = input_schema.index_of(MERGE_PARTITION_SPEC_ID_COLUMN).ok();
-        let partition_index = input_schema.index_of(MERGE_PARTITION_COLUMN).ok();
+        let partition_index = input_schema.index_of(MERGE_FILE_METADATA_COLUMN).ok();
         let (mut distribution_keys, has_delete_metadata) = match (spec_id_index, partition_index) {
             (Some(spec_id_index), Some(partition_index)) => (
                 vec![
                     Arc::new(Column::new(MERGE_PARTITION_SPEC_ID_COLUMN, spec_id_index))
                         as Arc<dyn PhysicalExpr>,
-                    Arc::new(Column::new(MERGE_PARTITION_COLUMN, partition_index))
+                    Arc::new(Column::new(MERGE_FILE_METADATA_COLUMN, partition_index))
                         as Arc<dyn PhysicalExpr>,
                 ],
                 true,
@@ -164,7 +338,7 @@ impl IcebergWriterExec {
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Iceberg MERGE writer requires both '{MERGE_PARTITION_SPEC_ID_COLUMN}' and \
-                     '{MERGE_PARTITION_COLUMN}' when either delete metadata column is present"
+                     '{MERGE_FILE_METADATA_COLUMN}' when either delete metadata column is present"
                 )));
             }
         };
@@ -236,8 +410,8 @@ impl IcebergWriterExec {
         &self.write_context
     }
 
-    pub fn reads_merge_row_intents(&self) -> bool {
-        self.merge_row_intents
+    pub fn row_level_mode(&self) -> Option<RowLevelWriteMode> {
+        self.row_level_mode
     }
 }
 
@@ -252,14 +426,18 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match &self.merge_distribution_keys {
+        match &self.distribution_keys {
             Some(expressions) => vec![Distribution::KeyPartitioned(expressions.clone())],
             None => vec![Distribution::UnspecifiedDistribution],
         }
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![self.sort_order.clone().map(OrderingRequirements::from)]
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![self.options.fixed_write_partitions.is_none()]
+        vec![false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -290,7 +468,15 @@ impl ExecutionPlan for IcebergWriterExec {
             return internal_err!("IcebergWriterExec requires exactly one child");
         }
         let input = Arc::clone(&children[0]);
-        let writer = if self.merge_row_intents {
+        let writer = if self.row_level_mode == Some(RowLevelWriteMode::CopyOnWrite) {
+            Self::new_copy_on_write(
+                input,
+                self.table_url.clone(),
+                self.partition_columns.clone(),
+                self.options.clone(),
+                self.write_context.clone(),
+            )?
+        } else if self.row_level_mode == Some(RowLevelWriteMode::MergeOnRead) {
             Self::new_merge(
                 input,
                 self.table_url.clone(),
@@ -334,11 +520,12 @@ impl ExecutionPlan for IcebergWriterExec {
         let table_url = self.table_url.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let merge_projection = self
-            .merge_row_intents
+        let row_level_mode = self.row_level_mode;
+        let merge_projection = row_level_mode
+            .is_some()
             .then(|| IcebergMergeRowProjection::try_new(self.input.schema()))
             .transpose()?;
-        let writes_position_deletes = merge_projection.is_some()
+        let writes_position_deletes = row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
             && self
                 .input
                 .schema()
@@ -346,6 +533,9 @@ impl ExecutionPlan for IcebergWriterExec {
                 .is_ok();
         let options = self.options.clone();
         let write_context = self.write_context.clone();
+        let parquet_properties = self.parquet_properties.clone();
+        let target_file_size_bytes = self.target_file_size_bytes;
+        let metrics = self.metrics.clone();
 
         let schema = self.schema();
         let future = async move {
@@ -370,7 +560,15 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_location = write_context.data_location()?;
-            let table_schema = write_context.writer_arrow_schema()?;
+            let preserve_lineage = row_level_mode.is_some()
+                && write_context
+                    .base_table
+                    .as_ref()
+                    .is_some_and(|base| base.format_version == FormatVersion::V3);
+            let mut table_schema = write_context.writer_arrow_schema()?;
+            if preserve_lineage {
+                table_schema = Arc::new(crate::row_lineage::append_lineage_fields(&table_schema)?);
+            }
             let iceberg_schema = write_context.writer_schema.clone();
             let spec_id_val = write_context.writer_partition_spec_id();
             let variant_shredding = write_context.variant_shredding.clone();
@@ -378,12 +576,14 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let writer_config = WriterConfig {
                 table_schema: table_schema.clone(),
-                // TODO: Resolve `write.parquet.*` table properties and write-option overrides
-                // into the Parquet writer properties.
-                writer_properties: WriterProperties::default(),
+                writer_properties: parquet_properties,
+                target_file_size_bytes,
+                sort_order_id: (!write_context.sort_order.is_unsorted())
+                    .then_some(write_context.sort_order.order_id as i32),
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: write_context.unbound_writer_partition_spec(),
                 variant_shredding,
+                metrics,
             };
 
             let data_object_store = get_object_store_from_context(&context, &data_location)?;
@@ -410,12 +610,7 @@ impl ExecutionPlan for IcebergWriterExec {
                                 .to_string(),
                         ));
                     }
-                    FormatVersion::V2 => {}
-                    FormatVersion::V3 => {
-                        return Err(DataFusionError::NotImplemented(
-                            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
-                        ));
-                    }
+                    FormatVersion::V2 | FormatVersion::V3 => {}
                 }
                 Some(PositionDeleteAccumulator::try_new(base_table_context)?)
             } else {
@@ -423,6 +618,7 @@ impl ExecutionPlan for IcebergWriterExec {
             };
 
             let mut total_rows = 0u64;
+            let mut removed_data_file_paths = BTreeSet::new();
             let mut data = stream;
             while let Some(batch_result) = data.next().await {
                 let input_batch = batch_result?;
@@ -443,7 +639,15 @@ impl ExecutionPlan for IcebergWriterExec {
                             MERGE_ROW_INDEX_COLUMN,
                         )?;
                     }
-                    merge_projection.project_data_rows(&input_batch)?
+                    if row_level_mode == Some(RowLevelWriteMode::CopyOnWrite) {
+                        removed_data_file_paths
+                            .extend(merge_projection.removed_file_paths(&input_batch)?);
+                    }
+                    merge_projection.project_data_rows(
+                        &input_batch,
+                        row_level_mode,
+                        preserve_lineage,
+                    )?
                 } else {
                     input_batch
                 };
@@ -463,9 +667,19 @@ impl ExecutionPlan for IcebergWriterExec {
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
             let delete_files = if let Some(position_deletes) = position_deletes {
                 let data_store_ctx = StoreContext::new(data_object_store, &data_location)?;
-                position_deletes
-                    .finish(&data_store_ctx, &data_location)
-                    .await?
+                if base_table_context.is_some_and(|base| base.format_version == FormatVersion::V3) {
+                    let table_store = StoreContext::new(
+                        get_object_store_from_context(&context, &table_url)?,
+                        &table_url,
+                    )?;
+                    position_deletes
+                        .finish_deletion_vectors(&table_store, &data_store_ctx, &data_location)
+                        .await?
+                } else {
+                    position_deletes
+                        .finish(&data_store_ctx, &data_location)
+                        .await?
+                }
             } else {
                 Vec::new()
             };
@@ -473,6 +687,11 @@ impl ExecutionPlan for IcebergWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
+                removed_data_file_paths: removed_data_file_paths.into_iter().collect(),
+                skip_empty_commit: row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
+                    || (row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
+                        && base_table_context
+                            .is_some_and(|base| base.format_version == FormatVersion::V3)),
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,
@@ -509,16 +728,16 @@ impl DisplayAs for IcebergWriterExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "IcebergWriterExec(table_path={}", self.table_url)?;
-                if self.merge_row_intents {
-                    write!(f, ", merge_row_intents=true")?;
+                if let Some(mode) = self.row_level_mode {
+                    write!(f, ", row_level_mode={mode:?}")?;
                 }
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;
                 write!(f, "table_path={}", self.table_url)?;
-                if self.merge_row_intents {
-                    write!(f, ", merge_row_intents=true")?;
+                if let Some(mode) = self.row_level_mode {
+                    write!(f, ", row_level_mode={mode:?}")?;
                 }
                 Ok(())
             }
@@ -554,7 +773,7 @@ mod tests {
             Field::new(MERGE_FILE_COLUMN, DataType::Utf8, true),
             Field::new(MERGE_ROW_INDEX_COLUMN, DataType::Int64, true),
             Field::new(MERGE_PARTITION_SPEC_ID_COLUMN, DataType::Int32, true),
-            Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, true),
+            Field::new(MERGE_FILE_METADATA_COLUMN, DataType::Utf8, true),
             Field::new(OPERATION_COLUMN, DataType::Int32, false),
             Field::new(MERGE_SOURCE_METRIC_COLUMN, DataType::Int64, true),
         ]))
@@ -654,7 +873,7 @@ mod tests {
 
         assert_eq!(expressions.len(), 3);
         assert_column(&expressions[0], MERGE_PARTITION_SPEC_ID_COLUMN, 4);
-        assert_column(&expressions[1], MERGE_PARTITION_COLUMN, 5);
+        assert_column(&expressions[1], MERGE_FILE_METADATA_COLUMN, 5);
         assert_column(&expressions[2], MERGE_FILE_COLUMN, 2);
     }
 
@@ -676,7 +895,7 @@ mod tests {
 
         assert_eq!(expressions.len(), 4);
         assert_column(&expressions[0], MERGE_PARTITION_SPEC_ID_COLUMN, 4);
-        assert_column(&expressions[1], MERGE_PARTITION_COLUMN, 5);
+        assert_column(&expressions[1], MERGE_FILE_METADATA_COLUMN, 5);
         assert_column(&expressions[2], "id", 0);
         let transform = expressions[3]
             .downcast_ref::<IcebergPartitionTransformExpr>()
@@ -739,12 +958,82 @@ mod tests {
     }
 
     #[test]
-    fn fixed_write_partitions_disable_optimizer_parallelism() {
-        let mut writer = iceberg_writer(false, vec![]);
-        assert_eq!(writer.benefits_from_input_partitioning(), vec![true]);
+    fn v3_merge_colocates_source_files_and_distributes_inserts() {
+        use datafusion::arrow::array::{
+            ArrayRef, Int64Array, StringArray, TimestampMicrosecondArray, new_null_array,
+        };
 
-        writer.options.fixed_write_partitions = Some(1);
-        assert_eq!(writer.benefits_from_input_partitioning(), vec![false]);
+        use crate::physical_plan::write_context::IcebergBaseWriteContext;
+
+        for partition_columns in [
+            vec![],
+            vec![CatalogPartitionField {
+                column: "id".to_string(),
+                transform: None,
+            }],
+        ] {
+            let original = iceberg_writer(true, partition_columns);
+            let mut context = original.write_context.clone();
+            context.base_table = Some(IcebergBaseWriteContext {
+                format_version: FormatVersion::V3,
+                partition_specs: vec![],
+                default_spec_id: 0,
+                properties: Default::default(),
+                last_column_id: 2,
+                current_schema_id: 0,
+                last_partition_id: 1000,
+                current_snapshot_id: Some(1),
+            });
+            let writer = IcebergWriterExec::new_merge(
+                original.input,
+                original.table_url,
+                original.partition_columns,
+                original.sink_mode,
+                true,
+                original.options,
+                context,
+            )
+            .expect("V3 merge writer");
+            let schema = merge_input_schema();
+            let mut columns: Vec<ArrayRef> = vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4])),
+                Arc::new(TimestampMicrosecondArray::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec![
+                    Some("same.parquet"),
+                    Some("same.parquet"),
+                    None,
+                    None,
+                ])),
+            ];
+            columns.extend(schema.fields().iter().skip(3).map(|field| {
+                if field.name() == OPERATION_COLUMN {
+                    Arc::new(datafusion::arrow::array::Int32Array::from(vec![0; 4])) as ArrayRef
+                } else {
+                    new_null_array(field.data_type(), 4)
+                }
+            }));
+            let batch = RecordBatch::try_new(schema, columns).expect("input");
+            let distributions = input_distributions(&writer);
+            let values = hash_expressions(&distributions)
+                .iter()
+                .map(|expr| {
+                    expr.evaluate(&batch)
+                        .expect("distribution key")
+                        .into_array(4)
+                        .expect("array")
+                })
+                .collect::<Vec<_>>();
+            let keys = (0..4)
+                .map(|row| {
+                    values
+                        .iter()
+                        .map(|array| ScalarValue::try_from_array(array, row).expect("scalar"))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(keys[0], keys[1]);
+            assert_ne!(keys[2], keys[3]);
+        }
     }
 
     #[test]
@@ -822,7 +1111,10 @@ mod tests {
             let (_, _, commit_meta) =
                 decode_actions_and_meta_from_batch(&batch).expect("commit metadata");
             assert_eq!(
-                commit_meta.expect("commit metadata action").requirements,
+                commit_meta
+                    .first()
+                    .expect("commit metadata action")
+                    .requirements,
                 expected_requirements
             );
 

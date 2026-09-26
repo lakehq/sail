@@ -26,6 +26,7 @@ pub use checkpoint::{CheckpointActionRow, LastCheckpointHint, LastCheckpointV2};
 pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
+pub(crate) use log::{CheckpointFileKind, parse_checkpoint_filename};
 pub use log::{
     DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR, checkpoint_path, checksum_path, commit_path,
     compacted_json_path, delta_log_file_path, delta_log_prefix_path, delta_log_root_path,

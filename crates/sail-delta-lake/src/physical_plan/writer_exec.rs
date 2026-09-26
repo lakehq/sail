@@ -552,28 +552,15 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_columns.is_empty() {
-            // Upstream repartitioning controls file counts and small-file behavior.
-            return vec![Distribution::UnspecifiedDistribution];
-        }
+        vec![Distribution::UnspecifiedDistribution]
+    }
 
-        // For partitioned tables, require grouping by the partition key so that each task can
-        // write its partitions correctly without opening many writers concurrently.
-        //
-        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
-        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
-            Vec::with_capacity(self.partition_columns.len());
-        for name in &self.partition_columns {
-            let idx = match self.input.schema().index_of(name) {
-                Ok(i) => i,
-                Err(_) => return vec![Distribution::UnspecifiedDistribution],
-            };
-            exprs.push(Arc::new(
-                datafusion_physical_expr::expressions::Column::new(name, idx),
-            ));
-        }
-
-        vec![Distribution::KeyPartitioned(exprs)]
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Writer parallelism follows the input plan. Letting `EnforceDistribution` add a
+        // round-robin repartition just for the writer would make the file layout and the
+        // `operationMetrics` file/byte counters depend on batch arrival order. Operators that do
+        // benefit from partitioning still get it, so upstream parallelism is unaffected.
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
@@ -14,9 +13,11 @@ use sail_logical_plan::merge::MergeCardinalityCheckNode;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
+use crate::datasource::predicate::Predicate;
 use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
+use crate::physical_plan::manifest_scan_exec::ManifestPruning;
 use crate::physical_plan::{
     IcebergManifestScanExec, IcebergProcedureExec, IcebergScanByDataFilesExec,
 };
@@ -74,14 +75,26 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
                 ))
             })?;
             let manifests: Arc<dyn ExecutionPlan> = Arc::new(
-                IcebergManifestScanExec::new(node.table_url().to_string(), snapshot)
-                    .with_selected_data_file_paths(node.selected_data_file_paths().to_vec()),
+                IcebergManifestScanExec::new(
+                    node.table_url().to_string(),
+                    snapshot,
+                    ManifestPruning {
+                        predicate: Predicate::Constant(Some(true)),
+                        specs: vec![],
+                        floating_field_ids: None,
+                        limit: None,
+                    },
+                )
+                .with_selected_data_file_paths(node.selected_data_file_paths().to_vec()),
             );
             return Ok(Some(Arc::new(IcebergScanByDataFilesExec::new(
                 manifests,
                 node.table_url().to_string(),
                 schema,
-            ))));
+                None,
+                None,
+                None,
+            )?)));
         }
 
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {
@@ -139,8 +152,14 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         };
         let filters = unnormalize_cols(scan.filters.clone());
         let plan = source
-            .provider()
-            .scan(session, scan.projection.as_ref(), &filters, scan.fetch)
+            .scan()
+            .create_physical_plan(
+                session,
+                scan.projection.as_ref(),
+                &filters,
+                scan.fetch,
+                source.prepared(&filters, scan.fetch),
+            )
             .await?;
         Ok(Some(plan))
     }

@@ -2,6 +2,7 @@ use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -18,6 +19,7 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
+use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
@@ -239,6 +241,7 @@ impl PlanResolver<'_> {
                 }
             }
         };
+        let func = coerce_timestamp_string_predicate(func, schema, &self.config)?;
 
         // DataFusion lambda variables carry no type until resolved against the schema.
         // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
@@ -338,9 +341,40 @@ impl PlanResolver<'_> {
         let mut exprs: Vec<expr::Expr> = vec![];
 
         for expression in expressions {
+            let is_named_reference = matches!(
+                &expression,
+                spec::Expr::UnresolvedAttribute { .. }
+                    | spec::Expr::UnresolvedNamedLambdaVariable(_)
+            );
+            // Preserve named references before resolution lowers field access to functions.
+            let field_name = match &expression {
+                spec::Expr::UnresolvedAttribute { name, .. }
+                | spec::Expr::UnresolvedNamedLambdaVariable(
+                    spec::UnresolvedNamedLambdaVariable { name },
+                ) => name.parts().last().map(|x| x.as_ref().to_string()),
+                spec::Expr::UnresolvedExtractValue { extraction, .. } => {
+                    match extraction.as_ref() {
+                        spec::Expr::Literal(spec::Literal::Utf8 { value }) => value.clone(),
+                        spec::Expr::UnresolvedAttribute { name, .. } => match name.parts() {
+                            [field] => Some(field.as_ref().to_string()),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             let NamedExpr { name, expr, .. } = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
+            // A string map key is not a struct field name in the Column API.
+            let field_name = if is_named_reference
+                || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())
+            {
+                field_name
+            } else {
+                None
+            };
 
             match expr {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
@@ -397,6 +431,13 @@ impl PlanResolver<'_> {
 
                 other => {
                     names.push(name.one()?);
+                    // A reference may resolve to an alias with different casing.
+                    let other = match field_name {
+                        Some(field_name) if !matches!(other, Expr::Column(_)) => {
+                            other.alias(field_name)
+                        }
+                        _ => other,
+                    };
                     exprs.push(other);
                 }
             }

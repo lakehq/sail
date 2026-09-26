@@ -477,6 +477,17 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
 
+    // With no columns, only cardinality matters; no Python values need decoding.
+    if schema.fields().is_empty() {
+        let options =
+            arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(pickled_rows.len()));
+        return Ok(RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &options,
+        )?);
+    }
+
     Python::attach(|py| {
         let cloudpickle = import_cloudpickle(py)?;
 
@@ -604,6 +615,25 @@ mod tests {
 
     fn init_python() {
         Python::initialize();
+    }
+
+    #[test]
+    fn test_zero_column_rows_preserve_count() -> Result<()> {
+        // Protocol 4 pickle of an empty tuple from a zero-column data source.
+        // This path must not require Python initialization or PySpark.
+        let rows = vec![vec![0x80, 0x04, b')', b'.']; 3];
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &rows)?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_zero_column_empty_rows() -> Result<()> {
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &[])?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 0);
+        Ok(())
     }
 
     #[test]

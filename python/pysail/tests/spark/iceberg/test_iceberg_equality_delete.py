@@ -22,7 +22,7 @@ from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.typedef import Record
-from pyiceberg.types import LongType, NestedField, StringType
+from pyiceberg.types import BinaryType, LongType, NestedField, StringType
 
 from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
@@ -37,6 +37,29 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, create_sql_catalog
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
+
+
+def test_binary_equality_delete_keys_are_applied_before_cow(spark, sql_catalog):
+    identifier = "default.binary_equality"
+    name = "binary_equality"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "key", BinaryType(), required=False),
+        ),
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "key": [b"\x01", b"\x02", None]}))
+        path = _append_equality_delete_snapshot(table, pa.table({"key": [b"\x01", None]}), [2])
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        assert [row.id for row in spark.table(name).collect()] == [2]
+        spark.sql(f"UPDATE {name} SET id = 4 WHERE id = 2").collect()  # noqa: S608
+        rows = spark.table(name).collect()
+        assert [(row.id, bytes(row.key)) for row in rows] == [(4, b"\x02")]
+    finally:
+        _drop_table(spark, name)
+        sql_catalog.drop_table(identifier)
 
 
 def _uri_sql(path: Path) -> str:
@@ -77,6 +100,8 @@ def _append_equality_delete_snapshot(
     equality_ids: list[int],
     *,
     partition: Record | None = None,
+    assign_root_ids: bool = True,
+    metrics: dict | None = None,
 ) -> Path:
     table_path = _local_table_path(table.location())
     metadata_dir = table_path / "metadata"
@@ -84,13 +109,14 @@ def _append_equality_delete_snapshot(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     delete_file_path = data_dir / f"equality-delete-{uuid.uuid4()}.parquet"
-    assert delete_rows.num_columns == len(equality_ids)
-    fields = []
-    for field, field_id in zip(delete_rows.schema, equality_ids, strict=True):
-        metadata = dict(field.metadata or {})
-        metadata[b"PARQUET:field_id"] = str(field_id).encode()
-        fields.append(field.with_metadata(metadata))
-    delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
+    if assign_root_ids:
+        assert delete_rows.num_columns == len(equality_ids)
+        fields = []
+        for field, field_id in zip(delete_rows.schema, equality_ids, strict=True):
+            metadata = dict(field.metadata or {})
+            metadata[b"PARQUET:field_id"] = str(field_id).encode()
+            fields.append(field.with_metadata(metadata))
+        delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
     pq.write_table(delete_rows, delete_file_path)
 
     metadata = _find_latest_metadata(table_path)
@@ -107,6 +133,7 @@ def _append_equality_delete_snapshot(
         record_count=delete_rows.num_rows,
         file_size_in_bytes=delete_file_path.stat().st_size,
         equality_ids=equality_ids,
+        **(metrics or {}),
     )
 
     manifest_path = metadata_dir / f"manifest-{uuid.uuid4()}.avro"
@@ -319,8 +346,7 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             """
         )
         empty_table_metadata_path = _latest_metadata_path(table_path)
-        with pytest.raises(Exception, match="partitioned tables are not supported"):
-            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
+        spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
         assert _latest_metadata_path(table_path) == empty_table_metadata_path
 
         spark.sql(
@@ -334,8 +360,7 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
         )
         before_metadata_path = _latest_metadata_path(table_path)
 
-        with pytest.raises(Exception, match="partitioned tables are not supported"):
-            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'missing'").collect()
+        spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'missing'").collect()
         assert _latest_metadata_path(table_path) == before_metadata_path
 
         with pytest.raises(Exception, match="partitioned tables are not supported"):
@@ -355,38 +380,6 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             (2, "drop", "A"),
             (3, "keep", "B"),
         ]
-    finally:
-        _drop_table(spark, table_name)
-
-
-@pytest.mark.parametrize("delete_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
-def test_iceberg_sql_delete_rejects_copy_on_write_before_scanning_empty_table(spark, tmp_path, delete_mode):
-    table_name = "iceberg_delete_copy_on_write_reject"
-    table_path = tmp_path / table_name
-    mode_property = "" if delete_mode is None else f", 'write.delete.mode' = '{delete_mode}'"
-
-    _drop_table(spark, table_name)
-    try:
-        spark.sql(
-            f"""
-            CREATE TABLE {table_name} (
-              id BIGINT,
-              name STRING
-            )
-            USING iceberg
-            LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES ('format-version' = '2'{mode_property})
-            """
-        )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
-
-        with pytest.raises(Exception, match=r"write\.delete\.mode=copy-on-write|copy-on-write.*not supported"):
-            spark.sql("DELETE FROM iceberg_delete_copy_on_write_reject WHERE id = 1").collect()
-
-        assert spark.sql("SELECT * FROM iceberg_delete_copy_on_write_reject").collect() == []
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
     finally:
         _drop_table(spark, table_name)
 
@@ -412,14 +405,19 @@ def test_iceberg_sql_delete_rejects_floating_equality_keys_without_file_side_eff
             )
             """
         )
-        spark.sql("INSERT INTO iceberg_delete_floating_key_reject VALUES (1, 1.25)")
+        spark.sql(
+            "INSERT INTO iceberg_delete_floating_key_reject SELECT /*+ COALESCE(1) */ * FROM VALUES (1, 1.25), (2, 2.5)"
+        )
         before_metadata_path = _latest_metadata_path(table_path)
         before_parquet_files = _parquet_file_paths(table_path)
 
         with pytest.raises(Exception, match=rf"identifier-field-invalid type {column_type.lower()}"):
             spark.sql("DELETE FROM iceberg_delete_floating_key_reject WHERE id = 1").collect()
 
-        assert [row.id for row in spark.sql("SELECT id FROM iceberg_delete_floating_key_reject").collect()] == [1]
+        assert sorted(row.id for row in spark.sql("SELECT id FROM iceberg_delete_floating_key_reject").collect()) == [
+            1,
+            2,
+        ]
         assert _latest_metadata_path(table_path) == before_metadata_path
         assert _parquet_file_paths(table_path) == before_parquet_files
     finally:
@@ -581,5 +579,25 @@ def test_iceberg_partitioned_equality_delete_only_applies_within_delete_partitio
         entries = _current_delete_entries(table_path)
         assert len(entries) == 1
         assert entries[0].data_file.partition == Record("A")
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_limit_counts_survivors_after_equality_deletes(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.limit_after_deletes"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(NestedField(1, "id", LongType(), required=False)),
+        properties={"format-version": "2"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3]}))
+        table.append(pa.table({"id": [4, 5, 6]}))
+        _append_equality_delete_snapshot(table, pa.table({"id": [4, 5, 6]}), [1])
+        survivors = spark.read.format("iceberg").load(table.location())
+        rows = survivors.limit(2).collect()
+        assert len(rows) == 2  # noqa: PLR2004
+        assert {row.id for row in rows} <= {1, 2, 3}
     finally:
         catalog.drop_table(identifier)

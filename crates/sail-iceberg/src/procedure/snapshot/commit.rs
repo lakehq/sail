@@ -7,7 +7,7 @@ use object_store::ObjectStoreExt;
 use super::operation::SnapshotOperation;
 use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
-    IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
+    IcebergCatalogCommitMode, catalog_requirements,
 };
 use crate::io::StoreContext;
 use crate::lake_source::{
@@ -19,7 +19,8 @@ use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{TableMetadata, TableUpdate};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
+    table_metadata_location, write_version_hint,
 };
 use crate::utils::metadata::metadata_files_for_version;
 
