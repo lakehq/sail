@@ -30,6 +30,7 @@ mod error;
 mod exec;
 mod executor;
 mod filter;
+mod object_store;
 mod stream;
 mod table_provider;
 mod write_exec;

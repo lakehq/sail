@@ -7667,12 +7667,14 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-object-store",
  "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "url",
 ]
 
