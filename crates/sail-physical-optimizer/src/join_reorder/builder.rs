@@ -8,12 +8,12 @@ use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::utils::collect_columns;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizerContext;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{AnalysisContext, analyze};
 use log::trace;
@@ -49,7 +49,8 @@ pub enum ColumnMapEntry {
 }
 
 /// Builder for constructing query graph from ExecutionPlan.
-pub struct GraphBuilder {
+pub struct GraphBuilder<'a> {
+    context: Option<&'a dyn PhysicalOptimizerContext>,
     /// The query graph being built.
     graph: QueryGraph,
     /// Counter for assigning unique relation IDs.
@@ -62,15 +63,28 @@ pub struct GraphBuilder {
     cached_relations: Vec<RelationNode>,
 }
 
-impl GraphBuilder {
+impl<'a> GraphBuilder<'a> {
     pub fn new(options: JoinReorderOptions) -> Self {
         Self {
+            context: None,
             graph: QueryGraph::new(),
             relation_counter: 0,
             expr_to_stable_id: HashMap::new(),
             options,
             cached_relations: vec![],
         }
+    }
+
+    pub fn statistics_context(mut self, context: &'a dyn PhysicalOptimizerContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    fn overall_statistics(
+        &self,
+        plan: &dyn ExecutionPlan,
+    ) -> Result<datafusion::common::Statistics> {
+        super::statistics::statistics(plan, self.context).map(Arc::unwrap_or_clone)
     }
 
     /// Reuse estimates for unchanged leaves while pricing alternatives in one region.
@@ -114,6 +128,7 @@ impl GraphBuilder {
         // TODO: Extend to support `SortMergeJoinExec`.
         if let Some(join_plan) = plan.downcast_ref::<HashJoinExec>() {
             if join_plan.join_type() == &JoinType::Inner
+                && !join_plan.properties().boundedness.is_unbounded()
                 && join_plan.fetch().is_none()
                 && join_plan.dynamic_expressions_produced().is_empty()
                 && !join_plan
@@ -661,7 +676,7 @@ impl GraphBuilder {
             //   base column stats as a best-effort proxy for join planning.
             let (pre_filter_plan, selectivity) =
                 self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
-            let pre_stats = overall_statistics(pre_filter_plan.as_ref())?;
+            let pre_stats = self.overall_statistics(pre_filter_plan.as_ref())?;
             let base = match pre_stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -674,9 +689,23 @@ impl GraphBuilder {
                 .total_byte_size
                 .with_estimated_selectivity(selectivity);
 
-            (adjusted, base * selectivity, base)
+            if self
+                .context
+                .is_some_and(|c| c.config_options().optimizer.use_statistics_registry)
+            {
+                let filtered = self.overall_statistics(plan.as_ref())?;
+                if let Some(&rows) = filtered.num_rows.get_value() {
+                    adjusted.num_rows = filtered.num_rows;
+                    adjusted.total_byte_size = filtered.total_byte_size;
+                    (adjusted, rows as f64, base)
+                } else {
+                    (adjusted, base * selectivity, base)
+                }
+            } else {
+                (adjusted, base * selectivity, base)
+            }
         } else {
-            let stats = overall_statistics(plan.as_ref())?;
+            let stats = self.overall_statistics(plan.as_ref())?;
             let initial_cardinality = match stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -726,7 +755,7 @@ impl GraphBuilder {
 
         while let Some(filter) = cur.downcast_ref::<FilterExec>() {
             let input = filter.input().clone();
-            let input_stats = overall_statistics(input.as_ref())?;
+            let input_stats = self.overall_statistics(input.as_ref())?;
             let input_schema = input.schema();
 
             let sel = self.estimate_filter_selectivity(
@@ -975,12 +1004,7 @@ impl GraphBuilder {
     }
 }
 
-fn overall_statistics(plan: &dyn ExecutionPlan) -> Result<datafusion::common::Statistics> {
-    let stats = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
-    Ok(Arc::unwrap_or_clone(stats))
-}
-
-impl Default for GraphBuilder {
+impl Default for GraphBuilder<'_> {
     fn default() -> Self {
         Self::new(JoinReorderOptions::default())
     }

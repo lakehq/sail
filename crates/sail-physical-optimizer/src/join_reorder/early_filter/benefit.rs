@@ -13,17 +13,17 @@ pub(super) fn worthwhile(
     keys: &[usize],
     restriction: &Restriction,
     downstream_work: f64,
-    options: &super::super::JoinReorderOptions,
+    context: &Context<'_>,
 ) -> Result<bool> {
-    let target_stats = StatisticsContext::new().compute(target.as_ref(), &StatisticsArgs::new())?;
+    let options = context.options;
+    let target_stats = statistics(target.as_ref(), Some(context.optimizer))?;
     let Some(&target_rows) = target_stats.num_rows.get_value() else {
         return Ok(false);
     };
     if target_rows <= restriction.rows.saturating_mul(4) {
         return Ok(false);
     }
-    let source_stats =
-        StatisticsContext::new().compute(restriction.keys.as_ref(), &StatisticsArgs::new())?;
+    let source_stats = statistics(restriction.keys.as_ref(), Some(context.optimizer))?;
     let retained = keys
         .iter()
         .enumerate()

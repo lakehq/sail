@@ -51,8 +51,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
+    } else {
+        rules.push(Arc::new(JoinSelection::new()));
     }
-    rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
@@ -103,7 +104,13 @@ mod tests {
             });
             let actual_datafusion_optimizer_names: Vec<&str> = optimizers
                 .iter()
-                .map(|opt| opt.name())
+                .map(|opt| {
+                    if opt.name() == "JoinReorder" {
+                        "join_selection"
+                    } else {
+                        opt.name()
+                    }
+                })
                 .filter(|name| datafusion_optimizer_names.contains(name))
                 .collect();
             assert_eq!(

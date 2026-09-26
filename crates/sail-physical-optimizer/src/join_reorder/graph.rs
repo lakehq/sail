@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -148,21 +148,6 @@ pub struct QueryGraph {
 impl QueryGraph {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Count the distinct physical hash keys supplied by the connecting predicates.
-    pub fn join_key_count(&self, edge_indices: &[usize]) -> usize {
-        edge_indices
-            .iter()
-            .filter_map(|index| self.edges.get(*index))
-            .flat_map(|edge| &edge.equi_pairs)
-            .map(|(left, right)| {
-                let left = (left.relation_id, left.column_index);
-                let right = (right.relation_id, right.column_index);
-                (left.min(right), left.max(right))
-            })
-            .collect::<HashSet<_>>()
-            .len()
     }
 
     /// Adds a relation node to the query graph.

@@ -22,13 +22,15 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr};
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizerContext;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
+
+use super::statistics::statistics;
 
 // Bound plan growth: each reduction duplicates a small, filtered scan. This is a
 // single pass over the original tree, never a fixed point over the added joins.
@@ -39,18 +41,20 @@ mod benefit;
 struct Context<'a> {
     remaining: usize,
     options: &'a super::JoinReorderOptions,
+    optimizer: &'a dyn PhysicalOptimizerContext,
 }
 
 pub(super) fn propagate(
     plan: Arc<dyn ExecutionPlan>,
-    config: &ConfigOptions,
+    optimizer: &dyn PhysicalOptimizerContext,
     options: &super::JoinReorderOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut context = Context {
         remaining: MAX_REDUCTIONS,
         options,
+        optimizer,
     };
-    visit(plan, config, &mut context)
+    visit(plan, optimizer.config_options(), &mut context)
 }
 
 fn visit(
@@ -91,7 +95,7 @@ fn visit(
         if scan_rows > max_rows {
             continue;
         }
-        let Some(rows) = row_count(source)? else {
+        let Some(rows) = row_count(source, context.optimizer)? else {
             continue;
         };
         if rows > max_rows {
@@ -126,7 +130,7 @@ fn visit(
             })
             .collect();
         let keys = Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
-        let key_stats = StatisticsContext::new().compute(keys.as_ref(), &StatisticsArgs::new())?;
+        let key_stats = statistics(keys.as_ref(), Some(context.optimizer))?;
         // Match JoinSelection's byte-first collection threshold: the benefit
         // estimate does not account for hash-repartitioning the target scan.
         let can_collect = match key_stats.total_byte_size.get_value() {
@@ -348,7 +352,7 @@ fn insert(
     context: &mut Context<'_>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if downstream_work <= 0.0
-        || !benefit::worthwhile(&plan, keys, restriction, downstream_work, context.options)?
+        || !benefit::worthwhile(&plan, keys, restriction, downstream_work, context)?
     {
         return Ok(plan);
     }
@@ -473,8 +477,11 @@ fn volatile(expr: &Arc<dyn PhysicalExpr>) -> Result<bool> {
     expr.exists(|expr| Ok(expr.is_volatile_node()))
 }
 
-fn row_count(plan: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
-    let stats = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
+fn row_count(
+    plan: &Arc<dyn ExecutionPlan>,
+    context: &dyn PhysicalOptimizerContext,
+) -> Result<Option<usize>> {
+    let stats = statistics(plan.as_ref(), Some(context))?;
     Ok(stats.num_rows.get_value().copied())
 }
 

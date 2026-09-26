@@ -27,9 +27,6 @@ type JoinConditionPairs = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
 /// Plan reconstructor, converting the optimal DPPlan back to ExecutionPlan.
 pub struct PlanReconstructor<'a> {
-    pub partition_mode: PartitionMode,
-    /// Reference to the complete DP table for looking up subproblems
-    dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>,
     /// Reference to the query graph
     query_graph: &'a QueryGraph,
     /// Cache for reconstructed plans to avoid duplicate construction
@@ -53,10 +50,8 @@ struct PendingFilter {
 }
 
 impl<'a> PlanReconstructor<'a> {
-    pub fn new(dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>, query_graph: &'a QueryGraph) -> Self {
+    pub fn new(query_graph: &'a QueryGraph) -> Self {
         Self {
-            partition_mode: PartitionMode::Auto,
-            dp_table,
             query_graph,
             plan_cache: HashMap::new(),
             pending_filters: Vec::new(),
@@ -145,16 +140,15 @@ impl<'a> PlanReconstructor<'a> {
         match &dp_plan.plan_type {
             PlanType::Leaf { .. } => Ok(()),
             PlanType::Join {
-                left_set,
-                right_set,
+                left,
+                right,
                 edge_indices,
+                ..
             } => {
-                let left_dp_plan = self.dp_table.get(left_set).ok_or_else(|| {
-                    DataFusionError::Internal("Left subplan not found in DP table".to_string())
-                })?;
-                let right_dp_plan = self.dp_table.get(right_set).ok_or_else(|| {
-                    DataFusionError::Internal("Right subplan not found in DP table".to_string())
-                })?;
+                let left_set = &left.join_set;
+                let right_set = &right.join_set;
+                let left_dp_plan = left;
+                let right_dp_plan = right;
 
                 let mut req_left = self.filter_required_by_join_set(required, left_set);
                 let mut req_right = self.filter_required_by_join_set(required, right_set);
@@ -359,10 +353,13 @@ impl<'a> PlanReconstructor<'a> {
                 }
             }
             PlanType::Join {
-                left_set,
-                right_set,
+                left,
+                right,
                 edge_indices,
+                ..
             } => {
+                let left_set = &left.join_set;
+                let right_set = &right.join_set;
                 if !left_set.is_disjoint(right_set) {
                     return Err(DataFusionError::Internal(format!(
                         "JoinReorder: join children overlap: left={:?}, right={:?}",
@@ -404,18 +401,8 @@ impl<'a> PlanReconstructor<'a> {
                     edge_use_counts[edge_index] += 1;
                 }
 
-                let left_dp_plan = self.dp_table.get(left_set).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "JoinReorder: left subplan {:?} missing from DP table",
-                        left_set
-                    ))
-                })?;
-                let right_dp_plan = self.dp_table.get(right_set).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "JoinReorder: right subplan {:?} missing from DP table",
-                        right_set
-                    ))
-                })?;
+                let left_dp_plan = left;
+                let right_dp_plan = right;
                 self.validate_reconstruction_subplan(
                     left_dp_plan,
                     edge_use_counts,
@@ -445,10 +432,11 @@ impl<'a> PlanReconstructor<'a> {
                 self.reconstruct_leaf(*relation_id, dp_plan.join_set)?
             }
             PlanType::Join {
-                left_set,
-                right_set,
+                left,
+                right,
                 edge_indices,
-            } => self.reconstruct_join(*left_set, *right_set, edge_indices)?,
+                mode,
+            } => self.reconstruct_join(left, right, edge_indices, *mode)?,
         };
 
         // If we just reconstructed the root join set (entire reorderable region),
@@ -530,19 +518,14 @@ impl<'a> PlanReconstructor<'a> {
     /// Reconstruct Join node.
     fn reconstruct_join(
         &mut self,
-        left_set: JoinSet,
-        right_set: JoinSet,
+        left_dp_plan: &DPPlan,
+        right_dp_plan: &DPPlan,
         edge_indices: &[usize],
+        mode: PartitionMode,
     ) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
+        let left_set = left_dp_plan.join_set;
+        let right_set = right_dp_plan.join_set;
         let current_join_set = left_set | right_set;
-        // Find left and right subplans from DP table
-        let left_dp_plan = self.dp_table.get(&left_set).ok_or_else(|| {
-            DataFusionError::Internal("Left subplan not found in DP table".to_string())
-        })?;
-        let right_dp_plan = self.dp_table.get(&right_set).ok_or_else(|| {
-            DataFusionError::Internal("Right subplan not found in DP table".to_string())
-        })?;
-
         // DPPlan stores the selected physical child order. For inner joins, PlanEnumerator may
         // choose either side as the left/build input based on asymmetric cost. Non-inner joins keep
         // their original semantic orientation via QueryGraph legality checks.
@@ -627,7 +610,7 @@ impl<'a> PlanReconstructor<'a> {
             join_filter,
             &join_type,         // Use determined join type
             projection.clone(), // projection
-            self.partition_mode,
+            mode,
             null_equality,
             false, // null_aware
         )?);
@@ -1340,20 +1323,17 @@ mod tests {
 
     #[test]
     fn test_reconstructor_creation() {
-        let dp_table = HashMap::new();
         let graph = QueryGraph::new();
-        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let reconstructor = PlanReconstructor::new(&graph);
         assert!(reconstructor.plan_cache.is_empty());
     }
 
     #[test]
     fn test_reconstruct_leaf() -> Result<()> {
-        let mut dp_table = HashMap::new();
         let graph = create_test_graph();
         let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
-        dp_table.insert(leaf_plan.join_set, leaf_plan.clone());
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let result = reconstructor.reconstruct(&leaf_plan);
 
         assert!(result.is_ok());
@@ -1369,20 +1349,24 @@ mod tests {
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
         let leaf2 = Arc::new(DPPlan::new_leaf(2, 1000.0)?);
-        let set0 = JoinSet::new_singleton(0)?;
-        let set1 = JoinSet::new_singleton(1)?;
-        let set2 = JoinSet::new_singleton(2)?;
-        let join01 = Arc::new(DPPlan::new_join(set0, set1, vec![edge_01], 100.0, 1000.0));
-        let root = Arc::new(DPPlan::new_join(set0 | set1, set2, vec![], 200.0, 1000.0));
+        let join01 = Arc::new(DPPlan::new_join(
+            leaf0,
+            leaf1,
+            vec![edge_01],
+            100.0,
+            1000.0,
+            PartitionMode::Partitioned,
+        ));
+        let root = Arc::new(DPPlan::new_join(
+            join01,
+            leaf2,
+            vec![],
+            200.0,
+            1000.0,
+            PartitionMode::Partitioned,
+        ));
 
-        let mut dp_table = HashMap::new();
-        dp_table.insert(set0, leaf0);
-        dp_table.insert(set1, leaf1);
-        dp_table.insert(set2, leaf2);
-        dp_table.insert(set0 | set1, join01);
-        dp_table.insert(root.join_set, root.clone());
-
-        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let reconstructor = PlanReconstructor::new(&graph);
         let err = match reconstructor.validate_reconstruction_plan(&root) {
             Ok(()) => {
                 return Err(DataFusionError::Internal(
@@ -1443,24 +1427,21 @@ mod tests {
             )],
         ))?;
 
-        // Build a DP table where the solver chose left={0}, right={1}.
+        // Preserve the solver's chosen left={0}, right={1} orientation.
         // Reconstructor must respect that physical order.
-        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 1_000_000.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 10.0)?);
-        dp_table.insert(leaf0.join_set, leaf0);
-        dp_table.insert(leaf1.join_set, leaf1);
 
         let root = Arc::new(DPPlan::new_join(
-            JoinSet::new_singleton(0)?,
-            JoinSet::new_singleton(1)?,
+            leaf0,
+            leaf1,
             vec![0],
             0.0,
             10.0,
+            PartitionMode::Partitioned,
         ));
-        dp_table.insert(root.join_set, root.clone());
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
@@ -1517,22 +1498,19 @@ mod tests {
             )],
         ))?;
 
-        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
-        dp_table.insert(leaf0.join_set, leaf0);
-        dp_table.insert(leaf1.join_set, leaf1);
 
         let root = Arc::new(DPPlan::new_join(
-            JoinSet::new_singleton(0)?,
-            JoinSet::new_singleton(1)?,
+            leaf0,
+            leaf1,
             vec![0],
             0.0,
             100.0,
+            PartitionMode::Partitioned,
         ));
-        dp_table.insert(root.join_set, root.clone());
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
@@ -1590,22 +1568,19 @@ mod tests {
         edge.null_equality = NullEquality::NullEqualsNull;
         graph.add_edge(edge)?;
 
-        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
-        dp_table.insert(leaf0.join_set, leaf0);
-        dp_table.insert(leaf1.join_set, leaf1);
 
         let root = Arc::new(DPPlan::new_join(
-            JoinSet::new_singleton(0)?,
-            JoinSet::new_singleton(1)?,
+            leaf0,
+            leaf1,
             vec![0],
             0.0,
             100.0,
+            PartitionMode::Partitioned,
         ));
-        dp_table.insert(root.join_set, root.clone());
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let (plan, _) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
@@ -1617,37 +1592,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reconstruct_join_missing_subplans() {
-        let dp_table = HashMap::new(); // Empty table
-        let graph = create_test_graph();
-
-        let left_set = JoinSet::new_singleton(0).unwrap();
-        let right_set = JoinSet::new_singleton(1).unwrap();
-        let join_plan = Arc::new(DPPlan::new_join(
-            left_set,
-            right_set,
-            vec![0],
-            2000.0,
-            500.0,
-        ));
-
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
-        let result = reconstructor.reconstruct(&join_plan);
-        assert!(result.is_err());
-
-        // Should return Internal error about missing subplan
-        if let Err(DataFusionError::Internal(_)) = result {
-            // Expected error type
-        } else {
-            unreachable!("Expected Internal error about missing subplan");
-        }
-    }
-
-    #[test]
     fn test_clear_cache() {
-        let dp_table = HashMap::new();
         let graph = QueryGraph::new();
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
 
         // Add some cache items (simulated)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1715,9 +1662,8 @@ mod tests {
             Arc::new(Column::new("R1.C0", 0)),
         ));
 
-        let dp_table = HashMap::new();
         let graph = QueryGraph::new();
-        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let reconstructor = PlanReconstructor::new(&graph);
         let deps = reconstructor.analyze_predicate_dependencies(
             &pred,
             &left_map,
@@ -1763,9 +1709,8 @@ mod tests {
             Arc::new(Column::new("R1.C0", 0)),
         ));
 
-        let dp_table = HashMap::new();
         let graph = QueryGraph::new();
-        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let reconstructor = PlanReconstructor::new(&graph);
         let res = reconstructor.analyze_predicate_dependencies(
             &pred,
             &left_map,
@@ -1850,8 +1795,7 @@ mod tests {
             equi_pairs,
         ))?;
 
-        let dp_table = HashMap::new();
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let res = reconstructor.build_join_filter(
             &[0],
             &left_map,
@@ -1885,9 +1829,8 @@ mod tests {
         ];
 
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("dup", 0));
-        let dp_table = HashMap::new();
         let graph = QueryGraph::new();
-        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let reconstructor = PlanReconstructor::new(&graph);
         let res = reconstructor.rewrite_expr_to_output_schema(&expr, &plan, &output_map);
         assert!(
             res.is_err(),
@@ -1903,7 +1846,6 @@ mod tests {
 
         use datafusion::logical_expr::JoinType;
 
-        use crate::join_reorder::dp_plan::PlanType;
         use crate::join_reorder::graph::{JoinEdge, StableColumn};
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1940,42 +1882,32 @@ mod tests {
             )],
         ))?;
 
-        // DP table with leaves and a cartesian join.
-        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        // Selected children include a cartesian join.
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
         let leaf2 = Arc::new(DPPlan::new_leaf(2, 1000.0)?);
-        dp_table.insert(leaf0.join_set, Arc::clone(&leaf0));
-        dp_table.insert(leaf1.join_set, Arc::clone(&leaf1));
-        dp_table.insert(leaf2.join_set, Arc::clone(&leaf2));
 
         // First join (0,1) with the single edge at index 0.
-        let join01 = Arc::new(DPPlan {
-            join_set: JoinSet::from_iter([0usize, 1usize])?,
-            plan_type: PlanType::Join {
-                left_set: leaf0.join_set,
-                right_set: leaf1.join_set,
-                edge_indices: vec![0],
-            },
-            cost: 0.0,
-            cardinality: 1000.0,
-        });
-        dp_table.insert(join01.join_set, Arc::clone(&join01));
+        let join01 = Arc::new(DPPlan::new_join(
+            leaf0,
+            leaf1,
+            vec![0],
+            0.0,
+            1000.0,
+            PartitionMode::Partitioned,
+        ));
 
         // Then cartesian join between (0,1) and 2 (no connecting edges).
-        let join012 = Arc::new(DPPlan {
-            join_set: JoinSet::from_iter([0usize, 1usize, 2usize])?,
-            plan_type: PlanType::Join {
-                left_set: join01.join_set,
-                right_set: leaf2.join_set,
-                edge_indices: vec![],
-            },
-            cost: 0.0,
-            cardinality: 1_000_000.0,
-        });
-        dp_table.insert(join012.join_set, Arc::clone(&join012));
+        let join012 = Arc::new(DPPlan::new_join(
+            join01,
+            leaf2,
+            vec![],
+            0.0,
+            1_000_000.0,
+            PartitionMode::Partitioned,
+        ));
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let (plan, _map) = reconstructor.reconstruct(&join012)?;
         assert_eq!(plan.name(), "CrossJoinExec");
         Ok(())
@@ -1989,7 +1921,6 @@ mod tests {
         use datafusion::logical_expr::{JoinType, Operator};
         use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
-        use crate::join_reorder::dp_plan::PlanType;
         use crate::join_reorder::graph::JoinEdge;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2021,26 +1952,20 @@ mod tests {
             vec![],
         ))?;
 
-        // DP table with leaves and the join using the single edge at index 0.
-        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        // Materialize the selected theta join.
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
-        dp_table.insert(leaf0.join_set, Arc::clone(&leaf0));
-        dp_table.insert(leaf1.join_set, Arc::clone(&leaf1));
 
-        let join01 = Arc::new(DPPlan {
-            join_set: JoinSet::from_iter([0usize, 1usize])?,
-            plan_type: PlanType::Join {
-                left_set: leaf0.join_set,
-                right_set: leaf1.join_set,
-                edge_indices: vec![0],
-            },
-            cost: 0.0,
-            cardinality: 1000.0,
-        });
-        dp_table.insert(join01.join_set, Arc::clone(&join01));
+        let join01 = Arc::new(DPPlan::new_join(
+            leaf0,
+            leaf1,
+            vec![0],
+            0.0,
+            1000.0,
+            PartitionMode::Partitioned,
+        ));
 
-        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let mut reconstructor = PlanReconstructor::new(&graph);
         let (plan, _map) = reconstructor.reconstruct(&join01)?;
         assert_eq!(plan.name(), "NestedLoopJoinExec");
         Ok(())
