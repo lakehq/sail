@@ -18,9 +18,7 @@ use datafusion_expr::{
     SubqueryAlias, Union, expr_fn, lit,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
-use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+use sail_python_udf::udf::expr_contains_python_udf;
 
 /// Spark folds expressions before replacing projected IN with an existence join.
 /// Fold only the affected expressions and their constant producers here; running
@@ -104,26 +102,20 @@ struct ProducerConstants {
 /// permits ordinary nondeterministic functions such as rand().
 fn locally_evaluable(expr: &Expr) -> Result<bool> {
     Ok(!expr.exists(|expr| {
-        Ok(match expr {
+        Ok(matches!(
+            expr,
             Expr::AggregateFunction(_)
-            | Expr::WindowFunction(_)
-            | Expr::Exists(_)
-            | Expr::InSubquery(_)
-            | Expr::SetComparison(_)
-            | Expr::ScalarSubquery(_)
-            | Expr::OuterReferenceColumn(_, _)
-            | Expr::GroupingSet(_)
-            | Expr::Placeholder(_)
-            | Expr::Unnest(_) => true,
-            Expr::ScalarFunction(function) => {
-                let function = function.func.inner();
-                function.is::<PySparkUDF>()
-                    || function.is::<PySparkUnresolvedUDF>()
-                    || function.is::<PySparkCoGroupMapUDF>()
-            }
-            _ => false,
-        })
-    })?)
+                | Expr::WindowFunction(_)
+                | Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+                | Expr::OuterReferenceColumn(_, _)
+                | Expr::GroupingSet(_)
+                | Expr::Placeholder(_)
+                | Expr::Unnest(_)
+        ))
+    })? && !expr_contains_python_udf(expr)?)
 }
 
 fn producer_constants(
