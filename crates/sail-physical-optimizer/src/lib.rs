@@ -26,6 +26,7 @@ use crate::filter_pushdown::PostFilterPushdown;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
 mod collect_left;
@@ -34,6 +35,7 @@ mod filter_pushdown;
 mod join_reorder;
 mod projection_pushdown;
 mod scan_partitions;
+mod select_semi_join_build_side;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -54,6 +56,7 @@ pub fn get_physical_optimizers(
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
+    rules.push(Arc::new(SelectSemiJoinBuildSide));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
