@@ -85,6 +85,12 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(source) = scan
+            .source
+            .downcast_ref::<crate::change_data_feed::ChangeDataFeedSource>()
+        {
+            return source.scan(session, scan.projection.as_deref()).map(Some);
+        }
         if let Some(source) = scan.source.downcast_ref::<DeltaMetadataAggregateSource>() {
             return plan_delta_metadata_aggregate(session, source)
                 .await

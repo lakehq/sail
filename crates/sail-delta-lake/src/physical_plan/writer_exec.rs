@@ -47,6 +47,7 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{StreamExt, once};
+use object_store::ObjectStoreExt;
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
@@ -723,6 +724,11 @@ impl DeltaWriterExec {
             let operation = write_context.operation.clone();
             let kernel_mode = write_context.effective_column_mapping_mode;
             let writer_schema = write_context.writer_schema()?;
+            let writer_schema = if options.change_data {
+                change_data_schema(&writer_schema)
+            } else {
+                writer_schema
+            };
             let stats_excluded_columns = variant_top_level_columns(&writer_schema);
             let variant_shredding =
                 Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
@@ -774,14 +780,27 @@ impl DeltaWriterExec {
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
-            let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
+            let writer_path = if options.change_data {
+                writer_path.join("_change_data")
+            } else {
+                writer_path
+            };
+            let mut writer =
+                DeltaWriter::new(object_store.clone(), writer_path.clone(), writer_config);
 
             let logical_schema_for_mapping = logical_kernel_for_mapping
                 .as_ref()
                 .map(Schema::try_from)
                 .transpose()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .map(Arc::new);
+                .map(Arc::new)
+                .map(|schema| {
+                    if options.change_data {
+                        change_data_schema(&schema)
+                    } else {
+                        schema
+                    }
+                });
 
             let mut total_rows = 0u64;
             let mut data = stream;
@@ -841,6 +860,44 @@ impl DeltaWriterExec {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let close_time_ms = close_start.elapsed().as_millis() as u64;
+
+            if options.change_data {
+                let mut actions = add_actions
+                    .into_iter()
+                    .map(|add| {
+                        Action::Cdc(crate::spec::AddCDCFile {
+                            path: format!("_change_data/{}", add.path),
+                            partition_values: add.partition_values,
+                            size: add.size,
+                            data_change: false,
+                            tags: None,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if actions.is_empty() {
+                    // An empty CDC file also suppresses inferred changes from copied data files.
+                    let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
+                    let parquet =
+                        parquet::arrow::ArrowWriter::try_new(Vec::new(), writer_schema, None)?;
+                    let bytes = parquet.into_inner()?;
+                    let size = i64::try_from(bytes.len())
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    object_store
+                        .put(&writer_path.clone().join(file_name.as_str()), bytes.into())
+                        .await?;
+                    actions.push(Action::Cdc(crate::spec::AddCDCFile {
+                        path: format!("_change_data/{file_name}"),
+                        size,
+                        data_change: false,
+                        partition_values: physical_partition_columns
+                            .iter()
+                            .map(|name| (name.clone(), None))
+                            .collect(),
+                        tags: None,
+                    }));
+                }
+                return encode_actions(actions, None);
+            }
 
             let num_added_files: u64 = add_actions.len() as u64;
             let num_added_bytes: u64 = add_actions
@@ -1246,6 +1303,16 @@ impl DisplayAs for DeltaWriterExec {
             }
         }
     }
+}
+
+fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
+    let mut fields = schema.fields().to_vec();
+    fields.push(Arc::new(datafusion::arrow::datatypes::Field::new(
+        crate::change_data_feed::CHANGE_TYPE_COLUMN,
+        DataType::Utf8,
+        true,
+    )));
+    Arc::new(Schema::new(fields))
 }
 
 #[cfg(test)]
