@@ -9,6 +9,7 @@ use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 
 use crate::error::ExecutionResult;
 use crate::id::{DriverId, TaskStreamKey};
+use crate::profiling::ProfileHandle;
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::error::TaskStreamError;
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
@@ -39,7 +40,13 @@ impl TaskStreamFlightClient {
         &self,
         key: TaskStreamKey,
         schema: SchemaRef,
+        profile: Option<ProfileHandle>,
     ) -> ExecutionResult<TaskStreamSource> {
+        if let Some(profile) = &profile {
+            profile.diagnostic("flight_fetch", || {
+                format!("stream={key:?} owner={:?}", self.owner)
+            });
+        }
         let ticket = TaskStreamTicket {
             job_id: key.job_id.into(),
             stage: key.stage as u64,
@@ -61,6 +68,9 @@ impl TaskStreamFlightClient {
             ticket: ticket.into(),
         };
         let response = self.inner.get().await?.do_get(request).await?;
+        if let Some(profile) = &profile {
+            profile.diagnostic("flight_stream_opened", || format!("{key:?}"));
+        }
         let stream = response.into_inner().map_err(|e| e.into());
         let stream = FlightRecordBatchStream::new_from_flight_data(stream).map_err(|e| e.into());
         // The Flight data encoder may have issue with the `LargeList` data type, causing

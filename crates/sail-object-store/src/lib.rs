@@ -8,3 +8,4 @@ pub use path::{
     ResolvedObjectStorePath, delete_object_store_prefix_objects, resolve_object_store_path,
 };
 pub use registry::DynamicObjectStoreRegistry;
+pub use s3::get_s3_object_store;

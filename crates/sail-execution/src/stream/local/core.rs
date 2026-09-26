@@ -20,10 +20,14 @@ use crate::stream::writer::TaskStreamChannelSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 impl LocalStreamManager {
-    pub fn new(options: LocalStreamManagerOptions) -> Self {
+    pub fn new(
+        options: LocalStreamManagerOptions,
+        profile: Option<crate::profiling::ProfileHandle>,
+    ) -> Self {
         Self {
             options,
             streams: HashMap::new(),
+            profile,
         }
     }
 
@@ -59,6 +63,15 @@ impl LocalStreamManager {
                 };
                 match create(senders.clone()) {
                     Ok((stream, sink)) => {
+                        if let Some(profile) = &self.profile {
+                            profile.diagnostic("local_stream_published", || {
+                                format!(
+                                    "{} waiting_readers={}",
+                                    TaskStreamKeyDisplay(&key),
+                                    senders.len()
+                                )
+                            });
+                        }
                         *entry.into_mut() = LocalStreamState::Created { stream };
                         Ok(sink)
                     }
@@ -72,6 +85,11 @@ impl LocalStreamManager {
             }
             Entry::Vacant(entry) => match create(vec![]) {
                 Ok((stream, sink)) => {
+                    if let Some(profile) = &self.profile {
+                        profile.diagnostic("local_stream_created", || {
+                            TaskStreamKeyDisplay(&key).to_string()
+                        });
+                    }
                     entry.insert(LocalStreamState::Created { stream });
                     Ok(sink)
                 }
@@ -91,8 +109,20 @@ impl LocalStreamManager {
     ) -> ExecutionResult<TaskStreamSource> {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Created { stream } => {
+                    if let Some(profile) = &self.profile {
+                        profile.diagnostic("local_stream_subscribed", || {
+                            TaskStreamKeyDisplay(key).to_string()
+                        });
+                    }
+                    stream.subscribe()
+                }
                 LocalStreamState::Pending { senders } => {
+                    if let Some(profile) = &self.profile {
+                        profile.diagnostic("local_stream_waiting", || {
+                            TaskStreamKeyDisplay(key).to_string()
+                        });
+                    }
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);
                     // There is no need to probe the pending stream again.
@@ -105,6 +135,11 @@ impl LocalStreamManager {
                 ))),
             },
             Entry::Vacant(entry) => {
+                if let Some(profile) = &self.profile {
+                    profile.diagnostic("local_stream_pending", || {
+                        TaskStreamKeyDisplay(key).to_string()
+                    });
+                }
                 let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
@@ -117,11 +152,20 @@ impl LocalStreamManager {
     }
 
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {
+        let before = self.profile.as_ref().map(|_| self.streams.len());
         if let Some(stage) = stage {
             self.streams
                 .retain(|key, _| key.job_id != job_id || key.stage != stage);
         } else {
             self.streams.retain(|key, _| key.job_id != job_id);
+        }
+        if let (Some(profile), Some(before)) = (&self.profile, before) {
+            profile.diagnostic("local_streams_removed", || {
+                format!(
+                    "job={job_id} stage={stage:?} count={}",
+                    before - self.streams.len()
+                )
+            });
         }
     }
 
@@ -130,6 +174,15 @@ impl LocalStreamManager {
             return;
         };
         if let LocalStreamState::Pending { senders } = value {
+            if let Some(profile) = &self.profile {
+                profile.diagnostic("local_stream_timeout", || {
+                    format!(
+                        "{} waiting_readers={}",
+                        TaskStreamKeyDisplay(key),
+                        senders.len()
+                    )
+                });
+            }
             let message = "local stream is not created within the expected time".to_string();
             let cause = CommonErrorCause::Execution(message);
             Self::fail_senders(senders, &cause);

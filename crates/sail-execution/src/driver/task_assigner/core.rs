@@ -108,6 +108,15 @@ impl TaskAssigner {
             )));
         }
         self.task_queue.push_back(region.clone());
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("task_region_enqueued", || {
+                format!(
+                    "{} task sets; queue length {}",
+                    region.tasks.len(),
+                    self.task_queue.len()
+                )
+            });
+        }
         Ok(())
     }
 
@@ -123,6 +132,11 @@ impl TaskAssigner {
             match assigner.try_assign_task_region(region) {
                 Ok(x) => assignments.extend(x),
                 Err(region) => {
+                    if let Some(profile) = &self.profile {
+                        profile.diagnostic("task_region_waiting", || {
+                            format!("{} task sets waiting for worker slots", region.tasks.len())
+                        });
+                    }
                     // The region cannot be successfully assigned as a whole
                     // due to insufficient worker task slots.
                     // Put the region back to the queue and try again later.

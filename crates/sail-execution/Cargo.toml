@@ -51,6 +51,7 @@ readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
+sysinfo = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

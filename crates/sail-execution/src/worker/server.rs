@@ -8,6 +8,7 @@ use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskKey};
+use crate::profiling::ProfileHandle;
 use crate::task::definition::TaskDefinition;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 use crate::worker::r#gen::worker_service_server::WorkerService;
@@ -17,10 +18,19 @@ use crate::worker::r#gen::{
 };
 use crate::worker::{WorkerActor, WorkerMessage};
 
+macro_rules! rpc {
+    ($server:expr, $operation:literal, $phase:literal, $duration:expr, $($detail:tt)*) => {
+        if let Some(profile) = &$server.profile {
+            profile.rpc("worker", $operation, $phase, || format!($($detail)*), $duration);
+        }
+    };
+}
+
 pub struct WorkerServer {
     worker: ActorHandle<WorkerActor>,
     task_runner: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
+    profile: Option<ProfileHandle>,
 }
 
 impl WorkerServer {
@@ -28,11 +38,13 @@ impl WorkerServer {
         worker: ActorHandle<WorkerActor>,
         task_runner: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
+        profile: Option<ProfileHandle>,
     ) -> Self {
         Self {
             worker,
             task_runner,
             context,
+            profile,
         }
     }
 }
@@ -44,6 +56,7 @@ impl WorkerService for WorkerServer {
         request: Request<RunTaskBatchRequest>,
     ) -> Result<Response<RunTaskBatchResponse>, Status> {
         let request = request.into_inner();
+        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
         debug!("{request:?}");
         let RunTaskBatchRequest {
             job_id,
@@ -52,6 +65,16 @@ impl WorkerService for WorkerServer {
             definition,
             peers,
         } = request;
+        rpc!(
+            self,
+            "run_task_batch",
+            "start",
+            None,
+            "RPC run_task_batch job={job_id} stage={stage} tasks={} peers={} definition_bytes={}",
+            tasks.len(),
+            peers.len(),
+            definition.len()
+        );
         let peers = peers
             .into_iter()
             .map(|x| x.try_into())
@@ -87,6 +110,13 @@ impl WorkerService for WorkerServer {
         rx.await
             .map_err(|_| Status::unavailable("task runner stopped before admission"))??;
         let response = RunTaskBatchResponse {};
+        rpc!(
+            self,
+            "run_task_batch",
+            "complete",
+            started.map(|x| x.elapsed().as_micros()),
+            "completed"
+        );
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -96,6 +126,7 @@ impl WorkerService for WorkerServer {
         request: Request<StopTaskRequest>,
     ) -> Result<Response<StopTaskResponse>, Status> {
         let request = request.into_inner();
+        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
         debug!("{request:?}");
         let StopTaskRequest {
             job_id,
@@ -103,6 +134,13 @@ impl WorkerService for WorkerServer {
             partition,
             attempt,
         } = request;
+        rpc!(
+            self,
+            "stop_task",
+            "start",
+            None,
+            "job={job_id} stage={stage} partition={partition} attempt={attempt}"
+        );
         self.task_runner
             .send(TaskRunnerMessage::StopTask {
                 key: TaskKey {
@@ -115,6 +153,13 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
+        rpc!(
+            self,
+            "stop_task",
+            "complete",
+            started.map(|x| x.elapsed().as_micros()),
+            "completed"
+        );
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -124,8 +169,16 @@ impl WorkerService for WorkerServer {
         request: Request<CleanUpJobRequest>,
     ) -> Result<Response<CleanUpJobResponse>, Status> {
         let request = request.into_inner();
+        let started = self.profile.as_ref().map(|_| std::time::Instant::now());
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
+        rpc!(
+            self,
+            "clean_up_job",
+            "start",
+            None,
+            "job={job_id} stage={stage:?}"
+        );
         let job_id = job_id.into();
         let stage = stage.map(|x| x as usize);
         if stage.is_none() {
@@ -143,6 +196,13 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};
+        rpc!(
+            self,
+            "clean_up_job",
+            "complete",
+            started.map(|x| x.elapsed().as_micros()),
+            "completed"
+        );
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -154,10 +214,18 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
+        rpc!(self, "stop_worker", "start", None, "stop_worker");
+        let (result, receiver) = tokio::sync::oneshot::channel();
         self.worker
-            .send(WorkerMessage::Shutdown)
+            .send(WorkerMessage::Shutdown {
+                result: Some(result),
+            })
             .await
             .map_err(ExecutionError::from)?;
+        // The driver may delete the worker pod after this RPC returns.
+        receiver
+            .await
+            .map_err(|_| Status::unavailable("worker stopped before shutdown completed"))?;
         let response = StopWorkerResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))

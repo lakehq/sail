@@ -13,11 +13,13 @@ impl Actor for TaskRunnerActor {
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
             session_id,
+            profile,
             extensions,
             placement,
         } = options;
         Self {
             session_id,
+            profile,
             signals: Default::default(),
             tasks: Default::default(),
             extensions,

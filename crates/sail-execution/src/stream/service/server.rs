@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status, Streaming, async_trait};
 
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
+use crate::profiling::ProfileHandle;
 use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
@@ -24,6 +25,10 @@ pub trait TaskStreamKeyDecoder: Debug + Send + 'static {
     fn decode(bytes: &[u8]) -> Result<Self, Status>
     where
         Self: Sized;
+
+    fn profile(&self) -> Option<ProfileHandle> {
+        None
+    }
 }
 
 impl From<TaskStreamTicket> for TaskStreamKey {
@@ -65,13 +70,19 @@ pub trait TaskStreamFetcher<K>: Send + Sync {
 pub struct TaskStreamFlightServer<K> {
     fetcher: Box<dyn TaskStreamFetcher<K>>,
     compression: ShuffleCompression,
+    profile: Option<ProfileHandle>,
 }
 
 impl<K> TaskStreamFlightServer<K> {
-    pub fn new(fetcher: Box<dyn TaskStreamFetcher<K>>, compression: ShuffleCompression) -> Self {
+    pub fn new(
+        fetcher: Box<dyn TaskStreamFetcher<K>>,
+        compression: ShuffleCompression,
+        profile: Option<ProfileHandle>,
+    ) -> Self {
         Self {
             fetcher,
             compression,
+            profile,
         }
     }
 }
@@ -130,6 +141,9 @@ where
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let Ticket { ticket } = request.into_inner();
         let key = K::decode(&ticket)?;
+        if let Some(profile) = self.profile.clone().or_else(|| key.profile()) {
+            profile.diagnostic("flight_do_get", || format!("stream={key:?}"));
+        }
         debug!("{key:?}");
         let (tx, rx) = oneshot::channel();
         self.fetcher.fetch(key, tx).await?;

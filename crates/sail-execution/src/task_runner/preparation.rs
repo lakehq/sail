@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use datafusion::arrow::datatypes::Schema;
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::profiling::{MetricSnapshot, OperatorMetricSnapshot, ProfileEvent, ProfileHandle};
 use crate::proto::{RemoteExecutionCodec, proto_to_physical_plan};
 use crate::stream::accessor::TaskStreamFactory;
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
@@ -30,8 +31,29 @@ use crate::task_runner::TaskRunnerActor;
 
 pub(super) struct TaskPreparation {
     pub session_id: String,
+    pub profile: Option<ProfileHandle>,
     pub handle: ActorHandle<TaskRunnerActor>,
     pub celeborn: bool,
+}
+
+#[derive(Default)]
+pub(super) struct TaskMetrics {
+    plan: OnceLock<Arc<dyn ExecutionPlan>>,
+}
+
+impl TaskMetrics {
+    pub(super) fn record(&self, profile: &ProfileHandle, key: &TaskKey, success: bool) {
+        if let Some(plan) = self.plan.get() {
+            profile.record(ProfileEvent::OperatorMetrics {
+                job_id: key.job_id.into(),
+                stage: key.stage,
+                partition: key.partition,
+                attempt: key.attempt,
+                operators: summarize_plan_metrics(plan.as_ref()),
+                success,
+            });
+        }
+    }
 }
 
 impl TaskPreparation {
@@ -42,10 +64,23 @@ impl TaskPreparation {
         definition: Arc<TaskDefinition>,
         proto: Arc<PhysicalPlanNode>,
         context: Arc<TaskContext>,
-    ) -> SendableRecordBatchStream {
-        preparation_stream(key.clone(), move |canceled| {
-            self.execute_plan(&key, &definition, &proto, &canceled, context)
-        })
+    ) -> (SendableRecordBatchStream, Option<Arc<TaskMetrics>>) {
+        let metrics = self
+            .profile
+            .as_ref()
+            .map(|_| Arc::new(TaskMetrics::default()));
+        let plan_metrics = metrics.clone();
+        let stream = preparation_stream(key.clone(), self.profile.clone(), move |canceled| {
+            self.execute_plan(
+                &key,
+                &definition,
+                &proto,
+                &canceled,
+                plan_metrics.as_deref(),
+                context,
+            )
+        });
+        (stream, metrics)
     }
 
     fn execute_plan(
@@ -54,6 +89,7 @@ impl TaskPreparation {
         definition: &TaskDefinition,
         proto: &PhysicalPlanNode,
         canceled: &CancellationToken,
+        metrics: Option<&TaskMetrics>,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
@@ -86,7 +122,11 @@ impl TaskPreparation {
                 "task canceled during preparation".into(),
             ));
         }
-        Ok(plan.execute(key.partition, context)?)
+        let stream = plan.execute(key.partition, context)?;
+        if let Some(metrics) = metrics {
+            let _ = metrics.plan.set(plan);
+        }
+        Ok(stream)
     }
 
     fn rewrite_file_scans(
@@ -146,6 +186,9 @@ impl TaskPreparation {
                     return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
                         streams.reader(key.clone(), input.clone(), placeholder.schema()),
                         placeholder.properties().clone(),
+                        key.clone(),
+                        input.stage,
+                        self.profile.clone(),
                     ))));
                 }
                 Ok(Transformed::no(node))
@@ -155,14 +198,54 @@ impl TaskPreparation {
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, &RemoteExecutionCodec)?;
         let writer = streams.writer(key.clone(), output.clone(), schema.clone());
-        Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
+        Ok(Arc::new(ShuffleWriteExec::new(
+            plan,
+            key.clone(),
+            writer,
+            partitioning,
+            self.profile.clone(),
+        )))
     }
+}
+
+/// Keep per-task measurements compact; the job graph is logged once per job.
+fn summarize_plan_metrics(plan: &dyn ExecutionPlan) -> Vec<OperatorMetricSnapshot> {
+    fn visit(plan: &dyn ExecutionPlan, index: &mut usize, out: &mut Vec<OperatorMetricSnapshot>) {
+        // TracingExec delegates metrics to its child, so visiting both would duplicate them.
+        if plan.name() != "TracingExec" {
+            let operator = *index;
+            *index += 1;
+            if let Some(metrics) = plan.metrics()
+                && metrics.iter().next().is_some()
+            {
+                let metrics = metrics
+                    .aggregate_by_name()
+                    .sorted_for_display()
+                    .iter()
+                    .map(|metric| MetricSnapshot::from_value(metric.value()))
+                    .collect();
+                out.push(OperatorMetricSnapshot {
+                    index: operator,
+                    name: plan.name().to_owned(),
+                    metrics,
+                });
+            }
+        }
+        for child in plan.children() {
+            visit(child.as_ref(), index, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    visit(plan, &mut 0, &mut out);
+    out
 }
 
 /// Dropping the pending stream cancels preparation cooperatively. The blocking task owns
 /// its inputs and result, so Tokio drops an abandoned result even after the monitor exits.
 fn preparation_stream(
     key: TaskKey,
+    profile: Option<ProfileHandle>,
     prepare: impl FnOnce(CancellationToken) -> ExecutionResult<SendableRecordBatchStream>
     + Send
     + 'static,
@@ -170,23 +253,37 @@ fn preparation_stream(
     let stream = futures::stream::once(async move {
         let canceled = CancellationToken::new();
         let _cancel_on_drop = canceled.clone().drop_guard();
-        let queued = Instant::now();
+        let capture = profile.is_some() || log::log_enabled!(log::Level::Debug);
+        let queued = capture.then(Instant::now);
         let span = fastrace::Span::enter_with_local_parent("TaskPreparation");
         tokio::task::spawn_blocking(move || {
             let _parent = span.set_local_parent();
-            let started = Instant::now();
+            let started = capture.then(Instant::now);
             if canceled.is_cancelled() {
                 return Err(ExecutionError::InternalError(
                     "task canceled before preparation".into(),
                 ));
             }
             let result = prepare(canceled);
-            debug!(
-                "{} preparation wait={:?} duration={:?}",
-                TaskKeyDisplay(&key),
-                started.duration_since(queued),
-                started.elapsed()
-            );
+            if let (Some(queued), Some(started)) = (queued, started) {
+                debug!(
+                    "{} preparation wait={:?} duration={:?}",
+                    TaskKeyDisplay(&key),
+                    started.duration_since(queued),
+                    started.elapsed()
+                );
+            }
+            if let (Some(profile), Some(queued), Some(started)) = (profile, queued, started) {
+                profile.record(ProfileEvent::TaskPreparation {
+                    job_id: key.job_id.into(),
+                    stage: key.stage,
+                    partition: key.partition,
+                    attempt: key.attempt,
+                    wait_us: started.duration_since(queued).as_micros(),
+                    duration_us: started.elapsed().as_micros(),
+                    success: result.is_ok(),
+                });
+            }
             result
         })
         .await
@@ -223,7 +320,7 @@ mod tests {
     async fn dropping_an_unpolled_stream_does_not_prepare() {
         let started = Arc::new(AtomicBool::new(false));
         let flag = started.clone();
-        let stream = preparation_stream(key(), move |_| {
+        let stream = preparation_stream(key(), None, move |_| {
             flag.store(true, Ordering::SeqCst);
             Err(ExecutionError::InternalError("should never start".into()))
         });
@@ -235,7 +332,7 @@ mod tests {
     #[tokio::test]
     async fn preparation_errors_and_panics_are_stream_errors()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut stream = preparation_stream(key(), |_| {
+        let mut stream = preparation_stream(key(), None, |_| {
             Err(ExecutionError::InvalidArgument("bad plan".into()))
         });
         assert!(
@@ -246,7 +343,7 @@ mod tests {
                 .is_err()
         );
         assert!(stream.next().await.is_none());
-        let mut stream = preparation_stream(key(), |_| {
+        let mut stream = preparation_stream(key(), None, |_| {
             std::panic::resume_unwind(Box::new("construction panic"))
         });
         assert!(stream.next().await.ok_or("missing panic error")?.is_err());
@@ -270,7 +367,7 @@ mod tests {
         let (release, blocked) = std::sync::mpsc::channel();
         let (observed, canceled) = oneshot::channel();
         let (dropped, result_dropped) = oneshot::channel();
-        let mut stream = preparation_stream(key(), move |token| {
+        let mut stream = preparation_stream(key(), None, move |token| {
             let _ = started.send(());
             blocked
                 .recv()

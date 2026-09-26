@@ -43,11 +43,11 @@ impl WorkerActor {
                 .await
             {
                 error!("failed to register worker with retries: {e}");
-                let _ = handle.send(WorkerMessage::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown { result: None }).await;
             }
             if let Err(e) = handle.send(WorkerMessage::StartHeartbeat).await {
                 error!("failed to start worker heartbeat: {e}");
-                let _ = handle.send(WorkerMessage::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown { result: None }).await;
             }
         });
         ActorAction::Continue

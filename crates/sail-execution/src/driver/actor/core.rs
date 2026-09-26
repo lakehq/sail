@@ -14,6 +14,7 @@ use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::worker_scaler::{WorkerScaler, WorkerScalerOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
+use crate::profiling::ProfileHandle;
 use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
 use crate::stream::celeborn::CelebornStreamManager;
 use crate::stream::local::LocalStreamManager;
@@ -56,12 +57,25 @@ impl Actor for DriverActor {
             activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
+            system_info_profile: None,
+            profile: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        self.profile =
+            ProfileHandle::start(&self.options.session_id, "driver", self.options.driver_id);
+        if let Some(profile) = &self.profile {
+            profile.register_driver(self.options.driver_id.into());
+            self.job_scheduler.profile = Some(profile.clone());
+            self.task_assigner.profile = Some(profile.clone());
+            self.worker_pool.profile = Some(profile.clone());
+            self.system_info_profile = Some(crate::system_info::start_system_info_profile(
+                profile.clone(),
+            ));
+        }
         let driver = ctx.handle().clone();
-        let local_streams = LocalStreamManager::new((&self.options).into());
+        let local_streams = LocalStreamManager::new((&self.options).into(), self.profile.clone());
         let storage_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Storage {
                 path,
@@ -109,7 +123,7 @@ impl Actor for DriverActor {
                         *compression,
                     ),
                 ));
-                let streams = CelebornStreamManager::new(client);
+                let streams = CelebornStreamManager::new(client, self.profile.clone());
                 Some(streams)
             }
             ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
@@ -117,6 +131,7 @@ impl Actor for DriverActor {
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
                 session_id: self.options.session_id.clone(),
+                profile: self.profile.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -195,6 +210,9 @@ impl Actor for DriverActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        if let Some(handle) = self.system_info_profile.take() {
+            handle.abort();
+        }
         self.job_scheduler.stop();
         if let Some(task_runner) = self.task_runner.take() {
             let _ = task_runner.send(TaskRunnerMessage::Shutdown).await;
@@ -206,6 +224,12 @@ impl Actor for DriverActor {
             let _ = lifecycle_manager.stop().await;
         }
         ctx.children_mut().join().await;
+        ProfileHandle::unregister_driver(self.options.driver_id.into());
+        if let Some(profile) = self.profile.take()
+            && let Err(error) = profile.finish().await
+        {
+            error!("failed to write driver profile: {error}");
+        }
         if let Some(result) = self.shutdown_notifier.take() {
             let _ = result.send(());
         }

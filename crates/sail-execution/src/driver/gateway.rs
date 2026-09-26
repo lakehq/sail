@@ -17,6 +17,7 @@ use crate::driver::server::DriverServer;
 use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
+use crate::profiling::ProfileHandle;
 use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
@@ -71,6 +72,10 @@ impl TaskStreamKeyDecoder for DriverTaskStreamKey {
             driver_id: driver_id.into(),
             stream: stream.into(),
         })
+    }
+
+    fn profile(&self) -> Option<ProfileHandle> {
+        ProfileHandle::for_driver(self.driver_id.into())
     }
 }
 
@@ -136,6 +141,7 @@ impl DriverGateway {
             FlightServiceServer::new(TaskStreamFlightServer::<DriverTaskStreamKey>::new(
                 Box::new(DriverTaskStreamFetcher { registry }),
                 self.flight_compression,
+                None,
             ))
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)

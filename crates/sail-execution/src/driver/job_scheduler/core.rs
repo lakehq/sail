@@ -27,6 +27,7 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
+use crate::profiling::ProfileEvent;
 use crate::proto::{
     encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
 };
@@ -63,6 +64,12 @@ impl JobScheduler {
             },
         )?;
         debug!("job {job_id} job graph \n{graph}");
+        if let Some(profile) = &self.profile {
+            profile.record(ProfileEvent::JobGraph {
+                job_id: job_id.into(),
+                graph: graph.to_string(),
+            });
+        }
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
@@ -124,6 +131,15 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
+        if let Some(profile) = &self.profile {
+            profile.diagnostic("task_state", || {
+                format!(
+                    "{} task state {}",
+                    TaskKeyDisplay(key),
+                    attempt.state.status()
+                )
+            });
+        }
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
@@ -210,6 +226,9 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
+            if let Some(profile) = &self.profile {
+                profile.diagnostic("job_failed", || format!("job {job_id} failed"));
+            }
             event_reporter.report(SystemEvent::JobUpdated {
                 session_id,
                 job_id: u64::from(job_id),
@@ -227,6 +246,9 @@ impl JobScheduler {
             // This drops `JobOutputManager` in the job state,
             // so that `JobOutputStream` turns to the draining state as well.
             job.state = JobState::Draining;
+            if let Some(profile) = &self.profile {
+                profile.diagnostic("job_draining", || format!("job {job_id} draining output"));
+            }
             event_reporter.report(SystemEvent::JobUpdated {
                 session_id,
                 job_id: u64::from(job_id),
@@ -241,6 +263,7 @@ impl JobScheduler {
             job,
             &event_reporter,
             &session_id,
+            self.profile.as_ref(),
         ));
 
         actions
@@ -379,6 +402,7 @@ impl JobScheduler {
         job: &mut JobDescriptor,
         event_reporter: &SystemEventReporter,
         session_id: &str,
+        profile: Option<&crate::profiling::ProfileHandle>,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
 
@@ -429,6 +453,14 @@ impl JobScheduler {
             actions.push(JobAction::ScheduleTaskRegion {
                 region: Self::build_task_region(job_id, job, region),
             });
+            if let Some(profile) = profile {
+                profile.diagnostic("job_region_scheduled", || {
+                    format!(
+                        "job {job_id} scheduled region {r} with {} tasks",
+                        region.tasks.len()
+                    )
+                });
+            }
         }
 
         actions

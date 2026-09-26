@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -20,6 +21,8 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
+use crate::id::TaskKey;
+use crate::profiling::{ProfileEvent, ProfileHandle};
 use crate::stream::writer::{TaskStreamWriteState, TaskStreamWriter};
 
 enum ShufflePartitioner {
@@ -104,19 +107,23 @@ impl ShufflePartitioner {
 #[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
     plan: Arc<dyn ExecutionPlan>,
+    key: TaskKey,
     /// The partitioning scheme for the shuffle output.
     /// The partition count for the shuffle output can be different from the
     /// partition count of the input plan.
     partitioning: ShufflePartitioning,
     properties: Arc<PlanProperties>,
     writer: Arc<dyn TaskStreamWriter>,
+    profile: Option<ProfileHandle>,
 }
 
 impl ShuffleWriteExec {
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
+        key: TaskKey,
         writer: Arc<dyn TaskStreamWriter>,
         partitioning: ShufflePartitioning,
+        profile: Option<ProfileHandle>,
     ) -> Self {
         let partitioning = partitioning.normalize();
         let properties = Arc::new(PlanProperties::new(
@@ -134,9 +141,11 @@ impl ShuffleWriteExec {
         ));
         Self {
             plan,
+            key,
             partitioning,
             properties,
             writer,
+            profile,
         }
     }
 }
@@ -191,8 +200,10 @@ impl ExecutionPlan for ShuffleWriteExec {
             })),
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
                 plan,
+                self.key.clone(),
                 Arc::clone(&self.writer),
                 self.partitioning.clone(),
+                self.profile.clone(),
             ))),
         }
     }
@@ -212,7 +223,9 @@ impl ExecutionPlan for ShuffleWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let key = self.key.clone();
         let writer = self.writer.clone();
+        let profile = self.profile.clone();
         let stream = self.plan.execute(partition, context)?;
         // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
@@ -252,7 +265,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let output = futures::stream::once(async move {
-            shuffle_write(writer, stream, partition, channels, partitioner).await?;
+            shuffle_write(writer, stream, key, channels, partitioner, profile).await?;
             Ok(empty)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -265,38 +278,111 @@ impl ExecutionPlan for ShuffleWriteExec {
 async fn shuffle_write(
     writer: Arc<dyn TaskStreamWriter>,
     mut stream: SendableRecordBatchStream,
-    partition: usize,
+    key: TaskKey,
     channels: usize,
     mut partitioner: ShufflePartitioner,
+    profile: Option<ProfileHandle>,
 ) -> Result<()> {
-    let mut sink = writer.open(partition).await?;
-    let result = async {
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            if batch.num_rows() == 0 {
-                continue;
+    let profiling = profile.is_some();
+    let started = profiling.then(Instant::now);
+    let open_started = profiling.then(Instant::now);
+    let sink = writer.open(key.partition).await;
+    let open_duration = open_started.map_or(Duration::ZERO, |instant| instant.elapsed());
+    let mut input_wait = Duration::ZERO;
+    let mut partition_duration = Duration::ZERO;
+    let mut sink_write_duration = Duration::ZERO;
+    let mut batches = 0u64;
+    let mut rows = 0u64;
+    let (result, outcome, finalize_duration) = match sink {
+        Ok(mut sink) => {
+            let result = async {
+                loop {
+                    let poll_started = profiling.then(Instant::now);
+                    let next = stream.next().await;
+                    if let Some(poll_started) = poll_started {
+                        input_wait += poll_started.elapsed();
+                    }
+                    let Some(batch) = next else { break };
+                    let batch = batch?;
+                    if profiling {
+                        batches += 1;
+                        rows += batch.num_rows() as u64;
+                    }
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+                    let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
+                    let partition_started = profiling.then(Instant::now);
+                    let partition_result = partitioner.partition(batch, |p, batch| {
+                        partitions[p] = Some(batch);
+                        Ok(())
+                    });
+                    if let Some(partition_started) = partition_started {
+                        partition_duration += partition_started.elapsed();
+                    }
+                    partition_result?;
+                    let write_started = profiling.then(Instant::now);
+                    let write_result = sink.write(partitions).await;
+                    if let Some(write_started) = write_started {
+                        sink_write_duration += write_started.elapsed();
+                    }
+                    if write_result? == TaskStreamWriteState::Closed {
+                        return Ok::<_, datafusion::error::DataFusionError>(false);
+                    }
+                }
+                Ok(true)
             }
-            let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
-            partitioner.partition(batch, |p, batch| {
-                partitions[p] = Some(batch);
-                Ok(())
-            })?;
-            if sink.write(partitions).await? == TaskStreamWriteState::Closed {
-                return Ok::<_, datafusion::error::DataFusionError>(false);
-            }
+            .await;
+            let finalize_started = profiling.then(Instant::now);
+            let (result, outcome) = match result {
+                Ok(true) => {
+                    let result = sink.commit().await;
+                    let outcome = if result.is_ok() {
+                        "commit"
+                    } else {
+                        "commit_error"
+                    };
+                    (result, outcome)
+                }
+                Ok(false) => {
+                    // TODO: model successful early-stop separately from error-triggered aborts
+                    let result = sink.abort().await;
+                    let outcome = if result.is_ok() {
+                        "early_stop"
+                    } else {
+                        "abort_error"
+                    };
+                    (result, outcome)
+                }
+                Err(error) => {
+                    let _ = sink.abort().await;
+                    (Err(error), "error")
+                }
+            };
+            let finalize_duration =
+                finalize_started.map_or(Duration::ZERO, |instant| instant.elapsed());
+            (result, outcome, finalize_duration)
         }
-        Ok(true)
+        Err(error) => (Err(error), "open_error", Duration::ZERO),
+    };
+    if let Some(profile) = profile {
+        profile.record(ProfileEvent::ShuffleWrite {
+            job_id: key.job_id.into(),
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+            channels,
+            batches,
+            rows,
+            elapsed_us: started.map_or(0, |instant| instant.elapsed().as_micros()),
+            open_us: open_duration.as_micros(),
+            input_wait_us: input_wait.as_micros(),
+            partition_us: partition_duration.as_micros(),
+            sink_write_us: sink_write_duration.as_micros(),
+            finalize_us: finalize_duration.as_micros(),
+            outcome: outcome.to_string(),
+            success: result.is_ok(),
+        });
     }
-    .await;
-    match result {
-        Ok(true) => sink.commit().await,
-        Ok(false) => {
-            // TODO: model successful early-stop separately from error-triggered aborts
-            sink.abort().await
-        }
-        Err(error) => {
-            let _ = sink.abort().await;
-            Err(error)
-        }
-    }
+    result
 }

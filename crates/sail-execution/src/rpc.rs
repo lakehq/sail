@@ -56,16 +56,23 @@ impl ServerMonitor {
         }
     }
 
-    pub async fn stop(self) {
+    pub fn begin_stop(self) -> Option<JoinHandle<ExecutionResult<()>>> {
         match self {
-            Self::Stopped => {}
+            Self::Stopped => None,
             Self::Pending { handle } => {
                 handle.abort();
+                None
             }
             Self::Running { signal, handle } => {
                 let _ = signal.send(());
-                let _ = handle.await;
+                Some(handle)
             }
+        }
+    }
+
+    pub async fn stop(self) {
+        if let Some(handle) = self.begin_stop() {
+            let _ = handle.await;
         }
     }
 }
