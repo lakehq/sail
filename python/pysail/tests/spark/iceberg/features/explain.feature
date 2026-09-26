@@ -1,5 +1,57 @@
 Feature: Iceberg Query Optimization
 
+  Rule: Verify procedure planning
+    Background:
+      Given variable location for temporary directory iceberg_explain_procedure
+      Given statement template
+        """
+        CREATE TABLE procedure_plan_table (id INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS procedure_plan_table
+        """
+
+    Scenario: EXPLAIN shows provider-planned procedure boundary
+      When query
+        """
+        EXPLAIN EXTENDED CALL sail.system.ancestors_of(table => 'procedure_plan_table')
+        """
+      Then query plan matches snapshot
+
+    Scenario: Metadata files use a projected manifest scan
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN SELECT file_path, record_count FROM procedure_plan_table.files
+        """
+      Then query plan matches snapshot
+
+    Scenario: Rewrite uses planned file groups
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN CALL system.rewrite_data_files(
+          table => 'procedure_plan_table', options => map('rewrite-all', 'true'))
+        """
+      Then query plan matches snapshot
+
   Rule: Verify EXPLAIN output for partition pruning
     Background:
       Given variable location for temporary directory iceberg_explain_prune

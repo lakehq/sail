@@ -14,6 +14,7 @@ pub mod action;
 pub mod append;
 pub mod bootstrap;
 pub mod helpers;
+pub(crate) mod metadata_commit;
 pub mod overwrite;
 pub mod snapshot;
 pub mod write;

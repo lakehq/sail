@@ -275,6 +275,8 @@ pub struct IcebergScanByDataFilesExec {
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
+    /// Whether each upstream partition owns a complete rewrite group.
+    preserve_file_groups: bool,
     /// Cached plan properties.
     cache: Arc<PlanProperties>,
 }
@@ -307,6 +309,7 @@ impl IcebergScanByDataFilesExec {
             projection,
             predicate,
             limit,
+            preserve_file_groups: false,
             cache,
         })
     }
@@ -333,6 +336,15 @@ impl IcebergScanByDataFilesExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn preserve_file_groups(mut self) -> Self {
+        self.preserve_file_groups = true;
+        self
+    }
+
+    pub fn preserves_file_groups(&self) -> bool {
+        self.preserve_file_groups
     }
 }
 
@@ -411,6 +423,10 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![!self.preserve_file_groups]
     }
 
     fn execute(
