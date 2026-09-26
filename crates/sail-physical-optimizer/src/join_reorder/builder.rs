@@ -59,6 +59,7 @@ pub struct GraphBuilder {
     /// Key: A Column expression (which is hashable). Value: Stable ID.
     expr_to_stable_id: HashMap<Column, (usize, usize)>,
     options: JoinReorderOptions,
+    cached_relations: Vec<RelationNode>,
 }
 
 impl GraphBuilder {
@@ -68,7 +69,14 @@ impl GraphBuilder {
             relation_counter: 0,
             expr_to_stable_id: HashMap::new(),
             options,
+            cached_relations: vec![],
         }
+    }
+
+    /// Reuse estimates for unchanged leaves while pricing alternatives in one region.
+    pub fn cache_relation_statistics(mut self, relations: &[RelationNode]) -> Self {
+        self.cached_relations = relations.to_vec();
+        self
     }
 
     /// Build query graph from the given execution plan.
@@ -105,7 +113,13 @@ impl GraphBuilder {
 
         // TODO: Extend to support `SortMergeJoinExec`.
         if let Some(join_plan) = plan.downcast_ref::<HashJoinExec>() {
-            if join_plan.join_type() == &JoinType::Inner {
+            if join_plan.join_type() == &JoinType::Inner
+                && join_plan.fetch().is_none()
+                && join_plan.dynamic_expressions_produced().is_empty()
+                && !join_plan
+                    .filter()
+                    .is_some_and(|filter| Self::contains_volatile_expression(filter.expression()))
+            {
                 trace!(
                     "Visiting hash join ({:?}): {}",
                     join_plan.join_type(),
@@ -113,10 +127,9 @@ impl GraphBuilder {
                 );
                 return self.visit_hash_join(join_plan);
             }
-            // Non-inner joins preserve null/row semantics through input orientation, so keep
-            // them as reorder boundaries until their reorder correctness is revalidated.
+            // Preserve join orientation, row limits, and expression state at these boundaries.
             trace!(
-                "Skipping non-inner join ({:?}): {}",
+                "Keeping hash join boundary ({:?}): {}",
                 join_plan.join_type(),
                 join_plan.name()
             );
@@ -510,6 +523,14 @@ impl GraphBuilder {
         Ok((residual, equi_pairs))
     }
 
+    fn contains_volatile_expression(expr: &PhysicalExprRef) -> bool {
+        expr.is_volatile_node()
+            || expr
+                .children()
+                .iter()
+                .any(|child| Self::contains_volatile_expression(child))
+    }
+
     /// Rewrite a HashJoin's JoinFilter expression so that any Column references are
     /// converted to stable names based on base relations: "R{relation_id}.C{column_index}".
     /// This avoids depending on transient projection aliases like "#37" and local indices.
@@ -616,7 +637,17 @@ impl GraphBuilder {
         // statistics from its *input* (pre-filter) so we retain the most original/accurate
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
-        let (stats, initial_cardinality, base_cardinality) = if plan.is::<FilterExec>() {
+        let (stats, initial_cardinality, base_cardinality) = if let Some(cached) = self
+            .cached_relations
+            .iter()
+            .find(|relation| Arc::ptr_eq(&relation.plan, &plan))
+        {
+            (
+                cached.statistics.clone(),
+                cached.initial_cardinality,
+                cached.base_cardinality,
+            )
+        } else if plan.is::<FilterExec>() {
             // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
             // we must avoid
             // an inconsistent stats state where num_rows is "post-filter" while distinct_count
@@ -644,20 +675,6 @@ impl GraphBuilder {
                 .with_estimated_selectivity(selectivity);
 
             (adjusted, base * selectivity, base)
-        } else if plan.is::<ProjectionExec>() {
-            // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
-            // (ProjectionExec may not have accurate stats of its own).
-            let mut cur = plan.clone();
-            while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
-                cur = p.input().clone();
-            }
-            let stats = overall_statistics(cur.as_ref())?;
-            let initial_cardinality = match stats.num_rows {
-                Precision::Exact(count) => count as f64,
-                Precision::Inexact(count) => count as f64,
-                Precision::Absent => 1000.0, // Default estimation
-            };
-            (stats, initial_cardinality, initial_cardinality)
         } else {
             let stats = overall_statistics(plan.as_ref())?;
             let initial_cardinality = match stats.num_rows {
@@ -774,6 +791,20 @@ impl GraphBuilder {
         input_stats: &datafusion::common::Statistics,
     ) -> Option<f64> {
         let bin = expr.downcast_ref::<BinaryExpr>()?;
+        if bin.op() == &Operator::And {
+            let left_columns = collect_columns(bin.left());
+            let right_columns = collect_columns(bin.right());
+            if check_support(expr, schema)
+                && left_columns.iter().any(|left| {
+                    right_columns
+                        .iter()
+                        .any(|right| left.index() == right.index())
+                })
+            {
+                // Interval analysis combines bounds on the same column without independence.
+                return None;
+            }
+        }
         match bin.op() {
             Operator::And => {
                 let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
@@ -833,7 +864,10 @@ impl GraphBuilder {
             return None;
         };
 
-        let col_idx = schema.index_of(col.name()).ok()?;
+        let col_idx = col.index();
+        if col_idx >= schema.fields().len() {
+            return None;
+        }
         let stats = input_stats.column_statistics.get(col_idx)?;
 
         // Prefer distinct_count for equality predicates.
@@ -964,6 +998,119 @@ mod tests {
     use datafusion::physical_plan::projection::ProjectionExpr;
 
     use super::*;
+
+    #[test]
+    fn filter_bounds_on_one_column_use_interval_intersection() {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)]));
+        let mut stats = datafusion::common::Statistics::new_unknown(&schema);
+        stats.num_rows = Precision::Exact(1000);
+        stats.column_statistics[0].min_value = Precision::Exact(ScalarValue::Int32(Some(0)));
+        stats.column_statistics[0].max_value = Precision::Exact(ScalarValue::Int32(Some(999)));
+        stats.column_statistics[0].distinct_count = Precision::Exact(1000);
+        stats.column_statistics[0].null_count = Precision::Exact(0);
+        let comparison = |operator, value| -> PhysicalExprRef {
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("key", 0)),
+                operator,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(value)))),
+            ))
+        };
+        let builder = GraphBuilder::default();
+        for (left, operator, right, expected) in [
+            (
+                comparison(Operator::GtEq, 100),
+                Operator::And,
+                comparison(Operator::LtEq, 199),
+                0.1,
+            ),
+            (
+                comparison(Operator::GtEq, 200),
+                Operator::And,
+                comparison(Operator::LtEq, 100),
+                0.0,
+            ),
+            (
+                comparison(Operator::Eq, 42),
+                Operator::And,
+                comparison(Operator::Eq, 42),
+                0.001,
+            ),
+        ] {
+            let predicate = Arc::new(BinaryExpr::new(left, operator, right)) as PhysicalExprRef;
+            let estimated = builder.estimate_filter_selectivity(&predicate, &schema, &stats, 20);
+            assert!(
+                (estimated - expected).abs() < 1e-9,
+                "{estimated} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_statistics_resolve_duplicate_names_by_column_index() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("key", DataType::Int32, false),
+        ]));
+        let mut stats = datafusion::common::Statistics::new_unknown(&schema);
+        stats.column_statistics[0].distinct_count = Precision::Exact(1);
+        stats.column_statistics[1].distinct_count = Precision::Exact(100);
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("key", 1)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+        )) as PhysicalExprRef;
+        assert_eq!(
+            GraphBuilder::estimate_selectivity_from_stats(&predicate, &schema, &stats),
+            Some(0.01)
+        );
+    }
+
+    #[test]
+    fn computed_projection_statistics_follow_output_columns() -> Result<()> {
+        use datafusion::common::Statistics;
+        use datafusion::physical_plan::test::exec::StatisticsExec;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let mut stats = Statistics::new_unknown(&schema);
+        stats.num_rows = Precision::Exact(1000);
+        stats.column_statistics[0].distinct_count = Precision::Exact(1000);
+        stats.column_statistics[1].distinct_count = Precision::Exact(2);
+        let source = Arc::new(StatisticsExec::new(stats, schema.as_ref().clone()));
+        let projection = Arc::new(ProjectionExec::try_new(
+            vec![
+                (
+                    Arc::new(Column::new("b", 1)) as PhysicalExprRef,
+                    "b".to_string(),
+                ),
+                (
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Plus,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                    )),
+                    "computed".to_string(),
+                ),
+            ],
+            source,
+        )?);
+        let mut builder = GraphBuilder::default();
+        builder.visit_plan(projection)?;
+        let relation = &builder.graph.relations[0];
+        assert_eq!(relation.initial_cardinality, 1000.0);
+        assert_eq!(relation.statistics.column_statistics.len(), 2);
+        assert_eq!(
+            relation.statistics.column_statistics[0].distinct_count,
+            Precision::Exact(2)
+        );
+        assert_eq!(
+            relation.statistics.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_graph_builder_creation() {

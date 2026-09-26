@@ -5,15 +5,18 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#5@0 as a_id, #6@1 as b_id, #7@2 as k]
-      ProjectionExec: expr=[id@2 as #5, id@1 as #6, #2@0 as #7]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, id@0)]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, id@0)]
-            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #3@0)], projection=[#2@0], NullsEqual: true, fetch=10
-              ProjectionExec: expr=[column1@0 as #2]
-                DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[column1@0 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[#0@0 as #5, #1@2 as #6, #4@1 as #7]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@1, #1@0)]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #0@0)], projection=[#0@1, #4@0]
+            ProjectionExec: expr=[#2@0 as #4]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #3@0)], projection=[#2@0], NullsEqual: true, fetch=10
+                ProjectionExec: expr=[column1@0 as #2]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+                ProjectionExec: expr=[column1@0 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[id@0 as #0]
+              CooperativeExec
+                RangeExec: start=0, end=100, step=1, num_partitions=1, projection=[0]
+          ProjectionExec: expr=[id@0 as #1]
             CooperativeExec
               RangeExec: start=0, end=100, step=1, num_partitions=1, projection=[0]
-          CooperativeExec
-            RangeExec: start=0, end=100, step=1, num_partitions=1, projection=[0]

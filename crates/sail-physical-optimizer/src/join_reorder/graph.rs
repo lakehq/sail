@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -141,13 +141,28 @@ pub struct QueryGraph {
     pub relations: Vec<RelationNode>,
     /// Original edges vector for backward compatibility and edge access by index
     pub edges: Vec<JoinEdge>,
-    /// Cache for neighbor lookups before applying the caller's forbidden set.
+    /// Minimal missing dependency sets before applying the caller's forbidden set.
     neighbor_cache: HashMap<JoinSet, Vec<JoinSet>>,
 }
 
 impl QueryGraph {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Count the distinct physical hash keys supplied by the connecting predicates.
+    pub fn join_key_count(&self, edge_indices: &[usize]) -> usize {
+        edge_indices
+            .iter()
+            .filter_map(|index| self.edges.get(*index))
+            .flat_map(|edge| &edge.equi_pairs)
+            .map(|(left, right)| {
+                let left = (left.relation_id, left.column_index);
+                let right = (right.relation_id, right.column_index);
+                (left.min(right), left.max(right))
+            })
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     /// Adds a relation node to the query graph.
@@ -164,7 +179,10 @@ impl QueryGraph {
         Ok(())
     }
 
-    /// Gets all neighbor hypernodes of a given JoinSet, excluding nodes in `forbidden`.
+    /// Gets singleton representatives of the missing predicate dependencies.
+    ///
+    /// A representative is an expansion seed, not necessarily a connected join input.
+    /// Actual joins still require both subplans and a fully available predicate.
     pub fn get_neighbors(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Vec<JoinSet> {
         let neighbors = if let Some(cached) = self.neighbor_cache.get(&nodes) {
             cached.clone()
@@ -172,6 +190,15 @@ impl QueryGraph {
             let mut candidates = Vec::new();
 
             for edge in &self.edges {
+                if edge.join_type == JoinType::Inner {
+                    // Inner predicates may connect any split of their dependencies, including
+                    // splits across an original endpoint. Match the connector's LCA semantics.
+                    let missing = edge.join_set - nodes;
+                    if !edge.join_set.is_disjoint(&nodes) && !missing.is_empty() {
+                        candidates.push(missing);
+                    }
+                    continue;
+                }
                 if edge.left_endpoint.is_subset(&nodes)
                     && !edge.right_endpoint.is_empty()
                     && edge.right_endpoint.is_disjoint(&nodes)
@@ -191,14 +218,16 @@ impl QueryGraph {
             result
         };
 
-        if forbidden.is_empty() {
-            neighbors
-        } else {
-            neighbors
-                .into_iter()
-                .filter(|neighbor| neighbor.is_disjoint(&forbidden))
-                .collect()
-        }
+        // Exclude the entire dependency set before selecting its representative. A seed
+        // cannot grow into a complete predicate if another required relation is forbidden.
+        let mut representatives: Vec<_> = neighbors
+            .into_iter()
+            .filter(|neighbor| neighbor.is_disjoint(&forbidden))
+            .map(|neighbor| JoinSet::from_bits(1u64 << neighbor.bits().trailing_zeros()))
+            .collect();
+        representatives.sort_unstable_by_key(|set| set.bits());
+        representatives.dedup();
+        representatives
     }
 
     fn minimize_neighbor_sets(mut candidates: Vec<JoinSet>) -> Vec<JoinSet> {
@@ -485,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hyperedge_neighbors_use_endpoint_semantics() {
+    fn test_hyperedge_neighbors_use_missing_dependency_representatives() {
         use std::sync::Arc;
 
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -527,9 +556,27 @@ mod tests {
 
         let set_0 = JoinSet::new_singleton(0).unwrap();
         let neighbors_0 = graph.get_neighbors(set_0, JoinSet::new());
+        assert_eq!(neighbors_0, vec![JoinSet::new_singleton(1).unwrap()]);
         assert!(
-            neighbors_0.is_empty(),
-            "endpoint {{0, 1}} must be complete before {{2}} is considered a neighbor"
+            graph
+                .get_neighbors(set_0, JoinSet::new_singleton(2).unwrap())
+                .is_empty(),
+            "forbidding any missing dependency must exclude the hyperedge seed"
+        );
+        assert_eq!(
+            graph.get_neighbors(set_0, JoinSet::new()),
+            neighbors_0,
+            "a cached neighborhood must remain independent of the forbidden set"
+        );
+        assert_eq!(
+            graph.get_neighbors(JoinSet::from_iter([0, 2]).unwrap(), JoinSet::new()),
+            vec![JoinSet::new_singleton(1).unwrap()],
+            "a predicate may connect across its original endpoint split"
+        );
+        assert_eq!(
+            graph.get_neighbors(JoinSet::new_singleton(2).unwrap(), JoinSet::new()),
+            vec![set_0],
+            "a disconnected opposite endpoint contributes only a singleton seed"
         );
 
         let set_01 = JoinSet::from_iter([0, 1]).unwrap();

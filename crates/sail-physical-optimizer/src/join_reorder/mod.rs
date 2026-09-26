@@ -3,10 +3,11 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
 
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_optimizer::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
@@ -27,6 +28,7 @@ mod early_filter;
 mod enumerator;
 mod graph;
 mod join_set;
+mod physical_cost;
 mod reconstructor;
 
 #[derive(Debug, Clone)]
@@ -136,20 +138,25 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
             "JoinReorder: Input plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Copy selective dimension keys below aggregates and semi joins whose filter side is
-        // more than a scan, which join enumeration never reorders across. This runs first so
-        // that enumeration sees the statistics of the reduced inputs.
-        let plan = early_filter::propagate(plan, config, &self.options)?;
+        // Reduce inputs across aggregate and semi-join boundaries before enumeration.
+        let plan = early_filter::propagate(plan, context.config_options(), &self.options)?;
 
-        // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
-        // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
-        self.find_and_optimize_regions(plan)
+        // Optimize complete regions, including regions nested behind their boundary leaves.
+        self.find_and_optimize_regions(plan, context)
     }
 
     fn name(&self) -> &str {
@@ -162,31 +169,56 @@ impl PhysicalOptimizerRule for JoinReorder {
 }
 
 impl JoinReorder {
-    /// Recursively searches for reorderable join regions bottom-up.
+    /// Optimize each complete region once, after visiting its boundary leaves.
     fn find_and_optimize_regions(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("find_and_optimize_regions: Processing {}", plan.name());
 
-        // Optimize children first so any nested reorderable regions inside "leaf" plans
-        // (from the perspective of the current region) are not skipped.
-        let optimized_children = plan
-            .children()
-            .into_iter()
-            .map(|child| self.find_and_optimize_regions(Arc::clone(child)))
-            .collect::<Result<Vec<_>>>()?;
-
-        let plan = if optimized_children.is_empty() {
-            plan
+        let region = GraphBuilder::new(self.options.clone())
+            .build(Arc::clone(&plan))?
+            .filter(|(graph, _)| graph.relation_count() > 2);
+        let plan = if let Some((graph, _)) = region {
+            let replacements = graph
+                .relations
+                .iter()
+                .map(|relation| {
+                    Ok((
+                        Arc::clone(&relation.plan),
+                        self.find_and_optimize_regions(Arc::clone(&relation.plan), context)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            plan.transform_down(|node| {
+                if let Some((_, replacement)) = replacements
+                    .iter()
+                    .find(|(original, _)| Arc::ptr_eq(original, &node))
+                {
+                    Ok(Transformed::new(
+                        Arc::clone(replacement),
+                        !Arc::ptr_eq(&node, replacement),
+                        TreeNodeRecursion::Jump,
+                    ))
+                } else {
+                    Ok(Transformed::no(node))
+                }
+            })?
+            .data
         } else {
-            replace_children_if_necessary(plan, optimized_children)?
+            let children = plan
+                .children()
+                .into_iter()
+                .map(|child| self.find_and_optimize_regions(Arc::clone(child), context))
+                .collect::<Result<Vec<_>>>()?;
+            return replace_children_if_necessary(plan, children);
         };
 
         // Attempt to optimize a reorderable region rooted at this node.
         // Soft fallback: if join reordering fails for any reason, log a warning and return
         // the plan with optimized children.
-        match self.try_optimize_region(Arc::clone(&plan)) {
+        match self.try_optimize_region(Arc::clone(&plan), context) {
             Ok(Some(new_plan)) => Ok(new_plan),
             Ok(None) => Ok(plan),
             Err(e) => {
@@ -206,7 +238,9 @@ impl JoinReorder {
     fn try_optimize_region(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let config = context.config_options();
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
         let mut graph_builder = GraphBuilder::new(self.options.clone());
@@ -219,13 +253,42 @@ impl JoinReorder {
             return Ok(None);
         }
 
+        let plan = if !config.optimizer.repartition_joins || config.execution.target_partitions == 1
+        {
+            plan.transform_down(|node| {
+                if query_graph
+                    .relations
+                    .iter()
+                    .any(|relation| Arc::ptr_eq(&relation.plan, &node))
+                {
+                    return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+                }
+                if let Some(join) =
+                    node.downcast_ref::<datafusion::physical_plan::joins::HashJoinExec>()
+                {
+                    return Ok(Transformed::yes(
+                        join.builder()
+                            .with_partition_mode(
+                                datafusion::physical_plan::joins::PartitionMode::CollectLeft,
+                            )
+                            .reset_state()
+                            .build_exec()?,
+                    ));
+                }
+                Ok(Transformed::no(node))
+            })?
+            .data
+        } else {
+            plan
+        };
+
         trace!(
             "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
             query_graph.relation_count(),
             query_graph.edges.len()
         );
 
-        let mut enumerator = PlanEnumerator::new(query_graph, self.options.clone());
+        let mut enumerator = PlanEnumerator::new(query_graph, self.options.clone(), config);
         let solve_result = enumerator.solve_with_status()?;
         let relation_count = enumerator.query_graph.relation_count();
         let emit_count = solve_result.emit_count;
@@ -278,12 +341,26 @@ impl JoinReorder {
         let mut reconstructor =
             PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
         reconstructor.validate_reconstruction_plan(&best_plan)?;
+        if !config.optimizer.repartition_joins || config.execution.target_partitions == 1 {
+            reconstructor.partition_mode =
+                datafusion::physical_plan::joins::PartitionMode::CollectLeft;
+        }
+
         // Pre-compute required output columns for each join subtree based on the original
         // region-root output columns. This keeps intermediate join outputs narrow before
         // `JoinSelection` runs, helping avoid plan-shape regressions when we see through
         // projection nodes while building the query graph.
         reconstructor.prepare_required_output_columns(&best_plan, &target_column_map)?;
-        let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
+        let reconstructed = reconstructor.reconstruct(&best_plan)?;
+        let (join_tree, final_map) = physical_cost::refine_join_tree(
+            &best_plan,
+            &enumerator.dp_table,
+            &enumerator.query_graph,
+            &target_column_map,
+            &self.options,
+            context,
+            reconstructed,
+        )?;
 
         trace!(
             "JoinReorder: Reconstructed join tree (before final projection):\n{}",
@@ -297,6 +374,37 @@ impl JoinReorder {
 
         let final_plan =
             self.build_final_projection(join_tree, &final_map, &target_column_map, &target_names)?;
+
+        // DP uses row estimates to explore cheaply. Check its winner against the input
+        // with DataFusion's actual build-side and distribution decisions before replacing it.
+        match (
+            physical_cost::estimate_selected_cost(
+                Arc::clone(&plan),
+                &enumerator.query_graph.relations,
+                &self.options,
+                context,
+            )?,
+            physical_cost::estimate_selected_cost(
+                Arc::clone(&final_plan),
+                &enumerator.query_graph.relations,
+                &self.options,
+                context,
+            )?,
+        ) {
+            (Some(input_cost), Some(reordered_cost)) => {
+                trace!(
+                    "JoinReorder: Selected physical costs: input={input_cost:.2}, reordered={reordered_cost:.2}"
+                );
+                if reordered_cost >= input_cost * (1.0 - 1e-9) {
+                    trace!("JoinReorder: Retaining input without a physical cost improvement");
+                    return Ok(Some(plan));
+                }
+            }
+            _ => {
+                trace!("JoinReorder: Retaining input because the full region could not be costed");
+                return Ok(Some(plan));
+            }
+        }
 
         trace!("JoinReorder: Optimization successful at current level. Returning new plan.");
         trace!(
@@ -559,7 +667,7 @@ mod tests {
 
         // Test our recursive optimizer
         let join_reorder = JoinReorder::default();
-        let optimized_plan = join_reorder.find_and_optimize_regions(aggregate.clone())?;
+        let optimized_plan = join_reorder.optimize(aggregate.clone(), &ConfigOptions::new())?;
 
         // Should complete without errors and preserve the structure
         assert_eq!(optimized_plan.name(), "AggregateExec");
@@ -656,7 +764,7 @@ mod tests {
 
         // Now test our recursive optimizer
         let join_reorder = JoinReorder::default();
-        let optimized_plan = join_reorder.find_and_optimize_regions(root_plan.clone())?;
+        let optimized_plan = join_reorder.optimize(root_plan.clone(), &ConfigOptions::new())?;
 
         // The optimized plan should have the same structure at the top level
         // (ProjectionExec -> AggregateExec), with joins underneath optimized
@@ -762,7 +870,8 @@ mod tests {
 
         // Test optimization
         let join_reorder = JoinReorder::default();
-        let optimized_plan = join_reorder.find_and_optimize_regions(upper_aggregate.clone())?;
+        let optimized_plan =
+            join_reorder.optimize(upper_aggregate.clone(), &ConfigOptions::new())?;
 
         // Should complete without errors and preserve the aggregate boundaries
         assert_eq!(optimized_plan.name(), "AggregateExec");
@@ -771,8 +880,7 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test: nested reorderable regions inside leaf nodes of a higher-level region
-    /// must still be optimized. This requires a bottom-up traversal.
+    /// Regions nested behind a boundary must each be enumerated exactly once.
     #[test]
     fn test_nested_reorderable_region_under_leaf_is_optimized() -> Result<()> {
         // Tables use the same simple schema so join conditions can consistently reference `id`.
@@ -847,17 +955,22 @@ mod tests {
         )?);
 
         let join_reorder = JoinReorder::default();
-        let optimized_plan = join_reorder.find_and_optimize_regions(root)?;
+        let optimized_plan = join_reorder.optimize(root, &ConfigOptions::new())?;
 
-        // Root region should be optimized (>= 3 relations), producing a ProjectionExec.
-        assert_eq!(optimized_plan.name(), "ProjectionExec");
+        let outcomes = join_reorder.take_recorded_outcomes();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|outcome| outcome.relation_count == 3));
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.path == RegionOutcomePath::DpCompleted)
+        );
 
-        // The nested region under FilterExec must also be optimized, producing its own ProjectionExec.
         #[expect(clippy::expect_used)]
         let filter_node = find_node_by_name(optimized_plan, "FilterExec")
             .expect("expected FilterExec leaf to remain in the optimized plan");
         assert_eq!(filter_node.children().len(), 1);
-        assert_eq!(filter_node.children()[0].name(), "ProjectionExec");
+        assert!(filter_node.children()[0].is::<HashJoinExec>());
 
         Ok(())
     }
@@ -941,7 +1054,7 @@ mod tests {
 
         // 4. Run the optimizer
         let optimizer = JoinReorder::default();
-        let optimized_plan = optimizer.find_and_optimize_regions(original_plan.clone())?;
+        let optimized_plan = optimizer.optimize(original_plan.clone(), &ConfigOptions::new())?;
 
         // 5. Assertions
         // The plan should have been processed without errors
@@ -1168,15 +1281,12 @@ mod tests {
         let root = hash_inner_join(j2, dim_l, "f_id", "l_id")?;
 
         let reorder = JoinReorder::default();
-        let optimized = reorder.find_and_optimize_regions(root)?;
-
-        // The optimizer must wrap the reordered join tree in a ProjectionExec that pins the
-        // original output column order. This is itself an invariant we want locked.
-        assert_eq!(optimized.name(), "ProjectionExec");
-        assert_eq!(optimized.children().len(), 1);
-
-        let join_tree = Arc::clone(optimized.children()[0]);
-        let shape_str = shape(&join_tree);
+        let optimized = reorder.optimize(root.clone(), &ConfigOptions::new())?;
+        assert!(
+            Arc::ptr_eq(&optimized, &root),
+            "an equal-cost tree must retain the input"
+        );
+        let shape_str = shape(&optimized);
 
         // Three inner HashJoinExec nodes => 4 leaves total.
         let hj_count = shape_str.matches("HJ(").count();
@@ -1195,12 +1305,9 @@ mod tests {
             );
         }
 
-        // The outcome trace must contain at least one DP-completion covering all 4 relations.
-        // Bottom-up recursion may legitimately enumerate the same join region more than once
-        // (an inner sub-region first, then the outer level after the inner is rebuilt), so we
-        // do not pin the exact number of outcomes — only that the largest-relation enumeration
-        // succeeded via DP, never via a greedy fallback.
+        // A complete region is enumerated once, without first rebuilding its prefixes.
         let outcomes = reorder.take_recorded_outcomes();
+        assert_eq!(outcomes.len(), 1);
         assert!(
             !outcomes.is_empty(),
             "expected at least one recorded region"
@@ -1244,11 +1351,9 @@ mod tests {
             ..JoinReorderOptions::default()
         };
         let reorder = JoinReorder::new(opts);
-        let optimized = reorder.find_and_optimize_regions(root)?;
-
-        assert_eq!(optimized.name(), "ProjectionExec");
-        let join_tree = Arc::clone(optimized.children()[0]);
-        let shape_str = shape(&join_tree);
+        let optimized = reorder.optimize(root.clone(), &ConfigOptions::new())?;
+        assert_eq!(optimized.schema(), root.schema());
+        let shape_str = shape(&optimized);
         assert_eq!(
             shape_str.matches("HJ(").count(),
             3,
@@ -1295,7 +1400,7 @@ mod tests {
         let root = hash_inner_join(j3, d4, "f_id", "d_id")?;
 
         let reorder = JoinReorder::default();
-        let optimized = reorder.find_and_optimize_regions(root)?;
+        let optimized = reorder.optimize(root, &ConfigOptions::new())?;
         assert_eq!(optimized.name(), "ProjectionExec");
         let join_tree = Arc::clone(optimized.children()[0]);
         let shape_str = shape(&join_tree);
@@ -1336,7 +1441,7 @@ mod tests {
         let root = hash_inner_join(a, b, "a_id", "b_id")?;
 
         let reorder = JoinReorder::default();
-        let optimized = reorder.find_and_optimize_regions(root.clone())?;
+        let optimized = reorder.optimize(root.clone(), &ConfigOptions::new())?;
 
         assert_eq!(shape(&optimized), shape(&(root as Arc<dyn ExecutionPlan>)));
         assert!(
@@ -1599,10 +1704,32 @@ mod tests {
                         ..Default::default()
                     });
                     let reordered = reorder.optimize(original.clone(), &ConfigOptions::new())?;
-                    assert!(
-                        reordered.is::<ProjectionExec>(),
-                        "must reconstruct the region"
-                    );
+                    assert!(Arc::ptr_eq(&reordered, &original) || reordered.is::<ProjectionExec>());
+
+                    // Execute the candidate even when the cost guard retains the input.
+                    let (graph, target) = GraphBuilder::new(reorder.options.clone())
+                        .build(original.clone())?
+                        .expect("three-relation fixture");
+                    let mut enumerator =
+                        PlanEnumerator::new(graph, reorder.options.clone(), &ConfigOptions::new());
+                    let candidate = match enumerator.solve_with_status()?.plan {
+                        Some(plan) => plan,
+                        None => enumerator.solve_greedy()?,
+                    };
+                    let mut reconstructor =
+                        PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+                    reconstructor.validate_reconstruction_plan(&candidate)?;
+                    reconstructor.prepare_required_output_columns(&candidate, &target)?;
+                    let (candidate, columns) = reconstructor.reconstruct(&candidate)?;
+                    let names = original
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|field| field.name().clone())
+                        .collect::<Vec<_>>();
+                    let candidate =
+                        reorder.build_final_projection(candidate, &columns, &target, &names)?;
+                    assert_eq!(candidate.schema(), original.schema());
                     assert_eq!(reordered.schema(), original.schema());
                     let outcomes = reorder.take_recorded_outcomes();
                     assert_eq!(outcomes.len(), 1);
@@ -1624,6 +1751,7 @@ mod tests {
                     }
                     expected.sort();
                     assert_eq!(rows(original).await?, expected);
+                    assert_eq!(rows(candidate).await?, expected);
                     assert_eq!(
                         rows(reordered).await?,
                         expected,
@@ -1631,6 +1759,78 @@ mod tests {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn join_reorder_respects_partition_configuration() -> Result<()> {
+        fn assert_collect_left(plan: &Arc<dyn ExecutionPlan>) {
+            if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+                assert_eq!(join.mode, PartitionMode::CollectLeft);
+            }
+            for child in plan.children() {
+                assert_collect_left(child);
+            }
+        }
+        for (repartition, partitions) in [(false, 4), (true, 1)] {
+            let mut config = ConfigOptions::new();
+            config.optimizer.repartition_joins = repartition;
+            config.execution.target_partitions = partitions;
+            config.optimizer.hash_join_single_partition_threshold = 0;
+            config.optimizer.hash_join_single_partition_threshold_rows = 0;
+            let reorder = JoinReorder::default();
+            let plan = reorder.optimize(original_plan()?, &config)?;
+            assert_eq!(reorder.take_recorded_outcomes().len(), 1);
+            assert_collect_left(&plan);
+            let selected = datafusion::physical_optimizer::join_selection::JoinSelection::new()
+                .optimize(plan, &config)?;
+            assert_collect_left(&selected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn fetched_volatile_and_dynamic_joins_are_reorder_boundaries() -> Result<()> {
+        use datafusion::common::{DFSchema, ScalarValue};
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::lit;
+        use datafusion::physical_expr::create_physical_expr;
+        use datafusion::physical_expr::expressions::{DynamicFilterPhysicalExpr, Literal};
+
+        let original = original_plan()?;
+        let join = original
+            .downcast_ref::<HashJoinExec>()
+            .expect("hash join fixture");
+        let fetched = join.builder().with_fetch(Some(0)).build_exec()?;
+        let random = datafusion::functions::math::expr_fn::random().gt(lit(0.5));
+        let expression = create_physical_expr(
+            &random,
+            &DFSchema::empty(),
+            &ExecutionProps::new(),
+            &datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext::default(
+            ),
+        )?;
+        let volatile = join
+            .builder()
+            .with_filter(Some(JoinFilter::new(
+                expression,
+                vec![],
+                Arc::new(Schema::empty()),
+            )))
+            .build_exec()?;
+        let dynamic = join.builder().build()?.with_dynamic_filter_expr(Arc::new(
+            DynamicFilterPhysicalExpr::new(
+                vec![Arc::new(Column::new("c_t", 0))],
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+            ),
+        ))?;
+        for plan in [fetched, volatile, Arc::new(dynamic)] {
+            let reorder = JoinReorder::default();
+            let optimized = reorder.optimize(plan.clone(), &ConfigOptions::new())?;
+            assert!(Arc::ptr_eq(&plan, &optimized));
+            assert!(reorder.take_recorded_outcomes().is_empty());
         }
         Ok(())
     }

@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::stats::Precision;
+use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use log::{trace, warn};
 
@@ -163,35 +164,20 @@ impl PlanEnumerator {
             .any(|edge_index| self.edge_is_low_confidence(edge_index))
     }
 
-    /// Visit every distinct non-empty union of the neighbor hypernodes.
+    /// Visit non-empty subsets of singleton neighbor representatives without materializing them.
     fn for_each_neighbor_subset_union<F>(neighbors: &[JoinSet], mut f: F) -> Result<bool>
     where
         F: FnMut(JoinSet) -> Result<bool>,
     {
-        if neighbors.is_empty() {
-            return Ok(true);
-        }
-        if neighbors.len() >= usize::BITS as usize {
-            return Err(DataFusionError::Internal(format!(
-                "Too many neighbor hypernodes to enumerate exactly: {}",
-                neighbors.len()
-            )));
-        }
-
-        let subset_count = 1usize << neighbors.len();
-        let mut seen = HashSet::with_capacity(subset_count.saturating_sub(1));
-        for mask in 1..subset_count {
-            let mut union = JoinSet::new();
-            for (idx, neighbor) in neighbors.iter().enumerate() {
-                if (mask & (1usize << idx)) != 0 {
-                    union |= *neighbor;
-                }
+        debug_assert!(neighbors.iter().all(|set| set.cardinality() == 1));
+        let neighbor_bits = Self::union_join_sets(neighbors).bits();
+        let mut subset = 0u64;
+        loop {
+            subset = subset.wrapping_sub(neighbor_bits) & neighbor_bits;
+            if subset == 0 {
+                break;
             }
-
-            if union.is_empty() || !seen.insert(union.bits()) {
-                continue;
-            }
-            if !f(union)? {
+            if !f(JoinSet::from_bits(subset))? {
                 return Ok(false);
             }
         }
@@ -206,11 +192,15 @@ impl PlanEnumerator {
     }
 
     /// Creates a new plan enumerator.
-    pub fn new(query_graph: QueryGraph, options: JoinReorderOptions) -> Self {
+    pub fn new(
+        query_graph: QueryGraph,
+        options: JoinReorderOptions,
+        config: &ConfigOptions,
+    ) -> Self {
         let (anchor_relations, enable_fact_anchor_heuristic) =
             Self::derive_anchor_relations(&query_graph, &options);
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
-        let cost_model = CostModel::new(&options);
+        let cost_model = CostModel::new(&options, config);
 
         Self {
             query_graph,
@@ -244,6 +234,11 @@ impl PlanEnumerator {
             ));
         }
 
+        self.dp_table.clear();
+        self.emit_count = 0;
+        #[cfg(test)]
+        self.emitted_pairs.clear();
+
         // Initialize leaf plans for all single relations
         self.init_leaf_plans()?;
 
@@ -252,18 +247,18 @@ impl PlanEnumerator {
 
         // Return the plan containing all relations if found; otherwise fallback to greedy.
         let all_relations_set = self.create_all_relations_set()?;
-        if let Some(result) = self.dp_table.get(&all_relations_set).cloned() {
-            Ok(JoinReorderSolveResult {
-                plan: Some(result),
-                status: JoinReorderStatus::DpCompleted,
-                emit_count: self.emit_count,
-            })
-        } else if !completed {
+        if !completed {
             Ok(JoinReorderSolveResult {
                 plan: None,
                 status: JoinReorderStatus::FallbackRequired(
                     JoinReorderFallbackReason::EmitThresholdExceeded,
                 ),
+                emit_count: self.emit_count,
+            })
+        } else if let Some(result) = self.dp_table.get(&all_relations_set).cloned() {
+            Ok(JoinReorderSolveResult {
+                plan: Some(result),
+                status: JoinReorderStatus::DpCompleted,
                 emit_count: self.emit_count,
             })
         } else {
@@ -328,7 +323,7 @@ impl PlanEnumerator {
         Ok(())
     }
 
-    /// Compute neighbor hypernodes of a connected subgraph `nodes`, excluding `forbidden`.
+    /// Compute singleton neighbor representatives, excluding `forbidden` dependencies.
     fn neighbors(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Vec<JoinSet> {
         self.query_graph.get_neighbors(nodes, forbidden)
     }
@@ -382,7 +377,8 @@ impl PlanEnumerator {
         }
 
         // Grow the exclusion set monotonically while walking neighbors in canonical order.
-        // This keeps each complement assigned to the first neighbor hypernode that can seed it.
+        // This assigns each complement to its first representative without excluding an
+        // entire, potentially disconnected hyperedge endpoint from subsequent seeds.
         let mut processed_neighbors = JoinSet::new();
         for &nbr_set in &neighbors {
             let edge_indices = self.query_graph.get_connecting_edge_indices(nodes, nbr_set);
@@ -540,30 +536,36 @@ impl PlanEnumerator {
             left_plan.cardinality,
             right_plan.cardinality,
             edge_indices,
+            left,
+            right,
         );
-        let (physical_left, physical_right, mut new_cost) =
-            if self.query_graph.can_swap_physical_order(edge_indices) {
-                let forward_cost =
-                    self.cost_model
-                        .compute_cost(&left_plan, &right_plan, new_cardinality);
-                let reverse_cost =
-                    self.cost_model
-                        .compute_cost(&right_plan, &left_plan, new_cardinality);
-                if reverse_cost < forward_cost {
-                    (right, left, reverse_cost)
-                } else {
-                    (left, right, forward_cost)
-                }
+        let key_count = self.query_graph.join_key_count(edge_indices);
+        let (physical_left, physical_right, mut new_cost) = if self
+            .query_graph
+            .can_swap_physical_order(edge_indices)
+        {
+            let forward_cost =
+                self.cost_model
+                    .compute_cost(&left_plan, &right_plan, new_cardinality, key_count);
+            let reverse_cost =
+                self.cost_model
+                    .compute_cost(&right_plan, &left_plan, new_cardinality, key_count);
+            if reverse_cost < forward_cost {
+                (right, left, reverse_cost)
             } else {
-                (
-                    left,
-                    right,
-                    self.cost_model
-                        .compute_cost(&left_plan, &right_plan, new_cardinality),
-                )
-            };
+                (left, right, forward_cost)
+            }
+        } else {
+            (
+                left,
+                right,
+                self.cost_model
+                    .compute_cost(&left_plan, &right_plan, new_cardinality, key_count),
+            )
+        };
         if self.should_apply_fact_anchor_penalty(parent, edge_indices) {
-            new_cost += new_cardinality * self.options.fact_anchor_penalty_multiplier;
+            new_cost = (new_cost + new_cardinality * self.options.fact_anchor_penalty_multiplier)
+                .min(f64::MAX);
         }
 
         let new_plan = Arc::new(DPPlan::new_join(
@@ -609,11 +611,7 @@ impl PlanEnumerator {
         // Ensure leaf plans exist so greedy can run even when called standalone.
         self.ensure_leaf_plans()?;
 
-        // If DP (even partial) already produced a full plan, prefer it directly.
         let all_relations_set = self.create_all_relations_set()?;
-        if let Some(plan) = self.dp_table.get(&all_relations_set).cloned() {
-            return Ok(plan);
-        }
 
         if relation_count == 1 {
             // Return the single relation.
@@ -683,10 +681,15 @@ impl PlanEnumerator {
                     current_plan.cardinality,
                     next_plan.cardinality,
                     &edge_indices,
+                    current_set,
+                    next_set,
                 );
-                let new_cost =
-                    self.cost_model
-                        .compute_cost(&current_plan, next_plan, new_cardinality);
+                let new_cost = self.cost_model.compute_cost(
+                    &current_plan,
+                    next_plan,
+                    new_cardinality,
+                    self.query_graph.join_key_count(&edge_indices),
+                );
 
                 if new_cardinality < best_cardinality
                     || (new_cardinality == best_cardinality && new_cost < best_cost)
@@ -709,11 +712,20 @@ impl PlanEnumerator {
                         ))
                     })?;
 
-                    let new_cardinality = current_plan.cardinality * next_plan.cardinality;
-                    let new_cost =
-                        self.cost_model
-                            .compute_cost(&current_plan, next_plan, new_cardinality)
-                            + 1_000_000.0;
+                    let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
+                        current_plan.cardinality,
+                        next_plan.cardinality,
+                        &[],
+                        current_set,
+                        next_set,
+                    );
+                    let new_cost = (self.cost_model.compute_cost(
+                        &current_plan,
+                        next_plan,
+                        new_cardinality,
+                        0,
+                    ) + 1_000_000.0)
+                        .min(f64::MAX);
 
                     if new_cardinality < best_cardinality
                         || (new_cardinality == best_cardinality && new_cost < best_cost)
@@ -991,10 +1003,325 @@ mod tests {
         }
     }
 
+    type OraclePair = (u64, u64, Vec<usize>);
+
+    fn oracle_graph(relation_count: usize) -> Result<QueryGraph> {
+        let rows = [13.0, 29.0, 53.0, 101.0, 211.0];
+        let distinct = [Some(7), Some(11), Some(17), Some(23), Some(31)];
+        create_graph_with_custom_distinct_stats(
+            &rows[..relation_count],
+            &distinct[..relation_count],
+        )
+    }
+
+    fn add_complex_predicate(graph: &mut QueryGraph, left: JoinSet, right: JoinSet) -> Result<()> {
+        let expression = |relations: JoinSet| {
+            relations
+                .iter()
+                .map(|relation_id| {
+                    Arc::new(Column::new(&format!("R{relation_id}.C0"), 0)) as Arc<dyn PhysicalExpr>
+                })
+                .reduce(|left, right| Arc::new(BinaryExpr::new(left, Operator::Plus, right)))
+                .unwrap()
+        };
+        graph.add_edge(JoinEdge::new(
+            left,
+            right,
+            Some(Arc::new(BinaryExpr::new(
+                expression(left),
+                Operator::Gt,
+                expression(right),
+            ))),
+            JoinType::Inner,
+            vec![],
+        ))
+    }
+
+    /// Independent, width-ordered DP over all binary partitions. A predicate is available
+    /// only when all its dependencies are present. No neighborhood or DPhyp method is used.
+    fn exhaustive_plan_oracle(
+        graph: &QueryGraph,
+        options: &JoinReorderOptions,
+    ) -> Result<(HashMap<JoinSet, DPPlan>, BTreeSet<OraclePair>)> {
+        assert!(!options.enable_fact_anchor_heuristic);
+        assert!(graph.relation_count() <= 5);
+        assert!(
+            graph
+                .edges
+                .iter()
+                .all(|edge| edge.join_type == JoinType::Inner)
+        );
+        let mut estimator = CardinalityEstimator::new(graph.clone());
+        let cost_model = CostModel::new(options, &ConfigOptions::new());
+        let mut plans = HashMap::new();
+        let mut pairs = BTreeSet::new();
+        let full_bits = (1u64 << graph.relation_count()) - 1;
+        for relation in &graph.relations {
+            let set = JoinSet::new_singleton(relation.relation_id)?;
+            plans.insert(
+                set,
+                DPPlan::new_leaf(relation.relation_id, estimator.estimate_cardinality(set)?)?,
+            );
+        }
+        for width in 2..=graph.relation_count() {
+            for parent_bits in 1..=full_bits {
+                if parent_bits.count_ones() as usize != width {
+                    continue;
+                }
+                let parent = JoinSet::from_bits(parent_bits);
+                let mut left_bits = (parent_bits - 1) & parent_bits;
+                while left_bits != 0 {
+                    let right_bits = parent_bits ^ left_bits;
+                    let left = JoinSet::from_bits(left_bits);
+                    let right = JoinSet::from_bits(right_bits);
+                    if left_bits < right_bits
+                        && let (Some(left_plan), Some(right_plan)) =
+                            (plans.get(&left), plans.get(&right))
+                    {
+                        let edges: Vec<_> = graph
+                            .edges
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, edge)| {
+                                let dependencies =
+                                    edge.left_endpoint.bits() | edge.right_endpoint.bits();
+                                (dependencies & parent_bits == dependencies
+                                    && dependencies & left_bits != 0
+                                    && dependencies & right_bits != 0)
+                                    .then_some(index)
+                            })
+                            .collect();
+                        if !edges.is_empty() {
+                            pairs.insert(normalize_pair(left, right, edges.clone()));
+                            let cardinality = estimator.estimate_join_cardinality(
+                                left_plan.cardinality,
+                                right_plan.cardinality,
+                                &edges,
+                                left,
+                                right,
+                            );
+                            let forward = cost_model.compute_cost(
+                                left_plan,
+                                right_plan,
+                                cardinality,
+                                graph.join_key_count(&edges),
+                            );
+                            let reverse = cost_model.compute_cost(
+                                right_plan,
+                                left_plan,
+                                cardinality,
+                                graph.join_key_count(&edges),
+                            );
+                            let cost = forward.min(reverse);
+                            if plans.get(&parent).is_none_or(|plan| cost < plan.cost) {
+                                plans.insert(
+                                    parent,
+                                    DPPlan::new_join(left, right, edges, cost, cardinality),
+                                );
+                            }
+                        }
+                    }
+                    left_bits = (left_bits - 1) & parent_bits;
+                }
+            }
+        }
+        Ok((plans, pairs))
+    }
+
+    fn assert_matches_exhaustive_oracle(graph: QueryGraph, case: &str) -> Result<bool> {
+        let options = JoinReorderOptions {
+            enable_fact_anchor_heuristic: false,
+            emit_threshold: usize::MAX,
+            ..Default::default()
+        };
+        let full = JoinSet::from_iter(0..graph.relation_count())?;
+        let (expected_plans, expected_pairs) = exhaustive_plan_oracle(&graph, &options)?;
+        let full_plan_exists = expected_plans.contains_key(&full);
+        let mut enumerator = PlanEnumerator::new(graph, options, &ConfigOptions::new());
+        let result = enumerator.solve_with_status()?;
+        assert_eq!(
+            result.status,
+            if full_plan_exists {
+                JoinReorderStatus::DpCompleted
+            } else {
+                JoinReorderStatus::FallbackRequired(JoinReorderFallbackReason::FullPlanMissing)
+            },
+            "{case}"
+        );
+        let actual_pairs = emitted_pair_set(&enumerator.emitted_pairs);
+        assert_eq!(
+            actual_pairs, expected_pairs,
+            "missing or invalid pair: {case}"
+        );
+        assert_eq!(
+            enumerator.emitted_pairs.len(),
+            actual_pairs.len(),
+            "duplicate emitted pair: {case}"
+        );
+        assert_eq!(enumerator.dp_table.len(), expected_plans.len(), "{case}");
+        for (set, expected) in expected_plans {
+            let actual = enumerator.dp_table.get(&set).unwrap();
+            assert!(
+                (actual.cost - expected.cost).abs() <= expected.cost.abs().max(1.0) * 1e-10,
+                "cost mismatch for {set:?}: {} vs {}; {case}",
+                actual.cost,
+                expected.cost
+            );
+        }
+        Ok(full_plan_exists)
+    }
+
+    #[test]
+    fn test_dphyp_matches_all_five_relation_simple_graphs() -> Result<()> {
+        let edges: Vec<_> = (0..5)
+            .flat_map(|left| ((left + 1)..5).map(move |right| (left, right)))
+            .collect();
+        let mut connected_count = 0;
+        for mask in 0usize..(1 << edges.len()) {
+            let mut graph = oracle_graph(5)?;
+            for (index, &(left, right)) in edges.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    add_equi_join_edge(&mut graph, left, right)?;
+                }
+            }
+            connected_count += usize::from(assert_matches_exhaustive_oracle(
+                graph,
+                &format!("simple mask={mask:#x}"),
+            )?);
+        }
+        assert_eq!(connected_count, 728);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dphyp_matches_all_four_relation_graphs_with_complex_predicate() -> Result<()> {
+        let edges: Vec<_> = (0..4)
+            .flat_map(|left| ((left + 1)..4).map(move |right| (left, right)))
+            .collect();
+        let mut compared = 0;
+        let mut connected_count = 0;
+        for dependencies in [7u64, 11, 13, 14] {
+            for right_id in JoinSet::from_bits(dependencies).iter() {
+                for mask in 0usize..(1 << edges.len()) {
+                    let mut graph = oracle_graph(4)?;
+                    for (index, &(left, right)) in edges.iter().enumerate() {
+                        if mask & (1 << index) != 0 {
+                            add_equi_join_edge(&mut graph, left, right)?;
+                        }
+                    }
+                    let right = JoinSet::new_singleton(right_id)?;
+                    add_complex_predicate(
+                        &mut graph,
+                        JoinSet::from_bits(dependencies) - right,
+                        right,
+                    )?;
+                    let case = format!(
+                        "complex dependencies={dependencies:#x}, right={right_id}, mask={mask:#x}"
+                    );
+                    connected_count += usize::from(assert_matches_exhaustive_oracle(graph, &case)?);
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 768);
+        assert_eq!(connected_count, 636);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dphyp_matches_all_four_relation_predicate_dependency_graphs() -> Result<()> {
+        let dependency_sets: Vec<_> = (1u64..16).filter(|bits| bits.count_ones() >= 2).collect();
+        assert_eq!(dependency_sets.len(), 11);
+        for mask in 0usize..(1 << dependency_sets.len()) {
+            let mut graph = oracle_graph(4)?;
+            for (index, &dependencies) in dependency_sets.iter().enumerate() {
+                if mask & (1 << index) == 0 {
+                    continue;
+                }
+                let relations = JoinSet::from_bits(dependencies);
+                let left_id = relations.iter().next().unwrap();
+                let left = JoinSet::new_singleton(left_id)?;
+                let right = relations - left;
+                if right.cardinality() == 1 {
+                    add_equi_join_edge(&mut graph, left_id, right.iter().next().unwrap())?;
+                } else {
+                    add_complex_predicate(&mut graph, left, right)?;
+                }
+            }
+            assert_matches_exhaustive_oracle(graph, &format!("dependency mask={mask:#x}"))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_neighbor_subsets_stop_before_exponential_allocation() -> Result<()> {
+        let neighbors: Vec<_> = (0..63).map(JoinSet::new_singleton).collect::<Result<_>>()?;
+        let mut visited = Vec::new();
+        let completed = PlanEnumerator::for_each_neighbor_subset_union(&neighbors, |subset| {
+            visited.push(subset);
+            Ok(false)
+        })?;
+        assert!(!completed);
+        assert_eq!(visited, vec![JoinSet::new_singleton(0)?]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_threshold_fallback_after_a_partial_full_plan_runs_greedy() -> Result<()> {
+        let mut graph = oracle_graph(4)?;
+        for left in 0..4 {
+            for right in (left + 1)..4 {
+                add_equi_join_edge(&mut graph, left, right)?;
+            }
+        }
+        let options = JoinReorderOptions {
+            enable_fact_anchor_heuristic: false,
+            emit_threshold: usize::MAX,
+            ..Default::default()
+        };
+        let completed = PlanEnumerator::new(graph.clone(), options.clone(), &ConfigOptions::new())
+            .solve_with_status()?;
+        assert_eq!(completed.status, JoinReorderStatus::DpCompleted);
+        let full = JoinSet::from_iter(0..4)?;
+        let mut partial_full_plans = 0;
+        for threshold in 0..completed.emit_count {
+            let mut enumerator = PlanEnumerator::new(
+                graph.clone(),
+                JoinReorderOptions {
+                    emit_threshold: threshold,
+                    ..options.clone()
+                },
+                &ConfigOptions::new(),
+            );
+            let result = enumerator.solve_with_status()?;
+            assert_eq!(
+                result.status,
+                JoinReorderStatus::FallbackRequired(
+                    JoinReorderFallbackReason::EmitThresholdExceeded
+                ),
+                "threshold={threshold}"
+            );
+            assert!(
+                result.plan.is_none(),
+                "truncated enumeration must not claim a completed result"
+            );
+            assert_eq!(enumerator.emitted_pairs.len(), threshold);
+            if enumerator.dp_table.contains_key(&full) {
+                partial_full_plans += 1;
+                let greedy = enumerator.solve_greedy()?;
+                assert_strict_left_deep(&greedy, &enumerator.dp_table);
+                assert_eq!(leftmost_relation_id(&greedy, &enumerator.dp_table), 3);
+            }
+        }
+        assert!(partial_full_plans > 0);
+        Ok(())
+    }
+
     #[test]
     fn test_plan_enumerator_creation() {
         let graph = create_test_graph_with_relations(2);
-        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         assert_eq!(enumerator.query_graph.relation_count(), 2);
         assert!(enumerator.dp_table.is_empty());
     }
@@ -1002,7 +1329,8 @@ mod tests {
     #[test]
     fn test_init_leaf_plans() {
         let graph = create_test_graph_with_relations(2);
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
 
         match enumerator.init_leaf_plans() {
             Ok(()) => (),
@@ -1021,7 +1349,8 @@ mod tests {
     #[test]
     fn test_create_all_relations_set() -> Result<()> {
         let graph = create_test_graph_with_relations(3);
-        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
 
         let all_set = enumerator.create_all_relations_set()?;
         assert_eq!(all_set.bits(), 7); // 111 in binary = 7
@@ -1037,7 +1366,8 @@ mod tests {
         add_equi_join_edge(&mut graph, 2, 3)?;
 
         let expected = brute_force_csg_cmp_pairs(&graph);
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         let result = enumerator.solve_with_status()?;
 
         assert_eq!(result.status, JoinReorderStatus::DpCompleted);
@@ -1072,7 +1402,8 @@ mod tests {
             vec![simple_01, complex_edge]
         );
 
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         let result = enumerator.solve_with_status()?;
 
         assert_eq!(result.status, JoinReorderStatus::DpCompleted);
@@ -1108,6 +1439,7 @@ mod tests {
                 emit_threshold: 1,
                 ..Default::default()
             },
+            &ConfigOptions::new(),
         );
         let result = enumerator.solve_with_status()?;
 
@@ -1133,7 +1465,8 @@ mod tests {
         graph.relations[1].base_cardinality = 10.0;
         add_equi_join_edge(&mut graph, 0, 1)?;
 
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         let plan = enumerator
             .solve()?
             .ok_or_else(|| DataFusionError::Internal("expected two-way join plan".to_string()))?;
@@ -1157,7 +1490,8 @@ mod tests {
     #[test]
     fn test_solve_greedy_generates_strict_left_deep_plan() -> Result<()> {
         let graph = create_star_graph(&[1_000_000.0, 4_000.0, 3_000.0, 2_000.0, 1_500.0], 0)?;
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
 
         let plan = enumerator.solve_greedy()?;
         assert_eq!(plan.join_set.cardinality(), 5);
@@ -1169,7 +1503,8 @@ mod tests {
     #[test]
     fn test_solve_greedy_starts_from_largest_relation() -> Result<()> {
         let graph = create_star_graph(&[1_000.0, 2_000.0, 50_000.0, 3_000.0], 2)?;
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
 
         let plan = enumerator.solve_greedy()?;
         let start_relation = leftmost_relation_id(&plan, &enumerator.dp_table);
@@ -1195,7 +1530,8 @@ mod tests {
             ],
             0,
         )?;
-        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let mut enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
 
         let neighbors = enumerator.neighbors(JoinSet::new_singleton(0)?, JoinSet::new());
 
@@ -1216,7 +1552,8 @@ mod tests {
         let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
         let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
 
-        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         assert!(enumerator.enable_fact_anchor_heuristic);
 
         let dim_parent = JoinSet::from_iter([1, 2])?;
@@ -1239,7 +1576,8 @@ mod tests {
         let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
         let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
 
-        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         assert!(enumerator.enable_fact_anchor_heuristic);
 
         let dim_parent = JoinSet::from_iter([1, 2])?;
@@ -1253,7 +1591,8 @@ mod tests {
         let distinct_stats = [None, None, None, None, None];
         let graph = create_graph_with_custom_distinct_stats(&cardinalities, &distinct_stats)?;
 
-        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let enumerator =
+            PlanEnumerator::new(graph, JoinReorderOptions::default(), &ConfigOptions::new());
         assert!(!enumerator.enable_fact_anchor_heuristic);
         Ok(())
     }

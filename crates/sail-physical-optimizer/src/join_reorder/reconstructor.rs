@@ -27,6 +27,7 @@ type JoinConditionPairs = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
 /// Plan reconstructor, converting the optimal DPPlan back to ExecutionPlan.
 pub struct PlanReconstructor<'a> {
+    pub partition_mode: PartitionMode,
     /// Reference to the complete DP table for looking up subproblems
     dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>,
     /// Reference to the query graph
@@ -54,6 +55,7 @@ struct PendingFilter {
 impl<'a> PlanReconstructor<'a> {
     pub fn new(dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>, query_graph: &'a QueryGraph) -> Self {
         Self {
+            partition_mode: PartitionMode::Auto,
             dp_table,
             query_graph,
             plan_cache: HashMap::new(),
@@ -622,10 +624,10 @@ impl<'a> PlanReconstructor<'a> {
             left_plan,
             right_plan,
             on_conditions,
-            join_filter,         // Preserve the original residual predicates
-            &join_type,          // Use determined join type
-            projection.clone(),  // projection
-            PartitionMode::Auto, // partition_mode
+            join_filter,
+            &join_type,         // Use determined join type
+            projection.clone(), // projection
+            self.partition_mode,
             null_equality,
             false, // null_aware
         )?);
@@ -727,6 +729,10 @@ impl<'a> PlanReconstructor<'a> {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
+
+            if edge.equi_pairs.is_empty() {
+                continue;
+            }
 
             if let Some(existing) = selected {
                 if existing != edge.null_equality {
