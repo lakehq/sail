@@ -39,7 +39,8 @@ use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
@@ -140,10 +141,17 @@ fn logical_file_schema_for_scan(
             logical_fields_by_physical_name
                 .get(physical_field.name())
                 .map(|logical_field| {
-                    Arc::new(
+                    let field =
                         with_variant_extension_if_marked_storage(logical_field.as_ref().clone())
-                            .with_name(physical_field.name()),
-                    )
+                            .with_name(physical_field.name());
+                    let field = if column_mapping_mode == ColumnMappingMode::Id
+                        && field.data_type().is_nested()
+                    {
+                        with_physical_name_aliases(field)
+                    } else {
+                        field
+                    };
+                    Arc::new(field)
                 })
                 .unwrap_or_else(|| Arc::clone(physical_field))
         })
@@ -153,6 +161,49 @@ fn logical_file_schema_for_scan(
         fields,
         physical_file_schema.metadata().clone(),
     ))
+}
+
+/// Adds the physical name of a nested field and its children as schema evolution aliases in
+/// column mapping ID mode.
+///
+/// Fields are matched by Parquet field ID in ID mode. The Parquet reader drops the field IDs
+/// of nested fields when it coerces INT96 timestamps (as written by Spark by default), and
+/// the alias lets such fields be matched by their physical name instead. Aliases only apply
+/// to Parquet fields without a field ID. Top-level primitive fields keep their field IDs, so
+/// they are left unchanged to avoid casts in the scan.
+fn with_physical_name_aliases(field: Field) -> Field {
+    let data_type = match field.data_type() {
+        ArrowDataType::Struct(children) => ArrowDataType::Struct(
+            children
+                .iter()
+                .map(|child| Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        ArrowDataType::List(child) => {
+            ArrowDataType::List(Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+        }
+        ArrowDataType::LargeList(child) => {
+            ArrowDataType::LargeList(Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+        }
+        ArrowDataType::FixedSizeList(child, size) => ArrowDataType::FixedSizeList(
+            Arc::new(with_physical_name_aliases(child.as_ref().clone())),
+            *size,
+        ),
+        ArrowDataType::Map(entries, sorted) => ArrowDataType::Map(
+            Arc::new(with_physical_name_aliases(entries.as_ref().clone())),
+            *sorted,
+        ),
+        other => other.clone(),
+    };
+    let mut metadata = field.metadata().clone();
+    let physical_name = arrow_field_physical_name(&field, ColumnMappingMode::Id).to_string();
+    if !metadata.contains_key(FIELD_ALIASES_METADATA_KEY)
+        && let Ok(aliases) = serde_json::to_string(&[physical_name])
+    {
+        metadata.insert(FIELD_ALIASES_METADATA_KEY.to_string(), aliases);
+    }
+    field.with_data_type(data_type).with_metadata(metadata)
 }
 
 pub(crate) fn file_scan_projection_for_schema(
@@ -757,9 +808,9 @@ mod tests {
     use object_store::path::Path;
 
     use super::{
-        add_column_statistics, map_statistics_to_schema,
+        FIELD_ALIASES_METADATA_KEY, add_column_statistics, map_statistics_to_schema,
         map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
-        sanitize_statistics_for_schema, stats_for_add,
+        sanitize_statistics_for_schema, stats_for_add, with_physical_name_aliases,
     };
     use crate::conversion::ScalarConverter;
     use crate::spec::Add;
@@ -1078,5 +1129,29 @@ mod tests {
         assert_eq!(column.min_value, Precision::Absent);
         assert_eq!(column.max_value, Precision::Absent);
         assert_eq!(column.null_count, Precision::Absent);
+    }
+
+    #[test]
+    fn physical_name_aliases_are_added_to_nested_fields() {
+        let mapped = |name: &str, physical: &str, data_type: DataType| {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([(
+                "delta.columnMapping.physicalName".to_string(),
+                physical.to_string(),
+            )]))
+        };
+        let child = mapped("a", "col-a", DataType::Int32);
+        let field = mapped("s", "col-s", DataType::Struct(vec![child].into()));
+
+        let field = with_physical_name_aliases(field);
+
+        assert_eq!(
+            field.metadata().get(FIELD_ALIASES_METADATA_KEY),
+            Some(&r#"["col-s"]"#.to_string())
+        );
+        let child_aliases = match field.data_type() {
+            DataType::Struct(children) => children[0].metadata().get(FIELD_ALIASES_METADATA_KEY),
+            _ => None,
+        };
+        assert_eq!(child_aliases, Some(&r#"["col-a"]"#.to_string()));
     }
 }
