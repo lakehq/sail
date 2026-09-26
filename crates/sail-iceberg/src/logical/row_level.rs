@@ -81,7 +81,7 @@ pub(crate) fn validate_row_level_columns(
         MERGE_FILE_COLUMN,
         MERGE_ROW_INDEX_COLUMN,
         MERGE_SOURCE_METRIC_COLUMN,
-        crate::row_level_metadata::MERGE_PARTITION_COLUMN,
+        crate::row_level_metadata::MERGE_FILE_METADATA_COLUMN,
         crate::row_level_metadata::MERGE_PARTITION_SPEC_ID_COLUMN,
     ] {
         sail_logical_plan::row_level::validate_row_level_internal_columns(

@@ -93,11 +93,11 @@ pub(crate) enum Predicate {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum Operation {
-    Eq(#[serde(with = "literal_serde")] PrimitiveLiteral),
-    Lt(#[serde(with = "literal_serde")] PrimitiveLiteral),
-    LtEq(#[serde(with = "literal_serde")] PrimitiveLiteral),
-    Gt(#[serde(with = "literal_serde")] PrimitiveLiteral),
-    GtEq(#[serde(with = "literal_serde")] PrimitiveLiteral),
+    Eq(#[serde(with = "crate::utils::literal_serde")] PrimitiveLiteral),
+    Lt(#[serde(with = "crate::utils::literal_serde")] PrimitiveLiteral),
+    LtEq(#[serde(with = "crate::utils::literal_serde")] PrimitiveLiteral),
+    Gt(#[serde(with = "crate::utils::literal_serde")] PrimitiveLiteral),
+    GtEq(#[serde(with = "crate::utils::literal_serde")] PrimitiveLiteral),
     IsNull,
     IsNan,
     StartsWith(String),
@@ -953,61 +953,6 @@ fn shift(value: &PrimitiveLiteral, increment: bool) -> Option<PrimitiveLiteral> 
             .checked_add(i128::from(offset))
             .map(PrimitiveLiteral::Int128),
         _ => None,
-    }
-}
-
-mod literal_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use super::PrimitiveLiteral;
-
-    #[derive(Serialize, Deserialize)]
-    enum LiteralBits {
-        Boolean(bool),
-        Int(i32),
-        Long(i64),
-        Float(u32),
-        Double(u64),
-        Decimal(String),
-        String(String),
-        Uuid(String),
-        Binary(Vec<u8>),
-    }
-    pub(super) fn serialize<S: Serializer>(
-        value: &PrimitiveLiteral,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let bits = match value {
-            PrimitiveLiteral::Boolean(v) => LiteralBits::Boolean(*v),
-            PrimitiveLiteral::Int(v) => LiteralBits::Int(*v),
-            PrimitiveLiteral::Long(v) => LiteralBits::Long(*v),
-            PrimitiveLiteral::Float(v) => LiteralBits::Float(v.0.to_bits()),
-            PrimitiveLiteral::Double(v) => LiteralBits::Double(v.0.to_bits()),
-            PrimitiveLiteral::Int128(v) => LiteralBits::Decimal(v.to_string()),
-            PrimitiveLiteral::String(v) => LiteralBits::String(v.clone()),
-            PrimitiveLiteral::UInt128(v) => LiteralBits::Uuid(v.to_string()),
-            PrimitiveLiteral::Binary(v) => LiteralBits::Binary(v.clone()),
-        };
-        bits.serialize(serializer)
-    }
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<PrimitiveLiteral, D::Error> {
-        Ok(match LiteralBits::deserialize(deserializer)? {
-            LiteralBits::Boolean(v) => PrimitiveLiteral::Boolean(v),
-            LiteralBits::Int(v) => PrimitiveLiteral::Int(v),
-            LiteralBits::Long(v) => PrimitiveLiteral::Long(v),
-            LiteralBits::Float(v) => PrimitiveLiteral::Float(f32::from_bits(v).into()),
-            LiteralBits::Double(v) => PrimitiveLiteral::Double(f64::from_bits(v).into()),
-            LiteralBits::Decimal(v) => {
-                PrimitiveLiteral::Int128(v.parse().map_err(serde::de::Error::custom)?)
-            }
-            LiteralBits::String(v) => PrimitiveLiteral::String(v),
-            LiteralBits::Uuid(v) => {
-                PrimitiveLiteral::UInt128(v.parse().map_err(serde::de::Error::custom)?)
-            }
-            LiteralBits::Binary(v) => PrimitiveLiteral::Binary(v),
-        })
     }
 }
 

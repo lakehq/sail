@@ -20,7 +20,7 @@ use sail_logical_plan::row_level::{
 };
 
 use crate::logical::table_source::IcebergTableSource;
-use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 
 /// Expand MERGE information into a unified row-level write node for Iceberg.
 ///
@@ -36,7 +36,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             MERGE_FILE_COLUMN,
             MERGE_ROW_INDEX_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
-            MERGE_PARTITION_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
             crate::row_lineage::ROW_ID_COLUMN,
             crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ],
@@ -76,12 +76,12 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         "iceberg merge target schema after metadata columns: {:?}",
         target_fields
     );
-    let mut row_metadata_columns = vec![MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN];
+    let mut row_metadata_columns = vec![MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_FILE_METADATA_COLUMN];
     row_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     let mut required_metadata_columns = vec![
         MERGE_FILE_COLUMN,
         MERGE_PARTITION_SPEC_ID_COLUMN,
-        MERGE_PARTITION_COLUMN,
+        MERGE_FILE_METADATA_COLUMN,
     ];
     required_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     if let Some(row_index_column) = row_index_column {
@@ -220,7 +220,7 @@ pub(crate) fn ensure_merge_metadata_columns(
     let mut metadata_cols = vec![
         file_col,
         MERGE_PARTITION_SPEC_ID_COLUMN,
-        MERGE_PARTITION_COLUMN,
+        MERGE_FILE_METADATA_COLUMN,
         crate::row_lineage::ROW_ID_COLUMN,
         crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
     ];
