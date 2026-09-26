@@ -232,3 +232,23 @@ def test_persistent_view_hides_conditional_config_properties(spark, with_propert
             assert "Table Properties:" not in information
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view_name}")
+
+
+@pytest.mark.timeout(30, func_only=True)
+@pytest.mark.parametrize(
+    ("tested", "nested_in_null_branch", "expected"),
+    [
+        pytest.param("CAST(id AS INT)", True, [(1,), (1,)], id="nonnull-test-null-branch"),
+        pytest.param("CAST(id AS INT)", False, [(0,), (0,)], id="nonnull-test-nonnull-branch"),
+        pytest.param("nullif(CAST(id AS INT), 0)", True, [(0,), (1,)], id="nullable-test-null-branch"),
+        pytest.param("nullif(CAST(id AS INT), 0)", False, [(1,), (0,)], id="nullable-test-nonnull-branch"),
+    ],
+)
+def test_sql_nested_nvl2_resolves_without_repeated_field_inference(spark, tested, nested_in_null_branch, expected):
+    expression = "0"
+    for _ in range(20):
+        expression = f"nvl2({tested}, 1, {expression})" if nested_in_null_branch else f"nvl2({tested}, {expression}, 1)"
+    result = spark.sql(f"SELECT {expression} AS v FROM range(2) ORDER BY id")  # noqa: S608
+    assert result.dtypes == [("v", "int")]
+    assert result.schema["v"].nullable is False
+    assert result.collect() == expected

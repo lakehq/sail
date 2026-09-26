@@ -93,6 +93,9 @@ pub(super) struct PlanResolverState {
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
     windows: HashMap<String, spec::Window>,
+    /// Preserve pre-analyzer conditional coercion when dynamic STRING values can hide
+    /// unresolved fractional UNION types. This is local to one plan-resolution request.
+    pub preserve_legacy_conditional_coercion: bool,
 }
 
 impl Default for PlanResolverState {
@@ -115,6 +118,7 @@ impl PlanResolverState {
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
             windows: HashMap::new(),
+            preserve_legacy_conditional_coercion: false,
         }
     }
 

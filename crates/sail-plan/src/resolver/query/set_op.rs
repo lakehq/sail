@@ -131,6 +131,8 @@ impl PlanResolver<'_> {
                     .config
                     .view_conditional_ansi_mode
                     .unwrap_or(self.config.ansi_mode);
+                state.preserve_legacy_conditional_coercion |=
+                    ansi_mode && union_has_fractional_string_coercion(&union, &coerced);
                 let fields = union
                     .schema
                     .iter()
@@ -329,5 +331,43 @@ fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: b
             )
         }
         _ => coerced_type.clone(),
+    }
+}
+
+pub(super) fn union_has_fractional_string_coercion(union: &Union, coerced: &DFSchema) -> bool {
+    union.inputs.iter().any(|input| {
+        input
+            .schema()
+            .fields()
+            .iter()
+            .zip(coerced.fields())
+            .any(|(source, target)| {
+                has_fractional_string_coercion(source.data_type(), target.data_type())
+            })
+    })
+}
+
+fn has_fractional_string_coercion(source: &DataType, target: &DataType) -> bool {
+    if (source.is_floating() || source.is_decimal()) && target.is_string() {
+        return true;
+    }
+    match (source, target) {
+        (
+            DataType::List(source)
+            | DataType::LargeList(source)
+            | DataType::FixedSizeList(source, _),
+            DataType::List(target)
+            | DataType::LargeList(target)
+            | DataType::FixedSizeList(target, _),
+        )
+        | (DataType::Map(source, _), DataType::Map(target, _)) => {
+            has_fractional_string_coercion(source.data_type(), target.data_type())
+        }
+        (DataType::Struct(source), DataType::Struct(target)) => {
+            source.iter().zip(target).any(|(source, target)| {
+                has_fractional_string_coercion(source.data_type(), target.data_type())
+            })
+        }
+        _ => false,
     }
 }

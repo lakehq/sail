@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -14,6 +15,68 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+
+pub(crate) fn needs_legacy_conditional_coercion(
+    name: &str,
+    arguments: &[expr::Expr],
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> datafusion_common::Result<bool> {
+    let ansi_mode = config
+        .view_conditional_ansi_mode
+        .unwrap_or(config.ansi_mode && !config.preserve_view_conditional_float_type);
+    if !ansi_mode {
+        return Ok(false);
+    }
+    let branches = match name {
+        "if" | "nvl2" => arguments
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .collect::<Vec<_>>(),
+        "case" | "when" => arguments.chunks(2).filter_map(|pair| pair.last()).collect(),
+        _ => return Ok(false),
+    };
+    let data_types = branches
+        .iter()
+        .map(|arg| arg.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(common_type) = get_coerce_type_for_case_expression(&data_types, None) else {
+        return Ok(false);
+    };
+    if ansi_string_numeric_type(&data_types, &common_type, config) == common_type {
+        return Ok(false);
+    }
+    for (branch, data_type) in branches.into_iter().zip(data_types) {
+        if !contains_string_type(&data_type) {
+            continue;
+        }
+        if branch.exists(|expr| {
+            Ok(matches!(
+                expr,
+                expr::Expr::Column(_)
+                    | expr::Expr::OuterReferenceColumn(_, _)
+                    | expr::Expr::ScalarSubquery(_)
+            ))
+        })? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn contains_string_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => contains_string_type(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_string_type(field.data_type())),
+        _ => is_string_type(data_type),
+    }
+}
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -70,6 +133,9 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
+    if function_context.preserve_legacy_conditional_coercion {
+        return Ok(expr_fn::nvl2(tested, if_non_null, if_null));
+    }
     // NVL2 temporal branches use the same creation-time ANSI mode as numeric branches.
     let mut config = Arc::clone(function_context.plan_config);
     if let Some(ansi_mode) = config.view_conditional_ansi_mode {
@@ -109,7 +175,12 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         // Swapping the branches can make an empty-batch IN-list probe return a scalar.
         // An identity cast preserves this result's type and returns an empty array instead.
         let data_type = result.get_type(function_context.schema)?;
-        Ok(ScalarUDF::from(SparkConditionalCast::new(data_type)).call(vec![result]))
+        let result =
+            ScalarUDF::from(SparkConditionalCast::new(data_type.clone())).call(vec![result]);
+        // Cache the logical type so nested NVL2 expressions do not recompute both the
+        // type and nullability of each inner CASE whenever its type is requested.
+        // DataFusion removes this same-type cast when creating the physical expression.
+        Ok(cast(result, data_type))
     }
 }
 
@@ -129,6 +200,13 @@ fn coerce_branch_values(
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
     let arguments = coerce_string_temporal_values(arguments, function_context)?;
+    if function_context.preserve_legacy_conditional_coercion {
+        // TODO: Restore early conditional typing once ANSI UNION types, including values
+        // read back from materialized sources, are reliable. Preserve the old lazy coercion
+        // for dynamic STRING branches and their enclosing numeric conditionals meanwhile.
+        // This also defers widening of subsequent and enclosing numeric conditionals.
+        return Ok(arguments);
+    }
     coerce_numeric_values(arguments, function_context)
 }
 

@@ -290,14 +290,36 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | timestamp   |
         | timestamp   |
 
-    @sail-bug
-    Scenario: ANSI STRING-first DECIMAL UNION conditional consumers retain fractional values
+    Scenario Outline: ANSI STRING-first <number_type> UNION conditional consumers retain fractional values
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(<expression> AS DOUBLE) AS value
+        FROM (
+          SELECT 0 AS id, '2.5' AS v
+          <operator>
+          SELECT 1 AS id, CAST(2.5 AS <number_type>) AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+      Examples:
+        | number_type  | operator  | expression                         |
+        | DECIMAL(2,1) | UNION ALL | IF(id = 0, 0, v)                   |
+        | FLOAT        | UNION     | CASE WHEN id = 0 THEN 0 ELSE v END |
+        | DOUBLE       | UNION ALL | NVL2(NULLIF(id, 1), 0, v)          |
+
+    Scenario: ANSI fractional UNION conditional skips an invalid unselected string
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT id, CAST(IF(id = 0, 0, v) AS DOUBLE) AS value
         FROM (
-          SELECT 0 AS id, '2.5' AS v
+          SELECT 0 AS id, 'bad' AS v
           UNION ALL
           SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
         ) AS q
@@ -307,6 +329,284 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | id | value |
         | 0  | 0.0   |
         | 1  | 2.5   |
+
+    Scenario: ANSI fractional UNION conditional retains a projected COALESCE value
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(IF(id = 0, 0, x) AS DOUBLE) AS value
+        FROM (
+          SELECT id, coalesce(v, NULL) AS x
+          FROM (
+            SELECT 0 AS id, '2.5' AS v
+            UNION ALL
+            SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+          ) AS q
+        ) AS p
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+    Scenario Outline: ANSI fractional UNION conditional preserves <kind> leaves
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(<leaf> AS DOUBLE) AS value
+        FROM (
+          SELECT id, <expression> AS result
+          FROM (
+            SELECT 0 AS id, <string_value> AS v
+            UNION ALL
+            SELECT 1 AS id, <numeric_value> AS v
+          ) AS q
+        ) AS p
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+      Examples:
+        | kind         | string_value                   | numeric_value                                         | expression                                                    | leaf        |
+        | ARRAY        | array('2.5')                   | array(CAST(2.5 AS DECIMAL(2,1)))                        | IF(id = 0, array(0), v)                                        | result[0]   |
+        | STRUCT       | named_struct('a', '2.5')        | named_struct('a', CAST(2.5 AS DECIMAL(2,1)))             | CASE WHEN id = 0 THEN named_struct('a', 0) ELSE v END           | result.a    |
+        | MAP          | map('a', '2.5')                 | map('a', CAST(2.5 AS DECIMAL(2,1)))                      | IF(id = 0, map('a', 0), v)                                     | result['a'] |
+        | ARRAY STRUCT | array(named_struct('a', '2.5')) | array(named_struct('a', CAST(2.5 AS DECIMAL(2,1))))      | CASE WHEN id = 0 THEN array(named_struct('a', 0)) ELSE v END    | result[0].a |
+
+    Scenario Outline: An enclosing <number_type> conditional preserves fractional UNION values
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(IF(id = 9, CAST(0 AS <number_type>), x) AS DOUBLE) AS value
+        FROM (
+          SELECT id, IF(id = 0, 0, v) AS x
+          FROM (
+            SELECT 0 AS id, '2.55' AS v
+            UNION ALL
+            SELECT 1 AS id, CAST(2.55 AS DECIMAL(3,2)) AS v
+          ) AS q
+        ) AS p
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.55  |
+
+      Examples:
+        | number_type  |
+        | BIGINT       |
+        | DECIMAL(2,1) |
+
+    Scenario: ANSI chained UNION conditional retains exact DECIMAL precision
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(IF(id = 9, 0, v) AS DECIMAL(22,1)) AS value
+        FROM (
+          SELECT 0 AS id, '9007199254740993' AS v
+          UNION ALL
+          SELECT 1 AS id, 1 AS v
+          UNION ALL
+          SELECT 2 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value              |
+        | 0  | 9007199254740993.0 |
+        | 1  | 1.0                |
+        | 2  | 2.5                |
+
+    Scenario: ANSI fractional UNION conditional INSERT retains scalar nested and exact values
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.storeAssignmentPolicy = ANSI
+      And variable location for temporary directory fractional_union_assignment
+      And final statement
+        """
+        DROP TABLE IF EXISTS fractional_union_assignment
+        """
+      And statement template
+        """
+        CREATE TABLE fractional_union_assignment (
+          id INT, scalar_value DOUBLE, nested_value ARRAY<DOUBLE>, exact_value DECIMAL(22,1)
+        ) USING PARQUET LOCATION {{ location.sql }}
+        """
+      And statement
+        """
+        INSERT INTO fractional_union_assignment
+        SELECT id, IF(id = 0, 0, v), IF(id = 0, array(0), a), IF(id = 9, 0, v)
+        FROM (
+          SELECT 0 AS id, '9007199254740993' AS v, array('2.5') AS a
+          UNION ALL
+          SELECT 1 AS id, 1 AS v, array(1) AS a
+          UNION ALL
+          SELECT 2 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v, array(CAST(2.5 AS DECIMAL(2,1))) AS a
+        ) AS q
+        """
+      When query
+        """
+        SELECT id, scalar_value, nested_value[0] AS nested_value, exact_value
+        FROM fractional_union_assignment ORDER BY id
+        """
+      Then query result ordered
+        | id | scalar_value | nested_value | exact_value        |
+        | 0  | 0.0          | 0.0          | 9007199254740993.0 |
+        | 1  | 1.0          | 1.0          | 1.0                |
+        | 2  | 2.5          | 2.5          | 2.5                |
+
+    Scenario Outline: ANSI fractional UNION conditional retains values through a <kind> view
+      Given config spark.sql.ansi.enabled = true
+      And final statement
+        """
+        DROP VIEW IF EXISTS <view_name>
+        """
+      And statement
+        """
+        <create_view> AS
+        SELECT id, IF(id = 0, 0, v) AS v
+        FROM (
+          SELECT 0 AS id, '2.5' AS v
+          UNION ALL
+          SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+        ) AS q
+        """
+      When query
+        """
+        SELECT id, CAST(IF(id = 9, 0L, v) AS DOUBLE) AS value
+        FROM <view_name> ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+      Examples:
+        | kind       | create_view                                              | view_name                            |
+        | temporary  | CREATE OR REPLACE TEMP VIEW fractional_union_view         | fractional_union_view                |
+        | global     | CREATE OR REPLACE GLOBAL TEMP VIEW fractional_union_view  | global_temp.fractional_union_view    |
+        | persistent | CREATE OR REPLACE VIEW fractional_union_view              | fractional_union_view                |
+
+    Scenario: ANSI fractional UNION scalar subquery preserves an enclosing numeric conditional
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(IF(false, 0L, x) AS DOUBLE) AS value
+        FROM (
+          SELECT IF(false, 0, (
+            SELECT v
+            FROM (
+              SELECT 0 AS id, '2.5' AS v
+              UNION ALL
+              SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+            ) AS q
+            WHERE id = 1
+          )) AS x
+        ) AS p
+        """
+      Then query result
+        | value |
+        | 2.5   |
+
+    @sail-bug
+    Scenario: An unrelated numeric conditional widens precisely beside an unresolved fractional STRING UNION
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, CAST(IF(id = 0, n, CAST(0 AS FLOAT)) AS BIGINT) AS value
+        FROM (
+          SELECT 0 AS id, '2.5' AS v, 16777217L AS n
+          UNION ALL
+          SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v, 0L AS n
+        ) AS q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 0  | 16777217 |
+        | 1  | 0        |
+
+    Scenario: ANSI fractional UNION conditional retains values after inferred Parquet materialization
+      Given config spark.sql.ansi.enabled = true
+      And variable location for temporary directory fractional_union_materialized
+      And final statement
+        """
+        DROP TABLE IF EXISTS fractional_union_materialized
+        """
+      And statement template
+        """
+        CREATE TABLE fractional_union_materialized
+        USING PARQUET LOCATION {{ location.sql }} AS
+        SELECT 0 AS id, '2.5' AS v
+        UNION ALL
+        SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+        """
+      When query
+        """
+        SELECT id, CAST(IF(id = 0, 0, v) AS DOUBLE) AS value
+        FROM fractional_union_materialized ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+    Scenario Outline: A <kind> view preserves fractional conditionals over materialized UNION values
+      Given config spark.sql.ansi.enabled = true
+      And variable location for temporary directory fractional_union_view_source
+      And final statement
+        """
+        DROP TABLE IF EXISTS fractional_union_view_source
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS <view_name>
+        """
+      And statement template
+        """
+        CREATE TABLE fractional_union_view_source
+        USING PARQUET LOCATION {{ location.sql }} AS
+        SELECT 0 AS id, '2.5' AS v
+        UNION ALL
+        SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
+        """
+      And statement
+        """
+        CREATE OR REPLACE <view_kind> VIEW fractional_union_materialized_view AS
+        SELECT id, IF(id = 0, 0, v) AS x FROM fractional_union_view_source
+        """
+      When query
+        """
+        SELECT id, CAST(IF(id = 9, 0L, x) AS DOUBLE) AS value
+        FROM <view_name> ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 0.0   |
+        | 1  | 2.5   |
+
+      Examples:
+        | kind      | view_kind   | view_name                                     |
+        | temporary | TEMP        | fractional_union_materialized_view            |
+        | global    | GLOBAL TEMP | global_temp.fractional_union_materialized_view |
+
+    @sail-bug
+    Scenario: ANSI numeric conditional promotes a dynamic STRING column to BIGINT
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, typeof(IF(id = 0, 0, v)) AS result_type
+        FROM VALUES (0, '1'), (1, '2') AS t(id, v)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result_type |
+        | 0  | bigint      |
+        | 1  | bigint      |
 
   Rule: UNION nested field metadata
 
