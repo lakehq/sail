@@ -27,10 +27,16 @@ pub struct SparkZipWith {
     map: bool,
     ansi_mode: bool,
     case_sensitive: bool,
+    legacy_map_key_equality: bool,
 }
 
 impl SparkZipWith {
-    pub fn new(map: bool, ansi_mode: bool, case_sensitive: bool) -> Self {
+    pub fn new(
+        map: bool,
+        ansi_mode: bool,
+        case_sensitive: bool,
+        legacy_map_key_equality: bool,
+    ) -> Self {
         Self {
             // The planner wraps the two collections in hidden lambdas so a null
             // left collection can skip evaluation of the right collection.
@@ -41,6 +47,7 @@ impl SparkZipWith {
             map,
             ansi_mode,
             case_sensitive,
+            legacy_map_key_equality,
         }
     }
 
@@ -54,6 +61,10 @@ impl SparkZipWith {
 
     pub fn case_sensitive(&self) -> bool {
         self.case_sensitive
+    }
+
+    pub fn legacy_map_key_equality(&self) -> bool {
+        self.legacy_map_key_equality
     }
 
     pub fn coerce_collection_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
@@ -255,9 +266,6 @@ impl HigherOrderUDFImpl for SparkZipWith {
             let left = left.as_map();
             let right = right.as_map();
             let keys = concat(&[left.keys().as_ref(), right.keys().as_ref()])?;
-            // TODO: Support Spark's legacy mapZipWithUsesJavaCollections=false
-            // setting when it is exposed through PlanConfig. That compatibility
-            // mode deliberately keeps separate NaN keys (see the sail-bug test).
             let normalized = normalize_keys(&keys)?;
             let mut positions = HashMap::new();
             for (row, original_row) in rows.iter().copied().enumerate() {
@@ -268,14 +276,24 @@ impl HigherOrderUDFImpl for SparkZipWith {
                     for index in offsets[row] as usize..offsets[row + 1] as usize {
                         let key_index = index + if side == 0 { 0 } else { left.keys().len() };
                         let key = ScalarValue::try_from_array(&normalized, key_index)?.compacted();
-                        let position = *positions.entry(key).or_insert_with(|| {
+                        // Scala collections use NaN != NaN for atomic floating keys.
+                        // Composite keys use Spark ordering in both modes instead.
+                        let distinct_nan = self.legacy_map_key_equality
+                            && (matches!(&key, ScalarValue::Float32(Some(value)) if value.is_nan())
+                                || matches!(&key, ScalarValue::Float64(Some(value)) if value.is_nan()));
+                        let mut append_key = || {
                             let position = key_indices.len();
                             key_indices.push(key_index as u64);
                             left_indices.push(None);
                             right_indices.push(None);
                             row_indices.push(original_row);
                             position
-                        });
+                        };
+                        let position = if distinct_nan {
+                            append_key()
+                        } else {
+                            *positions.entry(key).or_insert_with(append_key)
+                        };
                         let indices = if side == 0 {
                             &mut left_indices
                         } else {
@@ -287,9 +305,9 @@ impl HigherOrderUDFImpl for SparkZipWith {
                 }
                 lengths.push(key_indices.len() - start);
             }
-            // Spark normalizes top-level floating map keys as well as comparing
-            // them canonically; nested keys preserve the first original value.
-            let keys = if keys.data_type().is_floating() {
+            // Only Java collections normalize the emitted atomic floating keys.
+            // Scala collections and composite keys preserve the first original value.
+            let keys = if keys.data_type().is_floating() && !self.legacy_map_key_equality {
                 normalized
             } else {
                 keys
@@ -538,13 +556,21 @@ fn common_key_type(
                     _ if other.is_integer() => Some(DataType::Int64),
                     _ if other.is_floating() || other.is_decimal() => Some(DataType::Float64),
                     _ if other.is_binary() => Some(other.clone()),
-                    DataType::Boolean | DataType::Date32 | DataType::Timestamp(..) => {
-                        Some(other.clone())
-                    }
+                    DataType::Boolean
+                    | DataType::Date32
+                    | DataType::Time32(_)
+                    | DataType::Time64(_)
+                    | DataType::Timestamp(..) => Some(other.clone()),
                     _ => None,
                 }
             } else if other.is_numeric()
-                || matches!(other, DataType::Date32 | DataType::Timestamp(..))
+                || matches!(
+                    other,
+                    DataType::Date32
+                        | DataType::Time32(_)
+                        | DataType::Time64(_)
+                        | DataType::Timestamp(..)
+                )
             {
                 Some(DataType::Utf8)
             } else {
@@ -578,9 +604,11 @@ fn common_key_type(
                 comparison_coercion(left, right)
             }
         }
-        // DataFusion comparison coercion accepts date/integer and mixed
-        // interval families, which Spark's wider-type coercion rejects.
+        // DataFusion comparison coercion accepts date/integer, date/time, and
+        // mixed interval families, which Spark's wider-type coercion rejects.
         _ if left.is_temporal() != right.is_temporal() => None,
+        (DataType::Date32 | DataType::Date64, DataType::Time32(_) | DataType::Time64(_))
+        | (DataType::Time32(_) | DataType::Time64(_), DataType::Date32 | DataType::Date64) => None,
         (DataType::Interval(_), DataType::Duration(_))
         | (DataType::Duration(_), DataType::Interval(_)) => None,
         _ => comparison_coercion(left, right),

@@ -186,10 +186,12 @@ pub(super) fn try_decode_higher_order_udf(
             map,
             ansi_mode,
             case_sensitive,
+            legacy_map_key_equality,
         }) => Arc::new(HigherOrderUDF::new_from_impl(SparkZipWith::new(
             map,
             ansi_mode,
             case_sensitive,
+            legacy_map_key_equality,
         ))),
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))

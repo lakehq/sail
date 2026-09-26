@@ -46,6 +46,8 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Whether Spark's legacy analyzer mode permits subqueries inside zip functions.
     pub allow_subquery_expressions_in_lambdas: bool,
+    /// Whether Spark 3.5 permits ENCODE and ARRAY_APPEND in foldable percentile parameters.
+    pub legacy_percentile_parameter_foldability: bool,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
@@ -54,6 +56,8 @@ pub struct PlanConfig {
     pub store_assignment_policy: StoreAssignmentPolicy,
     /// Policy for duplicate keys created by map functions.
     pub map_key_dedup_policy: MapKeyDedupPolicy,
+    /// Whether map_zip_with uses Java equality for atomic floating map keys.
+    pub map_zip_with_uses_java_collections: bool,
     /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
     pub cross_join_enabled: bool,
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
@@ -93,10 +97,12 @@ impl Default for PlanConfig {
             session_user_id: "".to_string(),
             ansi_mode: true,
             allow_subquery_expressions_in_lambdas: false,
+            legacy_percentile_parameter_foldability: false,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
+            map_zip_with_uses_java_collections: true,
             cross_join_enabled: true,
             case_sensitive: false,
             pivot_max_values: 10000,

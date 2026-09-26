@@ -1,24 +1,15 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion::functions::core::nvl::NVLFunc;
-use datafusion::functions::core::nvl2::NVL2Func;
 use datafusion::functions::expr_fn::coalesce;
-use datafusion::functions::regex::regexpcount::RegexpCountFunc;
-use datafusion::functions::string::split_part::SplitPartFunc;
-use datafusion::functions::unicode::left::LeftFunc;
-use datafusion::functions::unicode::right::RightFunc;
 use datafusion::functions_aggregate::{
     approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
     covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
-use datafusion::functions_nested::sort::ArraySort;
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
@@ -28,10 +19,6 @@ use datafusion_expr::{
     lit, try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
-use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
-use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
-use datafusion_spark::function::url::url_decode::UrlDecode;
-use datafusion_spark::function::url::url_encode::UrlEncode;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -57,34 +44,15 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
-use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::array::spark_zip_with::SparkZipWith;
-use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_div::SparkTryDiv;
-use sail_function::scalar::math::spark_try_mod::SparkTryMod;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
-use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::misc::spark_aes::{SparkAESDecrypt, SparkTryAESDecrypt};
-use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
-use sail_function::scalar::string::spark_encode_decode::SparkDecode;
-use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::struct_function::StructFunction;
-use sail_function::scalar::url::parse_url::ParseUrl;
-use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    AggFunction, AggFunctionInput, count_min_sketch_args, expr_contains_python_udf,
+    get_arguments_and_null_treatment, get_null_treatment, hll_args_with_default_lg,
+    hll_union_args_with_default_allow_different_lg, theta_args_with_default_lg,
 };
-use crate::function::{is_higher_order_function, transform_count_star_wildcard_expr};
+use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -866,71 +834,12 @@ pub(super) fn approx_percentile_arguments(
         ));
     }
     for (argument, name) in arguments.iter().skip(1).zip(["percentage", "accuracy"]) {
-        // Spark's higher-order functions and these runtime-replaceable wrappers
-        // are non-foldable even with literal inputs. Check before simplification.
-        let has_non_foldable_function = argument.exists(|expression| {
-            Ok(match expression {
-                expr::Expr::HigherOrderFunction(function) => {
-                    let f = function.func.inner().as_ref() as &dyn Any;
-                    is_higher_order_function(function.func.name())
-                        || f.is::<SparkArrayAggregate>()
-                        || f.is::<SparkArrayFilter>()
-                        || f.is::<SparkMapFilter>()
-                        || f.is::<SparkArrayTransform>()
-                        || f.is::<SparkArrayExists>()
-                        || f.is::<SparkArrayForall>()
-                        || f.is::<SparkArraySort>()
-                        || f.is::<SparkZipWith>()
-                }
-                expr::Expr::ScalarFunction(function)
-                    if {
-                        let f = function.func.inner();
-                        f.is::<NVLFunc>()
-                            || f.is::<NVL2Func>()
-                            || f.is::<SparkTryAdd>()
-                            || f.is::<SparkTryDiv>()
-                            || f.is::<SparkTryMod>()
-                            || f.is::<SparkTryMult>()
-                            || f.is::<SparkTrySubtract>()
-                            || f.is::<SparkTryToBinary>()
-                            || f.is::<TryUrlDecode>()
-                            || f.is::<SparkTryParseUrl>()
-                            || f.is::<SparkTryAESDecrypt>()
-                            || f.is::<UrlEncode>()
-                            || f.is::<UrlDecode>()
-                            || f.is::<ParseUrl>()
-                            || f.is::<SparkToBinary>()
-                            || f.is::<RegexpCountFunc>()
-                            || f.is::<LeftFunc>()
-                            || f.is::<RightFunc>()
-                            || f.is::<SplitPartFunc>()
-                            || f.is::<SparkLuhnCheck>()
-                            || f.is::<SparkDecode>()
-                            || f.is::<SparkAESDecrypt>()
-                            || f.is::<MakeValidUtf8>()
-                    } =>
-                {
-                    true
-                }
-                // Only no-comparator array_sort lowers to ASC/NULLS LAST.
-                // Spark's foldable sort_array uses ASC/FIRST or DESC/LAST.
-                expr::Expr::ScalarFunction(function) if function.func.inner().is::<ArraySort>() => {
-                    function.args.len() == 3
-                        && function.args.get(1) == Some(&lit("ASC"))
-                        && function.args.get(2) == Some(&lit("NULLS LAST"))
-                }
-                // TODO: Reject NULLIF's non-foldable Spark wrapper; Sail currently
-                // treats its DataFusion implementation as foldable.
-                // TODO: Match ENCODE's version-dependent foldability: foldable with constant
-                // arguments in Spark 3.5, non-foldable in Spark 4+. This checker currently
-                // has no Spark-version information to distinguish those behaviors.
-                // TODO: Match ARRAY_APPEND's version-dependent foldability: foldable with
-                // constants in Spark 3.5, non-foldable in Spark 4+. Preserve legacy acceptance
-                // until this checker has Spark-version information.
-                _ => false,
-            })
-        })?;
-        if argument.any_column_refs() || argument.is_volatile() || has_non_foldable_function {
+        // The resolver checks source-level foldability before lowering. Generated
+        // lambdas and scalar helpers can implement otherwise foldable SQL expressions.
+        if argument.any_column_refs()
+            || argument.is_volatile()
+            || expr_contains_python_udf(argument)?
+        {
             return Err(PlanError::invalid(format!(
                 "{name} must be a foldable expression"
             )));

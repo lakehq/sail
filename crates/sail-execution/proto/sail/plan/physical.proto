@@ -176,6 +176,7 @@ message SparkZipWithUdf {
   bool map = 1;
   bool ansi_mode = 2;
   bool case_sensitive = 3;
+  bool legacy_map_key_equality = 4;
 }
 
 message SparkArrayFilterUdf {

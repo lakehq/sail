@@ -23,7 +23,9 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
-use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
+use crate::resolver::expression::predicate::{
+    coerce_timestamp_string_predicate, spark_interval_metadata_for_expression,
+};
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
@@ -88,27 +90,83 @@ impl PlanResolver<'_> {
         {
             state.config_mut().approx_percentile_parameter = None;
         }
-        // These source functions lose their non-foldable identity during lowering.
-        // The same lowered expressions also implement valid foldable functions.
+        // Spark checks the source expression before RuntimeReplaceable wrappers
+        // disappear. Check names here, since lowered helpers also implement valid
+        // foldable expressions (e.g. implicit array casts and ordinary division).
         if let Some(parameter) = state.config().approx_percentile_parameter
-            && matches!(
-                canonical_function_name.as_str(),
-                "array_compact"
-                    | "array_prepend"
-                    | "assert_true"
-                    | "btrim"
-                    | "current_catalog"
-                    | "current_database"
-                    | "current_schema"
-                    | "current_timezone"
-                    | "current_user"
-                    | "elt"
-                    | "is_valid_utf8"
-                    | "raise_error"
-                    | "session_user"
-                    | "try_element_at"
-                    | "user"
-            )
+            && (is_higher_order_function(&canonical_function_name)
+                || (!self.config.legacy_percentile_parameter_foldability
+                    && matches!(canonical_function_name.as_str(), "encode" | "array_append"))
+                || matches!(
+                    canonical_function_name.as_str(),
+                    "aes_decrypt"
+                        | "array_compact"
+                        | "array_prepend"
+                        | "array_size"
+                        | "arrays_zip"
+                        | "assert_true"
+                        | "btrim"
+                        | "current_catalog"
+                        | "current_database"
+                        | "current_schema"
+                        | "current_timezone"
+                        | "current_user"
+                        | "date_part"
+                        | "datepart"
+                        | "decode"
+                        | "elt"
+                        | "equal_null"
+                        | "extract"
+                        | "ifnull"
+                        | "ilike"
+                        | "is_valid_utf8"
+                        | "left"
+                        | "luhn_check"
+                        | "make_time"
+                        | "make_valid_utf8"
+                        | "map_concat"
+                        | "map_contains_key"
+                        | "nullif"
+                        | "nullifzero"
+                        | "nvl"
+                        | "nvl2"
+                        | "parse_url"
+                        | "raise_error"
+                        | "regexp_count"
+                        | "regexp_substr"
+                        | "right"
+                        | "session_user"
+                        | "split_part"
+                        | "st_asbinary"
+                        | "st_geogfromwkb"
+                        | "st_geomfromwkb"
+                        | "to_binary"
+                        | "to_date"
+                        | "to_time"
+                        | "to_timestamp"
+                        | "to_timestamp_ltz"
+                        | "to_timestamp_ntz"
+                        | "try_add"
+                        | "try_aes_decrypt"
+                        | "try_divide"
+                        | "try_element_at"
+                        | "try_make_timestamp"
+                        | "try_mod"
+                        | "try_multiply"
+                        | "try_parse_url"
+                        | "try_subtract"
+                        | "try_to_binary"
+                        | "try_to_time"
+                        | "try_to_timestamp"
+                        | "try_url_decode"
+                        | "try_validate_utf8"
+                        | "url_decode"
+                        | "url_encode"
+                        | "user"
+                        | "validate_utf8"
+                        | "version"
+                        | "zeroifnull"
+                ))
             && catalog_manager
                 .get_function(&canonical_function_name)?
                 .is_none()
@@ -175,6 +233,41 @@ impl PlanResolver<'_> {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        // Catalyst wraps datetime-minus-interval in non-foldable DatetimeSub.
+        // DATE minus a DAY-only interval instead lowers to foldable DateAdd.
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && canonical_function_name == "-"
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+            && let [left, right] = arguments.as_slice()
+        {
+            let left_type = left.get_type(schema)?;
+            let right_type = right.get_type(schema)?;
+            let datetime = matches!(
+                left_type,
+                DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+                    | DataType::Time32(_)
+                    | DataType::Time64(_)
+            ) || left_type.is_string();
+            let interval = matches!(right_type, DataType::Interval(_) | DataType::Duration(_));
+            let date_minus_days = matches!(left_type, DataType::Date32 | DataType::Date64)
+                && matches!(
+                    spark_interval_metadata_for_expression(right, schema)?,
+                    Some(spec::SparkIntervalMetadata::DayTime {
+                        start_field: spec::DayTimeIntervalField::Day,
+                        end_field: spec::DayTimeIntervalField::Day,
+                    })
+                );
+            if datetime && interval && !date_minus_days {
+                return Err(PlanError::invalid(format!(
+                    "{parameter} must be a foldable expression"
+                )));
+            }
+        }
 
         if !has_spec_lambda_argument
             && matches!(

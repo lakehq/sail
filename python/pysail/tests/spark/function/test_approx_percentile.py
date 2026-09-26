@@ -107,3 +107,37 @@ def test_approx_percentile_legacy_array_append_parameter(spark):
     percentages = F.array_append(F.array(F.lit(0.5)), F.lit(1.0))
     result = spark.createDataFrame([(1,), (2,)], ["value"]).select(F.percentile_approx("value", percentages))
     assert result.first()[0] == [1, 2]
+
+
+@pytest.mark.parametrize("window", [False, True])
+@pytest.mark.parametrize("parameter", ["percentage", "accuracy"])
+def test_approx_percentile_python_udf_parameters_are_not_foldable(spark, window, parameter):
+    @F.udf("double" if parameter == "percentage" else "int")
+    def constant():
+        return 0.5 if parameter == "percentage" else 100
+
+    percentage = constant() if parameter == "percentage" else F.lit(0.5)
+    accuracy = constant() if parameter == "accuracy" else F.lit(100)
+    aggregate = F.percentile_approx("id", percentage, accuracy)
+    if window:
+        aggregate = aggregate.over(Window.partitionBy())
+    with pytest.raises(Exception, match=r"(?i)foldable"):
+        spark.range(4).select(aggregate).collect()
+
+
+def test_approx_percentile_typeof_python_udf_remains_foldable(spark):
+    @F.udf("double")
+    def fail_if_evaluated():
+        message = "TYPEOF must not evaluate its input"
+        raise AssertionError(message)
+
+    percentage = F.when(F.typeof(fail_if_evaluated()) == "double", F.lit(0.5)).otherwise(F.lit(0.0))
+    result = spark.range(4).select(F.percentile_approx("id", percentage).alias("p"))
+    assert result.first().p == 1
+
+
+@pytest.mark.skipif(pyspark_version() >= (4,), reason="ENCODE is foldable with constants only before Spark 4")
+def test_approx_percentile_legacy_encode_parameter(spark):
+    accuracy = F.length(F.encode(F.lit("abcd"), "UTF-8"))
+    result = spark.createDataFrame([(1,), (2,)], ["value"]).select(F.percentile_approx("value", F.lit(0.5), accuracy))
+    assert result.first()[0] == 1

@@ -340,6 +340,8 @@ impl QuantileSummary {
             compressed.push(self.sampled[0]);
         }
         compressed.reverse();
+        // Retain only the compressed summary, not the full insertion buffer's allocation.
+        compressed.shrink_to_fit();
         self.sampled = compressed;
     }
 
@@ -718,7 +720,31 @@ impl Accumulator for ApproxPercentileAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use super::QuantileSummary;
+    use std::mem::size_of;
+
+    use super::{QuantileSummary, Sample};
+
+    #[test]
+    fn spark_summary_memory_remains_bounded_after_compression() {
+        // Match Spark's PercentileDigest memory test: allow the fixed head buffer
+        // and a small summary at accuracy 100, including allocation growth.
+        let memory_bound = 2 * (50_000 * size_of::<f64>() + 200 * size_of::<Sample>());
+        let mut summary = QuantileSummary::new(0.01);
+        for partition in 0..4 {
+            let mut partial = QuantileSummary::new(0.01);
+            for value in partition * 50_000..(partition + 1) * 50_000 {
+                partial.insert(value as f64);
+            }
+            partial.compress();
+            for candidate in [&partial, &summary] {
+                let allocated = candidate.sampled.capacity() * size_of::<Sample>()
+                    + candidate.head.capacity() * size_of::<f64>();
+                assert!(allocated < memory_bound, "retained {allocated} bytes");
+            }
+            summary.merge(partial);
+        }
+        assert_eq!(summary.query(&[0.0, 1.0]), [0.0, 199_999.0]);
+    }
 
     #[test]
     fn spark_summary_compression_boundaries() {

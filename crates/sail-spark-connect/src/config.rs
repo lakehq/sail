@@ -222,6 +222,8 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        output.legacy_percentile_parameter_foldability =
+            std::ptr::eq(config.entries, &SPARK_CONFIG_V3_5);
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
@@ -269,6 +271,16 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         {
             output.ansi_mode = value;
         }
+
+        let map_zip_key = SparkConfigKey::SPARK_SQL_MAP_ZIP_WITH_USES_JAVA_COLLECTIONS;
+        // Spark versions before 4.1 always use Scala collections, even if this
+        // later configuration key has been set explicitly.
+        output.map_zip_with_uses_java_collections = config.entries.contains_key(map_zip_key)
+            && config
+                .get_option(map_zip_key)
+                .map(|x| x.trim().to_lowercase().parse::<bool>())
+                .transpose()?
+                .unwrap_or(true);
 
         let subquery_key = SparkConfigKey::SPARK_SQL_ANALYZER_ALLOW_SUBQUERY_EXPRESSIONS_IN_LAMBDAS_OR_HIGHER_ORDER_FUNCTIONS;
         // Spark 3.5 has no restriction, even if this later configuration key is set.

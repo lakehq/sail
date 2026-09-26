@@ -23,6 +23,7 @@ use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
 use crate::resolver::build_rename_target_type;
@@ -92,8 +93,7 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
 /// before resolving lambda bodies.
 pub(crate) fn get_lambda_parameters(
     function_name: &str,
-    ansi_mode: bool,
-    case_sensitive: bool,
+    config: &PlanConfig,
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
     let zip_udf;
@@ -108,8 +108,9 @@ pub(crate) fn get_lambda_parameters(
         name @ ("zip_with" | "map_zip_with") => {
             zip_udf = Arc::new(HigherOrderUDF::new_from_impl(SparkZipWith::new(
                 name == "map_zip_with",
-                ansi_mode,
-                case_sensitive,
+                config.ansi_mode,
+                config.case_sensitive,
+                !config.map_zip_with_uses_java_collections,
             )));
             &zip_udf
         }
@@ -495,6 +496,10 @@ fn zip_collections(input: ScalarFunctionInput, map: bool) -> PlanResult<expr::Ex
         map,
         input.function_context.plan_config.ansi_mode,
         input.function_context.plan_config.case_sensitive,
+        !input
+            .function_context
+            .plan_config
+            .map_zip_with_uses_java_collections,
     );
     let schema = input.function_context.schema;
     if !matches!(function, expr::Expr::Lambda(_)) {

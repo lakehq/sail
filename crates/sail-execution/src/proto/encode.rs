@@ -167,6 +167,7 @@ pub(super) fn try_encode_higher_order_udf(
             map: zip.is_map(),
             ansi_mode: zip.ansi_mode(),
             case_sensitive: zip.case_sensitive(),
+            legacy_map_key_equality: zip.legacy_map_key_equality(),
         })
     } else if udf_inner.is::<SparkMapFilter>() {
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})

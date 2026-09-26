@@ -106,7 +106,6 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       | ifnull(CAST(NULL AS DOUBLE), 0.5D) | 10000                             |
       | 0.5D                               | nvl2(CAST(NULL AS INT), 0, 10000) |
 
-  @sail-bug
   Scenario: Nullif parameters retain Spark's non-foldable wrapper
     When query
       """
@@ -309,7 +308,6 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
     Then query error (?i)foldable
 
   @spark-4
-  @sail-bug
   Scenario: Encoding is non-foldable in Spark 4 percentile parameters
     When query
       """
@@ -394,7 +392,6 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       | 2 | [2, 1] |
 
   @spark-4
-  @sail-bug
   Scenario: Array append retains its non-foldable Spark 4 wrapper in percentile parameters
     When query
       """

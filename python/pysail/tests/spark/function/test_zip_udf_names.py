@@ -1,5 +1,19 @@
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+# Local Spark teardown removes SPARK_REMOTE before later module fixtures run.
+_PREFER_REGISTERED_FUNCTIONS = is_jvm_spark() and pyspark_version() >= (4, 2)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _prefer_registered_functions(spark):
+    # Spark 4.2 defaults to resolving built-ins before temporary functions.
+    # These tests exercise user functions registered with built-in names.
+    if _PREFER_REGISTERED_FUNCTIONS:
+        spark.conf.set("spark.sql.path.enabled", "true")
+        spark.sql("SET PATH = system.session, system.builtin, current_schema").collect()
+
 
 @pytest.mark.parametrize("function", ["zip_with", "map_zip_with"])
 def test_zip_function_udf_default_column_names(spark, function):

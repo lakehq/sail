@@ -88,13 +88,8 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let mut lambda_params = get_lambda_parameters(
-            function_name,
-            self.config.ansi_mode,
-            self.config.case_sensitive,
-            &fields,
-        )?
-        .into_iter();
+        let mut lambda_params =
+            get_lambda_parameters(function_name, &self.config, &fields)?.into_iter();
 
         let mut names: Vec<String> = Vec::with_capacity(slots.len());
         let mut exprs: Vec<expr::Expr> = Vec::with_capacity(slots.len());

@@ -203,7 +203,6 @@ Feature: map_zip_with merges the union of keys
 
   Rule: The legacy Scala map-key equality mode retains its compatibility behavior
 
-    @sail-bug
     Scenario: Legacy map zip mode preserves distinct NaN keys
       Given config spark.sql.mapZipWithUsesJavaCollections = false
       When query
