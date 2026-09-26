@@ -9,6 +9,8 @@ use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
+use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -81,11 +83,32 @@ impl PlanResolver<'_> {
         }
         // Spark resolves literal function names (e.g. `current_date`) that the output does
         // not have to the functions, before missing attributes and outer references.
-        // TODO: Resolve literal function names to the functions as Spark does.
         if plan_id.is_none() && Self::is_literal_function_name(&name) {
-            return Err(PlanError::analysis(format!(
-                "attribute {name:?} is missing from the schema: cannot resolve attribute"
-            )));
+            let function_name = name.parts()[0].as_ref().to_ascii_lowercase();
+            if function_name == "grouping__id" {
+                // TODO: Resolve the Hive grouping ID name to Spark's grouping aggregate.
+                return Err(PlanError::analysis(format!(
+                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                )));
+            }
+            let function_name = match function_name.as_str() {
+                "user" | "session_user" => "current_user",
+                name => name,
+            };
+            let expr = get_built_in_function(function_name)?(ScalarFunctionInput {
+                arguments: vec![],
+                function_context: FunctionContextInput {
+                    argument_display_names: &[],
+                    plan_config: &self.config,
+                    session_context: self.ctx,
+                    schema,
+                },
+            })?;
+            let name = match function_name {
+                "current_time" => "current_time(6)".to_string(),
+                name => format!("{name}()"),
+            };
+            return Ok(NamedExpr::new(vec![name], expr));
         }
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.

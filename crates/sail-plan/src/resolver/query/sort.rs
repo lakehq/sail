@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use async_recursion::async_recursion;
 use datafusion_common::Column;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::expr::{Alias, Sort};
@@ -10,11 +9,10 @@ use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -29,9 +27,19 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let sorts = self
-            .resolve_query_sort_orders_by_plan(&input, &order, state)
+        let (expressions, _) = self
+            .resolve_missing_input_expressions(
+                order.iter().cloned().map(spec::Expr::SortOrder).collect(),
+                &input,
+                true,
+                state,
+            )
             .await?;
+        let sorts = expressions
+            .into_iter()
+            .zip(order)
+            .map(|(expr, sort)| Self::sort_with_options(expr, sort.direction, sort.null_ordering))
+            .collect();
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
         let output_schema = Arc::clone(input.schema());
         let plan = if is_global {
@@ -54,8 +62,6 @@ impl PlanResolver<'_> {
     /// Spark adds the attributes missing from sort orders to every operator between the
     /// sort and the descendant that outputs them. DataFusion's logical plan builder only
     /// extends one projection, so add them here when every operator in between can carry them.
-    // TODO: Resolve sort orders against the missing-input chain as Spark does, instead of
-    //   recursing into every input, so that resolution boundaries also apply to sorting.
     fn add_sort_missing_inputs(
         input: LogicalPlan,
         sorts: &[Sort],
@@ -255,55 +261,5 @@ impl PlanResolver<'_> {
             asc,
             nulls_first,
         })
-    }
-
-    /// Resolve sort orders by attempting child plans recursively.
-    async fn resolve_query_sort_orders_by_plan(
-        &self,
-        plan: &LogicalPlan,
-        sorts: &[spec::SortOrder],
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<Sort>> {
-        let mut results: Vec<Sort> = Vec::with_capacity(sorts.len());
-        for sort in sorts {
-            let expr = self
-                .resolve_query_sort_order_by_plan(plan, sort, state)
-                .await?;
-            results.push(expr);
-        }
-        Ok(results)
-    }
-
-    /// Resolve a sort order by attempting child plans recursively.
-    /// This is needed since the sort order may refer to a column in a child plan,
-    /// So we need to use the schema of the child plan to map between user-facing
-    /// field name and the opaque field ID.
-    #[async_recursion]
-    async fn resolve_query_sort_order_by_plan(
-        &self,
-        plan: &LogicalPlan,
-        sort: &spec::SortOrder,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Sort> {
-        let sort_expr = self
-            .resolve_sort_order(sort.clone(), true, plan.schema(), state)
-            .await;
-        match sort_expr {
-            Ok(sort_expr) => Ok(sort_expr),
-            Err(_) => {
-                let mut sorts = Vec::with_capacity(plan.inputs().len());
-                for input_plan in plan.inputs() {
-                    let sort_expr = self
-                        .resolve_query_sort_order_by_plan(input_plan, sort, state)
-                        .await?;
-                    sorts.push(sort_expr);
-                }
-                if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!("sort expression: {sort:?}")))
-                } else {
-                    Ok(sorts.one()?)
-                }
-            }
-        }
     }
 }

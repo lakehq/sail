@@ -24,73 +24,11 @@ impl PlanResolver<'_> {
         input: LogicalPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<Expr>, LogicalPlan)> {
-        let output_schema = Arc::clone(input.schema());
-        // Most predicates only reference the input's output. Resolving them against it
-        // first avoids building the descendant schema, which grows with the chain depth.
-        // Subquery filters need descendant resolution before outer references. Avoid
-        // resolving them speculatively: nested correlated filters would otherwise
-        // resolve the entire subquery tree twice at each level.
-        if state.get_outer_query_schema().is_none()
-            && let Ok(resolved) = self
-                .resolve_expressions(expressions.clone(), &output_schema, state)
-                .await
-            && !Self::has_outer_reference(&resolved)?
-        {
+        let (resolved, schema) = self
+            .resolve_missing_input_expressions(expressions, &input, false, state)
+            .await?;
+        if Arc::ptr_eq(&schema, input.schema()) {
             return Ok((resolved, input));
-        }
-        let mut schemas = vec![Arc::clone(&output_schema)];
-        let mut plan = &input;
-        while let Some(child) = Self::missing_input_child(plan, state) {
-            schemas.push(Arc::clone(child.schema()));
-            plan = child;
-        }
-
-        // Type inference needs all reachable columns, while name resolution must
-        // prefer the nearest output for each attribute independently. In particular,
-        // retrying the entire predicate on a child loses projected aliases.
-        let mut columns = HashSet::new();
-        let fields = schemas
-            .iter()
-            .flat_map(|schema| schema.iter())
-            .filter(|(qualifier, field)| {
-                columns.insert(Column::new(qualifier.cloned(), field.name()))
-            })
-            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
-            .collect();
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            fields,
-            output_schema.metadata().clone(),
-        )?);
-        // Spark resolves each expression independently, so discarding the bindings to an
-        // output for one expression does not affect the others.
-        let mut resolved = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let mut schema_count = schemas.len();
-            let mut first_error = None;
-            let mut scope = state.enter_missing_input_scope(Arc::clone(&schema), schemas.clone());
-            let expr = loop {
-                match self
-                    .resolve_expression(expression.clone(), &schema, scope.state())
-                    .await
-                {
-                    Ok(expr) => break expr,
-                    Err(error) => {
-                        let remaining = scope
-                            .state()
-                            .get_missing_input_schemas(&schema)
-                            .map_or(0, |schemas| schemas.len());
-                        if remaining >= schema_count {
-                            return Err(first_error.unwrap_or(error));
-                        }
-                        // Discard bindings from the failed descendant output, retaining
-                        // the other outputs and outer references.
-                        // Each retry removes at least one name-resolution schema.
-                        first_error.get_or_insert(error);
-                        schema_count = remaining;
-                    }
-                }
-            };
-            resolved.push(expr);
         }
         let mut columns = resolved
             .iter()
@@ -123,6 +61,97 @@ impl PlanResolver<'_> {
         let input = Self::add_missing_inputs(&input, &columns, state)?
             .ok_or_else(|| PlanError::internal("missing input at resolution boundary"))?;
         Ok((resolved, input))
+    }
+
+    /// Resolves each reference against the nearest reachable output. The combined
+    /// schema is only for type checking, and does not extend the input plan.
+    pub(super) async fn resolve_missing_input_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        input: &LogicalPlan,
+        resolve_aggregate_inputs: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<Expr>, DFSchemaRef)> {
+        let output_schema = Arc::clone(input.schema());
+        // Most predicates only reference the input's output. Resolving them against it
+        // first avoids building the descendant schema, which grows with the chain depth.
+        // Subquery filters need descendant resolution before outer references. Avoid
+        // resolving them speculatively: nested correlated filters would otherwise
+        // resolve the entire subquery tree twice at each level.
+        if state.get_outer_query_schema().is_none()
+            && let Ok(resolved) = self
+                .resolve_expressions(expressions.clone(), &output_schema, state)
+                .await
+            && !Self::has_outer_reference(&resolved)?
+        {
+            return Ok((resolved, output_schema));
+        }
+        let mut schemas = vec![Arc::clone(&output_schema)];
+        let mut plan = input;
+        while let Some(child) = Self::missing_input_child(plan, state) {
+            schemas.push(Arc::clone(child.schema()));
+            plan = child;
+        }
+        // Sorts can contain grouping expressions and aggregate arguments that are
+        // not in the aggregate output. Rebase them before recovering inputs.
+        if resolve_aggregate_inputs
+            && !state.is_missing_input_boundary(plan)
+            && let LogicalPlan::Aggregate(aggregate) = plan
+        {
+            schemas.push(Arc::clone(aggregate.input.schema()));
+        }
+
+        // Type inference needs all reachable columns, while name resolution must
+        // prefer the nearest output for each attribute independently. In particular,
+        // retrying the entire predicate on a child loses projected aliases.
+        let mut columns = HashSet::new();
+        let fields = schemas
+            .iter()
+            .flat_map(|schema| schema.iter())
+            .filter(|(qualifier, field)| {
+                columns.insert(Column::new(qualifier.cloned(), field.name()))
+            })
+            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+            .collect();
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            fields,
+            output_schema.metadata().clone(),
+        )?);
+        // Spark resolves each expression independently, so discarding the bindings to an
+        // output for one expression does not affect the others.
+        let mut resolved = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let mut schema_count = schemas.len();
+            let mut first_error = None;
+            let mut scope = state.enter_missing_input_scope(Arc::clone(&schema), schemas.clone());
+            // TODO: Resolve ordinary references before lambda bodies, as Spark does, so
+            // retrying a failed lambda body retains higher-order arguments and references
+            // recovered elsewhere in the predicate.
+            let expr = loop {
+                match self
+                    .resolve_expression(expression.clone(), &schema, scope.state())
+                    .await
+                {
+                    Ok(expr) => break expr,
+                    Err(error) => {
+                        let remaining = scope
+                            .state()
+                            .get_missing_input_schemas(&schema)
+                            .map_or(0, |schemas| schemas.len());
+                        if remaining >= schema_count {
+                            return Err(first_error.unwrap_or(error));
+                        }
+                        // Discard bindings from the failed descendant output, retaining
+                        // the other outputs and outer references.
+                        // Each retry removes at least one name-resolution schema.
+                        first_error.get_or_insert(error);
+                        schema_count = remaining;
+                    }
+                }
+            };
+            resolved.push(expr);
+        }
+        Ok((resolved, schema))
     }
 
     fn has_outer_reference(expressions: &[Expr]) -> PlanResult<bool> {

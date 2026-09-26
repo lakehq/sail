@@ -2,7 +2,6 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -106,6 +105,22 @@ def test_sort_within_partitions_by_attribute_removed_by_projections(sort_source,
     assert result.collect() == expected
 
 
+@pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
+def test_sort_recovered_key_preserves_visible_alias(sort_source, operation):
+    projected = sort_source.coalesce(1).select((-F.col("b")).alias("b"), "a").select("b")
+    result = getattr(projected, operation)(F.col("b") + F.col("c"))
+    assert result.collect() == [Row(b=-30), Row(b=-20), Row(b=-10)]
+    assert result.schema == projected.schema
+
+
+@pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
+def test_sort_recovered_key_preserves_renamed_alias(sort_source, operation):
+    projected = sort_source.coalesce(1).select((-F.col("b")).alias("x"), "a").select("x")
+    result = getattr(projected, operation)(F.col("x") + F.col("c"))
+    assert result.collect() == [Row(x=-30), Row(x=-20), Row(x=-10)]
+    assert result.schema == projected.schema
+
+
 @pytest.mark.parametrize(
     "operation",
     [
@@ -136,15 +151,15 @@ def test_sort_keeps_monotonically_increasing_ids(sort_source, operation):
     ],
     ids=["monotonically-increasing-id", "limit"],
 )
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail cannot recover sort keys above operators that the physical optimizer reorders",
+    strict=True,
+)
 def test_sort_within_partitions_above_order_sensitive_operator(sort_source, operation, expected):
+    # TODO: Preserve the order of ID generation and limits before recovering their sort keys.
     result = operation(sort_source.coalesce(1))
-    if is_jvm_spark():
-        assert result.collect() == expected
-    else:
-        # TODO: The physical optimizer pushes such sorts below the operator, so Sail does not
-        #   recover the sort attributes until it does not.
-        with pytest.raises(AnalysisException):
-            result.collect()
+    assert result.collect() == expected
 
 
 @pytest.mark.parametrize(

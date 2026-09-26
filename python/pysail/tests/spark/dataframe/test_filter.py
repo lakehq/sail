@@ -328,10 +328,11 @@ def test_filter_descendant_fallback_preserves_deeper_bindings(spark, failure):
         lambda: F.col("s.x") == 1,
         lambda: F.col("s")["x"] == 1,
         lambda: F.col("s").getField("x") == 1,
+        lambda: F.col("s").alias("item")["x"] == 1,
         lambda: "s.x = 1",
         lambda: "s['x'] = 1",
     ],
-    ids=["dotted-column", "extract-column", "get-field", "dotted-sql", "extract-sql"],
+    ids=["dotted-column", "extract-column", "get-field", "aliased-column", "dotted-sql", "extract-sql"],
 )
 def test_filter_missing_attribute_skips_invalid_descendant(spark, predicate):
     predicate = predicate()
@@ -339,6 +340,15 @@ def test_filter_missing_attribute_skips_invalid_descendant(spark, predicate):
     # The intermediate struct has no field `x`, so the deeper struct is used instead.
     projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), "a").select("a")
     assert projected.where(predicate).collect() == [Row(a=7)]
+
+
+def test_filter_missing_attribute_through_aliased_nested_extraction(spark):
+    source = spark.createDataFrame([(((1,),), 7), (((2,),), 8)], "s struct<t:struct<x:int>>, a int")
+    projected = source.select(F.struct(F.struct(F.lit(2).alias("y")).alias("t")).alias("s"), "a").select("a")
+    predicate = F.col("s").alias("item")["t"].alias("nested")["x"] == 1
+    result = projected.where(predicate)
+    assert result.collect() == [Row(a=7)]
+    assert result.schema == projected.schema
 
 
 def test_filter_missing_attribute_keeps_bindings_above_invalid_descendant(spark):
@@ -385,36 +395,34 @@ def test_filter_does_not_recover_literal_function_names(spark, column, predicate
     source = spark.createDataFrame([(1, "alice", datetime.date(2000, 1, 1))], "id int, user string, day date")
     projected = source.withColumnRenamed("day" if column == "current_date" else "user", column).select("id")
     result = projected.where(predicate())
-    if is_jvm_spark():
-        # Spark resolves the name to the function since the output has no such column.
-        assert result.collect() == []
-    else:
-        # TODO: Resolve literal function names to the functions as Spark does.
-        with pytest.raises(AnalysisException):
-            result.collect()
+    # Spark resolves the name to the function since the output has no such column.
+    assert result.collect() == []
 
 
 @pytest.mark.parametrize(("color", "expected"), [("RED", [Row(id=1)]), ("red", [])])
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail does not extract map values by a dotted name",
+    strict=True,
+)
 def test_filter_missing_attribute_keeps_map_bindings(spark, color, expected):
     source = spark.createDataFrame([(1, ("red",)), (2, ("blue",))], "id int, attrs struct<color:string>")
     projected = source.withColumn("attrs", F.create_map(F.lit("color"), F.upper(F.col("attrs.color")))).select("id")
     result = projected.where(f"attrs.color = '{color}'")
-    if is_jvm_spark():
-        # Spark extracts the map value instead of discarding the map and using the older struct.
-        assert result.collect() == expected
-    else:
-        # TODO: Extract map values by a dotted name as Spark does.
-        with pytest.raises(AnalysisException):
-            result.collect()
+    # TODO: Extract map values by a dotted name as Spark does.
+    # Spark extracts the map value instead of discarding the map and using the older struct.
+    assert result.collect() == expected
 
 
 @pytest.mark.parametrize(
     "predicate",
     [
         lambda: F.coalesce(F.col("s"), F.col("s"))["k"] == 1,
+        lambda: F.coalesce(F.col("s"), F.col("s")).alias("item")["k"] == 1,
+        lambda: F.when(F.lit(True), F.col("s")).otherwise(F.col("s"))["k"] == 1,
         lambda: "coalesce(s.t, s.t).k = 7",
     ],
-    ids=["column", "sql"],
+    ids=["column", "aliased-column", "when-column", "sql"],
 )
 def test_filter_recovered_computed_struct_keeps_binding(spark, predicate):
     source = spark.createDataFrame([((1, (7,)), 5), ((2, (8,)), 6)], "s struct<k:int, t:struct<k:int>>, a int")
@@ -424,6 +432,19 @@ def test_filter_recovered_computed_struct_keeps_binding(spark, predicate):
     # Spark binds the function argument to the nearer struct and fails instead of using the older one.
     with pytest.raises(AnalysisException):
         projected.where(predicate()).collect()
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail cannot distinguish SQL CASE resolution from the Column when function",
+    strict=True,
+)
+def test_filter_recovered_sql_case_discards_invalid_struct_binding(spark):
+    source = spark.createDataFrame([((1,), 7), ((2,), 8)], "s struct<x:int>, a int")
+    projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), "a").select("a")
+    result = projected.where("(CASE WHEN true THEN s ELSE s END).x = 1")
+    assert result.collect() == [Row(a=7)]
+    assert result.schema == projected.schema
 
 
 @pytest.mark.parametrize("projected", [False, True])
@@ -600,6 +621,56 @@ def test_filter_missing_attributes_in_lambda(spark, predicate_kind):
     )
     result = source.select("key").where(predicate)
     assert result.collect() == [Row(key="b")]
+
+
+@pytest.mark.parametrize("predicate_kind", ["column", "sql"])
+@pytest.mark.parametrize(
+    "marker_scope",
+    [
+        pytest.param(
+            scope,
+            marks=pytest.mark.xfail(
+                not is_jvm_spark() and scope != "inside",
+                reason="Missing-input retries rebind higher-order arguments and other predicate references "
+                "before resolving the lambda body",
+                strict=True,
+            ),
+        )
+        for scope in ["none", "inside", "before", "after"]
+    ],
+)
+def test_filter_missing_lambda_fields_preserve_staged_bindings(spark, predicate_kind, marker_scope):
+    source = spark.createDataFrame(
+        [([1], (1,), 7, "SOURCE"), ([2], (2,), 8, "SOURCE")],
+        "values array<int>, s struct<x:int>, a int, marker string",
+    )
+    projected = source.select(
+        F.array(F.lit(2)).alias("values"),
+        F.struct(F.lit(2).alias("y")).alias("s"),
+        F.lit("NEAR").alias("marker"),
+        "a",
+    ).select("a")
+    if predicate_kind == "sql":
+        body = "x = s.x" + (" AND marker = 'NEAR'" if marker_scope != "none" else "")
+        predicate = f"exists(values, x -> {body})"
+        if marker_scope == "before":
+            predicate = f"marker = 'NEAR' AND {predicate}"
+        elif marker_scope == "after":
+            predicate = f"{predicate} AND marker = 'NEAR'"
+    else:
+        predicate = F.exists(
+            "values",
+            lambda x: (x == F.col("s.x")) & ((F.col("marker") == "NEAR") if marker_scope != "none" else F.lit(True)),
+        )
+        if marker_scope == "before":
+            predicate = (F.col("marker") == "NEAR") & predicate
+        elif marker_scope == "after":
+            predicate = predicate & (F.col("marker") == "NEAR")
+    # Spark finalizes ordinary references before resolving the lambda body. Only
+    # a marker referenced solely inside the failed lambda binds to the older source.
+    result = projected.where(predicate)
+    assert result.collect() == ([] if marker_scope == "inside" else [Row(a=8)])
+    assert result.schema == projected.schema
 
 
 @pytest.mark.parametrize("subset", [None, ["key"]], ids=["distinct", "drop-duplicates-subset"])

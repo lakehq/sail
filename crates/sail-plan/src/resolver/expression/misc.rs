@@ -269,6 +269,7 @@ impl PlanResolver<'_> {
             match expr {
                 spec::Expr::UnresolvedAttribute { .. } => true,
                 spec::Expr::UnresolvedExtractValue { child, .. } => is_attribute_path(child),
+                spec::Expr::Alias { expr, .. } => is_attribute_path(expr),
                 _ => false,
             }
         }
