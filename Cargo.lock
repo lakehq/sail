@@ -7974,8 +7974,10 @@ name = "sail-physical-optimizer"
 version = "0.7.1"
 dependencies = [
  "datafusion",
+ "datafusion-datasource",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 
