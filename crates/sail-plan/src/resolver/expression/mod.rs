@@ -24,6 +24,7 @@ mod udf;
 mod wildcard;
 mod window;
 
+pub(crate) use cast::build_rename_target_type;
 pub(super) use predicate::spark_interval_metadata_for_expression;
 
 #[derive(Debug, Clone, PartialEq)]

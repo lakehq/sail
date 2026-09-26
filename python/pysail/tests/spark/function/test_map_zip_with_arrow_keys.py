@@ -90,3 +90,32 @@ def test_map_zip_with_arrow_array_keys(spark, tmp_path, left_kind, right_kind, s
     assert [entry.asDict(recursive=True) for entry in entries] == [
         {"key": key(value), "value": merged} for value, merged in expected
     ]
+
+
+@pytest.mark.parametrize(("left_sorted", "right_sorted"), [(True, False), (False, True), (True, True)])
+def test_map_zip_with_preserves_sorted_input_maps(spark, tmp_path, left_sorted, right_sorted):
+    # SQL has no syntax for Arrow's sorted-map flag; Parquet preserves it.
+    path = tmp_path / "sorted_maps.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "left": pa.array(
+                    [[("b", 1), ("c", 2)]],
+                    type=pa.map_(pa.string(), pa.int32(), keys_sorted=left_sorted),
+                ),
+                "right": pa.array(
+                    [[("a", 3), ("c", 4)]],
+                    type=pa.map_(pa.string(), pa.int32(), keys_sorted=right_sorted),
+                ),
+            }
+        ),
+        path,
+    )
+    result = spark.read.parquet(str(path)).select(
+        F.map_entries(
+            F.map_zip_with(
+                "left", "right", lambda _key, left, right: F.coalesce(left, F.lit(0)) + F.coalesce(right, F.lit(0))
+            )
+        ).alias("entries")
+    )
+    assert [(entry.key, entry.value) for entry in result.first().entries] == [("b", 1), ("c", 6), ("a", 3)]

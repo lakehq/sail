@@ -79,12 +79,30 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        // TYPEOF is foldable regardless of its child's foldability. Resolve the
+        // child normally; nested percentile calls establish their own scopes.
+        if canonical_function_name == "typeof"
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            state.config_mut().approx_percentile_parameter = None;
+        }
         // These source functions lose their non-foldable identity during lowering.
         // The same lowered expressions also implement valid foldable functions.
         if let Some(parameter) = state.config().approx_percentile_parameter
             && matches!(
                 canonical_function_name.as_str(),
-                "array_compact" | "array_prepend" | "current_timezone"
+                "array_compact"
+                    | "array_prepend"
+                    | "current_catalog"
+                    | "current_database"
+                    | "current_schema"
+                    | "current_timezone"
+                    | "current_user"
+                    | "session_user"
+                    | "try_element_at"
+                    | "user"
             )
             && catalog_manager
                 .get_function(&canonical_function_name)?

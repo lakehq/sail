@@ -402,3 +402,109 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       FROM VALUES (1), (2) AS t(v)
       """
     Then query error (?i)foldable
+
+  Scenario Outline: Current context expressions remain non-foldable percentile parameters
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) AS p
+      FROM (SELECT 1 AS v WHERE <keep>) AS t GROUP BY v
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage                                        | accuracy                         | keep  |
+      | percentile_approx | array(IF(current_database() IS NULL, 0.5D, 0.5D)) | 100                              | true  |
+      | approx_percentile | IF(current_schema() IS NULL, 0.5D, 0.5D)          | 100                              | true  |
+      | percentile_approx | IF(current_catalog() IS NULL, 0.5D, 0.5D)         | 100                              | true  |
+      | approx_percentile | IF(current_user() IS NULL, 0.5D, 0.5D)            | 100                              | true  |
+      | percentile_approx | IF(user() IS NULL, 0.5D, 0.5D)                    | 100                              | true  |
+      | approx_percentile | 0.5D                                              | length(current_database()) + 100 | true  |
+      | percentile_approx | 0.5D                                              | length(current_catalog()) + 100  | false |
+      | approx_percentile | 0.5D                                              | length(current_user()) + 100     | false |
+
+  Scenario Outline: Current context expressions remain non-foldable percentile window parameters
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, <accuracy>) OVER () AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                               | accuracy             |
+      | IF(current_schema() IS NULL, 0.5D, 0.5D) | 100                  |
+      | 0.5D                                     | length(user()) + 100 |
+
+  @spark-4
+  Scenario: Session user remains a non-foldable percentile parameter
+    When query
+      """
+      SELECT percentile_approx(v, IF(session_user() IS NULL, 0.5D, 0.5D)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  Scenario Outline: Try element lookup remains non-foldable for array percentile parameters
+    When query
+      """
+      SELECT percentile_approx(v, try_element_at(array(array(0D, 1D)), 1)) AS p
+      FROM (SELECT 1 AS v WHERE <keep>) AS t GROUP BY v
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | keep  |
+      | true  |
+      | false |
+
+  Scenario: Try array element lookup remains non-foldable in percentile windows
+    When query
+      """
+      SELECT v, percentile_approx(v, try_element_at(array(0.25D, 0.5D), 2)) OVER () AS p
+      FROM VALUES (1), (2) AS t(v) ORDER BY v
+      """
+    Then query error (?i)foldable
+
+  Scenario: Try map element lookup remains non-foldable inside percentile accuracy
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D, try_element_at(map('accuracy', 100), 'accuracy')) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+  Scenario: Percentile foldability checks preserve ordinary element lookup and observation expressions
+    When query
+      """
+      SELECT percentile_approx(try_element_at(array(v), 1), element_at(array(0.5D), 1)) AS p,
+             try_element_at(array(7, 9), 1) AS picked
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p | picked |
+      | 1 | 7      |
+
+  Scenario: Typeof remains foldable over non-foldable percentile source functions
+    When query
+      """
+      SELECT percentile_approx(v,
+               array(IF(typeof(current_database()) = 'string', 0D, 0.5D), 1D),
+               length(typeof(try_element_at(array(1), 1))) + 100) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p      |
+      | [1, 2] |
+
+  Scenario: Typeof remains foldable in percentile window parameters
+    When query
+      """
+      SELECT v, approx_percentile(v,
+               IF(typeof(current_user()) = 'string', 0.5D, 0.75D),
+               length(typeof(try_element_at(map('x', 1), 'x'))) + 100) OVER () AS p
+      FROM VALUES (1), (2) AS t(v) ORDER BY v
+      """
+    Then query result
+      | v | p |
+      | 1 | 1 |
+      | 2 | 1 |

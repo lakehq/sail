@@ -312,3 +312,22 @@ Feature: map_zip_with merges the union of keys
         | collection | left                                  | right                                                       |
         | array      | array(DATE'2020-01-01')                | array(TIMESTAMP_NTZ'2020-01-01 00:00:00')                     |
         | struct     | named_struct('d', DATE'2020-01-01')     | named_struct('d', TIMESTAMP_NTZ'2020-01-01 00:00:00')         |
+
+
+  Rule: Case-insensitive struct key coercion preserves field positions
+
+    Scenario Outline: Case-only field permutations retain values for <shape> keys
+      When query
+        """
+        SELECT map_values(map_zip_with(map(<left>, 10), map(<right>, 20),
+                   (k, x, y) -> coalesce(x, 0) + coalesce(y, 0))) AS result
+        """
+      Then query result
+        | result |
+        | [30]   |
+
+      Examples:
+        | shape                       | left                                  | right                                   |
+        | struct                      | named_struct('a', 1, 'A', 2)            | named_struct('A', 1, 'a', 2)             |
+        | array of structs            | array(named_struct('a', 1, 'A', 2))     | array(named_struct('A', 1, 'a', 2))      |
+        | struct with numeric widening| named_struct('a', 1, 'A', 2)            | named_struct('A', 1L, 'a', 2)            |

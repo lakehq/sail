@@ -88,11 +88,13 @@ impl SparkZipWith {
             })?;
         Ok([left_fields, right_fields]
             .into_iter()
-            .map(|fields| {
+            .zip([left, right])
+            .map(|(fields, source)| {
                 map_type(
                     key.clone(),
                     fields[1].data_type().clone(),
                     fields[1].is_nullable(),
+                    matches!(source, DataType::Map(_, true)),
                 )
             })
             .collect())
@@ -203,6 +205,7 @@ impl HigherOrderUDFImpl for SparkZipWith {
                 map_fields(&types[0])?[0].data_type().clone(),
                 function.data_type().clone(),
                 function.is_nullable(),
+                false,
             )
         } else {
             let field = Arc::new(Field::new_list_field(
@@ -431,7 +434,7 @@ fn map_fields(data_type: &DataType) -> Result<&Fields> {
     plan_err!("map_zip_with requires maps, got {data_type}")
 }
 
-fn map_type(key: DataType, value: DataType, nullable: bool) -> DataType {
+fn map_type(key: DataType, value: DataType, nullable: bool, sorted: bool) -> DataType {
     DataType::Map(
         Arc::new(Field::new(
             SAIL_MAP_FIELD_NAME,
@@ -444,7 +447,7 @@ fn map_type(key: DataType, value: DataType, nullable: bool) -> DataType {
             ),
             false,
         )),
-        false,
+        sorted,
     )
 }
 

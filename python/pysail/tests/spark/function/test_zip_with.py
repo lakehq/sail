@@ -1,6 +1,7 @@
 import math
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
@@ -396,3 +397,63 @@ def test_zip_with_preserves_chained_struct_alias_display(spark):
     assert result.columns == [expected_name]
     assert result.select(F.col("`" + expected_name + "`")).collect() == result.collect()
     assert result.first()[0][0].asDict() == {"outer": 1, "right": 2}
+
+
+@pytest.mark.parametrize(("left_nullable", "right_nullable"), [(False, False), (False, True), (True, False)])
+def test_map_zip_with_case_renamed_keys_preserves_outer_nullability(spark, left_nullable, right_nullable):
+    spark.conf.set("spark.sql.caseSensitive", "false")
+    left_key = T.StructType([T.StructField("a", T.IntegerType(), False), T.StructField("A", T.IntegerType(), False)])
+    right_key = T.StructType([T.StructField("A", T.IntegerType(), False), T.StructField("a", T.IntegerType(), False)])
+    source = spark.createDataFrame(
+        [({(1, 2): 10}, {(1, 2): 20})],
+        T.StructType(
+            [
+                T.StructField("left", T.MapType(left_key, T.IntegerType(), False), left_nullable),
+                T.StructField("right", T.MapType(right_key, T.IntegerType(), False), right_nullable),
+            ]
+        ),
+    )
+    result = source.select(F.map_zip_with("left", "right", lambda _key, left, right: left + right).alias("result"))
+    assert result.schema[0].nullable is (left_nullable or right_nullable)
+    assert result.select(F.map_values("result")).first()[0] == [30]
+
+
+@pytest.mark.parametrize(("left_kind", "right_kind"), [("large", "list"), ("list", "fixed")])
+def test_map_zip_with_renames_struct_keys_before_widening_array_representation(spark, tmp_path, left_kind, right_kind):
+    left_struct = pa.struct([("a", pa.int32()), ("A", pa.int32())])
+    right_struct = pa.struct([("A", pa.int32()), ("a", pa.int32())])
+    left_key = pa.large_list(left_struct) if left_kind == "large" else pa.list_(left_struct)
+    right_key = pa.list_(right_struct, 1) if right_kind == "fixed" else pa.list_(right_struct)
+    path = tmp_path / "struct_array_keys.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "left": pa.array([[([{"a": 1, "A": 2}], 10)]], type=pa.map_(left_key, pa.int32())),
+                "right": pa.array([[([{"A": 1, "a": 2}], 20)]], type=pa.map_(right_key, pa.int32())),
+            }
+        ),
+        path,
+    )
+    previous_case_sensitive = spark.conf.get("spark.sql.caseSensitive")
+    source = None
+    try:
+        # Materialize the Parquet fields case-sensitively before comparing keys
+        # case-insensitively. Parquet preserves the Arrow list representations.
+        spark.conf.set("spark.sql.caseSensitive", "true")
+        source = spark.read.parquet(str(path)).cache()
+        assert source.count() == 1
+        source.createOrReplaceTempView("map_zip_struct_array_inputs")
+        spark.conf.set("spark.sql.caseSensitive", "false")
+        result = spark.table("map_zip_struct_array_inputs").select(
+            F.map_values(
+                F.map_zip_with(
+                    "left", "right", lambda _key, left, right: F.coalesce(left, F.lit(0)) + F.coalesce(right, F.lit(0))
+                )
+            ).alias("result")
+        )
+        assert result.first().result == [30]
+    finally:
+        if source is not None:
+            source.unpersist()
+        spark.catalog.dropTempView("map_zip_struct_array_inputs")
+        spark.conf.set("spark.sql.caseSensitive", previous_case_sensitive)

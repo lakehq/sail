@@ -7,7 +7,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, Tre
 use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, cast, expr, lit,
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ScalarUDF, ValueOrLambda, cast, expr,
+    lit,
 };
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -20,9 +21,11 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_zip_with::SparkZipWith;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
+use crate::resolver::build_rename_target_type;
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
@@ -520,6 +523,15 @@ fn zip_collections(input: ScalarFunctionInput, map: bool) -> PlanResult<expr::Ex
         .into_iter()
         .zip(types)
         .map(|(argument, data_type)| {
+            // Spark aligns struct key fields positionally, including names that
+            // differ only in case. Rename before Arrow's name-based key cast.
+            let source_type = argument.get_type(schema)?;
+            let renamed_type = build_rename_target_type(&source_type, &data_type);
+            let argument = if source_type == renamed_type {
+                argument
+            } else {
+                ScalarUDF::from(SparkStructRename::new(renamed_type)).call(vec![argument])
+            };
             let argument = if argument.get_type(schema)? == data_type {
                 argument
             } else {
