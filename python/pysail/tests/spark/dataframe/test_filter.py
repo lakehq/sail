@@ -84,6 +84,26 @@ def test_filter_replaced_attribute_preserves_reference_scope(filter_source, alia
     assert result.schema == projected.schema
 
 
+@pytest.mark.parametrize("aliased", [False, True])
+@pytest.mark.parametrize("replacement_name", ["b", "B"])
+def test_filter_recovered_column_replacement_preserves_reference_scope(spark, aliased, replacement_name):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "a int, b int")
+    if aliased:
+        source = source.alias("origin")
+    replaced = source.withColumn(replacement_name, F.col("a"))
+    projected = replaced.select("a")
+
+    assert projected.where(source.b == 20).collect() == [Row(a=1)]  # noqa: PLR2004
+    assert projected.where(F.col("b") == 2).collect() == [Row(a=2)]  # noqa: PLR2004
+    assert projected.where(replaced[replacement_name] == 2).collect() == [Row(a=2)]  # noqa: PLR2004
+    assert projected.where(source.a == 1).collect() == [Row(a=1)]
+    if aliased:
+        assert projected.where(F.col("origin.b") == 20).collect() == [Row(a=1)]  # noqa: PLR2004
+
+    with pytest.raises(AnalysisException):
+        replaced.alias("output").select("a").where(source.b == 20).collect()  # noqa: PLR2004
+
+
 @pytest.mark.parametrize("alias", ["origin", "output"])
 @pytest.mark.parametrize("reference", ["bound", "qualified"])
 def test_filter_replaced_attribute_preserves_explicit_alias_boundary(filter_source, alias, reference):
@@ -432,6 +452,28 @@ def test_filter_recovered_computed_struct_keeps_binding(spark, predicate):
     # Spark binds the function argument to the nearer struct and fails instead of using the older one.
     with pytest.raises(AnalysisException):
         projected.where(predicate()).collect()
+
+
+@pytest.mark.parametrize("update", ["drop", "with-literal", "with-cast"])
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Missing-input recovery does not preserve Spark analyzer staging for native struct updates",
+    strict=True,
+)
+def test_filter_native_struct_update_discards_invalid_descendant(spark, update):
+    source = spark.createDataFrame([((1, 9), 7), ((2, 8), 8)], "s struct<x:int,y:int>, a int")
+    projected = source.select(F.struct(F.lit(2).alias("x"), F.lit(3).alias("z")).alias("s"), "a").select("a")
+    if update == "drop":
+        child = F.col("s").dropFields("x")
+    elif update == "with-literal":
+        child = F.col("s").withField("x", F.lit(0))
+    else:
+        child = F.col("s").withField("x", F.col("a").cast("int"))
+    # Spark resolves these native expressions before extracting `y`, so the missing
+    # field discards the intermediate struct binding and recovers the older struct.
+    result = projected.where(child["y"] == 9)  # noqa: PLR2004
+    assert result.collect() == [Row(a=7)]
+    assert result.schema == projected.schema
 
 
 @pytest.mark.xfail(
@@ -1159,3 +1201,20 @@ def test_filter_missing_qualified_struct_ignores_ambiguous_alias_interpretation(
     result = projected.where("t.s.x = 1")
     assert result.collect() == [Row(keep=7)]
     assert result.schema == projected.schema
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+@pytest.mark.parametrize(("alias", "column"), [("T", "s"), ("t", "S")])
+def test_filter_recovered_qualified_root_uses_case_sensitive_resolver(spark, case_sensitive, alias, column):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", str(case_sensitive).lower())
+    try:
+        source = spark.createDataFrame(
+            [((1,), ((2,),), 7)], f"{column} struct<x:int>, t struct<s:struct<x:int>>, keep int"
+        )
+        projected = source.alias(alias).select("keep")
+        result = projected.where("t.s.x = 2")
+        assert result.collect() == ([Row(keep=7)] if case_sensitive else [])
+        assert result.schema == projected.schema
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)

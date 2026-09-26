@@ -113,7 +113,8 @@ impl PlanResolver<'_> {
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.
         if !missing_input_schemas.is_empty()
-            && Self::missing_input_attribute_root_fails(&name, plan_id, local_schema, state)
+            && self
+                .missing_input_attribute_root_fails(&name, plan_id, local_schema, state)
                 .is_some()
         {
             return Err(PlanError::analysis(format!(
@@ -133,7 +134,7 @@ impl PlanResolver<'_> {
                 return Ok(NamedExpr::new(vec![name], expr));
             }
             if let Some(fails) =
-                Self::missing_input_attribute_root_fails(&name, plan_id, schema, state)
+                self.missing_input_attribute_root_fails(&name, plan_id, schema, state)
             {
                 // Spark keeps the bindings to this output if the nested field can be
                 // extracted without failing (a map value or an array item).
@@ -170,6 +171,7 @@ impl PlanResolver<'_> {
     /// Returns whether extracting the nested field fails for every attribute root in the
     /// schema that the name refers to, or `None` if the schema has no such root.
     fn missing_input_attribute_root_fails(
+        &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
@@ -177,49 +179,71 @@ impl PlanResolver<'_> {
     ) -> Option<bool> {
         Self::generate_qualified_nested_field_candidates(name.parts())
             .iter()
-            .flat_map(|(q, root, inner)| {
+            .rev()
+            .find_map(|(q, root, inner)| {
                 schema
                     .iter()
                     .filter(|(qualifier, field)| {
-                        qualifier_matches(q.as_ref(), *qualifier)
+                        qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
                             && state.get_field_info(field.name()).is_ok_and(|info| {
-                                !info.is_hidden() && info.matches(root.as_ref(), plan_id)
+                                !info.is_hidden()
+                                    && info.matches(root.as_ref(), plan_id)
+                                    && (!self.config.case_sensitive || info.name() == root.as_ref())
                             })
                     })
-                    .map(|(_, field)| Self::nested_field_extraction_fails(field.data_type(), inner))
+                    .map(|(_, field)| self.nested_field_extraction_fails(field.data_type(), inner))
+                    .reduce(|a, b| a && b)
             })
-            .reduce(|a, b| a && b)
     }
 
     /// Returns whether Spark fails to extract the nested field from a value of the data type.
-    /// Map values and items of non-struct arrays are extracted without failing.
-    fn nested_field_extraction_fails<T: AsRef<str>>(data_type: &DataType, inner: &[T]) -> bool {
+    /// Map values and array items resolve before coercion, but extracting a later
+    /// field can still fail for the resulting type.
+    // TODO: Spark 4.2 propagates NullType through extraction via `applyOrNull`.
+    // Support that behavior without changing Spark 3.5–4.1 missing-input recovery.
+    fn nested_field_extraction_fails<T: AsRef<str>>(
+        &self,
+        data_type: &DataType,
+        inner: &[T],
+    ) -> bool {
         let [name, remaining @ ..] = inner else {
             return false;
         };
         match data_type {
-            DataType::Struct(fields) => match find_struct_field(fields, name.as_ref()) {
-                Ok(Some(field)) => {
-                    Self::nested_field_extraction_fails(field.data_type(), remaining)
+            DataType::Struct(fields) => {
+                match find_struct_field(fields, name.as_ref(), self.config.case_sensitive) {
+                    Ok(Some(field)) => {
+                        self.nested_field_extraction_fails(field.data_type(), remaining)
+                    }
+                    _ => true,
                 }
-                _ => true,
-            },
+            }
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _) => match field.data_type() {
-                DataType::Struct(fields) => match find_struct_field(fields, name.as_ref()) {
-                    Ok(Some(child)) => {
-                        let item = Field::new_list_field(child.data_type().clone(), true);
-                        Self::nested_field_extraction_fails(
-                            &DataType::List(Arc::new(item)),
-                            remaining,
-                        )
+                DataType::Struct(fields) => {
+                    match find_struct_field(fields, name.as_ref(), self.config.case_sensitive) {
+                        Ok(Some(child)) => {
+                            let item = Field::new_list_field(child.data_type().clone(), true);
+                            self.nested_field_extraction_fails(
+                                &DataType::List(Arc::new(item)),
+                                remaining,
+                            )
+                        }
+                        _ => true,
                     }
-                    _ => true,
-                },
-                _ => false,
+                }
+                _ => self.nested_field_extraction_fails(field.data_type(), remaining),
             },
-            DataType::Map(_, _) => false,
+            DataType::Map(field, _) => {
+                if let DataType::Struct(fields) = field.data_type()
+                    && let Some(value) = fields.get(1)
+                {
+                    self.nested_field_extraction_fails(value.data_type(), remaining)
+                } else {
+                    false
+                }
+            }
             _ => true,
         }
     }
@@ -248,23 +272,21 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
-        // Extraction errors in a less-qualified interpretation must not reject
-        // a reference whose root matches a more-qualified interpretation.
-        // TODO: Apply qualification precedence to successful candidates too, and
-        // stop fallback when the preferred root lacks the requested nested field.
-        let preferred_qualifier = || {
-            candidates.iter().rev().find_map(|(q, root, _)| {
-                schema
-                    .iter()
-                    .any(|(qualifier, field)| {
-                        qualifier_matches(q.as_ref(), qualifier)
-                            && state.get_field_info(field.name()).is_ok_and(|info| {
-                                !info.is_hidden() && info.matches(root.as_ref(), plan_id)
-                            })
-                    })
-                    .then_some(q)
-            })
-        };
+        // Spark chooses the most-qualified matching root before extracting nested
+        // fields, using its configured resolver for both the qualifier and root name.
+        // A missing field in that root cannot select a less-qualified root.
+        let preferred_qualifier = candidates.iter().rev().find_map(|(q, root, _)| {
+            (q.is_none()
+                || schema.iter().any(|(qualifier, field)| {
+                    qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
+                        && state.get_field_info(field.name()).is_ok_and(|info| {
+                            !info.is_hidden()
+                                && info.matches(root.as_ref(), plan_id)
+                                && (!self.config.case_sensitive || info.name() == root.as_ref())
+                        })
+                }))
+            .then_some(q)
+        });
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
@@ -276,20 +298,29 @@ impl PlanResolver<'_> {
                 }
                 candidates
                     .iter()
-                    .filter_map(|(q, name, inner)| {
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), plan_id)
+                    .filter_map(|(q, root, inner)| {
+                        if Some(q) == preferred_qualifier
+                            && qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
+                            && info.matches(root.as_ref(), plan_id)
+                            && (!self.config.case_sensitive || info.name() == root.as_ref())
                         {
-                            let expr = match Self::resolve_potentially_nested_field(
+                            let expr = match self.resolve_potentially_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             ) {
-                                Ok(expr) => expr?,
-                                Err(_) if Some(q) != preferred_qualifier() => return None,
+                                Ok(Some(expr)) => expr,
+                                Ok(None) => {
+                                    if self.nested_field_extraction_fails(field.data_type(), inner) {
+                                        return Some(Err(PlanError::analysis(format!(
+                                            "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                                        ))));
+                                    }
+                                    return None;
+                                }
                                 Err(error) => return Some(Err(error)),
                             };
-                            let name = inner.last().unwrap_or(name).as_ref().to_string();
+                            let name = inner.last().unwrap_or(root).as_ref().to_string();
                             Some(Ok((name, expr)))
                         } else {
                             None
@@ -395,8 +426,9 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier)
+                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
                             && info.matches(name.as_ref(), None)
+                            && (!self.config.case_sensitive || info.name() == name.as_ref())
                     })
                     .map(|(_, name)| {
                         (
@@ -419,6 +451,7 @@ impl PlanResolver<'_> {
     }
 
     fn resolve_potentially_nested_field<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
@@ -427,13 +460,15 @@ impl PlanResolver<'_> {
             [] => Ok(Some(expr)),
             [name, remaining @ ..] => match data_type {
                 DataType::Struct(fields) => {
-                    let Some(field) = find_struct_field(fields, name.as_ref())? else {
+                    let Some(field) =
+                        find_struct_field(fields, name.as_ref(), self.config.case_sensitive)?
+                    else {
                         return Ok(None);
                     };
                     let args = vec![expr, lit(field.name().to_string())];
                     let expr =
                         expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                    Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
+                    self.resolve_potentially_nested_field(expr, field.data_type(), remaining)
                 }
                 DataType::List(field)
                 | DataType::LargeList(field)
@@ -441,7 +476,9 @@ impl PlanResolver<'_> {
                     let DataType::Struct(fields) = field.data_type() else {
                         return Ok(None);
                     };
-                    let Some(child) = find_struct_field(fields, name.as_ref())? else {
+                    let Some(child) =
+                        find_struct_field(fields, name.as_ref(), self.config.case_sensitive)?
+                    else {
                         return Ok(None);
                     };
                     let expr = ScalarUDF::from(ArrayStructField::new())
@@ -456,7 +493,7 @@ impl PlanResolver<'_> {
                         DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
                         _ => unreachable!("list data type matched above"),
                     };
-                    Self::resolve_potentially_nested_field(expr, &data_type, remaining)
+                    self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }
                 _ => Ok(None),
             },
@@ -507,26 +544,33 @@ impl PlanResolver<'_> {
 }
 
 /// Returns whether the qualifier matches the target qualifier.
-/// Identifiers are case-insensitive.
 /// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
 pub(super) fn qualifier_matches(
     qualifier: Option<&TableReference>,
     target: Option<&TableReference>,
+    case_sensitive: bool,
 ) -> bool {
+    let names_equal = |left: &str, right: &str| {
+        if case_sensitive {
+            left == right
+        } else {
+            left.eq_ignore_ascii_case(right)
+        }
+    };
     let table_matches = |table: &str| {
         target
             .map(|x| x.table())
-            .is_some_and(|x| x.eq_ignore_ascii_case(table))
+            .is_some_and(|x| names_equal(x, table))
     };
     let schema_matches = |schema: &str| {
         target
             .and_then(|x| x.schema())
-            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
+            .is_some_and(|x| names_equal(x, schema))
     };
     let catalog_matches = |catalog: &str| {
         target
             .and_then(|x| x.catalog())
-            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
+            .is_some_and(|x| names_equal(x, catalog))
     };
     match qualifier {
         Some(TableReference::Bare { table }) => table_matches(table),
@@ -542,12 +586,20 @@ pub(super) fn qualifier_matches(
     }
 }
 
-/// Returns the struct field that the name selects case-insensitively. More than one match
-/// is an ambiguous reference in Spark.
-fn find_struct_field<'a>(fields: &'a Fields, name: &str) -> PlanResult<Option<&'a FieldRef>> {
-    let mut matches = fields
-        .iter()
-        .filter(|x| x.name().eq_ignore_ascii_case(name));
+/// Returns the struct field selected by Spark's configured name resolver.
+/// More than one match is an ambiguous reference.
+fn find_struct_field<'a>(
+    fields: &'a Fields,
+    name: &str,
+    case_sensitive: bool,
+) -> PlanResult<Option<&'a FieldRef>> {
+    let mut matches = fields.iter().filter(|x| {
+        if case_sensitive {
+            x.name() == name
+        } else {
+            x.name().eq_ignore_ascii_case(name)
+        }
+    });
     let field = matches.next();
     if matches.next().is_some() {
         return Err(PlanError::AnalysisError(format!(

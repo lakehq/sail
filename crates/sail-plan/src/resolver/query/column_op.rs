@@ -204,11 +204,25 @@ impl PlanResolver<'_> {
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
                 let expr = self.resolve_expression(expr, schema, state).await?;
+                // Replacements are new attributes in Spark, even when their value is
+                // another column. Only untouched columns inherit their input plan IDs.
+                let expr = if matches!(expr, Expr::Column(_)) {
+                    expr.alias(name.as_ref())
+                } else {
+                    expr
+                };
                 results.insert(name.into(), (expr, false, metadata));
             }
             Ok(results) as PlanResult<_>
         }
         .await?;
+        // Index replacements once instead of scanning them for every input column.
+        let mut alias_indices = HashMap::with_capacity(aliases.len());
+        for (index, name) in aliases.keys().enumerate() {
+            alias_indices
+                .entry(self.merge_name_key(name))
+                .or_insert(index);
+        }
         let mut expr = schema
             .columns()
             .into_iter()
@@ -216,9 +230,9 @@ impl PlanResolver<'_> {
                 let name = state.get_field_info(column.name())?.name();
                 // Spark replaces a column whose name matches a new column (case-insensitively
                 // by default), and the replacement takes the name of the new column.
-                match aliases
-                    .iter_mut()
-                    .find(|(alias, _)| self.merge_names_equal(alias, name))
+                match alias_indices
+                    .get(&self.merge_name_key(name))
+                    .and_then(|index| aliases.get_index_mut(*index))
                 {
                     Some((name, (e, exists, metadata))) => {
                         *exists = true;

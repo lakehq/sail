@@ -562,7 +562,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn merge_name_key(&self, name: &str) -> String {
+    pub(in crate::resolver) fn merge_name_key(&self, name: &str) -> String {
         if self.config.case_sensitive {
             name.to_string()
         } else {
@@ -570,7 +570,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(in crate::resolver) fn merge_names_equal(&self, left: &str, right: &str) -> bool {
+    fn merge_names_equal(&self, left: &str, right: &str) -> bool {
         if self.config.case_sensitive {
             left == right
         } else {

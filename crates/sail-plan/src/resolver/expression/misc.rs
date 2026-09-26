@@ -304,6 +304,8 @@ impl PlanResolver<'_> {
                 // which cannot bind a deeper column in place of the failed one.
                 // TODO: Keep the bindings as Spark does once name resolution is staged. Spark
                 //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
+                // TODO: Preserve analyzer staging for native `UpdateFields`: unlike an
+                //   unresolved function, it can fail and discard bindings in this pass.
                 state.discard_missing_input_schemas_from(index);
             }
         }

@@ -7,6 +7,7 @@ use sail_sql_analyzer::query::AUTO_GENERATED_SUBQUERY_NAME;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -60,15 +61,22 @@ impl PlanResolver<'_> {
             // Spark removes subquery aliases before decorrelation, and correlated predicates
             // cannot be pulled up through `SubqueryAlias` here. So the generated alias only
             // requalifies the output and, like Spark, stops missing-reference resolution.
-            let expr: Vec<Expr> = input
+            // Give the projection fresh field IDs so optimizer rewrites cannot combine
+            // its qualified output with unqualified input columns of the same name.
+            let names = Self::get_field_names(input.schema(), state)?;
+            let expr = input
                 .schema()
                 .columns()
                 .into_iter()
-                .map(|col| {
-                    let name = col.name.clone();
-                    Expr::Column(col).alias_qualified(Some(alias.clone()), name)
-                })
+                .zip(names)
+                .map(|(col, name)| NamedExpr::new(vec![name], Expr::Column(col)))
                 .collect();
+            let mut expr = self.rewrite_named_expressions(expr, state)?;
+            for expr in &mut expr {
+                if let Expr::Alias(expr) = expr {
+                    expr.relation = Some(alias.clone());
+                }
+            }
             let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
             state.register_missing_input_boundary(&plan);
             return Ok(plan);

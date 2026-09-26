@@ -3,7 +3,7 @@ import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 def test_get_item_ignore_case(spark):
@@ -144,3 +144,51 @@ def test_array_struct_field(spark):
         Row(id="2", d=[None, None, None]),
         Row(id="3", d=None),
     ]
+
+
+def test_recovered_struct_field_respects_case_sensitive_resolution(spark):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        source = spark.createDataFrame([((1,), 7)], "s struct<x:int>, a int")
+        projected = source.select(F.struct(F.lit(2).alias("X")).alias("s"), "a")
+        with pytest.raises(AnalysisException):
+            projected.where("s.x = 1").collect()
+        assert projected.select("a").where("s.x = 1").collect() == [Row(a=7)]
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        lambda: F.create_map(F.lit("a"), F.struct(F.lit(2).alias("y"))),
+        lambda: F.create_map(F.lit("a"), F.lit(2)),
+        lambda: F.array(F.lit(2)),
+    ],
+    ids=["map-struct", "map-scalar", "array-scalar"],
+)
+def test_recovered_struct_field_skips_failed_extraction_after_map_or_array(spark, replacement):
+    source = spark.createDataFrame([(((1,),), 7), (((2,),), 8)], "s struct<a:struct<x:int>>, marker int")
+    projected = source.select(replacement().alias("s"), "marker").select("marker")
+    assert projected.where("s.a.x = 1").collect() == [Row(marker=7)]
+
+
+def test_recovered_struct_field_preserves_successful_extraction_after_array(spark):
+    source = spark.createDataFrame([(((1,),), 7)], "s struct<a:struct<x:int>>, marker int")
+    replacement = F.array(F.create_map(F.lit("a"), F.struct(F.lit(2).alias("y"))))
+    projected = source.select(replacement.alias("s"), "marker").select("marker")
+    with pytest.raises(AnalysisException):
+        projected.where("s.a.x = 1").collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4, 2), reason="NullType extraction propagation was added in Spark 4.2")
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail follows Spark 3.5-4.1 recovery; Spark 4.2 propagates NULL through the newer map value",
+    strict=True,
+)
+def test_recovered_null_map_preserves_spark_42_null_propagation(spark):
+    source = spark.createDataFrame([(((1,),), 7)], "s struct<a:struct<x:int>>, marker int")
+    projected = source.select(F.create_map(F.lit("a"), F.lit(None)).alias("s"), "marker").select("marker")
+    assert projected.where("s.a.x = 1").collect() == []

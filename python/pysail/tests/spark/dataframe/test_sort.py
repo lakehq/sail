@@ -121,6 +121,17 @@ def test_sort_recovered_key_preserves_renamed_alias(sort_source, operation):
     assert result.schema == projected.schema
 
 
+@pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
+def test_sort_recovered_replacement_preserves_reference_scope(spark, operation):
+    source = spark.createDataFrame([(1, 30), (2, 10), (3, 20)], "a int, b int").coalesce(1)
+    projected = source.withColumn("b", F.col("a")).select("a")
+    original = getattr(projected, operation)(source.b)
+    replacement = getattr(projected, operation)("b")
+    assert original.collect() == [Row(a=2), Row(a=3), Row(a=1)]
+    assert replacement.collect() == [Row(a=1), Row(a=2), Row(a=3)]
+    assert original.schema == replacement.schema == projected.schema
+
+
 @pytest.mark.parametrize(
     "operation",
     [

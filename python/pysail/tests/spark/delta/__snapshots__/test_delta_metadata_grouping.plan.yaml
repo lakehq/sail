@@ -547,12 +547,12 @@ data:
                   DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[1 as __sail_delta_count_weight], file_type=parquet
   limited_group: |-
     == Physical Plan ==
-    ProjectionExec: expr=[#4@0 as p, #5@1 as count(1)]
-      ProjectionExec: expr=[#3@0 as #4, count(Int64(1))@1 as #5]
-        AggregateExec: mode=FinalPartitioned, gby=[#3@0 as #3], aggr=[count(Int64(1))]
-          RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[#3@0 as #3], aggr=[count(Int64(1))]
-              DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-0.parquet]]}, projection=[p@1 as #3], limit=2, file_type=parquet
+    ProjectionExec: expr=[#5@0 as p, #6@1 as count(1)]
+      ProjectionExec: expr=[#4@0 as #5, count(Int64(1))@1 as #6]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(Int64(1))]
+          RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[count(Int64(1))]
+              DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-0.parquet]]}, projection=[p@1 as #4], limit=2, file_type=parquet
   nullable_count: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(v)]
@@ -713,13 +713,13 @@ data:
                           DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   limited_group: |-
     == Physical Plan ==
-    ProjectionExec: expr=[#4@0 as p, #5@1 as count(1)]
-      ProjectionExec: expr=[#3@0 as #4, count(Int64(1))@1 as #5]
-        AggregateExec: mode=FinalPartitioned, gby=[#3@0 as #3], aggr=[count(Int64(1))]
-          RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=4
-            AggregateExec: mode=Partial, gby=[#3@0 as #3], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[#5@0 as p, #6@1 as count(1)]
+      ProjectionExec: expr=[#4@0 as #5, count(Int64(1))@1 as #6]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(Int64(1))]
+          RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
+            AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[count(Int64(1))]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[p@0 as #3]
+                ProjectionExec: expr=[p@0 as #4]
                   CoalescePartitionsExec: fetch=2
                     ProjectionExec: expr=[p@0 as p]
                       LocalLimitExec: fetch=2
