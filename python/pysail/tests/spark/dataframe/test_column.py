@@ -146,6 +146,22 @@ def test_array_struct_field(spark):
     ]
 
 
+def test_wide_qualified_nested_projection(spark):
+    width = 128
+    source = spark.createDataFrame([(1,), (2,), (None,)], "value int")
+    source = source.select(
+        F.struct(F.struct(F.lit(-1).alias("value")).alias("s0")).alias("origin"),
+        *[F.struct("value").alias(f"s{i}") for i in range(width)],
+    ).alias("origin")
+    # The matching roots span the schema. The qualifier also names a struct,
+    # whose nested value must not override the qualified column's value.
+    result = source.select(*[F.col(f"origin.s{i}.value").alias(f"v{i}") for i in range(width)])
+    assert result.schema == StructType([StructField(f"v{i}", IntegerType(), True) for i in range(width)])
+    assert sorted((tuple(row) for row in result.collect()), key=lambda row: row[0] or 0) == [
+        tuple([value] * width) for value in (None, 1, 2)
+    ]
+
+
 def test_recovered_struct_field_respects_case_sensitive_resolution(spark):
     previous = spark.conf.get("spark.sql.caseSensitive")
     spark.conf.set("spark.sql.caseSensitive", "true")

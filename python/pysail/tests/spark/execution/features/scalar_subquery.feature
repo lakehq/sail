@@ -104,6 +104,28 @@ Feature: Scalar subqueries in distributed execution
       | 1 | 2 |
       | 2 | 0 |
 
+  # TODO: Match Spark's nullable scalar-subquery schema even for COUNT. The same
+  # mismatch exists without the unaliased derived table before this PR.
+  @sail-bug
+  Scenario: Correlated scalar counts retain nullable schemas through unaliased derived tables
+    When query
+      """
+      SELECT a, (
+        SELECT COUNT(*) FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      ) AS n
+      FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      """
+    Then query result collected
+      | a | n |
+      | 1 | 2 |
+      | 2 | 0 |
+    Then query schema
+      """
+      root
+       |-- a: integer (nullable = false)
+       |-- n: long (nullable = true)
+      """
+
   Scenario Outline: Lateral subqueries resolve correlation inside unaliased derived tables
     When query
       """

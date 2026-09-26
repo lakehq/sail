@@ -269,72 +269,60 @@ impl PlanResolver<'_> {
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
         // Spark chooses the most-qualified matching root before extracting nested
         // fields, using its configured resolver for both the qualifier and root name.
         // A missing field in that root cannot select a less-qualified root.
-        let preferred_qualifier = candidates.iter().rev().find_map(|(q, root, _)| {
-            (q.is_none()
-                || schema.iter().any(|(qualifier, field)| {
-                    qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
+        for (q, root, inner) in candidates.iter().rev() {
+            // Reuse the matching fields for extraction rather than scanning the
+            // schema again after choosing a qualifier. Stop even if extraction is
+            // unsupported: a matching root still shadows less-qualified roots.
+            let mut fields = schema
+                .iter()
+                .filter(|(qualifier, field)| {
+                    qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
                         && state.get_field_info(field.name()).is_ok_and(|info| {
                             !info.is_hidden()
                                 && info.matches(root.as_ref(), plan_id)
                                 && (!self.config.case_sensitive || info.name() == root.as_ref())
                         })
-                }))
-            .then_some(q)
-        });
-        let mut candidates = schema
-            .iter()
-            .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field_info(field.name()) else {
-                    return vec![];
-                };
-                if info.is_hidden() {
-                    return vec![];
-                }
-                candidates
-                    .iter()
-                    .filter_map(|(q, root, inner)| {
-                        if Some(q) == preferred_qualifier
-                            && qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
-                            && info.matches(root.as_ref(), plan_id)
-                            && (!self.config.case_sensitive || info.name() == root.as_ref())
-                        {
-                            let expr = match self.resolve_potentially_nested_field(
-                                col((qualifier, field)),
-                                field.data_type(),
-                                inner,
-                            ) {
-                                Ok(Some(expr)) => expr,
-                                Ok(None) => {
-                                    if self.nested_field_extraction_fails(field.data_type(), inner) {
-                                        return Some(Err(PlanError::analysis(format!(
-                                            "attribute {name:?} is missing from the schema: cannot resolve attribute"
-                                        ))));
-                                    }
-                                    return None;
-                                }
-                                Err(error) => return Some(Err(error)),
-                            };
+                })
+                .peekable();
+            if fields.peek().is_none() {
+                continue;
+            }
+            let mut resolved = fields
+                .filter_map(|(qualifier, field)| {
+                    match self.resolve_potentially_nested_field(
+                        col((qualifier, field)),
+                        field.data_type(),
+                        inner,
+                    ) {
+                        Ok(Some(expr)) => {
                             let name = inner.last().unwrap_or(root).as_ref().to_string();
                             Some(Ok((name, expr)))
-                        } else {
-                            None
                         }
-                    })
-                    .collect()
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-        if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous attribute: {name:?}"
-            )));
+                        Ok(None) => self
+                            .nested_field_extraction_fails(field.data_type(), inner)
+                            .then(|| {
+                                Err(PlanError::analysis(format!(
+                                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                                )))
+                            }),
+                        Err(error) => Some(Err(error)),
+                    }
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            if resolved.len() > 1 {
+                return Err(PlanError::AnalysisError(format!(
+                    "ambiguous attribute: {name:?}"
+                )));
+            }
+            return Ok(resolved.pop());
         }
-        Ok(candidates.pop())
+        Ok(None)
     }
 
     fn resolve_aggregate_field(
