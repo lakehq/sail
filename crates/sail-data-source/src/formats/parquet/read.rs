@@ -10,9 +10,11 @@ use datafusion::datasource::physical_plan::parquet::metadata::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::scan::{ParquetRowGroup, ParquetScanMetadata};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
@@ -134,7 +136,7 @@ impl ReadFormat for ParquetReadFormat {
         })
     }
 
-    async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
+    async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
 
@@ -145,6 +147,52 @@ impl ReadFormat for ParquetReadFormat {
         let store = ctx
             .runtime_env()
             .object_store(input.object_store_url.clone())?;
+
+        // Keep the small subset of footer metadata needed by physical partition
+        // planning even if the shared metadata cache evicts the footer later.
+        // Reuse the same cache as schema/statistics inference and scan readers.
+        let concurrency: usize = ctx.config_options().execution.meta_fetch_concurrency.into();
+        input.file_groups = futures::stream::iter(input.file_groups)
+            .map(|group| {
+                let store = Arc::clone(&store);
+                let cache = Arc::clone(&metadata_cache);
+                async move {
+                    let statistics = group.file_statistics(None).cloned().map(Arc::new);
+                    let mut files = group.into_inner();
+                    for file in &mut files {
+                        let metadata = DFParquetMetadata::new(&store, &file.object_meta)
+                            .with_metadata_size_hint(options.global.metadata_size_hint)
+                            .with_file_metadata_cache(Some(Arc::clone(&cache)))
+                            .fetch_metadata()
+                            .await?;
+                        let row_groups = metadata
+                            .row_groups()
+                            .iter()
+                            .map(|group| {
+                                let column = group.columns().first()?;
+                                Some(ParquetRowGroup {
+                                    offset: column
+                                        .dictionary_page_offset()
+                                        .unwrap_or_else(|| column.data_page_offset()),
+                                    compressed_size: u64::try_from(group.compressed_size()).ok()?,
+                                    num_rows: u64::try_from(group.num_rows()).ok()?,
+                                })
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        if let Some(row_groups) = row_groups {
+                            file.extensions.insert(ParquetScanMetadata { row_groups });
+                        }
+                    }
+                    let mut group = FileGroup::new(files);
+                    if let Some(statistics) = statistics {
+                        group = group.with_statistics(statistics);
+                    }
+                    Ok::<_, DataFusionError>(group)
+                }
+            })
+            .buffered(concurrency)
+            .try_collect()
+            .await?;
         let cached_parquet_read_factory =
             Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
