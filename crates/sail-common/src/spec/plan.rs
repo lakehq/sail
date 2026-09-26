@@ -309,6 +309,10 @@ pub enum CommandNode {
     ListCatalogs {
         pattern: Option<String>,
     },
+    ShowTableProperties {
+        table: ObjectName,
+        property: Option<String>,
+    },
     ShowTables {
         database: Option<ObjectName>,
         pattern: Option<String>,

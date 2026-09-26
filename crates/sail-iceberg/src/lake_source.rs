@@ -138,6 +138,40 @@ impl DataSource for IcebergLakeSource {
 
 #[async_trait]
 impl LakeSource for IcebergLakeSource {
+    async fn table_properties(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Vec<(String, String)>> {
+        validate_iceberg_lakehouse_storage_access(info.lakehouse_table.as_ref())?;
+        let table_url = Self::parse_table_url(info.paths).await?;
+        let metadata_location = resolve_iceberg_metadata_location(
+            info.lakehouse_table.as_ref(),
+            metadata_location_from_options(&info.options),
+            catalog_managed_iceberg_from_options(&info.options),
+        )?;
+        let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
+        let metadata = table.metadata();
+        let mut properties = metadata.properties.clone();
+        let file_format = properties
+            .get("write.format.default")
+            .map(String::as_str)
+            .unwrap_or("parquet");
+        properties.insert("format".to_string(), format!("iceberg/{file_format}"));
+        properties.insert(
+            "format-version".to_string(),
+            (metadata.format_version as u8).to_string(),
+        );
+        properties.insert(
+            "current-snapshot-id".to_string(),
+            metadata
+                .current_snapshot()
+                .map(|snapshot| snapshot.snapshot_id().to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        );
+        Ok(properties.into_iter().collect())
+    }
+
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,

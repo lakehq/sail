@@ -444,3 +444,51 @@ Feature: Glue catalog table operations
       """
     Then query result
       | id | name |
+
+  Scenario Outline: Show catalog table properties reads Glue tables before and after writes
+    Given variable location for temporary directory catalog_show_properties
+    Given statement template
+      """
+      CREATE TABLE sail.table_test_db.show_properties (id INT) USING <format>
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES ('custom.show' = 'initial')
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.table_test_db.show_properties
+      """
+    Then query result row where "key" is "custom.show" has "value" equal to "initial"
+    Then query schema
+      """
+      root
+       |-- key: string (nullable = false)
+       |-- value: string (nullable = false)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.table_test_db.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |
+    When query
+      """
+      SHOW TBLPROPERTIES sail.table_test_db.show_properties ('custom.missing')
+      """
+    Then query result row where "key" is "custom.missing" has "value" containing "does not have property: custom.missing"
+    Given statement
+      """
+      INSERT INTO sail.table_test_db.show_properties VALUES (1)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.table_test_db.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |
+
+    Examples:
+      | format |
+      | delta |
+      | iceberg |

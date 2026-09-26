@@ -57,6 +57,9 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    /// Patterns used to redact sensitive table property keys and values.
+    pub redaction_options_regex: String,
+    pub redaction_regex: String,
     /// The maximum number of distinct values collected for a pivot without an explicit
     /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
     pub pivot_max_values: usize,
@@ -96,6 +99,8 @@ impl Default for PlanConfig {
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            redaction_options_regex: "(?i)url".to_string(),
+            redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
