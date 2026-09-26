@@ -44,6 +44,20 @@ def test_shuffle_preserves_rows_across_multiple_batches(spark):
     assert actual == rows
 
 
+@pytest.mark.timeout(60)
+def test_shuffle_remains_usable_after_repeated_limits(spark):
+    row_count, limit = 100_000, 10
+    shuffled = spark.range(row_count, numPartitions=8).repartition(16, "id")
+    for _ in range(8):
+        rows = shuffled.limit(limit).collect()
+        assert len(rows) == limit
+        assert len({row.id for row in rows}) == limit
+        assert all(0 <= row.id < row_count for row in rows)
+
+    # A later query must still be able to fully consume the shared Flight connections.
+    assert shuffled.groupBy().sum("id").first()[0] == row_count * (row_count - 1) // 2
+
+
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("input_sizes", "partitions", "completed_sizes"),

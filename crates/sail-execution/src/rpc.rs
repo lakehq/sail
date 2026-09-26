@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use arrow_flight::flight_service_client::FlightServiceClient;
 use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
@@ -95,7 +94,7 @@ pub trait ClientBuilder: Sized {
 /// The error details are stored as binary data in the Tonic status.
 /// If the header list size is larger than the allowed size, the error details would be
 /// dropped silently.
-const CLIENT_MAX_HEADER_LIST_SIZE: u32 = 1024 * 1024;
+pub(crate) const CLIENT_MAX_HEADER_LIST_SIZE: u32 = 1024 * 1024;
 
 macro_rules! impl_client_builder {
     ($client_type:ty) => {
@@ -120,7 +119,6 @@ pub type ClientService = TracingClientService<Channel>;
 impl_client_builder!(DriverServiceClient<ClientService>);
 impl_client_builder!(CelebornLifecycleManagerServiceClient<ClientService>);
 impl_client_builder!(WorkerServiceClient<ClientService>);
-impl_client_builder!(FlightServiceClient<ClientService>);
 
 /// A handle to a gRPC client to support connection reuse.
 /// The handle can be cheaply cloned and the underlying connection is shared.
@@ -148,8 +146,8 @@ impl<T: ClientBuilder + Clone> ClientHandle<T> {
     /// Returns a clone of the RPC client.
     /// The client requires `&mut self` when making RPC requests,
     /// so it is less useful to return `&T` here.
-    /// It is cheap to clone the client and return `T`, since they rely on [Channel] which is
-    /// cheap to clone. The underlying connection is reused among clones of the client.
+    /// It is cheap to clone the client and return `T`: both [Channel] and the Flight transport
+    /// share the underlying connection among clones of the client.
     /// Also, since the client can be cheaply cloned, we avoid the overhead of using a mutex
     /// to protect a shared client instance.
     pub async fn get(&self) -> ExecutionResult<T> {

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use arrow_flight::decode::FlightRecordBatchStream;
-use arrow_flight::flight_service_client::FlightServiceClient;
 use datafusion::arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
 use prost::Message;
@@ -9,10 +8,11 @@ use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 
 use crate::error::ExecutionResult;
 use crate::id::{DriverId, TaskStreamKey};
-use crate::rpc::{ClientHandle, ClientOptions, ClientService};
+use crate::rpc::{ClientHandle, ClientOptions};
 use crate::stream::error::TaskStreamError;
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
+use crate::stream::service::transport::FlightClient;
 
 #[derive(Clone, Copy, Debug)]
 pub enum TaskStreamOwner {
@@ -22,14 +22,13 @@ pub enum TaskStreamOwner {
 
 #[derive(Clone)]
 pub struct TaskStreamFlightClient {
-    inner: ClientHandle<FlightServiceClient<ClientService>>,
+    inner: ClientHandle<FlightClient>,
     owner: TaskStreamOwner,
 }
 
 impl TaskStreamFlightClient {
     pub fn new(options: ClientOptions, owner: TaskStreamOwner) -> Self {
         Self {
-            // TODO: share connection with driver/worker client
             inner: ClientHandle::new(options),
             owner,
         }
