@@ -152,12 +152,17 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             );
         }
 
+        let runtime_env = context.runtime_env();
+        let config_options = context.session_config().options().clone();
         let input_stream = self.input.execute(0, context)?;
         let pickled_writer = self.pickled_writer.clone();
         let expected_partitions = self.expected_partitions;
 
         let stream = futures::stream::once(async move {
-            let executor = Arc::new(InProcessExecutor::from_app_config());
+            let executor = Arc::new(
+                InProcessExecutor::from_app_config()
+                    .with_runtime_env(runtime_env, &config_options)?,
+            );
             let mut commit_messages: Vec<Option<Vec<u8>>> = vec![None; expected_partitions];
             let mut seen_partitions = vec![false; expected_partitions];
             let mut first_error: Option<String> = None;
@@ -195,7 +200,7 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             }
 
             if let Some(err) = first_error {
-                let _ = executor.abort_write(&pickled_writer, commit_messages).await;
+                abort_with_timeout(executor.as_ref(), &pickled_writer, commit_messages).await;
                 return exec_err!("{err}");
             }
 
@@ -207,8 +212,7 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
                 Ok(()) => {}
                 Err(commit_err) => {
                     log::error!("Commit failed, attempting abort: {}", commit_err);
-                    let _ = executor
-                        .abort_write(&pickled_writer, messages_for_abort)
+                    abort_with_timeout(executor.as_ref(), &pickled_writer, messages_for_abort)
                         .await;
                     return Err(commit_err);
                 }
@@ -221,6 +225,23 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             Arc::new(Schema::empty()),
             stream,
         )))
+    }
+}
+
+/// Cleanup has its own scope but cannot indefinitely delay the original error.
+async fn abort_with_timeout(
+    executor: &dyn PythonExecutor,
+    writer: &[u8],
+    messages: Vec<Option<Vec<u8>>>,
+) {
+    if tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.abort_write(writer, messages),
+    )
+    .await
+    .is_err()
+    {
+        log::warn!("Python datasource abort exceeded 30 seconds; canceling cleanup I/O");
     }
 }
 
