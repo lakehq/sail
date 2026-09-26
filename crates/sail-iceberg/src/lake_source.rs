@@ -218,10 +218,7 @@ impl LakeSource for IcebergLakeSource {
         let arrow_schema = create_table_arrow_schema(columns)?;
         let mut iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)?;
         iceberg_schema = if let Some((_, metadata)) = existing_metadata.as_ref() {
-            let next_field_id = metadata.last_column_id + 1;
-            let schema =
-                SchemaEvolver::assign_schema_field_ids_starting_at(&iceberg_schema, next_field_id)?;
-            iceberg_schema_with_id(&schema, next_schema_id(metadata))?
+            SchemaEvolver::assign_replacement_schema_ids(&iceberg_schema, metadata)?
         } else {
             SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?
         };
@@ -231,7 +228,7 @@ impl LakeSource for IcebergLakeSource {
 
         let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
         if let Some((_, metadata)) = existing_metadata.as_ref() {
-            partition_spec = partition_spec.with_spec_id(next_partition_spec_id(metadata));
+            partition_spec = partition_spec.assign_ids(metadata);
         }
         let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
         let store_ctx = StoreContext::new(object_store, &table_url)?;
@@ -923,34 +920,6 @@ fn create_table_partition_spec(
         );
     }
     Ok(partition_spec_builder.build())
-}
-
-fn iceberg_schema_with_id(schema: &Schema, schema_id: i32) -> Result<Schema> {
-    Schema::builder()
-        .with_schema_id(schema_id)
-        .with_fields(schema.fields().iter().cloned())
-        .build()
-        .map_err(|e| DataFusionError::Plan(format!("Failed to assign Iceberg schema id: {e}")))
-}
-
-fn next_schema_id(metadata: &TableMetadata) -> i32 {
-    metadata
-        .schemas
-        .iter()
-        .map(|schema| schema.schema_id())
-        .max()
-        .unwrap_or(0)
-        + 1
-}
-
-fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
-    metadata
-        .partition_specs
-        .iter()
-        .map(|spec| spec.spec_id())
-        .max()
-        .unwrap_or(0)
-        + 1
 }
 
 pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {

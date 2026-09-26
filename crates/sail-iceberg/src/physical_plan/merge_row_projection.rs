@@ -12,7 +12,7 @@ use sail_common_datafusion::datasource::{
     RowLevelOperationType, RowLevelWriteMode,
 };
 
-use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergMergeRowProjection {
@@ -30,7 +30,7 @@ impl IcebergMergeRowProjection {
             MERGE_SOURCE_METRIC_COLUMN,
             OPERATION_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
-            MERGE_PARTITION_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
             crate::row_lineage::ROW_ID_COLUMN,
             crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ];
@@ -70,8 +70,7 @@ impl IcebergMergeRowProjection {
         let mask = merge_operation_mask(batch, self.operation_index, |value| {
             merge_operation_writes_data(value)
                 || (mode == Some(RowLevelWriteMode::CopyOnWrite)
-                    && (value == RowLevelOperationType::Copy.as_i32()
-                        || value == RowLevelOperationType::Update.as_i32()))
+                    && value == RowLevelOperationType::Copy.as_i32())
         })?;
         let filtered = filter_record_batch(batch, &mask)
             .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
@@ -109,7 +108,7 @@ impl IcebergMergeRowProjection {
                         }
                         let values = values.ok_or_else(|| {
                             datafusion_common::exec_datafusion_err!(
-                                "Iceberg COW input is missing lineage column {name}"
+                                "Iceberg row-level input is missing lineage column {name}"
                             )
                         })?;
                         Ok(values.is_valid(row).then(|| values.value(row)))
@@ -189,13 +188,16 @@ fn merge_operation_mask(
 }
 
 fn merge_operation_writes_data(value: i32) -> bool {
-    value == RowLevelOperationType::Insert.as_i32()
+    value == RowLevelOperationType::Update.as_i32()
+        || value == RowLevelOperationType::Insert.as_i32()
         || value == RowLevelOperationType::MatchedUpdate.as_i32()
         || value == RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()
 }
 
 fn merge_operation_writes_position_delete(value: i32) -> bool {
-    value == RowLevelOperationType::MatchedDelete.as_i32()
+    value == RowLevelOperationType::Delete.as_i32()
+        || value == RowLevelOperationType::Update.as_i32()
+        || value == RowLevelOperationType::MatchedDelete.as_i32()
         || value == RowLevelOperationType::MatchedUpdate.as_i32()
         || value == RowLevelOperationType::NotMatchedBySourceDelete.as_i32()
         || value == RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()
@@ -216,7 +218,7 @@ mod tests {
             Field::new(MERGE_FILE_COLUMN, DataType::Utf8, true),
             Field::new(MERGE_ROW_INDEX_COLUMN, DataType::Int64, true),
             Field::new(MERGE_PARTITION_SPEC_ID_COLUMN, DataType::Int32, true),
-            Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, true),
+            Field::new(MERGE_FILE_METADATA_COLUMN, DataType::Utf8, true),
             Field::new(OPERATION_COLUMN, DataType::Int32, false),
             Field::new(MERGE_SOURCE_METRIC_COLUMN, DataType::Int64, true),
         ]));

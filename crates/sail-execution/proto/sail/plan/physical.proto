@@ -711,6 +711,7 @@ message ParquetExecNode {
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
+  repeated bytes virtual_columns = 7;
 }
 
 message ArrowExecNode {
@@ -1101,7 +1102,7 @@ message IcebergMergeMetadataExecNode {
   optional string file_column_name = 3;
   optional string row_index_column_name = 4;
   optional int32 data_file_partition_spec_id = 5;
-  optional string data_file_partition_json = 6;
+  optional string data_file_metadata_json = 6;
   IcebergRowLineage row_lineage = 7;
   map<string, IcebergRowLineage> file_lineage = 8;
 }

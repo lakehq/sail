@@ -993,3 +993,39 @@ Feature: Iceberg MERGE
         WHEN NOT MATCHED BY SOURCE AND t.id = 1 THEN DELETE
         """
       Then query error NON_LAST_NOT_MATCHED_BY_SOURCE_CLAUSE_OMIT_CONDITION
+
+  Scenario: File-scoped V2 MERGE deletes preserve double partition precision
+    Given variable location for temporary directory iceberg_v2_double_merge
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_v2_double_merge
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_v2_double_merge (id INT, p DOUBLE) USING iceberg PARTITIONED BY (p)
+      LOCATION {{ location.uri }} TBLPROPERTIES (
+        'format-version' = '2', 'write.merge.mode' = 'merge-on-read', 'write.delete.granularity' = 'file')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_v2_double_merge SELECT /*+ COALESCE(1) */ id, CAST(0.1 AS DOUBLE)
+      FROM VALUES (1), (2), (3) AS source(id)
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_v2_double_merge t USING (SELECT 1 AS id) s
+      ON t.id = s.id WHEN MATCHED THEN DELETE
+      """
+    Given statement
+      """
+      MERGE INTO iceberg_v2_double_merge t USING (SELECT 2 AS id) s
+      ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = CAST(0.2 AS DOUBLE)
+      """
+    When query
+      """
+      SELECT * FROM iceberg_v2_double_merge ORDER BY id
+      """
+    Then query result ordered
+      | id | p   |
+      | 2  | 0.2 |
+      | 3  | 0.1 |
