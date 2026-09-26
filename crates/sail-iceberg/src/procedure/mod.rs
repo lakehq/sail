@@ -26,8 +26,8 @@ use arguments::{
 use descriptor::IcebergProcedureType;
 pub(crate) use logical::IcebergProcedureNode;
 pub use rewrite_data_files::RewriteDataFilesPlan;
-pub(crate) use rewrite_data_files::RewriteDataFilesScanNode;
 use rewrite_data_files::plan_rewrite_data_files;
+pub(crate) use rewrite_data_files::{RewriteDataFilesRunNode, RewriteDataFilesScanNode};
 use snapshot::{SnapshotOperation, ancestors_output, commit_snapshot_operation};
 use table::{ProcedureTable, load_current_metadata};
 

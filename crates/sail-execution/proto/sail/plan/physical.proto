@@ -75,6 +75,7 @@ message ExtendedPhysicalPlanNode {
     IcebergProcedureExecNode iceberg_procedure = 60;
     IcebergMetadataRelationExecNode iceberg_metadata_relation = 61;
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
+    IcebergRewriteExecNode iceberg_rewrite = 63;
   }
 }
 
@@ -1238,4 +1239,14 @@ message IcebergMetadataRelationExecNode {
 
 message IcebergFileTasksExecNode {
   string groups = 1;
+}
+
+message IcebergRewriteExecNode {
+  bytes input = 1;
+  // Group partition indices assigned to each sequential worker task.
+  repeated IcebergRewriteGroupAssignment assignments = 2;
+}
+
+message IcebergRewriteGroupAssignment {
+  repeated uint64 groups = 1;
 }

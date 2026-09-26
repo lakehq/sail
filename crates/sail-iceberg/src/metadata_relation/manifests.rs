@@ -7,12 +7,12 @@ use datafusion::arrow::array::{Int32Array, Int64Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema};
 use datafusion::common::{DataFusionError, Result};
 
-use crate::io::load_manifest_list_with_version;
 use crate::spec::types::values::Literal;
 use crate::spec::{
     FieldSummary, ManifestContentType, ManifestFile, PartitionSpec, StructType, TableMetadata, Type,
 };
 use crate::table::Table;
+use crate::table::files::{ManifestScope, SnapshotScope, scan_manifests};
 
 pub(super) fn schema() -> Arc<ArrowSchema> {
     Arc::new(ArrowSchema::new(vec![
@@ -41,22 +41,16 @@ pub(super) fn schema() -> Arc<ArrowSchema> {
 
 pub(super) async fn batch(table: &Table) -> Result<RecordBatch> {
     let metadata = table.metadata();
-    let Some(snapshot) = metadata.current_snapshot() else {
-        return batch_from_manifest_files(metadata, &[]);
-    };
-    if snapshot.manifest_list().is_empty() {
-        return Err(DataFusionError::NotImplemented(
-            "Iceberg manifests metadata table does not yet support V1 snapshots without a manifest list"
-                .to_string(),
-        ));
-    }
-    let manifest_list = load_manifest_list_with_version(
+    let manifests = scan_manifests(
         table.store_context(),
-        snapshot.manifest_list(),
-        metadata.format_version,
+        metadata,
+        &ManifestScope {
+            snapshots: SnapshotScope::Current,
+            content: None,
+        },
     )
     .await?;
-    batch_from_manifest_files(metadata, manifest_list.entries())
+    batch_from_manifest_files(metadata, &manifests)
 }
 
 pub(super) fn batch_from_manifest_files(

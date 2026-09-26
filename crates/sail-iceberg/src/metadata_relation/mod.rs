@@ -290,6 +290,30 @@ mod tests {
 
         let mut scan: serde_json::Value = serde_json::from_str(&plan.serialized_scan()?)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        scan["source"]["ManifestEntries"]["selection"]["statuses"] = serde_json::json!(["DELETED"]);
+        let deleted_plan = IcebergMetadataRelationExec::try_from_serialized(
+            plan.original_schema().clone(),
+            &scan.to_string(),
+        )?;
+        let deleted = deleted_plan
+            .execute(0, worker.task_ctx())?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(
+            deleted.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            deleted[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("deleted path")
+                .value(0),
+            "data/0-2.parquet"
+        );
+        scan["source"]["ManifestEntries"]["selection"]["statuses"] =
+            serde_json::json!(["ADDED", "EXISTING"]);
         scan["projection"] = serde_json::json!([]);
         let count_plan = IcebergMetadataRelationExec::try_from_serialized(
             plan.original_schema().clone(),
@@ -320,6 +344,106 @@ mod tests {
                 .try_collect::<Vec<_>>()
                 .await?
                 .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manifest_scope_deduplicates_all_snapshots_and_filters_content() -> Result<()> {
+        use std::sync::Arc;
+
+        use bytes::Bytes;
+        use object_store::ObjectStoreExt;
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+        use url::Url;
+
+        use crate::io::StoreContext;
+        use crate::spec::manifest_list::ManifestListWriter;
+        use crate::table::files::{ManifestScope, SnapshotScope, scan_manifests};
+
+        let storage = StoreContext::new(
+            Arc::new(InMemory::new()),
+            &Url::parse("memory://bucket/table").expect("URL"),
+        )?;
+        let mut metadata = table_metadata();
+        for snapshot in &metadata.snapshots {
+            let mut list = ManifestListWriter::new();
+            for (path, content) in [
+                ("shared.avro".to_string(), ManifestContentType::Data),
+                (
+                    format!("delete-{}.avro", snapshot.snapshot_id()),
+                    ManifestContentType::Deletes,
+                ),
+            ] {
+                list.append(
+                    ManifestFile::builder()
+                        .with_manifest_path(path)
+                        .with_manifest_length(100)
+                        .with_partition_spec_id(0)
+                        .with_content(content)
+                        .with_sequence_number(1)
+                        .with_min_sequence_number(1)
+                        .with_added_snapshot_id(10)
+                        .with_file_counts(1, 0, 0)
+                        .with_row_counts(1, 0, 0)
+                        .build()
+                        .expect("manifest"),
+                );
+            }
+            let (store, path) = storage.resolve(snapshot.manifest_list())?;
+            store
+                .put(
+                    &Path::from(path.as_ref()),
+                    Bytes::from(list.to_bytes(FormatVersion::V2).expect("list")).into(),
+                )
+                .await?;
+        }
+        for (snapshots, content, expected) in [
+            (
+                SnapshotScope::Current,
+                None,
+                vec!["shared.avro", "delete-20.avro"],
+            ),
+            (
+                SnapshotScope::All,
+                None,
+                vec![
+                    "shared.avro",
+                    "delete-10.avro",
+                    "delete-30.avro",
+                    "delete-20.avro",
+                ],
+            ),
+            (
+                SnapshotScope::All,
+                Some(ManifestContentType::Data),
+                vec!["shared.avro"],
+            ),
+        ] {
+            let manifests =
+                scan_manifests(&storage, &metadata, &ManifestScope { snapshots, content }).await?;
+            assert_eq!(
+                manifests
+                    .iter()
+                    .map(|manifest| manifest.manifest_path.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        metadata.current_snapshot_id = None;
+        metadata.refs.remove("main");
+        assert!(
+            scan_manifests(
+                &storage,
+                &metadata,
+                &ManifestScope {
+                    snapshots: SnapshotScope::Current,
+                    content: None
+                }
+            )
+            .await?
+            .is_empty()
         );
         Ok(())
     }

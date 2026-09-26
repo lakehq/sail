@@ -16,9 +16,9 @@ use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
 use crate::physical_plan::{
-    IcebergFileTasksExec, IcebergProcedureExec, IcebergScanByDataFilesExec,
+    IcebergFileTasksExec, IcebergProcedureExec, IcebergRewriteExec, IcebergScanByDataFilesExec,
 };
-use crate::procedure::{IcebergProcedureNode, RewriteDataFilesScanNode};
+use crate::procedure::{IcebergProcedureNode, RewriteDataFilesRunNode, RewriteDataFilesScanNode};
 
 pub struct IcebergPhysicalPlanner;
 
@@ -54,6 +54,18 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
                 IcebergProcedureExec::try_new(node.call().clone(), node.planned_table().cloned())?
             };
             return Ok(Some(Arc::new(procedure)));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<RewriteDataFilesRunNode>() {
+            let [input] = physical_inputs else {
+                return datafusion_common::internal_err!(
+                    "Iceberg rewrite runner requires one input"
+                );
+            };
+            return Ok(Some(Arc::new(IcebergRewriteExec::try_new(
+                input.clone(),
+                node.assignments.clone(),
+            )?)));
         }
 
         if let Some(node) = node.as_any().downcast_ref::<RewriteDataFilesScanNode>() {

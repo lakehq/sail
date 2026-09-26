@@ -271,8 +271,8 @@ use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergFileTasksExec, IcebergManifestScanExec,
     IcebergMergeMetadataExec, IcebergMetadataRelationExec, IcebergMetadataScanExec,
-    IcebergPartitionTransformExpr, IcebergProcedureExec, IcebergScanByDataFilesExec,
-    IcebergWriterExec,
+    IcebergPartitionTransformExpr, IcebergProcedureExec, IcebergRewriteExec,
+    IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
@@ -1706,6 +1706,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode { groups }) => Ok(Arc::new(
                 IcebergFileTasksExec::try_from_serialized(&groups)?,
             )),
+            NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode { input, assignments }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let assignments = assignments
+                    .into_iter()
+                    .map(|assignment| {
+                        assignment
+                            .groups
+                            .into_iter()
+                            .map(|group| {
+                                usize::try_from(group).map_err(|error| {
+                                    plan_datafusion_err!("Invalid Iceberg rewrite group: {error}")
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(IcebergRewriteExec::try_new(input, assignments)?))
+            }
             NodeKind::IcebergMetadataRelation(r#gen::IcebergMetadataRelationExecNode {
                 schema,
                 scan,
@@ -2910,6 +2929,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(tasks) = node.downcast_ref::<IcebergFileTasksExec>() {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode {
                 groups: tasks.serialized_groups()?,
+            })
+        } else if let Some(rewrite) = node.downcast_ref::<IcebergRewriteExec>() {
+            NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    rewrite.input().clone(),
+                )?,
+                assignments: rewrite
+                    .assignments()
+                    .iter()
+                    .map(|groups| r#gen::IcebergRewriteGroupAssignment {
+                        groups: groups.iter().map(|group| *group as u64).collect(),
+                    })
+                    .collect(),
             })
         } else if let Some(relation) = node.downcast_ref::<IcebergMetadataRelationExec>() {
             NodeKind::IcebergMetadataRelation(r#gen::IcebergMetadataRelationExecNode {
@@ -5775,7 +5809,10 @@ mod tests {
         let scan = serde_json::json!({
             "table_url": "s3://bucket/table",
             "metadata_location": "s3://bucket/table/metadata/v7.metadata.json",
-            "relation": "Files", "manifest_groups": [[], []],
+            "relation": "Files", "source": {"ManifestEntries": {
+                "groups": [[], []],
+                "selection": {"statuses": ["ADDED", "EXISTING"], "content": null}
+            }},
             "projection": [0], "limit": 12
         });
         let metadata = IcebergMetadataRelationExec::try_from_serialized(schema, &scan.to_string())?;
@@ -5814,8 +5851,19 @@ mod tests {
             None,
         )?
         .preserve_file_groups();
-        let bytes = try_encode_physical_plan(&codec, Arc::new(scan))?;
+        let assignments = vec![vec![0, 3, 5], vec![1, 2, 4]];
+        let runner = IcebergRewriteExec::try_new(Arc::new(scan), assignments.clone())?;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(runner))?;
         let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let runner = decoded
+            .downcast_ref::<IcebergRewriteExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected rewrite runner"))?;
+        assert_eq!(runner.assignments(), assignments);
+        assert_eq!(
+            runner.properties().output_partitioning().partition_count(),
+            2
+        );
+        let decoded = runner.input();
         let decoded = decoded
             .downcast_ref::<IcebergScanByDataFilesExec>()
             .ok_or_else(|| plan_datafusion_err!("expected grouped data file scan"))?;

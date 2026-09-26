@@ -10,10 +10,12 @@ use url::Url;
 
 use super::{IcebergMetadataRelationType, files};
 use crate::physical_plan::metadata_relation_exec::{
-    IcebergMetadataRelationExec, MetadataRelationScan,
+    IcebergMetadataRelationExec, MetadataRelationScan, MetadataScanSource,
 };
 use crate::table::Table;
-use crate::table::files::{balance_by_size, current_manifests};
+use crate::table::files::{
+    EntrySelection, ManifestScope, SnapshotScope, balance_by_size, scan_manifests,
+};
 
 pub(crate) async fn metadata_relation_provider(
     session: &dyn Session,
@@ -79,14 +81,25 @@ impl TableProvider for IcebergMetadataRelationProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let manifest_groups = if self.relation_type == IcebergMetadataRelationType::Files {
-            balance_by_size(
-                current_manifests(self.table.store_context(), self.table.metadata()).await?,
-                session.config().target_partitions(),
-                |manifest| manifest.manifest_length.max(0) as u64,
-            )
+        let source = if self.relation_type == IcebergMetadataRelationType::Files {
+            MetadataScanSource::ManifestEntries {
+                groups: balance_by_size(
+                    scan_manifests(
+                        self.table.store_context(),
+                        self.table.metadata(),
+                        &ManifestScope {
+                            snapshots: SnapshotScope::Current,
+                            content: None,
+                        },
+                    )
+                    .await?,
+                    session.config().target_partitions(),
+                    |manifest| manifest.manifest_length.max(0) as u64,
+                ),
+                selection: EntrySelection::live(),
+            }
         } else {
-            vec![vec![]]
+            MetadataScanSource::TableMetadata
         };
         // Filters remain residual expressions above this scan.
         let limit = if filters.is_empty() { limit } else { None };
@@ -96,7 +109,7 @@ impl TableProvider for IcebergMetadataRelationProvider {
                 table_url: self.table.table_url().to_string(),
                 metadata_location: self.table.metadata_location().to_string(),
                 relation: self.relation_type,
-                manifest_groups,
+                source,
                 projection: projection
                     .cloned()
                     .unwrap_or_else(|| (0..self.schema.fields().len()).collect()),

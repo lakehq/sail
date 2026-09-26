@@ -58,7 +58,25 @@ def test_metadata_read_procedure_runs_on_a_worker(local_cluster_spark, tmp_path)
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_rewrite_data_files_uses_workers_and_coordinator_commit(local_cluster_spark, tmp_path):
+@pytest.mark.parametrize("option", ["max-file-group-size-bytes", "max-concurrent-file-group-rewrites"])
+def test_rewrite_rejects_zero_group_limits(spark, tmp_path, option):
+    table_name = "rewrite_invalid_group_limit"
+    location = (tmp_path / table_name).as_uri()
+    spark.sql(f"CREATE TABLE {table_name} (id BIGINT) USING ICEBERG LOCATION '{escape_sql_string_literal(location)}'")
+    try:
+        with pytest.raises(Exception, match="must be positive"):
+            spark.sql(
+                f"CALL system.rewrite_data_files(table => '{table_name}', options => map('{option}', '0'))"
+            ).collect()
+        assert spark.table(f"{table_name}.snapshots").count() == 0
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize(("files_per_group", "concurrent_groups"), [(8, 1), (2, 1), (2, 2)])
+def test_rewrite_data_files_uses_workers_and_coordinator_commit(
+    local_cluster_spark, tmp_path, files_per_group, concurrent_groups
+):
     spark = local_cluster_spark
     table_name = "distributed_rewrite_data_files"
     location = (tmp_path / table_name).as_uri()
@@ -78,6 +96,8 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(local_cluster_sp
         ).collect()
         assert len(before) == 8  # noqa: PLR2004
         target_file_size = sum(row.file_size_in_bytes for row in before)
+        group_size = files_per_group * max(row.file_size_in_bytes for row in before)
+        assert group_size < (files_per_group + 1) * min(row.file_size_in_bytes for row in before)
 
         result = spark.sql(
             f"""
@@ -85,12 +105,14 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(local_cluster_sp
               table => '{table_name}',
               options => map(
                 'rewrite-all', 'true',
-                'target-file-size-bytes', '{target_file_size}'))
+                'target-file-size-bytes', '{target_file_size}',
+                'max-file-group-size-bytes', '{group_size}',
+                'max-concurrent-file-group-rewrites', '{concurrent_groups}'))
             """
         ).first()
 
         assert result.rewritten_data_files_count == len(before)
-        assert result.added_data_files_count == 1
+        assert result.added_data_files_count == len(before) // files_per_group
         assert result.rewritten_bytes_count == sum(row.file_size_in_bytes for row in before)
         assert result.failed_data_files_count == 0
         assert result.removed_delete_files_count == 0
@@ -156,7 +178,8 @@ def test_rewrite_groups_preserve_transformed_partitions(local_cluster_spark, tmp
             f"""
             CALL system.rewrite_data_files(
               table => '{table_name}',
-              options => map('rewrite-all', 'true', 'target-file-size-bytes', '1048576'))
+              options => map('rewrite-all', 'true', 'target-file-size-bytes', '1048576',
+                            'max-concurrent-file-group-rewrites', '2'))
             """
         ).first()
 

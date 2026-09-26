@@ -16,14 +16,32 @@ use url::Url;
 use crate::metadata_relation::{IcebergMetadataRelationType, files};
 use crate::spec::ManifestFile;
 use crate::table::Table;
-use crate::table::files::live_files;
+use crate::table::files::{EntrySelection, manifest_entries};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum MetadataScanSource {
+    TableMetadata,
+    ManifestEntries {
+        groups: Vec<Vec<ManifestFile>>,
+        selection: EntrySelection,
+    },
+}
+
+impl MetadataScanSource {
+    fn partition_count(&self) -> usize {
+        match self {
+            Self::TableMetadata => 1,
+            Self::ManifestEntries { groups, .. } => groups.len(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MetadataRelationScan {
     pub table_url: String,
     pub metadata_location: String,
     pub relation: IcebergMetadataRelationType,
-    pub manifest_groups: Vec<Vec<ManifestFile>>,
+    pub source: MetadataScanSource,
     pub projection: Vec<usize>,
     pub limit: Option<usize>,
 }
@@ -41,19 +59,21 @@ impl IcebergMetadataRelationExec {
     pub(crate) fn try_new(original_schema: SchemaRef, scan: MetadataRelationScan) -> Result<Self> {
         if !scan.relation.is_supported()
             || scan.metadata_location.is_empty()
-            || scan.manifest_groups.is_empty()
+            || scan.source.partition_count() == 0
         {
             return plan_err!("Invalid Iceberg metadata relation scan");
         }
-        if scan.relation != IcebergMetadataRelationType::Files && scan.manifest_groups.len() != 1 {
-            return plan_err!("Static Iceberg metadata relations require one partition");
+        if matches!(scan.source, MetadataScanSource::ManifestEntries { .. })
+            != (scan.relation == IcebergMetadataRelationType::Files)
+        {
+            return plan_err!("Iceberg metadata relation does not match its scan source");
         }
         let table_url = Url::parse(&scan.table_url)
             .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
         let schema = Arc::new(original_schema.project(&scan.projection)?);
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(scan.manifest_groups.len()),
+            Partitioning::UnknownPartitioning(scan.source.partition_count()),
             EmissionType::Incremental,
             Boundedness::Bounded,
         ));
@@ -87,7 +107,7 @@ impl DisplayAs for IcebergMetadataRelationExec {
             f,
             "IcebergMetadataRelationExec: relation={}, partitions={}, projection={:?}",
             self.scan.relation.name(),
-            self.scan.manifest_groups.len(),
+            self.scan.source.partition_count(),
             self.scan.projection
         )
     }
@@ -123,7 +143,7 @@ impl ExecutionPlan for IcebergMetadataRelationExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition >= self.scan.manifest_groups.len() {
+        if partition >= self.scan.source.partition_count() {
             return exec_err!("Invalid Iceberg metadata scan partition {partition}");
         }
         let scan = Arc::clone(&self.scan);
@@ -135,10 +155,12 @@ impl ExecutionPlan for IcebergMetadataRelationExec {
                 let table = Table::load_with_metadata_location(context.runtime_env().as_ref(), table_url,
                     Some(scan.metadata_location.clone())).await?;
                 let mut remaining = scan.limit.unwrap_or(usize::MAX);
-                if scan.relation == IcebergMetadataRelationType::Files {
+                if let MetadataScanSource::ManifestEntries { groups, selection } = &scan.source {
                     let projection = files::FilesProjection::try_new(table.metadata(), &scan.projection)?;
-                    'manifests: for manifest in &scan.manifest_groups[partition] {
-                        let files = live_files(table.store_context(), manifest).await?;
+                    'manifests: for manifest in &groups[partition] {
+                        let files = manifest_entries(table.store_context(), manifest).await?
+                            .into_iter().filter(|entry| selection.matches(entry))
+                            .map(|entry| entry.data_file).collect::<Vec<_>>();
                         for chunk in files.chunks(batch_size) {
                             let count = chunk.len().min(remaining);
                             let batch = projection.batch(&chunk[..count])?;

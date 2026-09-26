@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -22,6 +22,8 @@ use crate::table::files::{balance_by_size, collect_live_files};
 
 const DEFAULT_TARGET_FILE_SIZE: u64 = 512 * 1024 * 1024;
 const DEFAULT_MIN_INPUT_FILES: usize = 5;
+const DEFAULT_MAX_FILE_GROUP_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_CONCURRENT_FILE_GROUPS: usize = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct RewriteDataFilesPlan {
@@ -113,6 +115,47 @@ impl UserDefinedLogicalNodeCore for RewriteDataFilesScanNode {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
+pub(crate) struct RewriteDataFilesRunNode {
+    pub input: LogicalPlan,
+    pub assignments: Vec<Vec<usize>>,
+}
+
+impl UserDefinedLogicalNodeCore for RewriteDataFilesRunNode {
+    fn name(&self) -> &str {
+        "IcebergRewriteDataFilesRun"
+    }
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "IcebergRewriteDataFilesRun: concurrent_groups={}, groups={}",
+            self.assignments.len(),
+            self.assignments.iter().map(Vec::len).sum::<usize>()
+        )
+    }
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        let [input]: [LogicalPlan; 1] = inputs.try_into().map_err(|_| {
+            datafusion_common::plan_datafusion_err!("Iceberg rewrite runner requires one input")
+        })?;
+        if !exprs.is_empty() {
+            return plan_err!("Iceberg rewrite runner does not accept expressions");
+        }
+        Ok(Self {
+            input,
+            assignments: self.assignments.clone(),
+        })
+    }
+}
+
 pub(super) async fn plan_rewrite_data_files(
     session: &dyn Session,
     info: SourceInfo,
@@ -135,6 +178,7 @@ pub(super) async fn plan_rewrite_data_files(
     let metadata = table.metadata();
     let current_snapshot = metadata.current_snapshot();
     let expected_snapshot_id = current_snapshot.map(Snapshot::snapshot_id);
+    let rewrite_options = rewrite_options(call, &metadata.properties)?;
     let live_files = collect_live_files(
         table.store_context(),
         metadata,
@@ -147,7 +191,6 @@ pub(super) async fn plan_rewrite_data_files(
         .filter(|file| !matches!(file.content, DataContentType::Data))
         .count();
 
-    let rewrite_options = rewrite_options(call, &metadata.properties)?;
     let selected_files = select_files(&live_files, &rewrite_options)?;
 
     if !selected_files.is_empty() && active_delete_files > 0 {
@@ -172,7 +215,12 @@ pub(super) async fn plan_rewrite_data_files(
             )
         })
     })?;
-    let groups = rewrite_groups(&selected_files, rewrite_options.target_file_size)?;
+    let groups = rewrite_groups(&selected_files, rewrite_options.max_file_group_size)?;
+    let assignments = balance_by_size(
+        (0..groups.len()).collect(),
+        rewrite_options.max_concurrent_file_groups,
+        |index| groups[*index].iter().map(|file| file.size).sum(),
+    );
     let plan = RewriteDataFilesPlan {
         expected_snapshot_id,
         removed_data_file_paths: selected_data_file_paths.clone(),
@@ -220,7 +268,13 @@ pub(super) async fn plan_rewrite_data_files(
             },
         )),
     });
-    Ok((writer, plan))
+    let runner = LogicalPlan::Extension(Extension {
+        node: Arc::new(RewriteDataFilesRunNode {
+            input: writer,
+            assignments,
+        }),
+    });
+    Ok((runner, plan))
 }
 
 fn validate_arguments(call: &LakeProcedureCall) -> Result<()> {
@@ -252,6 +306,8 @@ struct RewriteOptions {
     min_file_size: u64,
     max_file_size: u64,
     min_input_files: usize,
+    max_file_group_size: u64,
+    max_concurrent_file_groups: usize,
 }
 
 /// Only retain fields needed for grouping; manifest column metrics stay out of the driver plan.
@@ -297,6 +353,8 @@ fn rewrite_options(
         "min-file-size-bytes",
         "max-file-size-bytes",
         "min-input-files",
+        "max-file-group-size-bytes",
+        "max-concurrent-file-group-rewrites",
     ];
     if let Some(unsupported) = options
         .keys()
@@ -326,6 +384,20 @@ fn rewrite_options(
         })?
         .unwrap_or(DEFAULT_MIN_INPUT_FILES);
     let rewrite_all = option_bool(&options, "rewrite-all")?.unwrap_or(false);
+    let max_file_group_size =
+        option_u64(&options, "max-file-group-size-bytes")?.unwrap_or(DEFAULT_MAX_FILE_GROUP_SIZE);
+    let max_concurrent_file_groups = option_u64(&options, "max-concurrent-file-group-rewrites")?
+        .map(usize::try_from)
+        .transpose()
+        .map_err(|error| {
+            datafusion_common::plan_datafusion_err!("Invalid rewrite concurrency: {error}")
+        })?
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_FILE_GROUPS);
+    if max_file_group_size == 0 || max_concurrent_file_groups == 0 {
+        return plan_err!(
+            "rewrite_data_files max-file-group-size-bytes and max-concurrent-file-group-rewrites must be positive"
+        );
+    }
     if target_file_size == 0
         || min_input_files == 0
         || min_file_size >= target_file_size
@@ -341,6 +413,8 @@ fn rewrite_options(
         min_file_size,
         max_file_size,
         min_input_files,
+        max_file_group_size,
+        max_concurrent_file_groups,
     })
 }
 
@@ -384,7 +458,13 @@ fn select_files<'a>(
     Ok(selected)
 }
 
-fn rewrite_groups(files: &[&RewriteFile], target_size: u64) -> Result<Vec<Vec<IcebergFileTask>>> {
+fn rewrite_groups(
+    files: &[&RewriteFile],
+    max_group_size: u64,
+) -> Result<Vec<Vec<IcebergFileTask>>> {
+    if max_group_size == 0 {
+        return plan_err!("Iceberg rewrite group size must be positive");
+    }
     let mut partitions = HashMap::new();
     for file in files {
         if file.file_format != DataFileFormat::Parquet {
@@ -400,17 +480,23 @@ fn rewrite_groups(files: &[&RewriteFile], target_size: u64) -> Result<Vec<Vec<Ic
                 spec_id: file.partition_spec_id,
             });
     }
-    let mut groups = Vec::new();
-    for files in partitions.into_values() {
-        let bytes = files.iter().try_fold(0u64, |total, file| {
-            total.checked_add(file.size).ok_or_else(|| {
-                datafusion_common::plan_datafusion_err!("rewrite_data_files group size overflow")
-            })
-        })?;
-        let count = usize::try_from(bytes.div_ceil(target_size).max(1))
-            .unwrap_or(usize::MAX)
-            .min(files.len());
-        groups.extend(balance_by_size(files, count, |file| file.size));
+    let mut groups: Vec<Vec<IcebergFileTask>> = Vec::new();
+    for mut files in partitions.into_values() {
+        files.sort_by(|left, right| right.size.cmp(&left.size).then(left.path.cmp(&right.path)));
+        let mut capacity = BTreeSet::new();
+        for file in files {
+            if let Some((remaining, index)) = capacity.range((file.size, 0)..).next().copied() {
+                capacity.remove(&(remaining, index));
+                capacity.insert((remaining - file.size, index));
+                groups[index].push(file);
+            } else {
+                // A file is indivisible until scans carry row-group ranges.
+                if file.size < max_group_size {
+                    capacity.insert((max_group_size - file.size, groups.len()));
+                }
+                groups.push(vec![file]);
+            }
+        }
     }
     for group in &mut groups {
         group.sort_by(|left, right| left.path.cmp(&right.path));
@@ -481,6 +567,8 @@ mod tests {
             min_file_size: 75,
             max_file_size: 180,
             min_input_files: 2,
+            max_file_group_size: DEFAULT_MAX_FILE_GROUP_SIZE,
+            max_concurrent_file_groups: DEFAULT_MAX_CONCURRENT_FILE_GROUPS,
         };
 
         let selected = select_files(&files, &options)?
@@ -499,9 +587,10 @@ mod tests {
             .collect::<Vec<_>>();
         let selected = files.iter().collect::<Vec<_>>();
         let groups = rewrite_groups(&selected, 100)?;
-        assert_eq!(groups.len(), 12);
+        assert_eq!(groups.len(), 20);
         assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), files.len());
         for group in groups {
+            assert!(group.iter().map(|task| task.size).sum::<u64>() <= 100);
             let partitions = group
                 .iter()
                 .map(|task| {
@@ -513,6 +602,32 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>();
             assert_eq!(partitions.len(), 1);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn rewrite_group_limit_packs_small_files_and_isolates_oversized_files() -> Result<()> {
+        let files = [60, 60, 40, 40, 300]
+            .into_iter()
+            .enumerate()
+            .map(|(index, size)| data_file(&format!("file-{index}"), size, 0))
+            .collect::<Vec<_>>();
+        let selected = files.iter().collect::<Vec<_>>();
+        let groups = rewrite_groups(&selected, 100)?;
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.iter().map(|file| file.size).sum::<u64>())
+                .collect::<Vec<_>>(),
+            vec![100, 100, 300]
+        );
+        assert_eq!(groups[2].len(), 1);
+        let assignments = balance_by_size((0..groups.len()).collect(), 2, |index| {
+            groups[*index].iter().map(|file| file.size).sum()
+        });
+        assert_eq!(assignments, vec![vec![2], vec![0, 1]]);
+        assert_eq!(rewrite_groups(&[], 100)?, vec![vec![]]);
+        assert!(rewrite_groups(&selected, 0).is_err());
         Ok(())
     }
 }
