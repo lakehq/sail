@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef};
@@ -13,17 +13,17 @@ use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::NestedLoopJoinExec;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::projection::{ProjectionExec, remove_unnecessary_projections};
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions, replace_children_if_necessary,
 };
 use sail_common_datafusion::udf::get_field::SparkGetField;
 
-/// Narrows Parquet struct projections, then runs DataFusion projection pushdown
-/// without moving physical lambda variables across their planned schema boundary.
+/// Runs DataFusion projection pushdown without moving physical lambda variables
+/// across their planned schema boundary. Struct narrowing is limited to projections
+/// accepted directly by a Parquet scan.
 #[derive(Debug, Default)]
 pub struct LambdaSafeProjectionPushdown {
     datafusion_projection_pushdown: ProjectionPushdown,
@@ -42,10 +42,9 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = plan
-            .transform_up(prune_struct_projection)
-            .map(|result| result.data)?;
-        let plan = plan
-            .transform_up(install_lambda_optimizer_boundary)
+            .transform_up(|plan| {
+                install_lambda_optimizer_boundary(plan)?.transform_data(prune_struct_projection)
+            })
             .map(|result| result.data)?;
         let plan = self.datafusion_projection_pushdown.optimize(plan, config)?;
         plan.transform_up(remove_lambda_optimizer_boundary)
@@ -122,54 +121,29 @@ fn struct_access(expression: &Arc<dyn PhysicalExpr>) -> Option<(usize, Vec<Strin
     Some((column.index(), path))
 }
 
-fn is_parquet_column(plan: &Arc<dyn ExecutionPlan>, index: usize) -> bool {
-    if let Some(scan) = plan.downcast_ref::<DataSourceExec>() {
-        return scan
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .is_some_and(|config| config.file_source.file_type() == "parquet");
-    }
-    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
-        return projection.expr().get(index).is_some_and(|expression| {
-            expression
-                .expr
-                .downcast_ref::<Column>()
-                .is_some_and(|column| is_parquet_column(projection.input(), column.index()))
-        });
-    }
-    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
-        return is_parquet_column(
-            filter.input(),
-            filter
-                .projection()
-                .as_ref()
-                .map_or(index, |indices| indices[index]),
-        );
-    }
-    // These unary operators do not change the values or column positions.
-    if matches!(
-        plan.name(),
-        "CoalesceBatchesExec"
-            | "CoalescePartitionsExec"
-            | "RepartitionExec"
-            | "SortExec"
-            | "SortPreservingMergeExec"
-            | "LocalLimitExec"
-            | "GlobalLimitExec"
-    ) && let [input] = plan.children().as_slice()
-    {
-        return is_parquet_column(input, index);
-    }
-    false
-}
-
 fn prune_struct_projection(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(Transformed::no(plan));
     };
+    let Some(scan) = projection.input().downcast_ref::<DataSourceExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if config.file_source.file_type() != "parquet" {
+        return Ok(Transformed::no(plan));
+    }
     let schema = projection.input().schema();
+    if !schema
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Struct(_)))
+    {
+        return Ok(Transformed::no(plan));
+    }
     let mut selections = BTreeMap::<usize, StructSelection>::new();
     for expression in projection.expr() {
         expression.expr.apply(|expression| {
@@ -177,7 +151,12 @@ fn prune_struct_projection(
                 selections.entry(index).or_default().insert(&path);
                 return Ok(TreeNodeRecursion::Jump);
             }
-            if let Some(column) = expression.downcast_ref::<Column>() {
+            if let Some(column) = expression.downcast_ref::<Column>()
+                && schema
+                    .fields()
+                    .get(column.index())
+                    .is_some_and(|field| matches!(field.data_type(), DataType::Struct(_)))
+            {
                 selections.entry(column.index()).or_default().whole = true;
             }
             Ok(TreeNodeRecursion::Continue)
@@ -186,7 +165,7 @@ fn prune_struct_projection(
     let targets = selections
         .into_iter()
         .filter_map(|(index, selection)| {
-            if !is_parquet_column(projection.input(), index) {
+            if selection.whole {
                 return None;
             }
             let field = schema.fields().get(index)?;
@@ -196,6 +175,19 @@ fn prune_struct_projection(
         .collect::<BTreeMap<_, _>>();
     if targets.is_empty() {
         return Ok(Transformed::no(plan));
+    }
+    // Merging through computed expressions or multiple aliases of one root can
+    // require a full read even if the scan accepts the narrowed projection.
+    if let Some(expressions) = config.file_source.projection() {
+        let mut columns = HashSet::new();
+        if !expressions.iter().all(|expression| {
+            expression
+                .expr
+                .downcast_ref::<Column>()
+                .is_some_and(|column| columns.insert(column.index()))
+        }) {
+            return Ok(Transformed::no(plan));
+        }
     }
     // Parquet understands narrowing casts, but not SparkGetField. All accesses
     // to a root must share one target: different targets force a full read.
@@ -230,13 +222,22 @@ fn prune_struct_projection(
             })
             .map(|result| result.data)
     })?;
-    Ok(Transformed::yes(Arc::new(
-        ProjectionExec::try_new_with_schema_metadata(
-            expressions.iter().cloned(),
-            Arc::clone(projection.input()),
-            projection.schema().as_ref(),
-        )?,
-    )))
+    let narrowed = ProjectionExec::try_new_with_schema_metadata(
+        expressions.iter().cloned(),
+        Arc::clone(projection.input()),
+        projection.schema().as_ref(),
+    )?;
+    // A Parquet ancestor is insufficient: filters, limits, and lambda boundaries
+    // can prevent pushdown, leaving a runtime cast without reducing scan I/O.
+    // Keep the original plan unless the scan accepts the entire projection.
+    let pushed = remove_unnecessary_projections(Arc::new(narrowed))?;
+    Ok(
+        if pushed.transformed && pushed.data.is::<DataSourceExec>() {
+            pushed
+        } else {
+            Transformed::no(plan)
+        },
+    )
 }
 
 fn install_lambda_optimizer_boundary(

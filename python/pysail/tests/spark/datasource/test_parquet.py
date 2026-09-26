@@ -749,6 +749,35 @@ def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path, sel
         assert float(metric[1]) * scale < path.stat().st_size / 2
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("SELECT s.a AS value FROM {source} WHERE s.b % 2 = 0", [Row(value=2)]),
+        (
+            "SELECT transform(array(1L), x -> x + s.a) AS value FROM {source}",
+            [Row(value=[None]), Row(value=[3]), Row(value=[6])],
+        ),
+        ("SELECT s.a AS value FROM (SELECT * FROM {source} LIMIT 2 OFFSET 1)", [Row(value=2), Row(value=5)]),
+    ],
+    ids=["filter", "lambda", "limit"],
+)
+def test_parquet_struct_pruning_does_not_leave_runtime_casts(spark, tmp_path, query, expected):
+    path = tmp_path / "struct_projection_barrier.parquet"
+    payload = pa.StructArray.from_arrays(
+        [pa.array([100, 2, 5]), pa.array([0, 2, 3])],
+        names=["a", "b"],
+        mask=pa.array([True, False, False]),
+    )
+    pq.write_table(pa.table({"s": payload}), path)
+    query = query.format(source=f"parquet.`{escape_sql_identifier(str(path))}`")
+    assert spark.sql(query).collect() == expected
+
+    if not is_jvm_spark():
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN {query}").collect())
+        # Narrowing casts should only exist where the Parquet reader can prune fields.
+        assert all("CAST(" not in line for line in plan.splitlines() if "DataSourceExec:" not in line), plan
+
+
 @pytest.mark.parametrize("selection", ["parent", "intermediate", "null-check", "predicate-sibling"])
 def test_parquet_struct_projection_retains_other_consumers(spark, tmp_path, selection):
     path = tmp_path / "struct_consumers.parquet"
