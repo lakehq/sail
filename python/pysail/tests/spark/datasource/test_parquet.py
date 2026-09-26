@@ -714,28 +714,120 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="SparkGetField is not recognized by nested Parquet projection pruning",
-    strict=True,
-)
-def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path):
+@pytest.mark.parametrize("selected_fields", [("f0",), ("f0", "f2")], ids=["one-field", "siblings"])
+@pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
+def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path, selected_fields, nested):
     # EXPLAIN syntax and scan metrics differ between Spark and Sail, so use a Python test.
     count = 100_000
     values = pa.array(range(count), type=pa.int64())
-    payload = pa.StructArray.from_arrays([values] * 8, names=[f"f{i}" for i in range(8)])
+    nulls = pa.array([i % 3 == 0 for i in range(count)])
+    payload = pa.StructArray.from_arrays([values] * 8, names=[f"f{i}" for i in range(8)], mask=nulls)
+    prefix = "payload"
+    read_type = "struct<" + ",".join(f"{field}:bigint" for field in selected_fields) + ">"
+    if nested:
+        payload = pa.StructArray.from_arrays(
+            [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
+        )
+        prefix += ".inner"
+        read_type = f"struct<inner:{read_type}>"
     path = tmp_path / "nested_projection.parquet"
     pq.write_table(pa.table({"payload": payload}), path, compression=None, use_dictionary=False)
-    query = f"SELECT SUM(payload.f0) AS total FROM parquet.`{escape_sql_identifier(str(path))}`"  # noqa: S608
-    assert spark.sql(query).collect() == [Row(total=count * (count - 1) // 2)]
+    expressions = ", ".join(f"SUM({prefix}.{field}) AS {field}" for field in selected_fields)
+    query = f"SELECT {expressions} FROM parquet.`{escape_sql_identifier(str(path))}`"  # noqa: S608
+    total = sum(i for i in range(count) if i % 3 != 0 and (not nested or i % 5 != 0))
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(total,) * len(selected_fields)]
 
     if is_jvm_spark():
         plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
-        assert "ReadSchema: struct<payload:struct<f0:bigint>>" in plan
+        assert f"ReadSchema: struct<payload:{read_type}>" in plan
     else:
         plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
         metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
         assert metric is not None
         scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
-        # One of eight equal-sized leaves should read well below half the file.
+        # One or two of eight equal-sized leaves should read well below half the file.
         assert float(metric[1]) * scale < path.stat().st_size / 2
+
+
+@pytest.mark.parametrize("selection", ["parent", "intermediate", "null-check", "predicate-sibling"])
+def test_parquet_struct_projection_retains_other_consumers(spark, tmp_path, selection):
+    path = tmp_path / "struct_consumers.parquet"
+    inner_type = pa.struct([("x", pa.int64()), ("label", pa.string())])
+    parent_type = pa.struct([("a", pa.int64()), ("inner", inner_type), ("unused", pa.string())])
+    pq.write_table(
+        pa.table(
+            {
+                "id": [0, 1, 2],
+                "s": pa.array(
+                    [
+                        None,
+                        {"a": 1, "inner": None, "unused": "one"},
+                        {"a": 2, "inner": {"x": 20, "label": "keep"}, "unused": "two"},
+                    ],
+                    type=parent_type,
+                ),
+            }
+        ),
+        path,
+    )
+    data = spark.read.parquet(str(path)).orderBy("id")
+    if selection == "parent":
+        assert data.selectExpr("s", "s.a").collect() == [
+            Row(s=None, a=None),
+            Row(s=Row(a=1, inner=None, unused="one"), a=1),
+            Row(s=Row(a=2, inner=Row(x=20, label="keep"), unused="two"), a=2),
+        ]
+    elif selection == "intermediate":
+        assert data.selectExpr("s.inner", "s.inner.x").collect() == [
+            Row(inner=None, x=None),
+            Row(inner=None, x=None),
+            Row(inner=Row(x=20, label="keep"), x=20),
+        ]
+    elif selection == "null-check":
+        assert data.selectExpr("s IS NULL AS missing", "s.a").collect() == [
+            Row(missing=True, a=None),
+            Row(missing=False, a=1),
+            Row(missing=False, a=2),
+        ]
+    else:
+        assert data.where("s.inner.label = 'keep'").select("s.inner.x").collect() == [Row(x=20)]
+
+
+def test_parquet_nested_projection_preserves_schema_evolution(spark, tmp_path):
+    path = tmp_path / "nested_evolution.parquet"
+    inner_type = pa.struct([("value", pa.int32()), ("ignored", pa.int64())])
+    payload_type = pa.struct([("inner", inner_type), ("unused", pa.string())])
+    pq.write_table(
+        pa.table(
+            {
+                "id": [0, 1, 2, 3],
+                "payload": pa.array(
+                    [
+                        None,
+                        {"inner": None, "unused": "one"},
+                        {"inner": {"value": None, "ignored": 9}, "unused": "two"},
+                        {"inner": {"value": 7, "ignored": 10}, "unused": "three"},
+                    ],
+                    type=payload_type,
+                ),
+            }
+        ),
+        path,
+    )
+    data = (
+        spark.read.schema(
+            "id BIGINT, payload STRUCT<inner:STRUCT<value:BIGINT,missing:STRING,ignored:BIGINT>,unused:STRING>"
+        )
+        .parquet(str(path))
+        .selectExpr("id", "payload.inner.value", "payload.inner.missing")
+        .orderBy("id")
+    )
+    assert data.schema.simpleString() == "struct<id:bigint,value:bigint,missing:string>"
+    assert data.schema["value"].nullable
+    assert data.schema["missing"].nullable
+    assert data.collect() == [
+        Row(id=0, value=None, missing=None),
+        Row(id=1, value=None, missing=None),
+        Row(id=2, value=None, missing=None),
+        Row(id=3, value=7, missing=None),
+    ]

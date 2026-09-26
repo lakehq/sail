@@ -1,22 +1,29 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Result, internal_err};
 use datafusion::config::ConfigOptions;
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::LambdaVariable;
+use datafusion::physical_expr::expressions::{CastExpr, Column, LambdaVariable, Literal};
+use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions, replace_children_if_necessary,
 };
+use sail_common_datafusion::udf::get_field::SparkGetField;
 
-/// Runs DataFusion projection pushdown without moving physical lambda variables
-/// across the schema boundary where their positional indices were planned.
+/// Narrows Parquet struct projections, then runs DataFusion projection pushdown
+/// without moving physical lambda variables across their planned schema boundary.
 #[derive(Debug, Default)]
 pub struct LambdaSafeProjectionPushdown {
     datafusion_projection_pushdown: ProjectionPushdown,
@@ -35,6 +42,9 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = plan
+            .transform_up(prune_struct_projection)
+            .map(|result| result.data)?;
+        let plan = plan
             .transform_up(install_lambda_optimizer_boundary)
             .map(|result| result.data)?;
         let plan = self.datafusion_projection_pushdown.optimize(plan, config)?;
@@ -49,6 +59,184 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
     fn schema_check(&self) -> bool {
         self.datafusion_projection_pushdown.schema_check()
     }
+}
+
+/// A terminal selection consumes the whole field, including all its descendants.
+#[derive(Default)]
+struct StructSelection {
+    whole: bool,
+    fields: BTreeMap<String, Self>,
+}
+
+impl StructSelection {
+    fn insert(&mut self, path: &[String]) {
+        if let Some((first, rest)) = path.split_first() {
+            self.fields.entry(first.clone()).or_default().insert(rest);
+        } else {
+            self.whole = true;
+        }
+    }
+
+    fn narrow(&self, field: &FieldRef) -> FieldRef {
+        if self.whole {
+            return Arc::clone(field);
+        }
+        let DataType::Struct(fields) = field.data_type() else {
+            return Arc::clone(field);
+        };
+        let fields = fields
+            .iter()
+            .filter_map(|field| self.fields.get(field.name()).map(|s| s.narrow(field)))
+            .collect();
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(fields)),
+        )
+    }
+}
+
+fn struct_access(expression: &Arc<dyn PhysicalExpr>) -> Option<(usize, Vec<String>)> {
+    let mut expression = expression;
+    let mut path = vec![];
+    while let Some(access) =
+        ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
+    {
+        let [parent, field] = access.args() else {
+            return None;
+        };
+        let field = field
+            .downcast_ref::<Literal>()?
+            .value()
+            .try_as_str()
+            .flatten()?;
+        path.push(field.to_string());
+        expression = parent;
+    }
+    if path.is_empty() {
+        return None;
+    }
+    let column = expression.downcast_ref::<Column>()?;
+    path.reverse();
+    Some((column.index(), path))
+}
+
+fn is_parquet_column(plan: &Arc<dyn ExecutionPlan>, index: usize) -> bool {
+    if let Some(scan) = plan.downcast_ref::<DataSourceExec>() {
+        return scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .is_some_and(|config| config.file_source.file_type() == "parquet");
+    }
+    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        return projection.expr().get(index).is_some_and(|expression| {
+            expression
+                .expr
+                .downcast_ref::<Column>()
+                .is_some_and(|column| is_parquet_column(projection.input(), column.index()))
+        });
+    }
+    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+        return is_parquet_column(
+            filter.input(),
+            filter
+                .projection()
+                .as_ref()
+                .map_or(index, |indices| indices[index]),
+        );
+    }
+    // These unary operators do not change the values or column positions.
+    if matches!(
+        plan.name(),
+        "CoalesceBatchesExec"
+            | "CoalescePartitionsExec"
+            | "RepartitionExec"
+            | "SortExec"
+            | "SortPreservingMergeExec"
+            | "LocalLimitExec"
+            | "GlobalLimitExec"
+    ) && let [input] = plan.children().as_slice()
+    {
+        return is_parquet_column(input, index);
+    }
+    false
+}
+
+fn prune_struct_projection(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    let schema = projection.input().schema();
+    let mut selections = BTreeMap::<usize, StructSelection>::new();
+    for expression in projection.expr() {
+        expression.expr.apply(|expression| {
+            if let Some((index, path)) = struct_access(expression) {
+                selections.entry(index).or_default().insert(&path);
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            if let Some(column) = expression.downcast_ref::<Column>() {
+                selections.entry(column.index()).or_default().whole = true;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let targets = selections
+        .into_iter()
+        .filter_map(|(index, selection)| {
+            if !is_parquet_column(projection.input(), index) {
+                return None;
+            }
+            let field = schema.fields().get(index)?;
+            let target = selection.narrow(field);
+            (target != *field).then_some((index, target))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if targets.is_empty() {
+        return Ok(Transformed::no(plan));
+    }
+    // Parquet understands narrowing casts, but not SparkGetField. All accesses
+    // to a root must share one target: different targets force a full read.
+    // Keep the accessor itself so null ancestors still mask their descendants.
+    let expressions = ProjectionExprs::from(projection.expr()).try_map_exprs(|expression| {
+        expression
+            .transform_up(|expression| {
+                if let Some(column) = expression.downcast_ref::<Column>()
+                    && let Some(target) = targets.get(&column.index())
+                {
+                    return Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
+                        expression,
+                        Arc::clone(target),
+                        None,
+                    ))
+                        as Arc<dyn PhysicalExpr>));
+                }
+                if let Some(access) =
+                    ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
+                {
+                    // Nested accesses may now return a narrower intermediate
+                    // struct. Recompute its promised type from the new children.
+                    return Ok(Transformed::yes(Arc::new(ScalarFunctionExpr::try_new(
+                        Arc::new(access.fun().clone()),
+                        access.args().to_vec(),
+                        schema.as_ref(),
+                        Arc::new(access.config_options().clone()),
+                    )?)
+                        as Arc<dyn PhysicalExpr>));
+                }
+                Ok(Transformed::no(expression))
+            })
+            .map(|result| result.data)
+    })?;
+    Ok(Transformed::yes(Arc::new(
+        ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            Arc::clone(projection.input()),
+            projection.schema().as_ref(),
+        )?,
+    )))
 }
 
 fn install_lambda_optimizer_boundary(

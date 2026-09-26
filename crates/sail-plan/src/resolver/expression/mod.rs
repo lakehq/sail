@@ -24,7 +24,7 @@ mod udf;
 mod wildcard;
 mod window;
 
-pub(super) use predicate::{is_null_literal_expression, spark_interval_metadata_for_expression};
+pub(super) use predicate::spark_interval_metadata_for_expression;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {

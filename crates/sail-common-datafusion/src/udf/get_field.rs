@@ -13,8 +13,6 @@ use datafusion_expr::{
 
 use crate::array::record_batch::cast_array_recursively;
 
-// TODO: Restore nested Parquet projection pruning for this accessor. DataFusion
-// recognizes GetFieldFunc only; upstream support must preserve parent validity.
 /// Extract one field while preserving the validity of its enclosing struct.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkGetField {

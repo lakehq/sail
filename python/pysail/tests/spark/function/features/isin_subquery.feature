@@ -291,7 +291,7 @@ Feature: IN subquery support
         """
         SELECT CAST(NULL AS INT) IN (SELECT array(1)) AS present
         """
-      Then query error (?i)(cannot infer common argument type|data.?type.?mismatch)
+      Then query error (?i)(cannot infer common argument type|can.t cast|data.?type.?mismatch)
 
     Scenario: projected literal null IN still evaluates a nonempty subquery
       When query
@@ -302,9 +302,7 @@ Feature: IN subquery support
         """
       Then query error (?i)(cast_invalid_input|cannot cast string)
 
-    @sail-bug
     Scenario Outline: projected IN propagates folded null operands before decorrelation
-      # TODO: Normalize foldable expressions and constant input columns in the query optimizer.
       When query
         """
         SELECT
@@ -317,9 +315,10 @@ Feature: IN subquery support
         | NULL    | NULL   |
 
       Examples:
-        | value        |
-        | NULLIF(1, 1) |
-        | id           |
+        | value                         |
+        | NULLIF(1, 1)                  |
+        | TRY_CAST('invalid' AS INT)    |
+        | id                            |
 
     @sail-bug
     Scenario Outline: projected IN normalizes indirect negation before decorrelation
@@ -340,6 +339,116 @@ Feature: IN subquery support
         | predicate                                                          |
         | NOT CAST(id IN (SELECT x FROM VALUES (1), (NULL) t(x)) AS BOOLEAN) |
         | (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) = FALSE            |
+
+    Scenario: folded projected IN stays null when filtered through its result alias
+      When query
+        """
+        SELECT present
+        FROM (SELECT NULLIF(1, 1) IN (SELECT 1) AS present) t
+        WHERE present IS NULL
+        """
+      Then query result
+        | present |
+        | NULL    |
+
+    Scenario: an aggregate counts folded projected IN rows selected through their result alias
+      When query
+        """
+        SELECT COUNT(*) AS n
+        FROM (SELECT NULLIF(1, 1) IN (SELECT 1) AS present) t
+        WHERE present IS NULL
+        """
+      Then query result
+        | n |
+        | 1 |
+
+    Scenario: projected IN propagates constants through multiple named projections
+      When query
+        """
+        WITH a AS (SELECT id, NULLIF(1, 1) AS x FROM range(3)),
+          b AS (SELECT id, x AS y FROM a),
+          c AS (SELECT id, y AS z FROM b)
+        SELECT id, z IN (SELECT 1) AS present, z NOT IN (SELECT 1) AS absent
+        FROM c ORDER BY id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 0  | NULL    | NULL   |
+        | 1  | NULL    | NULL   |
+        | 2  | NULL    | NULL   |
+
+    Scenario: projected IN folds union branches independently
+      When query
+        """
+        SELECT tag, x IN (SELECT 1) AS present
+        FROM (
+          SELECT 0 AS tag, NULLIF(1, 1) AS x
+          UNION ALL
+          SELECT 1, 1
+        ) t
+        ORDER BY tag
+        """
+      Then query result ordered
+        | tag | present |
+        | 0   | NULL    |
+        | 1   | true    |
+
+    Scenario: projected IN folds union branches through multiple named projections
+      When query
+        """
+        WITH a AS (
+          SELECT 0 AS tag, NULLIF(1, 1) AS x
+          UNION ALL
+          SELECT 1, 1
+        ),
+          b AS (SELECT tag, x AS y FROM a),
+          c AS (SELECT tag, y AS z FROM b)
+        SELECT tag, z IN (SELECT 1) AS present FROM c ORDER BY tag
+        """
+      Then query result ordered
+        | tag | present |
+        | 0   | NULL    |
+        | 1   | true    |
+
+    Scenario: projected IN does not propagate constants from an outer join nullable side
+      When query
+        """
+        SELECT a.id, b.x IN (SELECT 1) AS present
+        FROM range(3) a
+        LEFT JOIN (SELECT id, NULLIF(1, 1) AS x FROM range(2)) b ON a.id = b.id
+        ORDER BY a.id
+        """
+      Then query result ordered
+        | id | present |
+        | 0  | false   |
+        | 1  | false   |
+        | 2  | false   |
+
+    Scenario: projected IN uses one query time while folding stable expressions
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          current_timestamp() = current_timestamp() AS same_time,
+          CASE WHEN current_timestamp() = current_timestamp()
+            THEN NULLIF(1, 1) ELSE 1 END IN (SELECT 1) AS present
+        """
+      Then query result
+        | same_time | present |
+        | true      | NULL    |
+
+    Scenario: projected folded null IN preserves subquery cardinality
+      When query
+        """
+        SELECT
+          NULLIF(1, 1) IN (SELECT id FROM range(0)) AS empty_present,
+          NULLIF(1, 1) NOT IN (SELECT id FROM range(0)) AS empty_absent,
+          NULLIF(1, 1) IN (SELECT MAX(id) FROM range(0)) AS aggregate_present,
+          NULLIF(1, 1) NOT IN (SELECT MAX(id) FROM range(0)) AS aggregate_absent
+        """
+      Then query result
+        | empty_present | empty_absent | aggregate_present | aggregate_absent |
+        | false         | true         | NULL              | NULL             |
 
   Rule: Struct constructors supply IN subquery values
 

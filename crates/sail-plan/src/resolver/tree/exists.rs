@@ -8,17 +8,14 @@ use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, ScalarValue, not_impl_err, plan_datafusion_err};
-use datafusion_expr::expr::InSubquery;
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, expr_fn, ident, lit,
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, expr_fn, ident, lit,
 };
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
-use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::resolver::expression::is_null_literal_expression;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
@@ -41,21 +38,14 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        // Spark handles NOT IN before replacing IN with an existence result.
-        // Fold chains of NOT here so NULLs also agree for NOT (NOT (x IN ...)).
         let mut inner = &expr;
-        let mut negated = false;
         while let Expr::Not(child) = inner {
             inner = child;
-            negated = !negated;
         }
-        if let Expr::InSubquery(subquery) = inner
-            && matches!(expr, Expr::Not(_))
-            && subquery.subquery.outer_ref_columns.is_empty()
+        if matches!(inner, Expr::InSubquery(subquery)
+            if subquery.subquery.outer_ref_columns.is_empty())
         {
-            let mut subquery = subquery.clone();
-            subquery.negated ^= negated;
-            return Ok(Transformed::yes(Expr::InSubquery(subquery)));
+            return Ok(Transformed::no(expr));
         }
         let indirect_negation = matches!(expr, Expr::Not(_))
             || matches!(&expr, Expr::BinaryExpr(binary)
@@ -74,12 +64,8 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        let exists = match expr {
-            Expr::InSubquery(subquery) if subquery.subquery.outer_ref_columns.is_empty() => {
-                return Ok(Transformed::yes(self.uncorrelated_in(subquery)?));
-            }
-            Expr::Exists(exists) => exists,
-            expr => return Ok(Transformed::no(expr)),
+        let Expr::Exists(exists) = expr else {
+            return Ok(Transformed::no(expr));
         };
         let result = if exists.subquery.outer_ref_columns.is_empty() {
             let query = LogicalPlanBuilder::from(exists.subquery.subquery)
@@ -99,48 +85,6 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
 }
 
 impl ExistsRewriter<'_> {
-    fn uncorrelated_in(&mut self, subquery: InSubquery) -> Result<Expr> {
-        let InSubquery {
-            expr,
-            subquery,
-            negated,
-        } = subquery;
-        let column = subquery.subquery.schema().columns().one()?;
-        let nullable = expr.nullable(self.plan.schema().as_ref())?
-            || subquery.subquery.schema().field(0).is_nullable();
-        // TODO: Fold constant expressions and propagate constant input columns before
-        // this rewrite using the query's optimizer context.
-        let null_literal = is_null_literal_expression(&expr);
-        let alias = self.state.register_field_name("");
-        let query = LogicalPlanBuilder::from(subquery.subquery)
-            .alias(alias.clone())?
-            .build()?;
-        let predicate = (*expr).eq(Expr::Column(Column::new(Some(alias.clone()), column.name)));
-        // Spark's projected NOT IN also excludes rows with an unknown comparison.
-        let predicate = if negated || null_literal {
-            predicate.clone().or(predicate.is_null())
-        } else {
-            predicate
-        };
-        let input = mem::replace(&mut self.plan, empty_logical_plan());
-        self.plan = LogicalPlanBuilder::from(input)
-            .join_on(query, JoinType::LeftMark, Some(predicate))?
-            .build()?;
-        let mark = Expr::Column(Column::new(Some(alias), "mark"));
-        if null_literal {
-            // Spark propagates a literal NULL before rewriting IN to an existence join.
-            return expr_fn::when(mark, lit(ScalarValue::Boolean(None))).otherwise(lit(negated));
-        }
-        // Spark declares IN nullable from its operands, before rewriting it into
-        // a non-null existence result. Keep that schema until optimization.
-        let result = if nullable {
-            expr_fn::when(lit(true), mark).end()?
-        } else {
-            mark
-        };
-        Ok(if negated { !result } else { result })
-    }
-
     fn count_rows(&mut self, query: LogicalPlan, skip: usize) -> Result<Expr> {
         let output = self.state.register_field_name("");
         let skip = i64::try_from(skip).map_err(|error| plan_datafusion_err!("{error}"))?;
