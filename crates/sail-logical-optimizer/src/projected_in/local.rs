@@ -2,10 +2,10 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, RecordBatchOptions,
+    Array, ArrayRef, AsArray, BooleanArray, Int64Array, RecordBatch, RecordBatchOptions, make_array,
 };
 use datafusion::arrow::compute::{concat, concat_batches};
-use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Float32Type, Float64Type, Schema};
 use datafusion::catalog::MemTable;
 use datafusion::datasource::{DefaultTableSource, provider_as_source};
 use datafusion::optimizer::propagate_empty_relation::PropagateEmptyRelation;
@@ -320,11 +320,15 @@ impl PhysicalExpr for LocalBooleanExpr {
             .into_array(batch.num_rows())?;
         let left = datafusion_common::cast::as_boolean_array(left.as_ref())?;
         let is_and = binary.op() == &Operator::And;
-        let selection = BooleanArray::from(
-            (0..left.len())
-                .map(|row| left.is_null(row) || left.value(row) == is_and)
-                .collect::<Vec<_>>(),
-        );
+        let mut selection = if is_and {
+            left.values().clone()
+        } else {
+            !left.values()
+        };
+        if let Some(nulls) = left.nulls().filter(|nulls| nulls.null_count() > 0) {
+            selection |= &!nulls.inner();
+        }
+        let selection = BooleanArray::new(selection, None);
         let right = binary
             .right()
             .evaluate_selection(batch, &selection)?
@@ -373,6 +377,106 @@ fn evaluation_batches(
         return Ok(Some(vec![concat_batches(plan.schema().inner(), &batches)?]));
     }
     Ok(Some(batches))
+}
+
+/// Compare evaluated SQL-created local relations, reusing equal Arrow data.
+/// Column names and batch boundaries are incidental to Catalyst LocalRelation.
+pub(super) fn same_result(left: &LogicalPlan, right: &LogicalPlan) -> Result<bool> {
+    if left.schema().fields().len() != right.schema().fields().len()
+        || left
+            .schema()
+            .fields()
+            .iter()
+            .zip(right.schema().fields())
+            .any(|(left, right)| {
+                left.data_type() != right.data_type() || left.is_nullable() != right.is_nullable()
+            })
+    {
+        return Ok(false);
+    }
+    let props = ExecutionProps::new();
+    let (Some(left), Some(right)) = (local_batches(left, &props)?, local_batches(right, &props)?)
+    else {
+        return Ok(false);
+    };
+    let mut left = left.iter().filter(|batch| batch.num_rows() > 0).peekable();
+    let mut right = right.iter().filter(|batch| batch.num_rows() > 0).peekable();
+    let (mut left_offset, mut right_offset) = (0, 0);
+    while let (Some(a), Some(b)) = (left.peek(), right.peek()) {
+        let rows = (a.num_rows() - left_offset).min(b.num_rows() - right_offset);
+        let left_slice = a.slice(left_offset, rows);
+        let right_slice = b.slice(right_offset, rows);
+        for (a, b) in left_slice.columns().iter().zip(right_slice.columns()) {
+            if a != b {
+                let left = normalize_local_floats(a)?;
+                let right = normalize_local_floats(b)?;
+                if (Arc::ptr_eq(a, &left) && Arc::ptr_eq(b, &right)) || left != right {
+                    return Ok(false);
+                }
+            }
+        }
+        left_offset += rows;
+        right_offset += rows;
+        if left_offset == a.num_rows() {
+            left.next();
+            left_offset = 0;
+        }
+        if right_offset == b.num_rows() {
+            right.next();
+            right_offset = 0;
+        }
+    }
+    Ok(left.next().is_none() && right.next().is_none())
+}
+
+// Catalyst's generic rows/arrays equate signed zeros and all NaN payloads.
+// Arrow equality compares float bits. Normalize only the comparison fallback,
+// including nested values, without changing the relation that will execute.
+fn normalize_local_floats(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Float32 => Ok(Arc::new(
+            array
+                .as_primitive::<Float32Type>()
+                .unary::<_, Float32Type>(|value| {
+                    if value.to_bits() << 1 == 0 {
+                        0.0
+                    } else if value.is_nan() {
+                        f32::NAN
+                    } else {
+                        value
+                    }
+                }),
+        )),
+        DataType::Float64 => Ok(Arc::new(
+            array
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float64Type>(|value| {
+                    if value.to_bits() << 1 == 0 {
+                        0.0
+                    } else if value.is_nan() {
+                        f64::NAN
+                    } else {
+                        value
+                    }
+                }),
+        )),
+        _ => {
+            let data = array.to_data();
+            if data.child_data().is_empty() {
+                return Ok(Arc::clone(array));
+            }
+            let children = data
+                .child_data()
+                .iter()
+                .map(|child| {
+                    normalize_local_floats(&make_array(child.clone())).map(|a| a.to_data())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(make_array(
+                data.into_builder().child_data(children).build()?,
+            ))
+        }
+    }
 }
 
 /// Reuse the existing runtime workers for large pure local evaluations.

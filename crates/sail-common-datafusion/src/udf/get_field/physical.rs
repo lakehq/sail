@@ -1,6 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
+use datafusion::arrow::array::Array;
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -10,9 +12,9 @@ use datafusion::functions::core::get_field;
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::ColumnarValue;
 
-use super::SparkGetField;
+use super::{SparkGetField, finish_field};
 use crate::schema_evolution::FIELD_DEFAULT_METADATA_KEY;
 
 // Keep the dependency distinct from an ordinary, unmasked native field access.
@@ -111,50 +113,40 @@ impl PhysicalExpr for SparkGetFieldExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let access = self.access()?;
-        let parent = &access.args()[0];
-        let mut field = parent.return_field(batch.schema().as_ref())?;
-        let mut value = parent.evaluate(batch)?;
-        let udf = SparkGetField::new();
-        let config_options = Arc::new(access.config_options().clone());
-        for (index, argument) in access.args()[1..].iter().enumerate() {
+        let array = match access.args()[0].evaluate(batch)? {
+            ColumnarValue::Array(array) => array,
+            ColumnarValue::Scalar(value) => value.to_array()?,
+        };
+        let mut value = &array;
+        let mut ancestors = Vec::with_capacity(access.args().len() - 1);
+        for argument in &access.args()[1..] {
             let name = argument
                 .downcast_ref::<Literal>()
                 .and_then(|literal| literal.value().try_as_str().flatten())
                 .ok_or_else(|| {
                     datafusion::common::internal_datafusion_err!("invalid field name")
                 })?;
-            let DataType::Struct(fields) = field.data_type() else {
-                return internal_err!(
-                    "field dependency requires a struct, got {}",
-                    field.data_type()
-                );
-            };
-            let child = fields
-                .iter()
-                .find(|child| child.name() == name)
-                .ok_or_else(|| {
-                    datafusion::common::internal_datafusion_err!("field {name} is missing")
-                })?;
-            let result_field = if index + 2 == access.args().len() {
-                self.field.clone()
-            } else {
-                Arc::new(
-                    child
-                        .as_ref()
-                        .clone()
-                        .with_nullable(field.is_nullable() || child.is_nullable()),
-                )
-            };
-            value = udf.invoke_with_args(ScalarFunctionArgs {
-                args: vec![value, argument.evaluate(batch)?],
-                arg_fields: vec![field, argument.return_field(batch.schema().as_ref())?],
-                number_rows: batch.num_rows(),
-                return_field: result_field.clone(),
-                config_options: Arc::clone(&config_options),
+            let parent = datafusion_common::cast::as_struct_array(value.as_ref())?;
+            if let Some(nulls) = parent.nulls().filter(|nulls| nulls.null_count() > 0) {
+                ancestors.push(nulls);
+            }
+            value = parent.column_by_name(name).ok_or_else(|| {
+                datafusion::common::internal_datafusion_err!("field {name} is missing")
             })?;
-            field = result_field;
         }
-        Ok(value)
+        // Intermediate structs are dependencies, not results. Rebuilding and
+        // masking each one copies their array descriptors and scans validity
+        // repeatedly. Combine ancestor masks and only mask the selected leaf.
+        let nulls = match ancestors.as_slice() {
+            [] => None,
+            [nulls] => Some((*nulls).clone()),
+            _ => NullBuffer::union_many(ancestors.into_iter().map(Some)),
+        };
+        finish_field(
+            ColumnarValue::Array(Arc::clone(value)),
+            self.field.data_type(),
+            nulls,
+        )
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

@@ -1,4 +1,5 @@
 use datafusion::arrow::array::{Array, BooleanArray};
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::nullif;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::functions::core::get_field;
@@ -101,40 +102,48 @@ impl ScalarUDFImpl for SparkGetField {
         .filter(|nulls| nulls.null_count() > 0)
         .cloned();
         let return_field = args.return_field.clone();
-        let return_type = return_field.data_type();
-        let mut value = get_field().inner().invoke_with_args(args)?;
-        if let ColumnarValue::Array(array) = &value
-            && array.data_type() != return_type
-            && array.data_type().equals_datatype(return_type)
-            && same_field_names(array.data_type(), return_type)
-        {
-            // File readers may retain storage metadata on nested fields. Match the
-            // planned field metadata without changing names, types, or nullability.
-            // Names and order already match, so avoid searching by name for each field.
-            value = ColumnarValue::Array(cast_array_positionally_recursively(array, return_type)?);
-        }
-        // NullArray already represents all NULLs and cannot carry a validity bitmap.
-        match (value, parent_nulls) {
-            (ColumnarValue::Array(array), Some(parent_nulls)) if !array.data_type().is_null() => {
-                if array.null_count() == array.len()
-                    || array
-                        .nulls()
-                        .is_some_and(|nulls| nulls.inner().ptr_eq(parent_nulls.inner()))
-                {
-                    return Ok(ColumnarValue::Array(array));
-                }
-                // Arrow children may contain valid values underneath a null struct.
-                // Spark's GetStructField returns NULL whenever the parent is NULL.
-                // The child is already valid Arrow data; replace only its null mask
-                // without revalidating variable-width payloads.
-                let parent_is_null = BooleanArray::new(!parent_nulls.inner(), None);
-                Ok(ColumnarValue::Array(nullif(
-                    array.as_ref(),
-                    &parent_is_null,
-                )?))
+        let value = get_field().inner().invoke_with_args(args)?;
+        finish_field(value, return_field.data_type(), parent_nulls)
+    }
+}
+
+/// Normalize the selected field and apply its ancestors' validity once.
+pub(super) fn finish_field(
+    mut value: ColumnarValue,
+    return_type: &DataType,
+    parent_nulls: Option<NullBuffer>,
+) -> Result<ColumnarValue> {
+    if let ColumnarValue::Array(array) = &value
+        && array.data_type() != return_type
+        && array.data_type().equals_datatype(return_type)
+        && same_field_names(array.data_type(), return_type)
+    {
+        // File readers may retain storage metadata on nested fields. Match the
+        // planned field metadata without changing names, types, or nullability.
+        // Names and order already match, so avoid searching by name for each field.
+        value = ColumnarValue::Array(cast_array_positionally_recursively(array, return_type)?);
+    }
+    // NullArray already represents all NULLs and cannot carry a validity bitmap.
+    match (value, parent_nulls) {
+        (ColumnarValue::Array(array), Some(parent_nulls)) if !array.data_type().is_null() => {
+            if array.null_count() == array.len()
+                || array
+                    .nulls()
+                    .is_some_and(|nulls| nulls.inner().ptr_eq(parent_nulls.inner()))
+            {
+                return Ok(ColumnarValue::Array(array));
             }
-            (value, _) => Ok(value),
+            // Arrow children may contain valid values underneath a null struct.
+            // Spark's GetStructField returns NULL whenever the parent is NULL.
+            // The child is already valid Arrow data; replace only its null mask
+            // without revalidating variable-width payloads.
+            let parent_is_null = BooleanArray::new(!parent_nulls.inner(), None);
+            Ok(ColumnarValue::Array(nullif(
+                array.as_ref(),
+                &parent_is_null,
+            )?))
         }
+        (value, _) => Ok(value),
     }
 }
 

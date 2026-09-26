@@ -993,3 +993,35 @@ def test_parquet_struct_list_predicates_prune_unselected_fields(spark, tmp_path,
             assert float(pruned[1]) > 0, plan
     finally:
         spark.catalog.dropTempView("struct_list_predicate")
+
+
+@pytest.mark.parametrize("leaf_type", [pa.int64(), pa.string(), pa.binary(), pa.list_(pa.int64())])
+def test_parquet_deep_field_preserves_every_ancestor_mask(spark, tmp_path, leaf_type):
+    count = 145
+    values = list(range(count))
+    if pa.types.is_string(leaf_type):
+        values = [f"{i}:雪" for i in values]
+    elif pa.types.is_binary(leaf_type):
+        values = [bytes([i, 0, 255]) for i in values]
+    elif pa.types.is_list(leaf_type):
+        # Parquet cannot encode nonempty lists hidden by null structs.
+        values = [None if any(i % divisor == 0 for divisor in [3, 5, 7]) else [i, None] for i in values]
+    values = [None if i % 11 == 0 else value for i, value in enumerate(values)]
+    payload = pa.array(values, type=leaf_type)
+    for divisor in [3, 5, 7]:
+        payload = pa.StructArray.from_arrays(
+            [payload], names=["x"], mask=pa.array([i % divisor == 0 for i in range(count)])
+        )
+    path = tmp_path / "deep_masks.parquet"
+    pq.write_table(pa.table({"id": range(count), "s": payload}), path, row_group_size=67)
+    rows = (
+        spark.read.option("pushdown_filters", "true")
+        .parquet(str(path))
+        .where("id >= 65")
+        .selectExpr("id", "s.x.x.x AS value")
+        .orderBy("id")
+        .collect()
+    )
+    assert rows == [
+        Row(id=i, value=None if any(i % divisor == 0 for divisor in [3, 5, 7]) else values[i]) for i in range(65, count)
+    ]

@@ -18,6 +18,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::NamePreserver;
+use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
     SubqueryAlias, Union, expr_fn, lit,
@@ -73,7 +74,13 @@ impl OptimizerRule for RewriteProjectedIn {
                 .cloned()
                 .collect();
             if references_projected_in(&filter.input, &needed)? {
-                PushDownFilter::new().rewrite(plan, config)
+                PushDownFilter::new()
+                    .rewrite(plan, config)?
+                    .transform_data(|plan| {
+                        plan.transform_up_with_subqueries(|plan| {
+                            rewrite_pushed_filter(plan, config, &mut prepared_marks)
+                        })
+                    })
             } else {
                 Ok(Transformed::no(plan))
             }
@@ -133,6 +140,54 @@ impl OptimizerRule for RewriteProjectedIn {
     }
 }
 
+// Alias pushdown copies expressions into filters. Simplify their conditional
+// boundaries before applying Spark's existence semantics to embedded IN.
+fn rewrite_pushed_filter(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+    prepared_marks: &mut HashSet<Column>,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Filter(filter) = &plan else {
+        return Ok(Transformed::no(plan));
+    };
+    if !has_uncorrelated_in(&filter.predicate)? {
+        return Ok(Transformed::no(plan));
+    }
+    let columns = plan.schema().columns();
+    let predicate = conditional::simplify(
+        conditional::inline_filter_nullif(filter.predicate.clone(), filter.input.schema())?,
+        Arc::clone(filter.input.schema()),
+        config,
+    )?;
+    let mut rewriter = InRewriter {
+        plan: Arc::unwrap_or_clone(Arc::clone(&filter.input)),
+        config,
+        prepare: false,
+        prepared_marks,
+    };
+    let predicates = split_conjunction(&predicate)
+        .into_iter()
+        .map(|predicate| {
+            // Bare IN conjuncts retain the ordinary semi/anti join path, including
+            // DataFusion's linear-time null-aware anti join implementation.
+            if matches!(predicate, Expr::InSubquery(_))
+                || matches!(predicate, Expr::Not(child) if matches!(child.as_ref(), Expr::InSubquery(_)))
+            {
+                Ok(predicate.clone())
+            } else {
+                Ok(predicate.clone().rewrite(&mut rewriter)?.data)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let predicate = conjunction(predicates).unwrap_or_else(|| lit(true));
+    Ok(Transformed::yes(
+        LogicalPlanBuilder::from(rewriter.plan)
+            .filter(predicate)?
+            .project(columns.into_iter().map(Expr::Column))?
+            .build()?,
+    ))
+}
+
 fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
     expr.exists(|expr| {
         Ok(matches!(expr, Expr::InSubquery(subquery)
@@ -151,7 +206,7 @@ fn needs_conditional_normalization(expr: &Expr) -> Result<bool> {
         };
         expr.exists(|child| {
             let boundary = matches!(child, Expr::ScalarFunction(function)
-                if matches!(function.func.name(), "coalesce" | "nvl" | "nvl2"))
+                if matches!(function.func.name(), "coalesce" | "nvl" | "nvl2" | "nullif"))
                 || (!coalesce_only && matches!(child, Expr::Case(_)));
             Ok(boundary && has_uncorrelated_in(child)?)
         })
@@ -789,6 +844,7 @@ fn rewrite_projection(
 }
 
 fn prepare_in_subqueries(expr: Expr, config: &dyn OptimizerConfig) -> Result<Expr> {
+    let mut local_queries: Vec<Arc<LogicalPlan>> = vec![];
     expr.transform_up(|expr| {
         let Expr::InSubquery(mut subquery) = expr else {
             return Ok(Transformed::no(expr));
@@ -796,6 +852,13 @@ fn prepare_in_subqueries(expr: Expr, config: &dyn OptimizerConfig) -> Result<Exp
         if !subquery.subquery.outer_ref_columns.is_empty() {
             return Ok(Transformed::no(Expr::InSubquery(subquery)));
         }
+        // SQL-created local data uses Catalyst generic rows. Imported Arrow
+        // data uses UnsafeRow, whose equality also depends on row/container
+        // representation. Do not erase that distinction by comparing values.
+        let compare_local = !subquery
+            .subquery
+            .subquery
+            .exists(|plan| Ok(matches!(plan, LogicalPlan::TableScan(_))))?;
         let query = local::materialize(Arc::unwrap_or_clone(subquery.subquery.subquery), config)?;
         subquery.subquery.subquery = Arc::new(
             OptimizeProjections::new()
@@ -827,6 +890,21 @@ fn prepare_in_subqueries(expr: Expr, config: &dyn OptimizerConfig) -> Result<Exp
                 })?
                 .data,
         );
+        // Catalyst canonicalizes evaluated LocalRelations independently of
+        // attribute IDs. Reuse their plans so Boolean and CASE simplification
+        // can recognize repeated IN expressions before existence rewriting.
+        // TODO: Match canonical equality for imported local and nonlocal
+        // subqueries. Imported data needs Catalyst row/container provenance;
+        // range and aggregate plans need canonical attribute identities.
+        if compare_local {
+            for query in &local_queries {
+                if local::same_result(query, &subquery.subquery.subquery)? {
+                    subquery.subquery.subquery = Arc::clone(query);
+                    return Ok(Transformed::yes(Expr::InSubquery(subquery)));
+                }
+            }
+            local_queries.push(Arc::clone(&subquery.subquery.subquery));
+        }
         Ok(Transformed::yes(Expr::InSubquery(subquery)))
     })
     .data()

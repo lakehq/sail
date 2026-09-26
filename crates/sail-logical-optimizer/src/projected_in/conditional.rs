@@ -25,7 +25,7 @@ pub(super) fn simplify(
     let mut qualifier = None;
     let protected = expr
         .transform_down(|expr| {
-            let expr = push_literal_comparison(expr)?;
+            let expr = simplify_complements(push_literal_comparison(expr, &schema, config)?)?;
             if !is_conditional(&expr) || !has_uncorrelated_in(&expr)? {
                 return Ok(Transformed::no(expr));
             }
@@ -79,10 +79,74 @@ pub(super) fn simplify(
         .data()
 }
 
+/// Alias substitution in a filter inlines Catalyst's NULLIF common value.
+/// Keep projected NULLIF as a scalar call so its comparison and result share
+/// the already evaluated existence value; only the copied predicate expands.
+pub(super) fn inline_filter_nullif(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        let Expr::ScalarFunction(function) = &expr else {
+            return Ok(Transformed::no(expr));
+        };
+        if function.func.name() != "nullif" || !has_uncorrelated_in(&expr)? {
+            return Ok(Transformed::no(expr));
+        }
+        let [left, right]: [Expr; 2] = function.args.clone().try_into().map_err(|_| {
+            datafusion_common::internal_datafusion_err!("NULLIF requires two arguments")
+        })?;
+        let null = lit(ScalarValue::try_new_null(&expr.get_type(schema)?)?);
+        Ok(Transformed::yes(
+            datafusion_expr::expr_fn::when(left.clone().eq(right), null).otherwise(left)?,
+        ))
+    })
+    .data()
+}
+
 fn is_conditional(expr: &Expr) -> bool {
     matches!(expr, Expr::Case(_))
         || matches!(expr, Expr::ScalarFunction(function)
-            if matches!(function.func.name(), "coalesce" | "nvl" | "nvl2"))
+            if matches!(function.func.name(), "coalesce" | "nvl" | "nvl2" | "nullif"))
+        || matches!(expr, Expr::BinaryExpr(binary)
+            if matches!(binary.op, Operator::Eq | Operator::NotEq | Operator::Lt | Operator::LtEq
+                | Operator::Gt | Operator::GtEq | Operator::IsDistinctFrom | Operator::IsNotDistinctFrom)
+                && [binary.left.as_ref(), binary.right.as_ref()].iter().any(|expr|
+                matches!(expr, Expr::ScalarFunction(function) if function.func.name() == "nullif")
+                    || matches!(expr, Expr::BinaryExpr(_)) && is_conditional(expr)))
+}
+
+fn simplify_complements(expr: Expr) -> Result<Expr> {
+    let Expr::BinaryExpr(binary) = &expr else {
+        return Ok(expr);
+    };
+    if !matches!(binary.op, Operator::And | Operator::Or) || !has_uncorrelated_in(&expr)? {
+        return Ok(expr);
+    }
+    let positive = match (binary.left.as_ref(), binary.right.as_ref()) {
+        (Expr::Not(child), other) | (other, Expr::Not(child)) if child.as_ref() == other => {
+            Some(other.clone())
+        }
+        (Expr::InSubquery(left), Expr::InSubquery(right))
+            if left.expr == right.expr
+                && left.subquery == right.subquery
+                && left.negated != right.negated =>
+        {
+            Some(Expr::InSubquery(if left.negated {
+                right.clone()
+            } else {
+                left.clone()
+            }))
+        }
+        _ => None,
+    };
+    let Some(positive) = positive else {
+        return Ok(expr);
+    };
+    if has_volatile_expression(&positive)? {
+        return Ok(expr);
+    }
+    // Catalyst preserves SQL nullability here, then rewrites the surviving IN
+    // to an existence value. Folding after separate IN/NOT IN joins is too late.
+    datafusion_expr::expr_fn::when(positive.is_null(), lit(ScalarValue::Boolean(None)))
+        .otherwise(lit(binary.op == Operator::Or))
 }
 
 fn null_literal(expr: &Expr) -> bool {
@@ -110,10 +174,20 @@ fn lower_nvl2(expr: Expr) -> Result<Expr> {
     )))
 }
 
-fn push_literal_comparison(expr: Expr) -> Result<Expr> {
+fn push_literal_comparison(
+    expr: Expr,
+    schema: &DFSchemaRef,
+    config: &dyn OptimizerConfig,
+) -> Result<Expr> {
     let Expr::BinaryExpr(binary) = &expr else {
         return Ok(expr);
     };
+    // NULLIF comparisons must stay intact until alias substitution. Their
+    // conditional simplifier already visits the operands; revisiting them here
+    // would double the work at every level of a nested comparison chain.
+    if is_conditional(&expr) {
+        return Ok(expr);
+    }
     if !matches!(
         binary.op,
         Operator::Eq
@@ -136,8 +210,17 @@ fn push_literal_comparison(expr: Expr) -> Result<Expr> {
     if !has_uncorrelated_in(conditional)? {
         return Ok(expr);
     }
-    let Expr::Case(mut case) = lower_nvl2(conditional.clone())? else {
-        return Ok(expr);
+    // Catalyst reaches a fixed point across nested comparisons. Simplify the
+    // inner expression first so each enclosing comparison sees its CASE result
+    // before DataFusion can turn that comparison into a NOT.
+    let conditional = simplify(conditional.clone(), Arc::clone(schema), config)?;
+    let conditional = lower_nvl2(conditional)?;
+    let Expr::Case(mut case) = conditional else {
+        return Ok(if conditional_left {
+            datafusion_expr::expr_fn::binary_expr(conditional, binary.op, literal.clone())
+        } else {
+            datafusion_expr::expr_fn::binary_expr(literal.clone(), binary.op, conditional)
+        });
     };
     // Spark pushes a foldable comparison into CASE/IF when at most one result
     // branch is not foldable. This happens before comparison-to-NOT folding.
@@ -185,6 +268,22 @@ fn simplify_conditional(
     let data_type = expr.get_type(schema.as_ref())?;
     let null = || ScalarValue::try_new_null(&data_type).map(lit);
     match expr {
+        Expr::BinaryExpr(mut binary) => {
+            binary.left = Box::new(simplify(*binary.left, Arc::clone(schema), config)?);
+            binary.right = Box::new(simplify(*binary.right, Arc::clone(schema), config)?);
+            Ok(Expr::BinaryExpr(binary))
+        }
+        Expr::ScalarFunction(mut function) if function.func.name() == "nullif" => {
+            function.args = function
+                .args
+                .into_iter()
+                .map(|arg| simplify(arg, Arc::clone(schema), config))
+                .collect::<Result<Vec<_>>>()?;
+            if function.args.get(1).is_some_and(null_literal) {
+                return Ok(function.args.remove(0));
+            }
+            Ok(Expr::ScalarFunction(function))
+        }
         Expr::ScalarFunction(function) if function.func.name() == "nvl2" => {
             // Spark replaces NVL2 with IF(IS NOT NULL(test), then, else).
             // Lower through the same protected CASE path before Boolean folding.
@@ -227,7 +326,7 @@ fn simplify_conditional(
                 .map(|expr| simplify(*expr, Arc::clone(schema), config))
                 .transpose()?;
             let mut branches = vec![];
-            let mut terminated = false;
+            let mut terminated = None;
             for (when, then) in case.when_then_expr {
                 // Spark represents simple CASE as searched CASE with equalities.
                 let when = if let Some(base) = &base {
@@ -244,15 +343,16 @@ fn simplify_conditional(
                     if branches.is_empty() {
                         return Ok(then);
                     }
-                    branches.push((Box::new(when), Box::new(then)));
-                    terminated = true;
+                    // The SQL resolver encodes ELSE as a final WHEN TRUE.
+                    // Restore the fallback before comparing result branches.
+                    terminated = Some(Box::new(then));
                     break;
                 }
                 branches.push((Box::new(when), Box::new(then)));
             }
             case.when_then_expr = branches;
-            case.else_expr = if terminated {
-                None
+            case.else_expr = if let Some(otherwise) = terminated {
+                Some(otherwise)
             } else {
                 case.else_expr
                     .map(|expr| simplify(*expr, Arc::clone(schema), config).map(Box::new))
