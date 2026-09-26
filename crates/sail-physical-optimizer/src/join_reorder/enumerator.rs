@@ -809,16 +809,10 @@ mod tests {
                 continue;
             }
 
-            let join_filter = Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
-                Operator::Eq,
-                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
-            )) as Arc<dyn PhysicalExpr>;
-
             let edge = JoinEdge::new(
                 JoinSet::new_singleton(center)?,
                 JoinSet::new_singleton(relation_id)?,
-                join_filter,
+                None,
                 JoinType::Inner,
                 vec![(
                     StableColumn {
@@ -863,16 +857,10 @@ mod tests {
     }
 
     fn add_equi_join_edge(graph: &mut QueryGraph, left: usize, right: usize) -> Result<usize> {
-        let join_filter = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
-            Operator::Eq,
-            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
-        )) as Arc<dyn PhysicalExpr>;
-
         let edge = JoinEdge::new(
             JoinSet::new_singleton(left)?,
             JoinSet::new_singleton(right)?,
-            join_filter,
+            None,
             JoinType::Inner,
             vec![(
                 StableColumn {
@@ -1072,7 +1060,7 @@ mod tests {
         graph.add_edge(JoinEdge::new(
             JoinSet::from_iter([0, 1])?,
             JoinSet::new_singleton(2)?,
-            join_filter,
+            Some(join_filter),
             JoinType::Inner,
             vec![],
         ))?;
