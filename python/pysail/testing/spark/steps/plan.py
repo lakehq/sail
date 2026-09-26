@@ -40,7 +40,7 @@ def normalize_plan_text(plan_text: str) -> str:
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
-        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        r"pytest-of-[^/]+/pytest-\d+/(?:popen-gw\d+/)?[^/]+/",
         re.IGNORECASE,
     )
 
