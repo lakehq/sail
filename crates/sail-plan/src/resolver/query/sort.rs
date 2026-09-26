@@ -1,14 +1,17 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion_common::Column;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::expr::{Alias, Sort};
+use datafusion_expr::expr_rewriter::rewrite_sort_cols_by_aggs;
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -30,16 +33,59 @@ impl PlanResolver<'_> {
             .resolve_query_sort_orders_by_plan(&input, &order, state)
             .await?;
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
-        if is_global {
-            Ok(LogicalPlanBuilder::from(input).sort(sorts)?.build()?)
+        let output_schema = Arc::clone(input.schema());
+        let plan = if is_global {
+            // The logical plan builder rewrites the sort orders in the same way.
+            let sorts = rewrite_sort_cols_by_aggs(sorts, &input)?;
+            let input = Self::add_sort_missing_inputs(input, &sorts, state)?;
+            LogicalPlanBuilder::from(input).sort(sorts)?.build()?
         } else {
             // TODO: Use the logical plan builder to include logic such as expression rebase.
             //   We can build a plan with a `Sort` node and then replace it with the
             //   `SortWithinPartitions` node using a tree node rewriter.
-            Ok(LogicalPlan::Extension(Extension {
+            let input = Self::add_sort_missing_inputs(input, &sorts, state)?;
+            LogicalPlan::Extension(Extension {
                 node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), sorts, None)),
-            }))
+            })
+        };
+        Self::restore_missing_input_output(plan, output_schema)
+    }
+
+    /// Spark adds the attributes missing from sort orders to every operator between the
+    /// sort and the descendant that outputs them. DataFusion's logical plan builder only
+    /// extends one projection, so add them here when every operator in between can carry them.
+    // TODO: Resolve sort orders against the missing-input chain as Spark does, instead of
+    //   recursing into every input, so that resolution boundaries also apply to sorting.
+    fn add_sort_missing_inputs(
+        input: LogicalPlan,
+        sorts: &[Sort],
+        state: &PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let columns = sorts
+            .iter()
+            .flat_map(|sort| sort.expr.column_refs())
+            .collect::<HashSet<_>>();
+        if columns
+            .iter()
+            .all(|column| input.schema().has_column(column))
+        {
+            return Ok(input);
         }
+        // TODO: The physical optimizer pushes sorts below `MonotonicIdExec` and into limits
+        //   (as a top-k sort), which changes the result, so do not recover more sort columns
+        //   above them until it doesn't.
+        if input.exists(|plan| {
+            Ok(match plan {
+                LogicalPlan::Limit(_) => true,
+                LogicalPlan::Extension(extension) => {
+                    extension.node.as_any().is::<MonotonicIdNode>()
+                }
+                _ => false,
+            })
+        })? {
+            return Ok(input);
+        }
+        Ok(Self::add_missing_inputs(&input, &columns, state)?.unwrap_or(input))
     }
 
     /// Rebase sort expressions using aggregation expressions when the aggregate plan

@@ -214,8 +214,13 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|column| {
                 let name = state.get_field_info(column.name())?.name();
-                match aliases.get_mut(name) {
-                    Some((e, exists, metadata)) => {
+                // Spark replaces a column whose name matches a new column (case-insensitively
+                // by default), and the replacement takes the name of the new column.
+                match aliases
+                    .iter_mut()
+                    .find(|(alias, _)| self.merge_names_equal(alias, name))
+                {
+                    Some((name, (e, exists, metadata))) => {
                         *exists = true;
                         match metadata {
                             Some(m) if !m.is_empty() => {
@@ -251,7 +256,7 @@ impl PlanResolver<'_> {
         let expr = self.rewrite_multi_expr(expr)?;
         let mut expr = self.rewrite_named_expressions(expr, state)?;
         // Spark preserves qualifiers only on untouched columns. Keep them on the
-        // projection expressions so missing-filter recovery can cross this project.
+        // projection expressions so missing-input recovery can cross this project.
         for expr in &mut expr {
             if let Expr::Alias(alias) = expr
                 && !aliases.contains_key(state.get_field_info(&alias.name)?.name())

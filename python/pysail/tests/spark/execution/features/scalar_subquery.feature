@@ -72,6 +72,62 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query error (?i)cannot (be )?resolve
 
+  Scenario Outline: Filter subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT a FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      WHERE <predicate> (
+        SELECT c FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      )
+      """
+    Then query result collected
+      | a   |
+      | <a> |
+
+    Examples:
+      | predicate     | a |
+      | EXISTS        | 1 |
+      | NOT EXISTS    | 2 |
+      | b * 10 IN     | 1 |
+      | b * 10 NOT IN | 2 |
+
+  Scenario: Projected scalar subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT a, (
+        SELECT COUNT(*) FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      ) AS n
+      FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      """
+    Then query result collected
+      | a | n |
+      | 1 | 2 |
+      | 2 | 0 |
+
+  Scenario Outline: Lateral subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT t.a, c FROM VALUES (1), (2) AS t(a), LATERAL (SELECT c FROM (<derived>))
+      """
+    Then query result collected
+      | a | c   |
+      | 1 | 100 |
+      | 2 | 200 |
+
+    Examples:
+      | derived                                                            |
+      | SELECT c FROM VALUES (1, 100), (2, 200) AS u(a, c) WHERE u.a = t.a |
+      | SELECT t.a * 100 AS c                                              |
+
+  Scenario: Unaliased derived tables expose columns under the generated qualifier
+    When query
+      """
+      SELECT __auto_generated_subquery_name.a FROM (SELECT a FROM VALUES (1) AS t(a))
+      """
+    Then query result collected
+      | a |
+      | 1 |
+
   Scenario: Scalar subquery in Parquet scan predicate
     Given variable location for temporary directory scalar_subquery_parquet
     Given statement template

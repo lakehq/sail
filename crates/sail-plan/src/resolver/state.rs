@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
@@ -75,12 +75,13 @@ pub(super) struct PlanResolverState {
     fields: HashMap<String, FieldInfo>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
-    /// The type-checking schema and ordered name-resolution schemas for a filter.
-    filter_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
+    /// The type-checking schema and ordered name-resolution schemas for expressions
+    /// that can recover missing inputs (e.g. a filter predicate).
+    missing_input_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
     /// Outputs whose descendants cannot participate in missing-reference resolution.
     /// Each output is paired with its input so that a pass-through projection that
     /// reproduces the output over a wider input (e.g. a join) is not a boundary.
-    filter_input_boundaries: Vec<(DFSchemaRef, Option<DFSchemaRef>)>,
+    missing_input_boundaries: Vec<(Vec<Column>, Option<Vec<Column>>)>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
@@ -114,8 +115,8 @@ impl PlanResolverState {
             next_id: 0,
             fields: HashMap::new(),
             outer_query_schema: None,
-            filter_resolution: None,
-            filter_input_boundaries: vec![],
+            missing_input_resolution: None,
+            missing_input_boundaries: vec![],
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
@@ -216,25 +217,45 @@ impl PlanResolverState {
         self.outer_query_schema.as_ref()
     }
 
-    pub fn get_filter_schemas(&self, schema: &DFSchemaRef) -> Option<&[DFSchemaRef]> {
-        self.filter_resolution
+    pub fn get_missing_input_schemas(&self, schema: &DFSchemaRef) -> Option<&[DFSchemaRef]> {
+        self.missing_input_resolution
             .as_ref()
             .filter(|(input, _)| Arc::ptr_eq(input, schema))
             .map(|(_, schemas)| schemas.as_slice())
     }
 
-    pub fn discard_filter_schemas_from(&mut self, index: usize) {
-        if let Some((_, schemas)) = &mut self.filter_resolution {
+    /// Returns the operator's own input schema when `schema` is the type-checking schema
+    /// for missing-input resolution. Expansions such as `*` only see this schema.
+    pub fn get_local_schema(&self, schema: &DFSchemaRef) -> DFSchemaRef {
+        self.get_missing_input_schemas(schema)
+            .and_then(|schemas| schemas.first())
+            .unwrap_or(schema)
+            .clone()
+    }
+
+    /// Discards the bindings to one descendant output, as Spark does when resolving
+    /// against that output fails. Deeper outputs remain available.
+    pub fn discard_missing_input_schema(&mut self, index: usize) {
+        if let Some((_, schemas)) = &mut self.missing_input_resolution
+            && index < schemas.len()
+        {
+            schemas.remove(index);
+        }
+    }
+
+    /// Discards the bindings to one descendant output and all deeper outputs.
+    pub fn discard_missing_input_schemas_from(&mut self, index: usize) {
+        if let Some((_, schemas)) = &mut self.missing_input_resolution {
             schemas.truncate(index);
         }
     }
 
-    pub fn register_filter_input_boundary(&mut self, plan: &LogicalPlan) {
+    pub fn register_missing_input_boundary(&mut self, plan: &LogicalPlan) {
         let mut plan = plan;
         // Empty outputs can share a schema with unrelated plans. Stop recovery at
         // the first nonempty input instead, whose field IDs distinguish the boundary.
         while plan.schema().fields().is_empty() {
-            let Some(child) = PlanResolver::filter_missing_input_child(plan, self) else {
+            let Some(child) = PlanResolver::missing_input_child(plan, self) else {
                 return;
             };
             if !child.schema().fields().is_empty() {
@@ -242,32 +263,32 @@ impl PlanResolverState {
             }
             plan = child;
         }
-        self.filter_input_boundaries
-            .push(Self::filter_input_boundary_key(plan));
+        self.missing_input_boundaries
+            .push(Self::missing_input_boundary_key(plan));
     }
 
-    pub fn is_filter_input_boundary(&self, plan: &LogicalPlan) -> bool {
+    pub fn is_missing_input_boundary(&self, plan: &LogicalPlan) -> bool {
         // Rewriters can rebuild a projection's schema while preserving its field IDs.
-        self.filter_input_boundaries
-            .contains(&Self::filter_input_boundary_key(plan))
+        self.missing_input_boundaries
+            .contains(&Self::missing_input_boundary_key(plan))
     }
 
-    fn filter_input_boundary_key(plan: &LogicalPlan) -> (DFSchemaRef, Option<DFSchemaRef>) {
+    fn missing_input_boundary_key(plan: &LogicalPlan) -> (Vec<Column>, Option<Vec<Column>>) {
+        // Parameter binding recomputes data types and nullability after registration,
+        // so compare column identities instead of schema values.
         (
-            Arc::clone(plan.schema()),
-            plan.inputs()
-                .first()
-                .map(|input| Arc::clone(input.schema())),
+            plan.schema().columns(),
+            plan.inputs().first().map(|input| input.schema().columns()),
         )
     }
 
-    pub fn enter_filter_scope(
+    pub fn enter_missing_input_scope(
         &mut self,
         schema: DFSchemaRef,
         schemas: Vec<DFSchemaRef>,
-    ) -> FilterScope<'_> {
-        let previous = self.filter_resolution.replace((schema, schemas));
-        FilterScope {
+    ) -> MissingInputScope<'_> {
+        let previous = self.missing_input_resolution.replace((schema, schemas));
+        MissingInputScope {
             state: self,
             previous,
         }
@@ -446,20 +467,20 @@ impl Drop for ParamValuesScope<'_> {
     }
 }
 
-pub(crate) struct FilterScope<'a> {
+pub(crate) struct MissingInputScope<'a> {
     state: &'a mut PlanResolverState,
     previous: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
 }
 
-impl FilterScope<'_> {
+impl MissingInputScope<'_> {
     pub(crate) fn state(&mut self) -> &mut PlanResolverState {
         self.state
     }
 }
 
-impl Drop for FilterScope<'_> {
+impl Drop for MissingInputScope<'_> {
     fn drop(&mut self) {
-        self.state.filter_resolution = self.previous.take();
+        self.state.missing_input_resolution = self.previous.take();
     }
 }
 
@@ -473,11 +494,7 @@ impl<'a> QueryScope<'a> {
         // Subqueries cannot recover missing local inputs solely for correlation.
         // TODO: Resolve the filter's local references before its subqueries so that
         // directly recovered inputs become visible to correlation in either order.
-        let schema = state
-            .get_filter_schemas(&schema)
-            .and_then(|schemas| schemas.first())
-            .cloned()
-            .unwrap_or(schema);
+        let schema = state.get_local_schema(&schema);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
         Self {
             state,

@@ -203,10 +203,7 @@ impl PlanResolver<'_> {
         use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
-        let schema = state
-            .get_filter_schemas(schema)
-            .and_then(|schemas| schemas.first())
-            .unwrap_or(schema);
+        let schema = &state.get_local_schema(schema);
 
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
@@ -268,13 +265,22 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        fn recovered_filter_input_index(
+        fn is_attribute_path(expr: &spec::Expr) -> bool {
+            match expr {
+                spec::Expr::UnresolvedAttribute { .. } => true,
+                spec::Expr::UnresolvedExtractValue { child, .. } => is_attribute_path(child),
+                _ => false,
+            }
+        }
+
+        fn discard_failed_missing_input(
             expr: &expr::Expr,
+            child_is_attribute_path: bool,
             schema: &DFSchemaRef,
-            state: &PlanResolverState,
-        ) -> Option<usize> {
-            state
-                .get_filter_schemas(schema)
+            state: &mut PlanResolverState,
+        ) {
+            let Some(index) = state
+                .get_missing_input_schemas(schema)
                 .and_then(|schemas| {
                     expr.column_refs()
                         .into_iter()
@@ -284,24 +290,24 @@ impl PlanResolver<'_> {
                         .max()
                 })
                 .filter(|index| *index > 0)
-        }
-
-        fn discard_failed_filter_input(
-            expr: &expr::Expr,
-            schema: &DFSchemaRef,
-            state: &mut PlanResolverState,
-        ) -> bool {
-            if let Some(index) = recovered_filter_input_index(expr, schema, state) {
+            else {
+                return;
+            };
+            if child_is_attribute_path {
                 // Spark discards tentative descendant bindings when extracting a
-                // struct field fails, then retries earlier outputs and outer references.
-                state.discard_filter_schemas_from(index);
-                true
+                // struct field fails, then retries deeper outputs and outer references.
+                state.discard_missing_input_schema(index);
             } else {
-                false
+                // Spark binds the arguments of a function before resolving the function, so it
+                // keeps those bindings and fails. Retry only earlier outputs and outer references,
+                // which cannot bind a deeper column in place of the failed one.
+                // TODO: Keep the bindings as Spark does once name resolution is staged. Spark
+                //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
+                state.discard_missing_input_schemas_from(index);
             }
         }
 
-        let is_attribute = matches!(&child, spec::Expr::UnresolvedAttribute { .. });
+        let child_is_attribute_path = is_attribute_path(&child);
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -328,20 +334,13 @@ impl PlanResolver<'_> {
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
-                if matches!(data_type, DataType::Struct(_))
-                    && (is_attribute
-                        || recovered_filter_input_index(&expr, schema, state).is_none())
-                {
-                    if is_attribute {
-                        discard_failed_filter_input(&expr, schema, state);
-                    }
+                if matches!(data_type, DataType::Struct(_)) {
+                    // A column cannot select a struct field, even if it is named like one.
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(
                         "extraction must be a literal".to_string(),
                     ));
                 }
-                // TODO: Reject column selectors on computed recovered structs after
-                // staged name resolution can preserve Spark's descendant rollback.
-                // Until then, retain their existing resolution behavior.
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),
@@ -357,7 +356,7 @@ impl PlanResolver<'_> {
                         | DataType::ListView(_)
                         | DataType::LargeListView(_)
                 ) {
-                    discard_failed_filter_input(&expr, schema, state);
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 }
                 return Err(PlanError::invalid("extraction must be a literal"));
             }
@@ -418,7 +417,7 @@ impl PlanResolver<'_> {
             }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
-                    discard_failed_filter_input(&expr, schema, state);
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"
                     )));
@@ -430,7 +429,7 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>()
                     .one()
                 else {
-                    discard_failed_filter_input(&expr, schema, state);
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "missing or ambiguous field: {name}"
                     )));
@@ -438,7 +437,7 @@ impl PlanResolver<'_> {
                 expr.field(name)
             }
             _ => {
-                discard_failed_filter_input(&expr, schema, state);
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
                 )));

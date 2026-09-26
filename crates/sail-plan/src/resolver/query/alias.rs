@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion_common::TableReference;
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use sail_common::spec;
+use sail_sql_analyzer::query::AUTO_GENERATED_SUBQUERY_NAME;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -52,11 +53,29 @@ impl PlanResolver<'_> {
                 .collect();
             LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
         };
+        let alias = TableReference::Bare {
+            table: Arc::from(String::from(name)),
+        };
+        if alias.table() == AUTO_GENERATED_SUBQUERY_NAME {
+            // Spark removes subquery aliases before decorrelation, and correlated predicates
+            // cannot be pulled up through `SubqueryAlias` here. So the generated alias only
+            // requalifies the output and, like Spark, stops missing-reference resolution.
+            let expr: Vec<Expr> = input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(|col| {
+                    let name = col.name.clone();
+                    Expr::Column(col).alias_qualified(Some(alias.clone()), name)
+                })
+                .collect();
+            let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+            state.register_missing_input_boundary(&plan);
+            return Ok(plan);
+        }
         Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             Arc::new(input),
-            TableReference::Bare {
-                table: Arc::from(String::from(name)),
-            },
+            alias,
         )?))
     }
 }

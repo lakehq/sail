@@ -3,6 +3,8 @@ import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 
 def test_get_item_ignore_case(spark):
     df = spark.sql("SELECT struct(1 AS b) AS a")
@@ -17,6 +19,8 @@ def test_struct_field_selector_kind(spark, computed):
 
     assert df.select(payload.getField("selector").alias("value")).collect() == [Row(value=1)]
     assert df.select(payload["selector"].alias("value")).collect() == [Row(value=1)]
+    if pyspark_version() < (4,):
+        pytest.skip("the Spark Connect client does not support column selectors before PySpark 4")
     with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
         df.select(payload[F.col("selector")]).collect()
 

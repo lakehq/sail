@@ -2,9 +2,11 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException
+from pyspark.sql import Row
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 def partition_count(df):
@@ -231,3 +233,71 @@ def test_explicit_coalesce_after_filter_and_projection(spark):
 
     assert partition_count(df.coalesce(1)) == 1
     assert_frame_equal(actual, expected)
+
+
+@pytest.fixture
+def repartition_source(spark):
+    return spark.createDataFrame([(1, 10, 3), (2, 20, 1), (3, 30, 2)], "a int, b int, c int")
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (lambda df: df.select("a").repartition(F.col("b")), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartition(3, "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartition("a", "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").where("c > 1").repartition("b"), [Row(a=1), Row(a=3)]),
+        (lambda df: df.select("a").repartitionByRange(2, "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartitionByRange(2, F.col("b").desc()), [Row(a=1), Row(a=2), Row(a=3)]),
+    ],
+    ids=["hash", "hash-with-count", "visible-and-removed", "after-filter", "range", "range-descending"],
+)
+def test_repartition_by_attribute_removed_by_projections(repartition_source, operation, expected):
+    result = operation(repartition_source)
+    assert result.columns == ["a"]
+    assert sorted(result.collect()) == expected
+
+
+def partition_groups(df, column):
+    rows = df.select(column, F.spark_partition_id().alias("pid")).collect()
+    return {row["pid"]: sorted(r[column] for r in rows if r["pid"] == row["pid"]) for row in rows}
+
+
+def test_repartition_by_removed_attribute_partitions_by_it(spark):
+    source = spark.createDataFrame([(1, 10), (2, 10), (3, 20), (4, 20)], "a int, b int")
+    groups = partition_groups(source.select("a").repartition(4, "b"), "a").values()
+    assert all(group in ([1, 2], [3, 4], [1, 2, 3, 4]) for group in groups)
+
+
+def test_repartition_resolves_each_expression_independently(spark):
+    source = spark.createDataFrame(
+        [((1,), 100, 7), ((1,), 200, 8), ((1,), 300, 9), ((1,), 400, 10)], "s struct<x:int>, m int, a int"
+    )
+    projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), (F.col("m") * 0).alias("m"), "a").select("a")
+    # Only `s.x` falls back to the older struct, while `m` still refers to the nearer output.
+    result = projected.repartition(16, F.col("s.x"), F.col("m"))
+    assert len(partition_groups(result, "a")) == 1
+
+
+def test_repartition_then_sort_within_partitions_by_removed_attribute(repartition_source):
+    result = repartition_source.coalesce(1).select("a").repartition(1, "b").sortWithinPartitions(F.col("b").desc())
+    assert result.collect() == [Row(a=3), Row(a=2), Row(a=1)]
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4,), reason="the Spark Connect client does not support column selectors before PySpark 4"
+)
+def test_repartition_recovered_struct_rejects_column_selector(spark):
+    source = spark.createDataFrame([((1, 2), 5)], "s struct<x:int, k:int>, a int")
+    projected = source.select("s", "a").select("a")
+    with pytest.raises(AnalysisException):
+        projected.repartition(F.coalesce(F.col("s"), F.col("s"))[F.col("x")]).collect()
+
+
+def test_repartition_rejects_attribute_removed_before_view(spark, repartition_source):
+    repartition_source.select("a", "c").createOrReplaceTempView("repartition_view")
+    try:
+        with pytest.raises(AnalysisException):
+            spark.table("repartition_view").repartition("b").collect()
+    finally:
+        spark.catalog.dropTempView("repartition_view")

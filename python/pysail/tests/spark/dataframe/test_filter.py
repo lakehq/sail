@@ -1,3 +1,5 @@
+import datetime
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -6,6 +8,10 @@ from pyspark.sql import Row, Window
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+COLUMN_SELECTOR_MARK = pytest.mark.skipif(
+    pyspark_version() < (4,), reason="the Spark Connect client does not support column selectors before PySpark 4"
+)
 
 
 @pytest.fixture
@@ -234,11 +240,6 @@ def test_filter_does_not_resolve_field_of_shadowed_struct(spark):
 
 
 @pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Missing-reference recovery across invalid intermediate projections requires staged expression resolution",
-    strict=True,
-)
 def test_filter_missing_attributes_discard_failed_projection_resolution(spark, failure):
     if failure == "nested-field":
         source = spark.createDataFrame([((1,), "SOURCE")], "payload struct<x:int>, marker string")
@@ -301,11 +302,6 @@ def test_filter_descendant_fallback_preserves_earlier_bindings(spark, failure, r
 
 @pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
 @pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Missing-reference recovery across invalid intermediate projections requires staged expression resolution",
-    strict=True,
-)
 def test_filter_descendant_fallback_preserves_deeper_bindings(spark, failure):
     outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
     if failure == "nested-field":
@@ -324,6 +320,161 @@ def test_filter_descendant_fallback_preserves_deeper_bindings(spark, failure):
         .where((F.col("marker").outer() == "OUTER") & (F.col(reference).outer() == 1))
     )
     assert outer.where(inner.exists()).collect() == []
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        lambda: F.col("s.x") == 1,
+        lambda: F.col("s")["x"] == 1,
+        lambda: F.col("s").getField("x") == 1,
+        lambda: "s.x = 1",
+        lambda: "s['x'] = 1",
+    ],
+    ids=["dotted-column", "extract-column", "get-field", "dotted-sql", "extract-sql"],
+)
+def test_filter_missing_attribute_skips_invalid_descendant(spark, predicate):
+    predicate = predicate()
+    source = spark.createDataFrame([((1,), 7)], "s struct<x:int>, a int")
+    # The intermediate struct has no field `x`, so the deeper struct is used instead.
+    projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), "a").select("a")
+    assert projected.where(predicate).collect() == [Row(a=7)]
+
+
+def test_filter_missing_attribute_keeps_bindings_above_invalid_descendant(spark):
+    source = spark.createDataFrame([((1,), "SOURCE", 7)], "payload struct<x:int>, marker string, a int")
+    projected = (
+        source.select(F.struct(F.lit(2).alias("y")).alias("payload"), "a", "marker")
+        .select("a", F.lit("NEAR").alias("marker"))
+        .select("a")
+    )
+    # Only the failed projection is discarded: `marker` still binds to the nearer output.
+    assert projected.where((F.col("marker") == "NEAR") & (F.col("payload.x") == 1)).collect() == [Row(a=7)]
+    assert projected.where((F.col("marker") == "SOURCE") & (F.col("payload.x") == 1)).collect() == []
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param(
+            lambda: F.coalesce(F.col("s"), F.col("s"))[F.col("k")] == 2,  # noqa: PLR2004
+            marks=COLUMN_SELECTOR_MARK,
+        ),
+        lambda: "coalesce(s, s)[k] = 2",
+        pytest.param(lambda: F.struct(F.col("s.x").alias("q"))[F.col("q")] == 1, marks=COLUMN_SELECTOR_MARK),
+    ],
+    ids=["function-column", "function-sql", "struct-column"],
+)
+def test_filter_recovered_struct_rejects_column_selector(spark, predicate):
+    source = spark.createDataFrame([((1, 2), "x", 5)], "s struct<x:int, k:int>, k string, a int")
+    projected = source.select("s", "k", "a").select("a")
+    # A column cannot select a struct field, even if it is named like one.
+    with pytest.raises(AnalysisException):
+        projected.where(predicate()).collect()
+
+
+@pytest.mark.parametrize(
+    ("column", "predicate"),
+    [
+        ("user", lambda: F.col("user") == "alice"),
+        ("session_user", lambda: "session_user = 'alice'"),
+        ("current_date", lambda: F.col("current_date") == F.lit("2000-01-01").cast("date")),
+    ],
+)
+def test_filter_does_not_recover_literal_function_names(spark, column, predicate):
+    source = spark.createDataFrame([(1, "alice", datetime.date(2000, 1, 1))], "id int, user string, day date")
+    projected = source.withColumnRenamed("day" if column == "current_date" else "user", column).select("id")
+    result = projected.where(predicate())
+    if is_jvm_spark():
+        # Spark resolves the name to the function since the output has no such column.
+        assert result.collect() == []
+    else:
+        # TODO: Resolve literal function names to the functions as Spark does.
+        with pytest.raises(AnalysisException):
+            result.collect()
+
+
+@pytest.mark.parametrize(("color", "expected"), [("RED", [Row(id=1)]), ("red", [])])
+def test_filter_missing_attribute_keeps_map_bindings(spark, color, expected):
+    source = spark.createDataFrame([(1, ("red",)), (2, ("blue",))], "id int, attrs struct<color:string>")
+    projected = source.withColumn("attrs", F.create_map(F.lit("color"), F.upper(F.col("attrs.color")))).select("id")
+    result = projected.where(f"attrs.color = '{color}'")
+    if is_jvm_spark():
+        # Spark extracts the map value instead of discarding the map and using the older struct.
+        assert result.collect() == expected
+    else:
+        # TODO: Extract map values by a dotted name as Spark does.
+        with pytest.raises(AnalysisException):
+            result.collect()
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        lambda: F.coalesce(F.col("s"), F.col("s"))["k"] == 1,
+        lambda: "coalesce(s.t, s.t).k = 7",
+    ],
+    ids=["column", "sql"],
+)
+def test_filter_recovered_computed_struct_keeps_binding(spark, predicate):
+    source = spark.createDataFrame([((1, (7,)), 5), ((2, (8,)), 6)], "s struct<k:int, t:struct<k:int>>, a int")
+    projected = source.select(
+        F.struct(F.lit(2).alias("x"), F.struct(F.lit(3).alias("z")).alias("t")).alias("s"), "a"
+    ).select("a")
+    # Spark binds the function argument to the nearer struct and fails instead of using the older one.
+    with pytest.raises(AnalysisException):
+        projected.where(predicate()).collect()
+
+
+@pytest.mark.parametrize("projected", [False, True])
+def test_filter_rejects_ambiguous_qualified_struct_field(spark, projected):
+    source = spark.createDataFrame(
+        [((1, 2), ((9,),), 7)], "s struct<x:int, X:int>, t struct<s:struct<x:int>>, a int"
+    ).alias("t")
+    # `t.s.x` refers to the ambiguous field of `s`, not to the nested field of `t`.
+    with pytest.raises(AnalysisException):
+        (source.select("a") if projected else source).where("t.s.x = 9").collect()
+
+
+def test_filter_missing_attribute_discards_ambiguous_struct_field(spark):
+    source = spark.createDataFrame([((1,), 7), ((2,), 8)], "s struct<x:int>, a int")
+    projected = source.select(F.struct(F.lit(2).alias("x"), F.lit(3).alias("X")).alias("s"), "a").select("a")
+    # The nearer struct has two fields named `x` case-insensitively, so the older struct is used.
+    assert projected.where("s.x = 1").collect() == [Row(a=7)]
+
+
+@pytest.mark.parametrize(
+    ("reference", "marker", "expected"),
+    [("name", "NEAR", [Row(keep="keep")]), ("name", "OTHER", []), ("plan-id", "NEAR", [Row(keep="keep")])],
+)
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Spark resolves names again in later analyzer iterations and never discards plan ID references, "
+    "so a name only output by a discarded projection can still bind to it",
+    strict=True,
+)
+def test_filter_missing_attribute_rebinds_name_only_in_discarded_output(spark, reference, marker, expected):
+    source = spark.createDataFrame([((1,), "SOURCE")], "payload struct<x:int>, marker string")
+    projected = source.select(F.struct(F.lit(2).alias("y")).alias("payload"), F.lit("NEAR").alias("near"))
+    near = projected["near"] if reference == "plan-id" else F.col("near")
+    result = projected.select(F.lit("keep").alias("keep")).where((near == marker) & (F.col("payload.x") == 1))
+    assert result.collect() == expected
+
+
+@pytest.mark.parametrize(
+    ("columns", "predicate", "expected"),
+    [
+        (["a"], "x.b = 20", [Row(a=2)]),
+        (["a", "b", "c"], "x.b = 20", [Row(a=2, b=200, c=1)]),
+        (["a"], "x.b = 20 AND b = 200", [Row(a=2)]),
+        (["a"], "b = 200", [Row(a=2)]),
+    ],
+)
+def test_filter_qualified_attribute_replaced_by_with_column(spark, columns, predicate, expected):
+    source = spark.createDataFrame([(1, 10, 3), (2, 20, 1), (3, 30, 2)], "a int, b int, c int")
+    # The qualifier refers to the input of `withColumn`, so `x.b` is the replaced column.
+    replaced = source.alias("x").withColumn("b", F.col("b") * 10)
+    assert replaced.select(*columns).where(predicate).collect() == expected
 
 
 @pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
@@ -574,6 +725,55 @@ def test_filter_with_query_recovers_only_query_output(spark, filter_source, colu
             assert projected.where(predicate).collect() == [Row(key="b")]
     finally:
         spark.catalog.dropTempView("filter_with_source")
+
+
+PARAMETERIZED_BOUNDARY_QUERIES = [
+    ("WITH c AS (SELECT a, b FROM VALUES (1, 20) AS t(a, b)) SELECT a, :p AS p FROM c", {"p": 1}),
+    ("WITH c AS (SELECT a, b FROM VALUES (1, 20) AS t(a, b)) SELECT a, ? AS p FROM c", [1]),
+    ("WITH c AS (SELECT a, b, :p AS p FROM VALUES (1, 20) AS t(a, b)) SELECT a FROM c", {"p": 1}),
+    ("SELECT * FROM (SELECT :p AS x, a, b FROM VALUES (1, 20) AS t(a, b)) UNPIVOT (v FOR n IN (b))", {"p": 1}),
+    ("SELECT * FROM (SELECT a, :p AS p FROM VALUES (1, 20) AS t(a, b))", {"p": 1}),
+]
+PARAMETERIZED_BOUNDARY_IDS = [
+    "with-output-named",
+    "with-output-positional",
+    "with-definition",
+    "unpivot",
+    "derived-table",
+]
+
+
+@pytest.mark.parametrize(("query", "args"), PARAMETERIZED_BOUNDARY_QUERIES, ids=PARAMETERIZED_BOUNDARY_IDS)
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda df: df.where(F.col("b") == 20),  # noqa: PLR2004
+        lambda df: df.repartition(2, "b"),
+        lambda df: df.coalesce(1).sortWithinPartitions(F.col("b").desc()),
+    ],
+    ids=["filter", "repartition", "sort-within-partitions"],
+)
+def test_parameterized_query_rejects_hidden_attribute(spark, query, args, operation):
+    # Binding a projected parameter changes column types but not the query's resolution boundaries.
+    with pytest.raises(AnalysisException):
+        operation(spark.sql(query, args=args)).collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH c AS (SELECT a, b FROM VALUES (1, 20), (2, 10) AS t(a, b)) SELECT a, :p AS p FROM c",
+        "SELECT * FROM (SELECT a, :p AS p FROM VALUES (1, 20), (2, 10) AS t(a, b))",
+    ],
+    ids=["with-query", "derived-table"],
+)
+def test_filter_parameterized_query_preserves_correlated_attribute(spark, query):
+    outer = spark.createDataFrame([(1, 10), (2, 20)], "a int, b int")
+    inner = spark.sql(query, args={"p": 1})
+    # The column b is hidden by the query output, so b refers to the outer row.
+    predicate = (F.col("a") == F.col("o.a").outer()) & (F.col("b") == 20)  # noqa: PLR2004
+    assert outer.alias("o").where(inner.where(predicate).exists()).select("a").collect() == [Row(a=2)]
 
 
 @pytest.mark.parametrize("subquery", ["scalar", "exists"])
