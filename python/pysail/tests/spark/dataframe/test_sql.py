@@ -1,6 +1,41 @@
 import pytest
 
 
+@pytest.mark.parametrize("depth", [20, 80])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("nullable_default", [False, True])
+def test_nested_numeric_nvl2_preserves_values_and_schema(spark, depth, nullable, nullable_default):
+    if nullable:
+        frame = spark.createDataFrame([(None,), (7,)], "x long")
+        tested, value = "x", "x"
+        expected = [(1,), (7,)]
+    else:
+        frame = spark.range(2)
+        tested, value = "nullif(id, 0)", "0L"
+        expected = [(0,), (1,)]
+    default = tested if nullable_default else "1"
+    if nullable_default:
+        expected = [(None,), (7 if nullable else 0,)]
+    for _ in range(depth):
+        value = f"nvl2({tested}, {value}, {default})"
+    # A SQL expression avoids the client's protobuf nesting limit at depth 80.
+    result = frame.selectExpr(f"{value} AS v")
+    assert result.dtypes == [("v", "bigint")]
+    assert result.schema["v"].nullable is (nullable or nullable_default)
+    assert result.orderBy("v").collect() == expected
+
+
+@pytest.mark.parametrize("value", [1, None])
+def test_nvl2_retains_nullable_branch_after_binding_a_cast_parameter(spark, value):
+    result = spark.sql(
+        "SELECT nvl2(x, x, CAST(? AS BIGINT)) AS v FROM VALUES (CAST(NULL AS BIGINT)), (7L) AS t(x)",
+        args=[value],
+    )
+    assert result.dtypes == [("v", "bigint")]
+    assert result.schema["v"].nullable
+    assert result.collect() == [(value,), (7,)]
+
+
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
 
@@ -12,6 +47,129 @@ def test_sql_positional_parameters(spark):
         (1,),
     ]
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
+
+
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize(
+    ("query", "value", "expected"),
+    [
+        pytest.param(
+            "SELECT CASE WHEN id = 0 THEN {marker} WHEN id = 1 THEN 16777217 ELSE CAST(2 AS FLOAT) END AS v "
+            "FROM range(3) ORDER BY id",
+            1.25,
+            [(1.25,), (16777217.0,), (2.0,)],
+            id="case",
+        ),
+        pytest.param(
+            "SELECT CASE WHEN id = 0 THEN v ELSE CAST(2 AS FLOAT) END AS v "
+            "FROM (SELECT id, {marker} + 1 AS v FROM range(2)) AS q ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (2.0,)],
+            id="case-through-projection",
+        ),
+        pytest.param(
+            "SELECT IF(id = 0, {marker} + 1, CAST(2 AS FLOAT)) AS v FROM range(2) ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (2.0,)],
+            id="if",
+        ),
+        pytest.param(
+            "SELECT nvl2(id, {marker} + 1, CAST(2 AS FLOAT)) AS v FROM range(2) ORDER BY id",
+            16777216.0,
+            [(16777217.0,), (16777217.0,)],
+            id="nvl2",
+        ),
+    ],
+)
+def test_sql_conditional_preserves_parameter_branch_precision(spark, marker, named, query, value, expected):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        args = {"value": value} if named else [value]
+        df = spark.sql(query.format(marker=marker), args=args)
+        assert df.dtypes == [("v", "double")]
+        assert df.collect() == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize(
+    ("query", "value"),
+    [
+        pytest.param(
+            "SELECT nvl2(id, 1, CAST(1.5 AS DOUBLE)) AS v FROM VALUES (0), (NULL) AS t(id) WHERE {marker} ORDER BY v",
+            True,
+            id="unrelated-parameter",
+        ),
+        pytest.param(
+            "SELECT nvl2(id, 1, {marker}) AS v FROM VALUES (0), (NULL) AS t(id) ORDER BY v",
+            1.5,
+            id="result-parameter",
+        ),
+    ],
+)
+def test_sql_nvl2_preserves_widened_parameter_schema(spark, marker, named, ansi, query, value):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        args = {"value": value} if named else [value]
+        df = spark.sql(query.format(marker=marker), args=args)
+        assert df.dtypes == [("v", "double")]
+        assert df.collect() == [(1.0,), (1.5,)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
+@pytest.mark.parametrize("through_view", [False, True], ids=["dataframe", "temp-view"])
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param(
+            "SELECT 0 AS id, 1 AS v UNION ALL SELECT 1 AS id, {marker} AS v",
+            id="union-all",
+        ),
+        pytest.param(
+            "SELECT 0 AS id, 1 AS v UNION SELECT 1 AS id, {marker} AS v",
+            id="union-distinct",
+        ),
+        pytest.param(
+            "SELECT id, CASE WHEN id = 0 THEN 1 ELSE {marker} END AS v FROM range(2)",
+            id="case-projection",
+        ),
+    ],
+)
+def test_sql_conditional_preserves_composed_parameter_precision(spark, marker, named, query, through_view):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        args = {"value": 16777217.0} if named else [16777217.0]
+        df = spark.sql(query.format(marker=marker), args=args)
+        if through_view:
+            # Queries over the view are resolved without the parameters.
+            df.createOrReplaceTempView("parameterized_input")
+            df = spark.table("parameterized_input")
+        result = df.selectExpr(
+            "id",
+            "CASE WHEN id = 0 THEN CAST(2 AS FLOAT) ELSE v END AS case_result",
+            "if(id = 0, CAST(2 AS FLOAT), v) AS if_result",
+            "nvl2(nullif(id, 1), CAST(2 AS FLOAT), v) AS nvl2_result",
+        ).orderBy("id")
+        assert result.collect() == [
+            (0, 2.0, 2.0, 2.0),
+            (1, 16777217.0, 16777217.0, 16777217.0),
+        ]
+    finally:
+        spark.sql("DROP VIEW IF EXISTS parameterized_input")
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
+def test_sql_case_widens_parameter_marker_branch(spark):
+    df = spark.sql("SELECT CASE WHEN id = 0 THEN ? ELSE CAST(2 AS BIGINT) END AS v FROM range(2) ORDER BY id", args=[1])
+    assert df.dtypes == [("v", "bigint")]
+    assert df.collect() == [(1,), (2,)]
 
 
 def test_sql_timestamp_string_parameters(spark):
@@ -83,3 +241,49 @@ def test_predicate_negation(spark):
     assert spark.sql("SELECT NOT (1 NOT IN (1, 2))").collect() == [(True,)]
     with pytest.raises(Exception, match="NOT"):
         assert spark.sql("SELECT 1 NOT NOT IN (1, 2)").collect() == [(True,)]
+
+
+@pytest.mark.parametrize("with_properties", [False, True])
+def test_persistent_view_hides_conditional_config_properties(spark, with_properties):
+    view_name = "view_conditional_config_metadata"
+    properties = "TBLPROPERTIES ('review.owner' = 'team')" if with_properties else ""
+    try:
+        spark.sql(f"CREATE VIEW {view_name} {properties} AS SELECT 1 AS id")
+
+        describe = {row.col_name: row.data_type for row in spark.sql(f"DESCRIBE EXTENDED {view_name}").collect()}
+        information = spark.sql(f"SHOW TABLE EXTENDED LIKE '{view_name}'").collect()[0].information
+        for key in (
+            "view.sqlConfig.spark.sql.ansi.enabled",
+            "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate",
+        ):
+            assert key not in describe.get("Table Properties", "")
+            assert key not in information
+
+        if with_properties:
+            assert describe["Table Properties"] == "[review.owner=team]"
+            assert "Table Properties: [review.owner=team]" in information
+        else:
+            assert "Table Properties" not in describe
+            assert "Table Properties:" not in information
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {view_name}")
+
+
+@pytest.mark.timeout(30, func_only=True)
+@pytest.mark.parametrize(
+    ("tested", "nested_in_null_branch", "expected"),
+    [
+        pytest.param("CAST(id AS INT)", True, [(1,), (1,)], id="nonnull-test-null-branch"),
+        pytest.param("CAST(id AS INT)", False, [(0,), (0,)], id="nonnull-test-nonnull-branch"),
+        pytest.param("nullif(CAST(id AS INT), 0)", True, [(0,), (1,)], id="nullable-test-null-branch"),
+        pytest.param("nullif(CAST(id AS INT), 0)", False, [(1,), (0,)], id="nullable-test-nonnull-branch"),
+    ],
+)
+def test_sql_nested_nvl2_resolves_without_repeated_field_inference(spark, tested, nested_in_null_branch, expected):
+    expression = "0"
+    for _ in range(20):
+        expression = f"nvl2({tested}, 1, {expression})" if nested_in_null_branch else f"nvl2({tested}, {expression}, 1)"
+    result = spark.sql(f"SELECT {expression} AS v FROM range(2) ORDER BY id")  # noqa: S608
+    assert result.dtypes == [("v", "int")]
+    assert result.schema["v"].nullable is False
+    assert result.collect() == expected

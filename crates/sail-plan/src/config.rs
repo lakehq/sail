@@ -44,6 +44,12 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether decimal common types retain fractional digits when precision exceeds 38.
+    pub legacy_decimal_retain_fraction_digits: bool,
+    /// Preserve existing numeric conditional FLOAT coercion while re-resolving views.
+    pub preserve_view_conditional_float_type: bool,
+    /// Creation-time ANSI mode for conditional coercion in persistent views.
+    pub view_conditional_ansi_mode: Option<bool>,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
@@ -90,6 +96,9 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: true,
+            legacy_decimal_retain_fraction_digits: false,
+            preserve_view_conditional_float_type: false,
+            view_conditional_ansi_mode: None,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,

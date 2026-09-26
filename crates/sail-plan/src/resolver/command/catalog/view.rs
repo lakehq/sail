@@ -10,7 +10,10 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::TemporaryViewSource;
+use sail_common_datafusion::catalog::{
+    TemporaryViewSource, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
+    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -32,7 +35,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             replace,
             comment,
-            properties,
+            mut properties,
         } = definition;
         // Resolve the query plan to register fields in state and extract column types.
         let resolved_input = self.resolve_query_plan(*input, state).await?;
@@ -71,6 +74,21 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
+        // Preserve the settings used by conditional coercion.
+        properties.retain(|(key, _)| {
+            key != VIEW_CONDITIONAL_ANSI_MODE_PROPERTY
+                && key != VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY
+        });
+        properties.push((
+            VIEW_CONDITIONAL_ANSI_MODE_PROPERTY.to_string(),
+            self.config.ansi_mode.to_string(),
+        ));
+        properties.push((
+            VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY.to_string(),
+            self.config
+                .legacy_decimal_retain_fraction_digits
+                .to_string(),
+        ));
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {

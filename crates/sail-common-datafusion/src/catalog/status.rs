@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    VIEW_PREFIX,
 };
 use crate::column_features::ColumnFeaturesBuilder;
 use crate::session::plan::PlanFormatter;
@@ -280,14 +281,21 @@ impl TableStatus {
             rows.push(("View Text".to_string(), definition.to_string()));
         }
 
-        let properties = self.kind.properties();
+        let properties = self
+            .kind
+            .properties()
+            .iter()
+            .filter(|(key, _)| {
+                // Matches Spark's behavior
+                !matches!(&self.kind, TableKind::View { .. }) || !key.starts_with(VIEW_PREFIX)
+            })
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>();
         if !properties.is_empty() {
-            let props_str = properties
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            rows.push(("Table Properties".to_string(), format!("[{props_str}]")));
+            rows.push((
+                "Table Properties".to_string(),
+                format!("[{}]", properties.join(", ")),
+            ));
         }
 
         if let Some(loc) = self.kind.location() {

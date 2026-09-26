@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 

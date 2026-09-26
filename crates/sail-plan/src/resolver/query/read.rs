@@ -11,7 +11,10 @@ use datafusion_expr::{
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseOperation, TableColumnStatus, TableKind, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
+    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -151,15 +154,21 @@ impl PlanResolver<'_> {
                 definition,
                 columns,
                 comment: _,
-                properties: _,
+                properties,
             } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                self.resolve_table_view(definition, columns, table_reference.clone(), state)
-                    .await?
+                self.resolve_table_view(
+                    definition,
+                    columns,
+                    properties,
+                    table_reference.clone(),
+                    state,
+                )
+                .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {
@@ -208,17 +217,34 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    // FIXME: Capture and restore the remaining creation-time SQL configuration;
+    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
         columns: Vec<TableColumnStatus>,
+        properties: Vec<(String, String)>,
         table_reference: TableReference,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        let mut config = self.config.as_ref().clone();
+        config.preserve_view_conditional_float_type = true;
+        // Older views lack the creation-time setting; retain their existing coercion.
+        config.view_conditional_ansi_mode = properties
+            .iter()
+            .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
+            .and_then(|(_, value)| value.parse::<bool>().ok());
+        // Older views retain the existing nonlegacy decimal rule.
+        config.legacy_decimal_retain_fraction_digits = properties
+            .iter()
+            .find(|(key, _)| key == VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY)
+            .and_then(|(_, value)| value.parse::<bool>().ok())
+            .unwrap_or(false);
+        let resolver = Self::new(self.ctx, Arc::new(config));
         let plan = match spec_plan {
-            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
                 return Err(PlanError::invalid("view definition must be a query"));
             }

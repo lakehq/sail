@@ -1,8 +1,13 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::create_physical_expr;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Expr};
 
 pub struct LiteralEvaluator {
@@ -35,8 +40,33 @@ impl LiteralEvaluator {
     }
 
     pub fn evaluate(&self, expr: &Expr) -> Result<ScalarValue> {
+        if let Expr::Literal(value, _) = expr {
+            return Ok(value.clone());
+        }
+        // Logical functions such as NVL2 must lower to executable expressions
+        // before physical planning, including in constant-only resolver paths.
+        let context = SimplifyContext::builder()
+            .with_schema(Arc::new(self.schema.clone()))
+            .build();
+        let expr = ExprSimplifier::new(context.clone()).coerce(expr.clone(), &self.schema)?;
+        // Lower logical UDFs without constant-folding their children: invalid
+        // casts in unselected CASE branches must remain unevaluated.
+        let expr = expr
+            .transform_up(|expr| {
+                let Expr::ScalarFunction(mut function) = expr else {
+                    return Ok(Transformed::no(expr));
+                };
+                match function.func.simplify(function.args, &context)? {
+                    ExprSimplifyResult::Original(args) => {
+                        function.args = args;
+                        Ok(Transformed::no(Expr::ScalarFunction(function)))
+                    }
+                    ExprSimplifyResult::Simplified(expr) => Ok(Transformed::yes(expr)),
+                }
+            })?
+            .data;
         let expr = create_physical_expr(
-            expr,
+            &expr,
             &self.schema,
             &self.props,
             &PhysicalPlanningContext::default(),
