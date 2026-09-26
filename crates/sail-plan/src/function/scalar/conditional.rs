@@ -147,8 +147,7 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
     // Preserve NVL2's common result type before exposing a CASE to its callers.
-    let common_type =
-        get_coerce_type_for_case_expression(&argument_types(&branches, &function_context)?, None);
+    let common_type = conditional_common_type(&argument_types(&branches, &function_context)?);
     let (mut if_non_null, mut if_null) = branches.two()?;
     if let Some(common_type) = common_type {
         if_non_null = if_non_null.cast_to(&common_type, function_context.schema)?;
@@ -220,6 +219,59 @@ fn argument_types(
         .collect::<Result<Vec<_>, _>>()?)
 }
 
+fn conditional_common_type(data_types: &[DataType]) -> Option<DataType> {
+    let common_type = get_coerce_type_for_case_expression(data_types, None)?;
+    let Some(source_type) = data_types.iter().find(|data_type| !data_type.is_null()) else {
+        return Some(common_type);
+    };
+    // DataFusion rebuilds nested fields while coercing their types. Keep source metadata
+    // such as interval qualifiers, which enclosing expressions need before analysis.
+    Some(preserve_nested_metadata(source_type, &common_type))
+}
+
+fn preserve_nested_metadata(source: &DataType, target: &DataType) -> DataType {
+    let preserve_field = |source: &FieldRef, target: &FieldRef| {
+        Arc::new(
+            target
+                .as_ref()
+                .clone()
+                .with_metadata(source.metadata().clone())
+                .with_data_type(preserve_nested_metadata(
+                    source.data_type(),
+                    target.data_type(),
+                )),
+        )
+    };
+    match (source, target) {
+        (DataType::Struct(source), DataType::Struct(target)) if source.len() == target.len() => {
+            DataType::Struct(
+                source
+                    .iter()
+                    .zip(target)
+                    .map(|(source, target)| preserve_field(source, target))
+                    .collect(),
+            )
+        }
+        (
+            DataType::List(source)
+            | DataType::LargeList(source)
+            | DataType::FixedSizeList(source, _),
+            target,
+        ) => match target {
+            DataType::List(target) => DataType::List(preserve_field(source, target)),
+            DataType::LargeList(target) => DataType::LargeList(preserve_field(source, target)),
+            DataType::FixedSizeList(target, size) => {
+                DataType::FixedSizeList(preserve_field(source, target), *size)
+            }
+            _ => target.clone(),
+        },
+        (DataType::Map(source, _), DataType::Map(target, sorted)) => {
+            DataType::Map(preserve_field(source, target), *sorted)
+        }
+        _ => target.clone(),
+    }
+}
+
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
 /// Preserves DataFusion's existing nested coercion except ANSI STRING/numeric leaves.
 fn coerce_numeric_values(
@@ -252,7 +304,7 @@ fn coerce_numeric_values(
         {
             // Preserve DataFusion's existing coercion for nested types and
             // string/numeric branches before an enclosing numeric CASE/IF uses their type.
-            get_coerce_type_for_case_expression(&data_types, None)
+            conditional_common_type(&data_types)
         } else {
             None
         }
@@ -384,6 +436,7 @@ fn ansi_string_numeric_type(
             };
             // Spark does not allow map-key coercions that can introduce NULL.
             // Repair only values and keep the existing key type unchanged.
+            // TODO: Reject incompatible numeric/STRING map keys in ANSI conditionals.
             let value = ansi_string_numeric_field(&entries[1], &value_types, config);
             DataType::Map(
                 Arc::new(field.as_ref().clone().with_data_type(DataType::Struct(
@@ -449,7 +502,7 @@ fn ansi_string_numeric_field(
 
 /// Returns Spark's wider type of two numeric (or NULL) types,
 /// following `findWiderTypeForTwo` in `TypeCoercion` and `AnsiTypeCoercion`.
-fn wider_numeric_type(
+pub(crate) fn wider_numeric_type(
     left: &DataType,
     right: &DataType,
     ansi_mode: bool,

@@ -7,12 +7,15 @@ use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
 use datafusion_common::{Column, DFSchema, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::type_coercion::binary::type_union_coercion;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, Union, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Union, WindowFrame,
+    WindowFunctionDefinition, expr,
 };
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::wider_numeric_type;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -108,29 +111,43 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let ansi_mode = self
+                    .config
+                    .view_conditional_ansi_mode
+                    .unwrap_or(self.config.ansi_mode);
+                // Spark widens fractional DECIMAL combinations and ANSI integral/FLOAT
+                // combinations to DOUBLE. Cast the inputs before exposing the UNION type:
+                // conditional consumers must not cache a narrower type than its actual values.
+                let left_schema = Arc::clone(left.schema());
+                let left = promote_union_numeric_input(
+                    left,
+                    right.schema(),
+                    ansi_mode,
+                    self.config.legacy_decimal_retain_fraction_digits,
+                )?;
+                let right = promote_union_numeric_input(
+                    right,
+                    &left_schema,
+                    ansi_mode,
+                    self.config.legacy_decimal_retain_fraction_digits,
+                )?;
                 let mut union =
                     Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
                 // Conditional coercion needs the common UNION schema.
                 // TODO: Match Spark's ANSI string coercion for UNION inputs, including nested
                 //  leaves. STRING-first DECIMAL unions remain STRING, so an enclosing
                 //  numeric conditional can request an invalid integral cast of fractional values.
-                // TODO: Widen DECIMAL with FLOAT/DOUBLE, and ANSI BIGINT with FLOAT, to DOUBLE
-                //  like Spark. DataFusion keeps DECIMAL or FLOAT for these UNION inputs.
                 let coerced = coerce_union_schema(&union.inputs)?;
                 // Take only types and nullability from the coerced schema, since DataFusion lets
                 // the last input's field metadata (such as a Spark interval qualifier) win.
                 // Columns keep the loose type where DataFusion's common type differs from Spark:
-                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP, FLOAT/DOUBLE with DECIMAL
-                // becomes DECIMAL, and ANSI numeric with STRING becomes STRING, which store
+                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP,
+                // and ANSI numeric with STRING becomes STRING, which store
                 // assignment rejects.
                 // TODO: Widen these columns and interval qualifiers like Spark.
                 // TODO: Coerce TIMESTAMP/STRING UNION columns to microseconds; raw UNION
                 //  output currently retains unsupported nanosecond units, and STRING-first
                 //  inputs also break UTC conversion consumers.
-                let ansi_mode = self
-                    .config
-                    .view_conditional_ansi_mode
-                    .unwrap_or(self.config.ansi_mode);
                 state.preserve_legacy_conditional_coercion |=
                     ansi_mode && union_has_fractional_string_coercion(&union, &coerced);
                 let fields = union
@@ -269,13 +286,111 @@ impl PlanResolver<'_> {
     }
 }
 
+fn promote_union_numeric_input(
+    input: LogicalPlan,
+    other_schema: &DFSchema,
+    ansi_mode: bool,
+    retain_fraction_digits: bool,
+) -> PlanResult<LogicalPlan> {
+    // Leave column-count validation to the UNION constructor.
+    if input.schema().fields().len() != other_schema.fields().len() {
+        return Ok(input);
+    }
+    let mut changed = false;
+    let expressions = input
+        .schema()
+        .fields()
+        .iter()
+        .zip(other_schema.fields())
+        .enumerate()
+        .map(|(index, (field, other))| {
+            let data_type = promote_union_numeric_type(
+                field.data_type(),
+                other.data_type(),
+                ansi_mode,
+                retain_fraction_digits,
+            );
+            let column = Expr::Column(Column::from(input.schema().qualified_field(index)));
+            if data_type == *field.data_type() {
+                Ok(column)
+            } else {
+                changed = true;
+                Ok(column
+                    .cast_to(&data_type, input.schema())?
+                    .alias(field.name()))
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    if changed {
+        Ok(project(input, expressions)?)
+    } else {
+        Ok(input)
+    }
+}
+
+// Promote only numeric combinations whose Spark common type is DOUBLE. Preserve
+// each input's other leaves and field metadata; casting an entire repaired UNION
+// schema would also alter the existing temporal and STRING coercion paths.
+fn promote_union_numeric_type(
+    data_type: &DataType,
+    other_type: &DataType,
+    ansi_mode: bool,
+    retain_fraction_digits: bool,
+) -> DataType {
+    if wider_numeric_type(data_type, other_type, ansi_mode, retain_fraction_digits)
+        == Some(DataType::Float64)
+        && type_union_coercion(data_type, other_type) != Some(DataType::Float64)
+    {
+        return DataType::Float64;
+    }
+    let promote_field = |field: &FieldRef, other: &FieldRef| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(promote_union_numeric_type(
+                    field.data_type(),
+                    other.data_type(),
+                    ansi_mode,
+                    retain_fraction_digits,
+                )),
+        )
+    };
+    match (data_type, other_type) {
+        (
+            DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _),
+            DataType::List(other) | DataType::LargeList(other) | DataType::FixedSizeList(other, _),
+        ) => {
+            let field = promote_field(field, other);
+            match data_type {
+                DataType::List(_) => DataType::List(field),
+                DataType::LargeList(_) => DataType::LargeList(field),
+                DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field, *size),
+                _ => unreachable!(),
+            }
+        }
+        (DataType::Map(field, sorted), DataType::Map(other, _)) => {
+            DataType::Map(promote_field(field, other), *sorted)
+        }
+        (DataType::Struct(fields), DataType::Struct(others)) if fields.len() == others.len() => {
+            DataType::Struct(
+                fields
+                    .iter()
+                    .zip(others)
+                    .map(|(field, other)| promote_field(field, other))
+                    .collect(),
+            )
+        }
+        _ => data_type.clone(),
+    }
+}
+
 // Keep the pre-analyzer type only at leaves where exposing DataFusion's common
 // type would change existing consumers. Preserve widened types in sibling fields.
 // TODO: Expose the LTZ common type of mixed NTZ/LTZ UNION inputs after timestamp
 //  consumers preserve nullability and apply timezone conversions to that common type.
 fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: bool) -> DataType {
-    if (data_type.is_floating() && coerced_type.is_decimal())
-        || (ansi_mode && data_type.is_numeric() && coerced_type.is_string())
+    if (ansi_mode && data_type.is_numeric() && coerced_type.is_string())
         || matches!(
             (data_type, coerced_type),
             (

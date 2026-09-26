@@ -883,7 +883,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | nvl2(nullif(id, 1), CAST(2 AS BIGINT), v)                     | UNION ALL |
         | nvl2(nullif(id, 1), CAST(2 AS BIGINT), v)                     | UNION     |
 
-    @sail-bug
     Scenario: UNION widens raw FLOAT and DECIMAL output to DOUBLE
       When query
         """

@@ -185,7 +185,6 @@ Feature: if output schema
         | bigint      |
         | bigint      |
 
-    @sail-bug
     Scenario Outline: UNION exposes the Spark numeric common type to typeof: <case>, ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
