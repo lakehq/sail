@@ -70,18 +70,21 @@ The `DESCRIBE QUERY` statement is not supported yet.
 | `LOAD DATA`                         | :construction:     |
 | `COPY INTO`                         | :construction:     |
 | `MERGE INTO`                        | :white_check_mark: |
-| `UPDATE`                            | :construction:     |
+| `UPDATE`                            | :white_check_mark: |
 | `DELETE FROM`                       | :white_check_mark: |
 
 The `COPY INTO`, `MERGE INTO`, `UPDATE`, and `DELETE FROM` statements are not core Spark features.
 But some extensions support these statements for lakehouse tables (e.g., Delta Lake).
+
+Sail supports `DELETE`, `UPDATE`, and `MERGE INTO` for Delta Lake and Iceberg tables.
+See [Delta Lake DML operations](../sources/delta/features#dml-operations) and [Iceberg DML operations](../sources/iceberg/features#dml-operations) for supported write modes.
 
 ### Catalog Management
 
 | Statement               | Supported          |
 | ----------------------- | ------------------ |
 | `ALTER DATABASE`        | :construction:     |
-| `ALTER TABLE`           | :construction:     |
+| `ALTER TABLE`           | Partial            |
 | `ALTER VIEW`            | :construction:     |
 | `ANALYZE TABLE`         | :construction:     |
 | `CREATE DATABASE`       | :white_check_mark: |
@@ -111,6 +114,10 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 | `SHOW VIEWS`            | :white_check_mark: |
 | `TRUNCATE TABLE`        | :construction:     |
 | `USE DATABASE`          | :white_check_mark: |
+
+For Delta Lake, supported `ALTER TABLE` operations include setting/unsetting table properties, supported column type widening, setting/dropping column defaults, and adding `CHECK` constraints.
+For Iceberg, filesystem-backed tables support setting/unsetting table properties, including format-version upgrades.
+See the [Delta Lake](../sources/delta/features#core-table-operations) and [Iceberg](../sources/iceberg/features#core-table-operations) feature checklists for details.
 
 ### Configuration Management
 

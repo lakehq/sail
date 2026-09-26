@@ -7,6 +7,8 @@ rank: 1
 
 You can use the `delta` format in Sail to work with [Delta Lake](https://delta.io/).
 You can use the Spark DataFrame API or Spark SQL to read and write Delta tables.
+Sail supports snapshot reads, schema evolution, time travel, and DML statements including `DELETE`, `UPDATE`, and `MERGE INTO`.
+See [Supported Features](./features) for protocol and operation support.
 
 ## Topics
 
