@@ -39,6 +39,24 @@ Feature: nvl2 output schema
   @function(nullability)
   Rule: Output schema
 
+    @sail-bug
+    Scenario: NVL2 includes DATE to TIMESTAMP_NTZ cast nullability
+      # The shared DATE cast currently reports non-nullability in Sail.
+      When query
+        """
+        SELECT nvl2(nullif(id, 0), DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-02 03:04:05') AS result
+        FROM range(2) ORDER BY id
+        """
+      Then query result
+        | result              |
+        | 2020-01-02 03:04:05 |
+        | 2020-01-01 00:00:00 |
+      And query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = true)
+        """
+
     Scenario: a non-null literal input to nvl2 yields the schema Spark declares
       When query
         """

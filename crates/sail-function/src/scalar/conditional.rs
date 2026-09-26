@@ -66,6 +66,8 @@ impl SparkNvl2 {
         {
             // Spark timestamps have microsecond precision. DATE/TIMESTAMP
             // coercion must also retain LTZ when either branch has a timezone.
+            // TODO: Match Spark's nullable DATE-to-TIMESTAMP_NTZ cast in NVL2's
+            // schema; the shared cast currently preserves non-nullability.
             // TODO: Preserve stored-view temporal cast timezones during later analysis;
             // shared DATE/TIMESTAMP casts can still use the reader's timezone.
             let timezone = branches
@@ -247,7 +249,7 @@ fn cast_visible_values(
         return Ok(Arc::clone(array));
     }
     Ok(cast_with_options(
-        &visible_nested_values(array)?,
+        &visible_nested_values(array, Some(target))?,
         target,
         options,
     )?)
@@ -255,8 +257,8 @@ fn cast_visible_values(
 
 /// Spark casts only present nested values. Arrow casts every child slot, including
 /// values masked by a NULL parent or outside the offsets of a sliced list/map.
-fn visible_nested_values(array: &ArrayRef) -> Result<ArrayRef> {
-    if !array.data_type().is_nested() {
+fn visible_nested_values(array: &ArrayRef, target: Option<&DataType>) -> Result<ArrayRef> {
+    if target == Some(array.data_type()) || !array.data_type().is_nested() {
         return Ok(Arc::clone(array));
     }
     let sliced_values = match array.data_type() {
@@ -296,18 +298,47 @@ fn visible_nested_values(array: &ArrayRef) -> Result<ArrayRef> {
         None
     };
     let mut changed = mask_struct;
+    // Unchanged siblings are not cast, so their hidden values need no masking or
+    // compaction. In particular, avoid copying large lists beside a cast scalar.
+    // For reordered structs, leave matching to Arrow and keep the existing full
+    // masking path rather than assuming that source and target positions agree.
+    let target_fields = match (array.data_type(), target) {
+        (DataType::Struct(source), Some(DataType::Struct(target)))
+            if source.len() == target.len()
+                && source.iter().zip(target).all(|(a, b)| a.name() == b.name()) =>
+        {
+            Some(target)
+        }
+        _ => None,
+    };
     let children = data
         .child_data()
         .iter()
-        .map(|child| {
+        .enumerate()
+        .map(|(index, child)| {
             let child = make_array(child.clone());
+            let child_target = match (array.data_type(), target) {
+                (
+                    DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _),
+                    Some(
+                        DataType::List(field)
+                        | DataType::LargeList(field)
+                        | DataType::FixedSizeList(field, _),
+                    ),
+                )
+                | (DataType::Map(_, _), Some(DataType::Map(field, _))) => Some(field.data_type()),
+                _ => target_fields.map(|fields| fields[index].data_type()),
+            };
+            if child_target == Some(child.data_type()) {
+                return Ok(child);
+            }
             // The kernel changes only validity, without copying or revalidating
             // value buffers (including potentially large STRING children).
             let child = match &parent_mask {
                 Some(mask) => nullif(child.as_ref(), mask)?,
                 None => child,
             };
-            let visible = visible_nested_values(&child)?;
+            let visible = visible_nested_values(&child, child_target)?;
             changed |= !Arc::ptr_eq(&child, &visible);
             Ok(visible)
         })

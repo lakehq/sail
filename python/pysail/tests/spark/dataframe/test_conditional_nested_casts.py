@@ -85,3 +85,42 @@ def test_conditional_cast_of_an_all_null_struct(spark):
         assert result.collect() == [(None,), (None,)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
+@pytest.mark.parametrize("operation", ["IF(id = 9, {numeric}, v)", "NVL2(NULLIF(id, 9), v, {numeric})", "union"])
+@pytest.mark.parametrize("container", ["array", "map", "struct"])
+def test_conditional_cast_preserves_unchanged_nested_siblings(spark, operation, container):
+    mask = pa.array([True, False, False])
+    if container == "array":
+        sibling = pa.ListArray.from_arrays(
+            pa.array([0, 2, 4, 6], type=pa.int32()), pa.array(["hidden", "bad", "keep", None, "7", "bad"]), mask=mask
+        )
+    elif container == "map":
+        sibling = pa.MapArray.from_arrays(
+            pa.array([0, 1, 2, 3], type=pa.int32()), pa.array(["k"] * 3), pa.array(["hidden", "keep", "bad"]), mask=mask
+        )
+    else:
+        sibling = pa.StructArray.from_arrays([pa.array(["hidden", "keep", "bad"])], names=["text"], mask=mask)
+    value = pa.StructArray.from_arrays(
+        [pa.array(["7", "8", "bad"]), sibling], names=["x", "payload"], mask=pa.array([False, False, True])
+    )
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        frame = spark.createDataFrame(pa.table({"id": [0, 1, 2], "v": value}))
+        numeric = "named_struct('x', 1, 'payload', v.payload)"
+        if operation == "union":
+            result = frame.union(frame.where("id = 1").selectExpr("3L AS id", f"{numeric} AS v"))
+        else:
+            result = frame.selectExpr("id", f"{operation.format(numeric=numeric)} AS v")
+        rows = result.orderBy("id").collect()
+        source = frame.orderBy("id").collect()
+        assert [(row.id, None if row.v is None else row.v.x) for row in rows[:3]] == [(0, 7), (1, 8), (2, None)]
+        assert rows[0].v.payload is None
+        assert rows[1].v.payload == source[1].v.payload
+        assert rows[2].v is None
+        if operation == "union":
+            assert rows[3].v.x == 1
+            assert rows[3].v.payload == source[1].v.payload
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)

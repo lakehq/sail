@@ -103,7 +103,8 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments,
         function_context,
     } = input;
-    let arguments = coerce_string_temporal_values(arguments, &function_context)?;
+    let data_types = argument_types(&arguments, &function_context)?;
+    let arguments = coerce_string_temporal_values(arguments, data_types, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
 }
 
@@ -116,7 +117,7 @@ fn coerce_branch_values(
     let data_types = argument_types(&arguments, function_context)?;
     if data_types.iter().any(is_temporal_type) {
         // A temporal branch cannot have a numeric common type.
-        coerce_string_temporal_values(arguments, function_context)
+        coerce_string_temporal_values(arguments, data_types, function_context)
     } else {
         coerce_numeric_values(arguments, data_types, function_context)
     }
@@ -485,9 +486,9 @@ fn integral_decimal_precision(data_type: &DataType) -> Option<u8> {
 //  DataFusion's common type is Timestamp(Nanosecond, None), which cannot be returned.
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
+    data_types: Vec<DataType>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let data_types = argument_types(&arguments, function_context)?;
     let has_string = data_types.iter().any(is_string_type);
     let temporal_type =
         common_temporal_type(&data_types, &function_context.plan_config.session_timezone);

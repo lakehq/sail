@@ -389,3 +389,97 @@ Feature: Numeric STRING coercion in UNION inputs
       | 'x'                        | 1                          | x     | 1    |
       | CAST(1.25 AS FLOAT)         | 'x'                        | 1.25  | x    |
       | 'x'                        | CAST(1.25 AS DECIMAL(10,2)) | x     | 1.25 |
+
+  Rule: Subquery bindings survive conditional projection pushdown
+
+    # Spark 4.2's own projection rule can fail with a missing AttributeMap key
+    # for correlated aggregates over UNION. Excluding that optional rule keeps
+    # this regression test focused on the query's supported SQL semantics.
+    Scenario Outline: A <conditional> branch keeps its correlated scalar subquery bindings
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.optimizer.excludedRules = org.apache.spark.sql.catalyst.optimizer.PushProjectionThroughUnion
+      When query
+        """
+        SELECT id, <expression> AS result
+        FROM (SELECT 0 AS id, '1' AS v UNION ALL SELECT 1 AS id, 2 AS v) t
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | 0      |
+        | 1  | 2      |
+
+      Examples:
+        | conditional | expression                                                                                           |
+        | IF          | IF(id = 0, 0, (SELECT max(r.id) FROM range(4) r WHERE r.id = t.v))                                      |
+        | CASE        | CASE WHEN id = 0 THEN 0 ELSE (SELECT max(r.id) FROM range(4) r WHERE r.id = t.v) END                     |
+        | NVL2        | NVL2(nullif(id, 0), (SELECT max(r.id) FROM range(4) r WHERE r.id = t.v), 0)                              |
+
+    Scenario: A conditional keeps correlated bindings in an intermediate projection
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.optimizer.excludedRules = org.apache.spark.sql.catalyst.optimizer.PushProjectionThroughUnion
+      When query
+        """
+        SELECT id, IF(id = 0, 0, n) AS result
+        FROM (
+          SELECT t.id, (SELECT max(r.id) FROM range(4) r WHERE r.id = t.v) AS n
+          FROM (SELECT 0 AS id, '1' AS v UNION ALL SELECT 1 AS id, 2 AS v) t
+        ) q
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | 0      |
+        | 1  | 2      |
+
+    Scenario: A conditional keeps correlated bindings inside a UNION input
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.optimizer.excludedRules = org.apache.spark.sql.catalyst.optimizer.PushProjectionThroughUnion
+      When query
+        """
+        SELECT id, IF(id = 0, 0, v) AS result, n
+        FROM (
+          SELECT l.id, CAST(l.id + 1 AS STRING) AS v,
+            (SELECT max(r.id) FROM range(4) r WHERE r.id = l.id) AS n
+          FROM range(2) l
+          UNION ALL SELECT 2 AS id, 3 AS v, 2 AS n
+        ) t
+        ORDER BY id
+        """
+      Then query result
+        | id | result | n |
+        | 0  | 0      | 0 |
+        | 1  | 2      | 1 |
+        | 2  | 3      | 2 |
+
+    Scenario Outline: An uncorrelated <subquery> preserves lazy UNION casts
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, IF(id = 0, 0, v) AS result, <expression> AS extra
+        FROM (SELECT 0 AS id, 'bad' AS v UNION ALL SELECT 1 AS id, 2 AS v) t
+        ORDER BY id
+        """
+      Then query result
+        | id | result | extra      |
+        | 0  | 0      | <expected> |
+        | 1  | 2      | <expected> |
+
+      Examples:
+        | subquery  | expression                                    | expected |
+        | literal   | (SELECT 7)                                    | 7        |
+        | aggregate | (SELECT SUM(id + 1) FROM range(4))             | 10       |
+        | EXISTS    | EXISTS(SELECT 1 FROM range(4) WHERE id > 2)     | true     |
+
+    Scenario: An uncorrelated subquery inside a branch preserves lazy UNION casts
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, IF(id = 0, 0, v + (SELECT SUM(id) FROM range(4))) AS result
+        FROM (SELECT 0 AS id, 'bad' AS v UNION ALL SELECT 1 AS id, 2 AS v) t
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | 0      |
+        | 1  | 8      |

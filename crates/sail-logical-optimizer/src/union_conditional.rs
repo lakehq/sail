@@ -42,7 +42,9 @@ impl OptimizerRule for PushUnionConditional {
         loop {
             match input {
                 LogicalPlan::Projection(projection) => {
-                    if projection.expr.iter().any(Expr::is_volatile) {
+                    if projection.expr.iter().any(Expr::is_volatile)
+                        || has_correlated_subquery(&projection.expr)?
+                    {
                         return Ok(Transformed::no(plan));
                     }
                     wrappers.push(input);
@@ -210,6 +212,12 @@ fn inline_projection(
     mut projection: Projection,
     config: &dyn OptimizerConfig,
 ) -> Result<Projection> {
+    // Correlated subquery plans retain outer bindings that expression-only column remapping
+    // cannot update. Let the existing decorrelation rules lower them to joins
+    // before moving or inlining their projections.
+    if has_correlated_subquery(&projection.expr)? {
+        return Ok(projection);
+    }
     loop {
         match projection.input.as_ref() {
             LogicalPlan::SubqueryAlias(alias) => {
@@ -218,6 +226,9 @@ fn inline_projection(
                 projection.input = Arc::clone(&alias.input);
             }
             LogicalPlan::Projection(inner) => {
+                if has_correlated_subquery(&inner.expr)? {
+                    break;
+                }
                 let mut references = Default::default();
                 for expression in &projection.expr {
                     expression.add_column_ref_counts(&mut references);
@@ -284,6 +295,24 @@ fn inline_projection(
         }
     }
     Ok(projection)
+}
+
+fn has_correlated_subquery(expressions: &[Expr]) -> Result<bool> {
+    for expression in expressions {
+        if expression.exists(|expr| {
+            let subquery = match expr {
+                Expr::ScalarSubquery(subquery) => subquery,
+                Expr::Exists(exists) => &exists.subquery,
+                Expr::InSubquery(in_subquery) => &in_subquery.subquery,
+                Expr::SetComparison(comparison) => &comparison.subquery,
+                _ => return Ok(false),
+            };
+            Ok(!subquery.outer_ref_columns.is_empty())
+        })? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 // DataFusion also retains repeated literals. These linear cast chains are cheap

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, Statistics, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 /// A sort above LIMIT must sort the selected rows, without changing their selection.
@@ -78,6 +79,20 @@ impl ExecutionPlan for LimitSortBoundary {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        // The boundary changes no rows. Keep the limit's cardinality visible so
+        // requirement enforcement does not repartition a known-small input.
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn apply_expressions(
