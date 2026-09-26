@@ -168,7 +168,6 @@ Feature: if output schema
         | bigint      |
         | bigint      |
 
-    @sail-bug
     Scenario: ANSI UNION widens INT with STRING to BIGINT
       Given config spark.sql.ansi.enabled = true
       When query

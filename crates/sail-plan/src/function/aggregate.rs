@@ -1138,7 +1138,6 @@ mod tests {
                 plan_config: &plan_config,
                 session_context: &session_context,
                 schema: &schema,
-                preserve_legacy_conditional_coercion: false,
             },
         })?;
 

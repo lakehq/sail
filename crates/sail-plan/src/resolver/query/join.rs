@@ -246,8 +246,6 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema: &join_schema,
-                                preserve_legacy_conditional_coercion: state
-                                    .preserve_legacy_conditional_coercion,
                             },
                         })?;
                         Ok(expression.alias(state.register_field_name(name)))

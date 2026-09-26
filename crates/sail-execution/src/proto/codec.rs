@@ -156,7 +156,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
-use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::conditional::{SparkConditionalCast, SparkNvl2};
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
@@ -3267,6 +3267,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     target_type,
                 ))));
             }
+            UdfKind::SparkNvl2(r#gen::SparkNvl2Udf { session_timezone }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNvl2::new(
+                    session_timezone.into(),
+                ))));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -3793,6 +3798,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkConditionalCast>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkConditionalCast(r#gen::SparkConditionalCastUdf { target_type })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkNvl2>() {
+            UdfKind::SparkNvl2(r#gen::SparkNvl2Udf {
+                session_timezone: func.session_timezone().to_string(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
@@ -6563,6 +6572,16 @@ mod tests {
             let decoded = downcast_udf::<SparkConditionalCast>(&decoded, "SparkConditionalCast")?;
             assert_eq!(decoded.target_type(), &target_type);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_nvl2_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkNvl2::new(Arc::from(
+            "America/Los_Angeles",
+        ))))?;
+        let decoded = downcast_udf::<SparkNvl2>(&decoded, "SparkNvl2")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
         Ok(())
     }
 

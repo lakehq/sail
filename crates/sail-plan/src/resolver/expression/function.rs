@@ -15,7 +15,6 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
-    needs_legacy_conditional_coercion,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -162,16 +161,6 @@ impl PlanResolver<'_> {
                         if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                             return Err(PlanError::invalid("invalid scalar function clause"));
                         }
-                        if !state.preserve_legacy_conditional_coercion
-                            && needs_legacy_conditional_coercion(
-                                &canonical_function_name,
-                                &arguments,
-                                schema,
-                                &self.config,
-                            )?
-                        {
-                            state.preserve_legacy_conditional_coercion = true;
-                        }
                         let input = ScalarFunctionInput {
                             arguments,
                             function_context: FunctionContextInput {
@@ -179,8 +168,6 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema,
-                                preserve_legacy_conditional_coercion: state
-                                    .preserve_legacy_conditional_coercion,
                             },
                         };
                         func(input)?
@@ -240,8 +227,6 @@ impl PlanResolver<'_> {
                                         plan_config: &self.config,
                                         session_context: self.ctx,
                                         schema,
-                                        preserve_legacy_conditional_coercion: state
-                                            .preserve_legacy_conditional_coercion,
                                     },
                                 };
                                 func(input)?

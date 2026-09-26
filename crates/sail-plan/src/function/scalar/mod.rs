@@ -1,4 +1,4 @@
-pub(crate) use conditional::{needs_legacy_conditional_coercion, wider_numeric_type};
+pub(crate) use conditional::{ansi_string_numeric_type, wider_numeric_type};
 pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
 
 use crate::function::common::ScalarFunction;

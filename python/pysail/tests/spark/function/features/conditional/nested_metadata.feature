@@ -69,3 +69,57 @@ Feature: Conditional coercion preserves nested metadata
       | kind | expression                                           |
       | IF   | if(id = 0, map(1, 1), map('2', 2))                   |
       | CASE | CASE WHEN id = 0 THEN map(1, 1) ELSE map('2', 2) END |
+
+  @sail-bug
+  Scenario Outline: Conditional numeric widening merges nested year-month qualifiers in <kind>
+    When query
+      """
+      SELECT id,
+             CAST(if_result<access>.v AS INT) AS if_months,
+             CAST(case_result<access>.v AS INT) AS case_months,
+             CAST(nvl2_result<access>.v AS INT) AS nvl2_months
+      FROM (
+        SELECT id,
+               if(id = 0, <first>, <second>) AS if_result,
+               CASE WHEN id = 0 THEN <first> ELSE <second> END AS case_result,
+               nvl2(nullif(id, 1), <first>, <second>) AS nvl2_result
+        FROM range(2)
+      ) AS q ORDER BY id
+      """
+    Then query result ordered
+      | id | if_months | case_months | nvl2_months |
+      | 0  | 12        | 12          | 12          |
+      | 1  | 2         | 2           | 2           |
+
+    Examples:
+      | kind                | first                                               | second                                                 | access   |
+      | a struct            | struct(INTERVAL '1' YEAR AS v, 1 AS n)              | struct(INTERVAL '2' MONTH AS v, 2L AS n)               |          |
+      | an array of structs | array(struct(INTERVAL '1' YEAR AS v, 1 AS n))       | array(struct(INTERVAL '2' MONTH AS v, 2L AS n))        | [0]      |
+      | a map of structs    | map('item', struct(INTERVAL '1' YEAR AS v, 1 AS n)) | map('item', struct(INTERVAL '2' MONTH AS v, 2L AS n)) | ['item'] |
+
+  @sail-bug
+  Scenario Outline: Conditional numeric widening merges nested day-time qualifiers in <kind>
+    When query
+      """
+      SELECT id,
+             CAST(if_result<access>.v AS STRING) AS if_interval,
+             CAST(case_result<access>.v AS STRING) AS case_interval,
+             CAST(nvl2_result<access>.v AS STRING) AS nvl2_interval
+      FROM (
+        SELECT id,
+               if(id = 0, <first>, <second>) AS if_result,
+               CASE WHEN id = 0 THEN <first> ELSE <second> END AS case_result,
+               nvl2(nullif(id, 1), <first>, <second>) AS nvl2_result
+        FROM range(2)
+      ) AS q ORDER BY id
+      """
+    Then query result ordered
+      | id | if_interval                   | case_interval                 | nvl2_interval                 |
+      | 0  | INTERVAL '1 00' DAY TO HOUR | INTERVAL '1 00' DAY TO HOUR | INTERVAL '1 00' DAY TO HOUR |
+      | 1  | INTERVAL '0 02' DAY TO HOUR | INTERVAL '0 02' DAY TO HOUR | INTERVAL '0 02' DAY TO HOUR |
+
+    Examples:
+      | kind                | first                                              | second                                                | access   |
+      | a struct            | struct(INTERVAL '1' DAY AS v, 1 AS n)              | struct(INTERVAL '2' HOUR AS v, 2L AS n)               |          |
+      | an array of structs | array(struct(INTERVAL '1' DAY AS v, 1 AS n))       | array(struct(INTERVAL '2' HOUR AS v, 2L AS n))        | [0]      |
+      | a map of structs    | map('item', struct(INTERVAL '1' DAY AS v, 1 AS n)) | map('item', struct(INTERVAL '2' HOUR AS v, 2L AS n)) | ['item'] |

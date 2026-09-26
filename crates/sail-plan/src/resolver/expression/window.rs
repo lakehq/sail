@@ -160,8 +160,6 @@ impl PlanResolver<'_> {
                             plan_config: &self.config,
                             session_context: self.ctx,
                             schema,
-                            preserve_legacy_conditional_coercion: state
-                                .preserve_legacy_conditional_coercion,
                         },
                     };
                     (

@@ -512,7 +512,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | value |
         | 2.5   |
 
-    @sail-bug
     Scenario: An unrelated numeric conditional widens precisely beside an unresolved fractional STRING UNION
       Given config spark.sql.ansi.enabled = true
       When query
@@ -594,7 +593,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | temporary | TEMP        | fractional_union_materialized_view            |
         | global    | GLOBAL TEMP | global_temp.fractional_union_materialized_view |
 
-    @sail-bug
     Scenario: ANSI numeric conditional promotes a dynamic STRING column to BIGINT
       Given config spark.sql.ansi.enabled = true
       When query
@@ -950,7 +948,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
          |-- result: timestamp (nullable = true)
         """
 
-    @sail-bug
     Scenario: ANSI UNION widens nested numeric and STRING leaves to BIGINT
       Given config spark.sql.ansi.enabled = true
       When query

@@ -4,10 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
-use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
 };
@@ -27,11 +24,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
-use super::set_op::union_has_fractional_string_coercion;
 use crate::error::{PlanError, PlanResult};
-use crate::function::{
-    get_built_in_table_function, is_built_in_generator_function, needs_legacy_conditional_coercion,
-};
+use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
@@ -181,55 +175,6 @@ impl PlanResolver<'_> {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for temporary views",
                     ));
-                }
-                // Temporary views retain their unresolved logical plan across requests.
-                // Recheck their UNIONs and dynamic CASE branches without persisting planner
-                // flags in Arrow schemas. A CASE over a materialized STRING column can expose
-                // its first numeric branch's type while still producing fractional strings.
-                let ansi_mode = self.config.view_conditional_ansi_mode.unwrap_or(
-                    self.config.ansi_mode && !self.config.preserve_view_conditional_float_type,
-                );
-                if ansi_mode && !state.preserve_legacy_conditional_coercion {
-                    plan.apply_with_subqueries(|plan| {
-                        if let LogicalPlan::Union(union) = plan {
-                            let coerced = coerce_union_schema(&union.inputs)?;
-                            if union_has_fractional_string_coercion(union, &coerced) {
-                                state.preserve_legacy_conditional_coercion = true;
-                                return Ok(TreeNodeRecursion::Stop);
-                            }
-                        }
-                        let inputs = plan.inputs();
-                        if inputs.is_empty() {
-                            return Ok(TreeNodeRecursion::Continue);
-                        }
-                        // Expressions bind to inputs, including the hidden side of a semi join.
-                        let schema = Arc::new(merge_schema(&inputs));
-                        for expression in plan.expressions() {
-                            if expression.exists(|expression| {
-                                let Expr::Case(case) = expression else {
-                                    return Ok(false);
-                                };
-                                let arguments = case
-                                    .when_then_expr
-                                    .iter()
-                                    .flat_map(|(when, then)| {
-                                        [when.as_ref().clone(), then.as_ref().clone()]
-                                    })
-                                    .chain(case.else_expr.iter().map(|expr| expr.as_ref().clone()))
-                                    .collect::<Vec<_>>();
-                                needs_legacy_conditional_coercion(
-                                    "case",
-                                    &arguments,
-                                    &schema,
-                                    &self.config,
-                                )
-                            })? {
-                                state.preserve_legacy_conditional_coercion = true;
-                                return Ok(TreeNodeRecursion::Stop);
-                            }
-                        }
-                        Ok(TreeNodeRecursion::Continue)
-                    })?;
                 }
                 let names = state.register_fields(plan.schema().inner().fields());
                 rename_logical_plan(plan.as_ref().clone(), &names)?

@@ -1,5 +1,41 @@
 Feature: nvl2 output schema
 
+  Rule: Constant evaluation
+
+    Scenario Outline: nvl2 can supply a constant identifier: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT IDENTIFIER(<expression>) AS result FROM VALUES (4) AS t(id1)
+        """
+      Then query result
+        | result |
+        | 4      |
+
+      Examples:
+        | case                    | expression                                                   |
+        | null tested argument    | nvl2(NULL, 'missing', 'id1')                                   |
+        | nonnull tested argument | nvl2(1, 'id1', 'missing')                                      |
+        | nested conditional      | nvl2(NULL, 'missing', nvl2(1, 'id1', 'missing'))                |
+        | invalid unselected cast | concat('id', CAST(nvl2(NULL, 'bad', 1) AS STRING))              |
+
+    Scenario Outline: Constant identifier evaluation keeps unselected <function> casts lazy
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT IDENTIFIER(<expression>) AS result FROM VALUES (7) AS t(id)
+        """
+      Then query result
+        | result |
+        | 7      |
+
+      Examples:
+        | function   | expression                                                                          |
+        | IF then    | IF(TRUE, 'id', CAST(CAST('invalid' AS INT) AS STRING))                                |
+        | IF else    | IF(FALSE, CAST(CAST('invalid' AS INT) AS STRING), 'id')                               |
+        | CASE then  | CASE WHEN TRUE THEN 'id' ELSE CAST(CAST('invalid' AS INT) AS STRING) END              |
+        | CASE else  | CASE WHEN FALSE THEN CAST(CAST('invalid' AS INT) AS STRING) ELSE 'id' END             |
+
   @function(nullability)
   Rule: Output schema
 
@@ -115,7 +151,6 @@ Feature: nvl2 output schema
         | TIMESTAMP_NTZ and LTZ  | true  | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | STRING and BINARY     | true  | 'a'                                | X'62'                              | binary        |
 
-    @sail-bug
     Scenario: nvl2 returns a DATE branch as TIMESTAMP_NTZ
       When query
         """

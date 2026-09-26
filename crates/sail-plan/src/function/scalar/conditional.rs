@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn;
-use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::conditional::{
+    SparkConditionalCast, SparkNvl2, preserve_nested_metadata,
+};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
@@ -15,68 +16,6 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
-
-pub(crate) fn needs_legacy_conditional_coercion(
-    name: &str,
-    arguments: &[expr::Expr],
-    schema: &DFSchemaRef,
-    config: &PlanConfig,
-) -> datafusion_common::Result<bool> {
-    let ansi_mode = config
-        .view_conditional_ansi_mode
-        .unwrap_or(config.ansi_mode && !config.preserve_view_conditional_float_type);
-    if !ansi_mode {
-        return Ok(false);
-    }
-    let branches = match name {
-        "if" | "nvl2" => arguments
-            .get(1..)
-            .unwrap_or_default()
-            .iter()
-            .collect::<Vec<_>>(),
-        "case" | "when" => arguments.chunks(2).filter_map(|pair| pair.last()).collect(),
-        _ => return Ok(false),
-    };
-    let data_types = branches
-        .iter()
-        .map(|arg| arg.get_type(schema))
-        .collect::<Result<Vec<_>, _>>()?;
-    let Some(common_type) = get_coerce_type_for_case_expression(&data_types, None) else {
-        return Ok(false);
-    };
-    if ansi_string_numeric_type(&data_types, &common_type, config) == common_type {
-        return Ok(false);
-    }
-    for (branch, data_type) in branches.into_iter().zip(data_types) {
-        if !contains_string_type(&data_type) {
-            continue;
-        }
-        if branch.exists(|expr| {
-            Ok(matches!(
-                expr,
-                expr::Expr::Column(_)
-                    | expr::Expr::OuterReferenceColumn(_, _)
-                    | expr::Expr::ScalarSubquery(_)
-            ))
-        })? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn contains_string_type(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::Map(field, _) => contains_string_type(field.data_type()),
-        DataType::Struct(fields) => fields
-            .iter()
-            .any(|field| contains_string_type(field.data_type())),
-        _ => is_string_type(data_type),
-    }
-}
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -133,9 +72,6 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
-    if function_context.preserve_legacy_conditional_coercion {
-        return Ok(expr_fn::nvl2(tested, if_non_null, if_null));
-    }
     // NVL2 temporal branches use the same creation-time ANSI mode as numeric branches.
     let mut config = Arc::clone(function_context.plan_config);
     if let Some(ansi_mode) = config.view_conditional_ansi_mode {
@@ -146,41 +82,11 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         ..function_context
     };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
-    // Preserve NVL2's common result type before exposing a CASE to its callers.
-    let common_type = conditional_common_type(&argument_types(&branches, &function_context)?);
-    let (mut if_non_null, mut if_null) = branches.two()?;
-    if let Some(common_type) = common_type {
-        if_non_null = if_non_null.cast_to(&common_type, function_context.schema)?;
-        if_null = if_null.cast_to(&common_type, function_context.schema)?;
-    }
-    // Keep a nullable result in ELSE so DataFusion's predicate-based inference
-    // preserves Spark's branch-based nullability even when the test is constant.
-    let if_null_nullable = if_null.nullable(function_context.schema)?;
-    let (condition, then_expr, else_expr) = if if_null_nullable {
-        (tested.is_not_null(), if_non_null, if_null)
-    } else {
-        (tested.is_null(), if_null, if_non_null)
-    };
-    let result = expr::Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(Box::new(condition), Box::new(then_expr))],
-        else_expr: Some(Box::new(else_expr)),
-    });
-    if if_null_nullable {
-        // TODO: Fix DataFusion's empty-batch constant detection for IN lists whose NVL2
-        //  has a scalar non-null result and a nullable column null result.
-        Ok(result)
-    } else {
-        // Swapping the branches can make an empty-batch IN-list probe return a scalar.
-        // An identity cast preserves this result's type and returns an empty array instead.
-        let data_type = result.get_type(function_context.schema)?;
-        let result =
-            ScalarUDF::from(SparkConditionalCast::new(data_type.clone())).call(vec![result]);
-        // Cache the logical type so nested NVL2 expressions do not recompute both the
-        // type and nullability of each inner CASE whenever its type is requested.
-        // DataFusion removes this same-type cast when creating the physical expression.
-        Ok(cast(result, data_type))
-    }
+    let (if_non_null, if_null) = branches.two()?;
+    Ok(ScalarUDF::from(SparkNvl2::new(Arc::clone(
+        &function_context.plan_config.session_timezone,
+    )))
+    .call(vec![tested, if_non_null, if_null]))
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -199,13 +105,6 @@ fn coerce_branch_values(
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
     let arguments = coerce_string_temporal_values(arguments, function_context)?;
-    if function_context.preserve_legacy_conditional_coercion {
-        // TODO: Restore early conditional typing once ANSI UNION types, including values
-        // read back from materialized sources, are reliable. Preserve the old lazy coercion
-        // for dynamic STRING branches and their enclosing numeric conditionals meanwhile.
-        // This also defers widening of subsequent and enclosing numeric conditionals.
-        return Ok(arguments);
-    }
     coerce_numeric_values(arguments, function_context)
 }
 
@@ -226,50 +125,9 @@ fn conditional_common_type(data_types: &[DataType]) -> Option<DataType> {
     };
     // DataFusion rebuilds nested fields while coercing their types. Keep source metadata
     // such as interval qualifiers, which enclosing expressions need before analysis.
+    // TODO: Widen nested interval qualifiers across every branch instead of keeping
+    // only the first qualifier (for example, YEAR and MONTH require YEAR TO MONTH).
     Some(preserve_nested_metadata(source_type, &common_type))
-}
-
-fn preserve_nested_metadata(source: &DataType, target: &DataType) -> DataType {
-    let preserve_field = |source: &FieldRef, target: &FieldRef| {
-        Arc::new(
-            target
-                .as_ref()
-                .clone()
-                .with_metadata(source.metadata().clone())
-                .with_data_type(preserve_nested_metadata(
-                    source.data_type(),
-                    target.data_type(),
-                )),
-        )
-    };
-    match (source, target) {
-        (DataType::Struct(source), DataType::Struct(target)) if source.len() == target.len() => {
-            DataType::Struct(
-                source
-                    .iter()
-                    .zip(target)
-                    .map(|(source, target)| preserve_field(source, target))
-                    .collect(),
-            )
-        }
-        (
-            DataType::List(source)
-            | DataType::LargeList(source)
-            | DataType::FixedSizeList(source, _),
-            target,
-        ) => match target {
-            DataType::List(target) => DataType::List(preserve_field(source, target)),
-            DataType::LargeList(target) => DataType::LargeList(preserve_field(source, target)),
-            DataType::FixedSizeList(target, size) => {
-                DataType::FixedSizeList(preserve_field(source, target), *size)
-            }
-            _ => target.clone(),
-        },
-        (DataType::Map(source, _), DataType::Map(target, sorted)) => {
-            DataType::Map(preserve_field(source, target), *sorted)
-        }
-        _ => target.clone(),
-    }
 }
 
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
@@ -329,6 +187,8 @@ fn coerce_numeric_values(
             } else {
                 // TODO: Return NULL for overflowing implicit DECIMAL casts in non-ANSI mode.
                 // Retaining fractional digits can narrow the integral range.
+                // TODO: Match Spark's DECIMAL-to-DOUBLE rounding at high scales once shared
+                // casts support it; Arrow can currently return an adjacent floating value.
                 // Like DataFusion's type coercion, this keeps values of the common type unchanged
                 // and casts a scalar subquery inside the subquery.
                 if ansi_string_coercion && data_type != common_type {
@@ -348,7 +208,7 @@ fn coerce_numeric_values(
 
 /// Repairs only ANSI STRING/numeric leaves in the existing common type. In particular,
 /// source projections must expose the numeric result before store-assignment validation.
-fn ansi_string_numeric_type(
+pub(crate) fn ansi_string_numeric_type(
     data_types: &[DataType],
     common_type: &DataType,
     config: &PlanConfig,
