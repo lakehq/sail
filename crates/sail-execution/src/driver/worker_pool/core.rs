@@ -89,6 +89,7 @@ impl WorkerPool {
             task_stream_buffer: self.options.task_stream_buffer,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
+            enable_shuffle_read_coalescing: self.options.enable_shuffle_read_coalescing,
             shuffle_backend: self.options.shuffle_backend.clone(),
         };
         let task = self
@@ -473,12 +474,13 @@ impl WorkerPool {
                 host, port, client, ..
             } => {
                 let client = client.get_or_insert_with(|| {
+                    let flight_connection_count = options.shuffle_backend.flight_connection_count();
                     let options = ClientOptions {
                         enable_tls: options.enable_tls,
                         host: host.clone(),
                         port: *port,
                     };
-                    WorkerClientSet::new(options)
+                    WorkerClientSet::new(options, flight_connection_count)
                 });
                 Ok(client.clone())
             }

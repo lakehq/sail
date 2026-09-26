@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use figment::providers::Env;
@@ -216,6 +217,7 @@ pub struct ClusterConfig {
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub enable_shuffle_read_coalescing: bool,
     pub shuffle_backend: ShuffleBackend,
 }
 
@@ -315,6 +317,7 @@ pub enum ShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlightShuffleBackend {
+    pub connection_count: NonZeroUsize,
     pub compression: ShuffleCompression,
 }
 
@@ -485,6 +488,7 @@ mod shuffle_backend {
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
                     flight: super::FlightShuffleBackend {
+                        connection_count: std::num::NonZeroUsize::MIN,
                         compression: super::ShuffleCompression::None,
                     },
                     storage,
@@ -500,6 +504,7 @@ mod shuffle_backend {
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
                     r#type: Type::Celeborn,
                     flight: super::FlightShuffleBackend {
+                        connection_count: std::num::NonZeroUsize::MIN,
                         compression: super::ShuffleCompression::None,
                     },
                     storage: super::StorageShuffleBackend {
@@ -1019,8 +1024,10 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        ENABLE_SHUFFLE_READ_COALESCING,
         SHUFFLE_BACKEND__TYPE,
         SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
+        SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
@@ -1035,7 +1042,28 @@ impl ClusterConfigEnv {
 
 #[cfg(test)]
 mod tests {
-    use super::CelebornCompressionCodec;
+    use super::{APP_CONFIG, CelebornCompressionCodec, FlightShuffleBackend};
+    use crate::config::ConfigDefinition;
+
+    #[test]
+    fn flight_connection_count_defaults_and_validation() -> Result<(), Box<dyn std::error::Error>> {
+        let defaults = figment::Figment::from(ConfigDefinition::new(APP_CONFIG));
+        let config: FlightShuffleBackend =
+            defaults.extract_inner("cluster.shuffle_backend.flight")?;
+        assert_eq!(config.connection_count.get(), 1);
+        let config: FlightShuffleBackend = defaults
+            .clone()
+            .merge(("cluster.shuffle_backend.flight.connection_count", 4))
+            .extract_inner("cluster.shuffle_backend.flight")?;
+        assert_eq!(config.connection_count.get(), 4);
+        assert!(
+            defaults
+                .merge(("cluster.shuffle_backend.flight.connection_count", 0))
+                .extract_inner::<FlightShuffleBackend>("cluster.shuffle_backend.flight")
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn parses_celeborn_compression() {

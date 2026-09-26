@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use sail_common_datafusion::error::CommonErrorCause;
 use tonic::Request;
 
@@ -26,11 +28,19 @@ pub struct DriverClientSet {
 }
 
 impl DriverClientSet {
-    pub fn new(driver_id: DriverId, options: ClientOptions) -> Self {
+    pub fn new(
+        driver_id: DriverId,
+        options: ClientOptions,
+        flight_connection_count: NonZeroUsize,
+    ) -> Self {
         Self {
             core: DriverClient::new(driver_id, options.clone()),
             celeborn: CelebornLifecycleManagerClient::new(driver_id, options.clone()),
-            flight: TaskStreamFlightClient::new(options, TaskStreamOwner::Driver { driver_id }),
+            flight: TaskStreamFlightClient::new(
+                options,
+                TaskStreamOwner::Driver { driver_id },
+                flight_connection_count,
+            ),
         }
     }
 }

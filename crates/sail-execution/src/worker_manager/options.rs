@@ -17,5 +17,6 @@ pub struct WorkerLaunchOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub enable_shuffle_read_coalescing: bool,
     pub shuffle_backend: ShuffleBackendKind,
 }

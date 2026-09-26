@@ -24,7 +24,7 @@ use crate::id::{
 };
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
 use crate::task_runner::TaskRunnerMessage;
 
 impl DriverActor {
@@ -520,6 +520,20 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                // Broadcasts may be cached on any consumer worker, independently of
+                // where this stage's output was produced or stored.
+                if stage.is_some() {
+                    for worker_id in self.task_assigner.active_worker_ids() {
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                    }
+                    if let Some(task_runner) = self.task_runner.clone() {
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })
+                                .await;
+                        });
+                    }
+                }
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
                 // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {
@@ -547,41 +561,16 @@ impl DriverActor {
                             .await;
                     });
                 }
-                if self.task_assigner.untrack_external_streams(job_id, stage) {
-                    if let Some(task_runner) = self.task_runner.clone() {
-                        ctx.spawn(async move {
-                            let _ = task_runner
-                                .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
-                                .await;
-                        });
-                    }
-                    if stage.is_some() {
-                        for worker_id in self.task_assigner.active_worker_ids() {
-                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
-                        }
-                    }
+                if self.task_assigner.untrack_external_streams(job_id, stage)
+                    && let Some(task_runner) = self.task_runner.clone()
+                {
+                    ctx.spawn(async move {
+                        let _ = task_runner
+                            .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
+                            .await;
+                    });
                 }
-                for x in self.task_assigner.untrack_local_streams(job_id, stage) {
-                    match x {
-                        TaskStreamAssignment::Driver => {
-                            if let Some(task_runner) = self.task_runner.clone() {
-                                ctx.spawn(async move {
-                                    let _ = task_runner
-                                        .send(TaskRunnerMessage::CleanUpLocalStreams {
-                                            job_id,
-                                            stage,
-                                        })
-                                        .await;
-                                });
-                            }
-                        }
-                        TaskStreamAssignment::Worker { worker_id } => {
-                            if stage.is_some() {
-                                self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
-                            }
-                        }
-                    }
-                }
+                self.task_assigner.untrack_local_streams(job_id, stage);
             }
         }
     }

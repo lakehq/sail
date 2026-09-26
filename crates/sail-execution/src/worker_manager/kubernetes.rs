@@ -138,6 +138,7 @@ impl KubernetesWorkerService {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
+            enable_shuffle_read_coalescing,
             shuffle_backend,
         } = options;
         let w3c_traceparent =
@@ -246,6 +247,11 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
             EnvVar {
+                name: ClusterConfigEnv::ENABLE_SHUFFLE_READ_COALESCING.to_string(),
+                value: Some(enable_shuffle_read_coalescing.to_string()),
+                value_from: None,
+            },
+            EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
                     match &shuffle_backend {
@@ -258,7 +264,16 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
-        if let ShuffleBackendKind::Flight { compression } = &shuffle_backend {
+        if let ShuffleBackendKind::Flight {
+            compression,
+            connection_count,
+        } = &shuffle_backend
+        {
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT.to_string(),
+                value: Some(connection_count.to_string()),
+                value_from: None,
+            });
             env.push(EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),
                 value: Some(compression.to_string()),

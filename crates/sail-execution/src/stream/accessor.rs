@@ -10,12 +10,15 @@ use tokio::sync::oneshot;
 
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::stream::broadcast::BroadcastStreamKey;
 use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
     MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter,
 };
-use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
+use crate::task::definition::{
+    TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputLocator,
+};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 pub struct TaskStreamFactory {
@@ -93,6 +96,7 @@ impl TaskStreamFactory {
     }
 }
 
+#[derive(Clone)]
 struct TaskStreamAccessor {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
@@ -119,15 +123,14 @@ impl TaskStreamAccessor {
     async fn create_local_stream(
         &self,
         key: TaskStreamKey,
-        replicas: usize,
-        schema: SchemaRef,
+        replayable: bool,
     ) -> Result<Box<dyn TaskStreamChannelSink>> {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::CreateLocalStream {
                 key,
-                replicas,
-                schema,
+                replayable,
+                context: self.context.clone(),
                 result,
             },
             rx,
@@ -250,6 +253,7 @@ impl TaskStreamAccessor {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct MultiChannelTaskStreamReader {
     streams: TaskStreamAccessor,
     key: TaskKey,
@@ -283,6 +287,61 @@ impl fmt::Debug for MultiChannelTaskStreamReader {
 #[tonic::async_trait]
 impl TaskStreamReader for MultiChannelTaskStreamReader {
     async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
+        if self.input.broadcast {
+            let keys = match self.input.locator.as_ref() {
+                TaskInputLocator::Driver { keys } | TaskInputLocator::Storage { keys } => {
+                    keys.get(partition).cloned()
+                }
+                TaskInputLocator::Worker { keys } => keys
+                    .get(partition)
+                    .map(|keys| keys.iter().map(|(_, key)| key.clone()).collect()),
+                TaskInputLocator::ShuffleService { channels, attempts } => {
+                    channels.get(partition).map(|channels| {
+                        attempts
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(partition, attempt)| {
+                                channels.iter().map(move |channel| TaskInputKey {
+                                    partition,
+                                    attempt: *attempt,
+                                    channel: *channel,
+                                })
+                            })
+                            .collect()
+                    })
+                }
+            }
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!("input partition {partition} not found"))
+            })?;
+            let key = BroadcastStreamKey {
+                job_id: self.key.job_id,
+                stage: self.input.stage,
+                inputs: keys,
+            };
+            let reader = self.clone();
+            let fetch =
+                Box::pin(async move { reader.open_unshared(partition).await.map_err(Into::into) });
+            let (result, rx) = oneshot::channel();
+            return self
+                .streams
+                .receive(
+                    TaskRunnerMessage::FetchBroadcastStream {
+                        key,
+                        fetch,
+                        context: self.streams.context.clone(),
+                        result,
+                    },
+                    rx,
+                )
+                .await;
+        }
+        self.open_unshared(partition).await
+    }
+}
+
+impl MultiChannelTaskStreamReader {
+    async fn open_unshared(&self, partition: usize) -> Result<TaskStreamSource> {
         let streams = match self.input.locator.as_ref() {
             TaskInputLocator::Driver { keys } => {
                 let keys = keys.get(partition).ok_or_else(|| {
@@ -321,7 +380,7 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 }))
                 .await?
             }
-            TaskInputLocator::ShuffleService { channels } => {
+            TaskInputLocator::ShuffleService { channels, .. } => {
                 let channels = channels.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))
                 })?;
@@ -382,13 +441,10 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas } => {
+            TaskOutputLocator::Pipelined { replayable } => {
                 try_join_all((0..channels).map(|channel| {
-                    self.streams.create_local_stream(
-                        self.key.task_stream_key(channel),
-                        *replicas,
-                        self.schema.clone(),
-                    )
+                    self.streams
+                        .create_local_stream(self.key.task_stream_key(channel), *replayable)
                 }))
                 .await?
             }

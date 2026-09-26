@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use prost::Message;
@@ -21,10 +22,14 @@ pub struct WorkerClientSet {
 }
 
 impl WorkerClientSet {
-    pub fn new(options: ClientOptions) -> Self {
+    pub fn new(options: ClientOptions, flight_connection_count: NonZeroUsize) -> Self {
         Self {
             core: WorkerClient::new(options.clone()),
-            flight: TaskStreamFlightClient::new(options, TaskStreamOwner::Worker),
+            flight: TaskStreamFlightClient::new(
+                options,
+                TaskStreamOwner::Worker,
+                flight_connection_count,
+            ),
         }
     }
 }

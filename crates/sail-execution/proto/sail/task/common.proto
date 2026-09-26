@@ -11,6 +11,7 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  bool broadcast = 3;
 }
 
 message TaskInputLocator {
@@ -57,6 +58,7 @@ message TaskInputStorageLocator {
 
 message TaskInputShuffleServiceLocator {
   repeated TaskInputChannelList channels = 1;
+  repeated uint64 attempts = 2;
 }
 
 message TaskInputChannelList {
@@ -113,7 +115,8 @@ message TaskOutputLocator {
 }
 
 message TaskOutputPipelinedLocator {
-  uint64 replicas = 1;
+  reserved 1;
+  bool replayable = 2;
 }
 
 message TaskOutputBlockingLocator {

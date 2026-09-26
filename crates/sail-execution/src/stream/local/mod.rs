@@ -1,30 +1,31 @@
+mod channel;
 mod core;
-mod memory;
+pub(crate) mod memory;
 mod options;
 
 use std::collections::HashMap;
 
-use datafusion::arrow::array::RecordBatch;
 pub use options::LocalStreamManagerOptions;
-use sail_common_datafusion::error::CommonErrorCause;
-use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
+use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
-use crate::stream::error::TaskStreamResult;
+use crate::stream::reader::TaskStreamSource;
 
 pub struct LocalStreamManager {
     options: LocalStreamManagerOptions,
     streams: HashMap<TaskStreamKey, LocalStreamState>,
 }
 
-pub enum LocalStreamState {
+enum LocalStreamState {
     Pending {
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+        subscribers: Vec<oneshot::Sender<ExecutionResult<TaskStreamSource>>>,
     },
-    Created {
-        stream: memory::MemoryStream,
-    },
-    Failed {
-        cause: CommonErrorCause,
-    },
+    Created(LocalStream),
+    Failed,
+}
+
+enum LocalStream {
+    Replayable(memory::MemoryStream),
+    Single(Option<TaskStreamSource>),
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
+use futures::future::BoxFuture;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
@@ -10,6 +11,7 @@ use tokio::sync::oneshot;
 use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::stream::broadcast::BroadcastStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -39,8 +41,8 @@ pub enum TaskRunnerMessage {
     },
     CreateLocalStream {
         key: TaskStreamKey,
-        replicas: usize,
-        schema: SchemaRef,
+        replayable: bool,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
     CreateStorageStream {
@@ -55,6 +57,12 @@ pub enum TaskRunnerMessage {
         channels: usize,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    },
+    FetchBroadcastStream {
+        key: BroadcastStreamKey,
+        fetch: BoxFuture<'static, ExecutionResult<TaskStreamSource>>,
+        context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -114,6 +122,7 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
             Self::CreateCelebornStream { .. } => "CreateCelebornStream",
+            Self::FetchBroadcastStream { .. } => "FetchBroadcastStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
             Self::FetchLocalStream { .. } => "FetchLocalStream",
@@ -290,6 +299,10 @@ impl SpanAssociation for TaskRunnerMessage {
                 if let Some(stage) = stage {
                     properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 }
+            }
+            Self::FetchBroadcastStream { key, .. } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, key.job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, key.stage.to_string()));
             }
             Self::Shutdown => {}
         }

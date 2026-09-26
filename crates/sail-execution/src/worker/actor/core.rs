@@ -36,6 +36,7 @@ impl Actor for WorkerActor {
                 host: options.driver_host.clone(),
                 port: options.driver_port,
             },
+            options.shuffle_backend.flight_connection_count(),
         );
         let metrics_client = driver_client_set.core.clone();
         set_metric_sender(move |metrics| {
@@ -93,6 +94,7 @@ impl Actor for WorkerActor {
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
                 session_id: self.options.session_id.clone(),
+                enable_shuffle_read_coalescing: self.options.enable_shuffle_read_coalescing,
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,

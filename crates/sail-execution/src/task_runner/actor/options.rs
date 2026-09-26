@@ -43,6 +43,7 @@ pub enum TaskRunnerPlacement {
 
 pub struct TaskRunnerComponents {
     pub session_id: String,
+    pub enable_shuffle_read_coalescing: bool,
     pub extensions: TaskRunnerExtensions,
     pub placement: TaskRunnerPlacement,
 }

@@ -8,13 +8,29 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
+@pytest.fixture(
+    scope="module", params=[None, True, False], ids=["coalescing-default", "coalescing-on", "coalescing-off"]
+)
+def shuffle_read_coalescing(request):
+    return request.param
+
+
+@pytest.fixture(scope="module", params=[None, 4], ids=["connections-default", "connections-4"])
+def flight_connection_count(request):
+    return request.param
+
+
 @pytest.fixture(scope="module", params=[None, "none", "lz4", "zstd"], ids=["default", "none", "lz4", "zstd"])
-def remote(request):
+def remote(request, shuffle_read_coalescing, flight_connection_count):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
+    if flight_connection_count is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(flight_connection_count)
+    if shuffle_read_coalescing is not None:
+        envs["SAIL_CLUSTER__ENABLE_SHUFFLE_READ_COALESCING"] = str(shuffle_read_coalescing).lower()
     if request.param is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = request.param
     with spark_connect_server(envs=envs) as server:
@@ -64,7 +80,9 @@ def test_shuffle_preserves_rows_across_multiple_batches(spark):
         "empty",
     ],
 )
-def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
+def test_shuffle_reader_batch_boundaries_in_channel_order(
+    spark, shuffle_read_coalescing, input_sizes, partitions, completed_sizes
+):
     def make_batches(batches):
         for _ in batches:
             offset = 0
@@ -87,6 +105,16 @@ def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, p
 
     expected = []
     for partition in range(partitions):
+        if shuffle_read_coalescing is False:
+            batches = []
+            offset = 0
+            for size in input_sizes:
+                rows = [value for value in range(offset, offset + size) if value % partitions == partition]
+                if rows:
+                    batches.append(rows)
+                offset += size
+            expected.append(batches)
+            continue
         ids = list(range(partition, sum(input_sizes), partitions))
         batches = []
         offset = 0
@@ -100,7 +128,7 @@ def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, p
 
 
 @pytest.mark.timeout(30)
-def test_shuffle_reader_coalesces_batches_across_producers(spark):
+def test_shuffle_reader_batch_boundaries_across_producers(spark, shuffle_read_coalescing):
     def make_batches(batches):
         for batch in batches:
             for producer in batch.column(0).to_pylist():
@@ -121,5 +149,6 @@ def test_shuffle_reader_coalesces_batches_across_producers(spark):
 
     # Each producer contributes only 65 rows per destination. A 256-row batch
     # therefore requires combining producers after the reader merges them.
-    assert sorted([len(batch) for batch in row.batches] for row in result) == [[256, 4], [256, 4]]
+    expected_sizes = [65] * 4 if shuffle_read_coalescing is False else [256, 4]
+    assert sorted([len(batch) for batch in row.batches] for row in result) == [expected_sizes] * 2
     assert sorted(value for row in result for batch in row.batches for value in batch) == list(range(520))

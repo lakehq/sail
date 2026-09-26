@@ -13,13 +13,16 @@ impl Actor for TaskRunnerActor {
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
             session_id,
+            enable_shuffle_read_coalescing,
             extensions,
             placement,
         } = options;
         Self {
             session_id,
+            enable_shuffle_read_coalescing,
             signals: Default::default(),
             tasks: Default::default(),
+            broadcasts: Default::default(),
             extensions,
             placement,
         }
@@ -57,10 +60,10 @@ impl Actor for TaskRunnerActor {
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
-                replicas,
-                schema,
+                replayable,
+                context,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => self.handle_create_local_stream(key, replayable, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -74,6 +77,12 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_create_celeborn_stream(ctx, key, mappers, channels, schema, result),
+            TaskRunnerMessage::FetchBroadcastStream {
+                key,
+                fetch,
+                context,
+                result,
+            } => self.handle_fetch_broadcast_stream(ctx, key, fetch, context, result),
             TaskRunnerMessage::FetchDriverStream {
                 key,
                 schema,

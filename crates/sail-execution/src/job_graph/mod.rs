@@ -44,25 +44,24 @@ impl JobGraph {
         &self.options.shuffle_backend
     }
 
-    /// Get the required number of output replicas for the given stage.
-    pub fn replicas(&self, stage: usize) -> usize {
-        let replicas = self
-            .stages
+    /// Whether output streams need to support consumers that subscribe independently.
+    pub fn is_replayable(&self, stage: usize) -> bool {
+        self.stages
             .iter()
-            .flat_map(|x| {
-                x.inputs
+            .flat_map(|consumer| {
+                consumer
+                    .inputs
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
-                        InputMode::Merge | InputMode::Broadcast => {
-                            x.plan.output_partitioning().partition_count()
+                        InputMode::Broadcast | InputMode::Merge => {
+                            consumer.plan.output_partitioning().partition_count()
                         }
+                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
                     })
             })
-            .sum::<usize>();
-        // ensure one replica for final stages for the job output
-        replicas.max(1)
+            .sum::<usize>()
+            > 1
     }
 }
 

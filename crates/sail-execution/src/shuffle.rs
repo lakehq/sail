@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::arrow::error::ArrowError;
@@ -11,6 +12,7 @@ use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
     Flight {
+        connection_count: NonZeroUsize,
         compression: ShuffleCompression,
     },
     Storage {
@@ -38,6 +40,7 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
     fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
             sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
+                connection_count: flight.connection_count,
                 compression: flight.compression.clone().into(),
             },
             sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
@@ -76,9 +79,18 @@ pub fn celeborn_application_id(session_id: &str) -> String {
 }
 
 impl ShuffleBackendKind {
+    pub fn flight_connection_count(&self) -> NonZeroUsize {
+        match self {
+            Self::Flight {
+                connection_count, ..
+            } => *connection_count,
+            Self::Storage { .. } | Self::Celeborn { .. } => NonZeroUsize::MIN,
+        }
+    }
+
     pub fn flight_compression(&self) -> ShuffleCompression {
         match self {
-            Self::Flight { compression } => *compression,
+            Self::Flight { compression, .. } => *compression,
             Self::Storage { .. } | Self::Celeborn { .. } => ShuffleCompression::None,
         }
     }
@@ -217,6 +229,7 @@ mod tests {
     fn test_non_celeborn_endpoint_overrides_string_is_empty() {
         assert_eq!(
             ShuffleBackendKind::Flight {
+                connection_count: std::num::NonZeroUsize::MIN,
                 compression: super::ShuffleCompression::None
             }
             .celeborn_endpoint_overrides_string(),
@@ -228,6 +241,7 @@ mod tests {
     fn test_non_celeborn_master_endpoints_string_is_empty() {
         assert_eq!(
             ShuffleBackendKind::Flight {
+                connection_count: std::num::NonZeroUsize::MIN,
                 compression: super::ShuffleCompression::None
             }
             .celeborn_master_endpoints_string(),

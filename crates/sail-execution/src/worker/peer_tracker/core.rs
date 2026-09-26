@@ -46,7 +46,7 @@ impl PeerTracker {
                 host: peer.host.clone(),
                 port: peer.port,
             };
-            WorkerClientSet::new(options)
+            WorkerClientSet::new(options, self.options.flight_connection_count)
         });
         Ok(client.clone())
     }
