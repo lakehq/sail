@@ -13,7 +13,7 @@ use sail_common_datafusion::datasource::{
     RowLevelCommand, RowLevelOperationType, RowLevelWriteMode,
 };
 
-use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::scan::IcebergScan;
 use crate::logical::IcebergTableSource;
 use crate::spec::TableMetadata;
 
@@ -81,7 +81,7 @@ pub(crate) fn validate_row_level_columns(
         MERGE_FILE_COLUMN,
         MERGE_ROW_INDEX_COLUMN,
         MERGE_SOURCE_METRIC_COLUMN,
-        crate::row_level_metadata::MERGE_PARTITION_COLUMN,
+        crate::row_level_metadata::MERGE_FILE_METADATA_COLUMN,
         crate::row_level_metadata::MERGE_PARTITION_SPEC_ID_COLUMN,
     ] {
         sail_logical_plan::row_level::validate_row_level_internal_columns(
@@ -99,27 +99,27 @@ pub(crate) fn target_write_state(
     plan: &LogicalPlan,
     command: RowLevelCommand,
 ) -> Result<(RowLevelWriteMode, Option<i64>)> {
-    let provider = target_provider(plan)?;
+    let read_scan = target_scan(plan)?;
     Ok((
-        provider.row_level_options.mode(command)?,
-        provider
+        read_scan.row_level_options.mode(command)?,
+        read_scan
             .current_snapshot()
             .map(|snapshot| snapshot.snapshot_id()),
     ))
 }
 
-pub(crate) fn target_provider(plan: &LogicalPlan) -> Result<Arc<IcebergTableProvider>> {
-    let mut provider = None;
+pub(crate) fn target_scan(plan: &LogicalPlan) -> Result<Arc<IcebergScan>> {
+    let mut read_scan = None;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node
             && let Some(source) = scan.source.downcast_ref::<IcebergTableSource>()
         {
-            provider = Some(Arc::clone(source.provider()));
+            read_scan = Some(Arc::clone(source.scan()));
             return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    provider.ok_or_else(|| {
+    read_scan.ok_or_else(|| {
         datafusion_common::plan_datafusion_err!("Missing Iceberg row-level target scan")
     })
 }
@@ -131,12 +131,12 @@ pub(crate) fn select_copy_on_write_candidates(
     plan.transform_up(|plan| {
         if let LogicalPlan::TableScan(mut scan) = plan {
             if let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() {
-                let provider = source
-                    .provider()
+                let read_scan = source
+                    .scan()
                     .as_ref()
                     .clone()
                     .select_copy_on_write_candidates(predicate.clone());
-                scan.source = Arc::new(IcebergTableSource::new(Arc::new(provider)));
+                scan.source = Arc::new(IcebergTableSource::new(Arc::new(read_scan)));
                 return Ok(Transformed::yes(LogicalPlan::TableScan(scan)));
             }
             return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
@@ -193,7 +193,7 @@ pub(crate) fn write_effects(
 }
 
 pub(crate) fn lineage_columns(plan: &LogicalPlan) -> Result<&'static [&'static str]> {
-    Ok(if target_provider(plan)?.has_row_lineage() {
+    Ok(if target_scan(plan)?.has_row_lineage() {
         &crate::row_lineage::LINEAGE_COLUMNS
     } else {
         &[]

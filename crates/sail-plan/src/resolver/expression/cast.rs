@@ -273,6 +273,16 @@ impl PlanResolver<'_> {
                     cast(renamed, to)
                 }
             }
+            (
+                from,
+                DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
+                _,
+            ) if from.is_numeric()
+                && !self.config.ansi_mode
+                && (is_try || decimal_cast_can_overflow(&from, precision, scale)) =>
+            {
+                try_cast(expr, cast_to_type)
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
@@ -303,6 +313,23 @@ impl PlanResolver<'_> {
             }
             None => NamedExpr::new(name, expr),
         })
+    }
+}
+
+fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {
+    let integer_digits = i16::from(precision) - i16::from(scale);
+    match from {
+        DataType::Decimal128(from_precision, from_scale)
+        | DataType::Decimal256(from_precision, from_scale) => {
+            let source_integer_digits = i16::from(*from_precision) - i16::from(*from_scale);
+            integer_digits < source_integer_digits
+                || (integer_digits == source_integer_digits && scale < *from_scale)
+        }
+        DataType::Int8 | DataType::UInt8 => scale < 0 || integer_digits < 3,
+        DataType::Int16 | DataType::UInt16 => scale < 0 || integer_digits < 5,
+        DataType::Int32 | DataType::UInt32 => scale < 0 || integer_digits < 10,
+        DataType::Int64 | DataType::UInt64 => scale < 0 || integer_digits < 20,
+        _ => true,
     }
 }
 

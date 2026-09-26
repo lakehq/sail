@@ -114,7 +114,27 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
                 .push(FileGroup::from(files));
         }
     }
-    if groups.keys().all(|defaults| defaults.0.is_empty()) {
+    fn needs_default(field: &Field, defaults: &IdentityPartitionDefaults) -> bool {
+        iceberg_field_id(field)
+            .ok()
+            .flatten()
+            .is_some_and(|id| defaults.0.contains_key(&id))
+            || matches!(field.data_type(), DataType::Struct(fields) if fields.iter().any(|field| needs_default(field, defaults)))
+    }
+    let projected = config.projected_schema()?;
+    let parquet_filter = config
+        .file_source
+        .downcast_ref::<ParquetSource>()
+        .and_then(|source| source.filter());
+    if groups.keys().all(|defaults| defaults.0.is_empty())
+        || (parquet_filter.is_none()
+            && groups.keys().all(|defaults| {
+                !projected
+                    .fields()
+                    .iter()
+                    .any(|field| needs_default(field, defaults))
+            }))
+    {
         let mut config = config;
         for group in &mut config.file_groups {
             *group = FileGroup::from(
@@ -142,6 +162,7 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
         let table_schema =
             TableSchema::builder(defaults.schema(parquet.table_schema().file_schema())?)
                 .with_table_partition_cols(parquet.table_schema().table_partition_cols().to_vec())
+                .with_virtual_columns(parquet.table_schema().virtual_columns().clone())
                 .build();
         // Preserve whole-file partitions without advertising compatible hash
         // partitioning: interleaving these scans would reset file-local row offsets.
@@ -160,8 +181,15 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
                 .ok_or_else(|| internal_datafusion_err!("Cannot project Iceberg Parquet scan"))?,
             None => Arc::new(source),
         };
-        let statistics =
+        let unknown =
             datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
+        let statistics = sail_common_datafusion::statistics::aggregate_statistics(
+            source.table_schema().table_schema(),
+            file_groups
+                .iter()
+                .flat_map(|group| group.files())
+                .map(|file| file.statistics.as_deref().unwrap_or(&unknown)),
+        );
         let scan = FileScanConfigBuilder::from(config.clone())
             .with_source(source)
             .with_file_groups(file_groups)

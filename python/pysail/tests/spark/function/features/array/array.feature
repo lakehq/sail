@@ -1,5 +1,29 @@
 Feature: array output schema
 
+  Rule: Void columns preserve rows
+
+    Scenario Outline: Void columns in array(<arguments>)
+      When query
+        """
+        SELECT array(<arguments>) AS result FROM VALUES (NULL), (NULL) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: void (containsNull = true)
+        """
+      Then query result
+        | result   |
+        | <result> |
+        | <result> |
+
+      Examples:
+        | arguments | result       |
+        | v         | [NULL]       |
+        | v, v      | [NULL, NULL] |
+        | v, NULL   | [NULL, NULL] |
+
   @function(nullability)
   Rule: Output schema
 
