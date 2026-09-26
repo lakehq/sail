@@ -1,5 +1,32 @@
 Feature: Short-circuit projected IN expressions
 
+  Scenario Outline: unreachable projected IN preserves eager constant subquery errors
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT <expression> AS result FROM range(1)
+      """
+    Then query error (?i)(cast_invalid_input|cannot cast string)
+
+    Examples:
+      | expression                                                               |
+      | false AND (id IN (SELECT CAST('invalid' AS INT)))                          |
+      | true OR (id IN (SELECT CAST('invalid' AS INT)))                            |
+      | CASE WHEN false THEN NULL IN (SELECT CAST('invalid' AS INT)) ELSE true END |
+      | COALESCE(true, id IN (SELECT CAST('invalid' AS INT)))                       |
+
+  Scenario: unreachable projected IN does not execute a runtime candidate expression
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT false AND (id IN (
+        SELECT CAST(CONCAT('invalid-', id) AS BIGINT) FROM range(1)
+      )) AS result FROM range(1)
+      """
+    Then query result
+      | result |
+      | false  |
+
   Scenario Outline: constant Boolean branches discard an unreachable IN subquery before validation
     Given config spark.sql.ansi.enabled = <ansi>
     When query

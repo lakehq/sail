@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
+use datafusion_expr::{
+    Expr, Join, JoinConstraint, LogicalPlan, LogicalPlanBuilder, build_join_schema,
+};
 use sail_common::spec;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
@@ -75,7 +77,8 @@ impl PlanResolver<'_> {
 
         match (join_type, join_criteria) {
             (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
-            // When the join criteria are not specified, any join type has the semantics of a cross join.
+            // Keep the requested join type even without criteria. In particular,
+            // a conditionless semi/anti join is not a cartesian product.
             (Some(_), None) | (None, None) => {
                 if join_data_type.is_some() {
                     return Err(PlanError::invalid("cross join with join data type"));
@@ -87,7 +90,16 @@ impl PlanResolver<'_> {
                         IMPLICIT_CARTESIAN_PRODUCT_MSG.to_string(),
                     ));
                 }
-                Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
+                Ok(LogicalPlan::Join(Join::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    vec![],
+                    None,
+                    join_type.unwrap_or(JoinType::Inner),
+                    JoinConstraint::On,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )?))
             }
             (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
                 // Use Inner to build the schema for resolving the ON condition,

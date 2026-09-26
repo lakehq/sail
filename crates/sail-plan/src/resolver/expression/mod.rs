@@ -211,39 +211,23 @@ impl PlanResolver<'_> {
                     .await
             }
             Expr::InSubquery {
-                expr,
+                values,
                 subquery,
                 negated,
             } => {
-                // Spark expands struct constructors into IN-subquery values, even
-                // when there is only one value (which may itself be a struct).
-                if let Expr::UnresolvedFunction(ref f) = *expr
-                    && f.function_name.parts() == [spec::Identifier::from("struct")]
-                    && !f.arguments.is_empty()
-                {
-                    let arguments = match *expr {
-                        Expr::UnresolvedFunction(f) => f.arguments,
-                        _ => unreachable!(),
-                    };
-                    if arguments.len() == 1 {
-                        return self
-                            .resolve_expression_in_subquery(
-                                arguments.one()?,
-                                *subquery,
-                                negated,
-                                schema,
-                                state,
-                            )
-                            .await;
-                    }
-                    return self
-                        .resolve_multi_column_in_subquery(
-                            arguments, *subquery, negated, schema, state,
-                        )
-                        .await;
-                }
-                self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state)
+                if values.len() == 1 {
+                    self.resolve_expression_in_subquery(
+                        values.one()?,
+                        *subquery,
+                        negated,
+                        schema,
+                        state,
+                    )
                     .await
+                } else {
+                    self.resolve_multi_column_in_subquery(values, *subquery, negated, schema, state)
+                        .await
+                }
             }
             Expr::ScalarSubquery { subquery } => {
                 self.resolve_expression_scalar_subquery(*subquery, schema, state)

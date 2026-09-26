@@ -14,3 +14,4 @@ sail-python-udf = { path = "../sail-python-udf" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+tokio = { workspace = true }

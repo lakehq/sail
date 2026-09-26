@@ -227,9 +227,7 @@ Feature: Projected IN subquery optimizer boundaries
       | present |
       | NULL    |
 
-  @sail-bug
   Scenario: projected IN preserves CASE under indirect negation
-    # TODO: Keep Spark's CASE boundary while normalizing projected IN negation.
     When query
       """
       SELECT id,
@@ -245,9 +243,7 @@ Feature: Projected IN subquery optimizer boundaries
       | 2    | true   |
       | NULL | true   |
 
-  @sail-bug
   Scenario Outline: projected IN preserves COALESCE before indirect negation
-    # TODO: Keep COALESCE around the positive existence result before negation.
     When query
       """
       SELECT id, <expression> AS result
@@ -300,9 +296,7 @@ Feature: Projected IN subquery optimizer boundaries
       | 0  | NULL    |
       | 1  | NULL    |
 
-  @sail-bug
   Scenario Outline: nested projected IN preserves conditional negation in its right side
-    # TODO: Preserve the same CASE/COALESCE boundary while folding nested subqueries.
     When query
       """
       SELECT <operand> IN (

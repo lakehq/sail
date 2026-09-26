@@ -568,6 +568,74 @@ Feature: IN subquery support
 
   Rule: Struct constructors supply IN subquery values
 
+    Scenario Outline: SQL struct constructors and quoted struct functions retain their value shapes
+      When query
+        """
+        SELECT id FROM VALUES (1), (2) t(id)
+        WHERE <value> <operator> (SELECT <candidate> FROM VALUES (1) u(x))
+        """
+      Then query result
+        | id       |
+        | <result> |
+
+      Examples:
+        | value          | operator | candidate       | result |
+        | STRUCT(id)     | IN       | x               | 1      |
+        | (STRUCT(id))   | NOT IN   | x               | 2      |
+        | `struct`(id)   | IN       | STRUCT(x AS id) | 1      |
+        | (`struct`(id)) | NOT IN   | STRUCT(x AS id) | 2      |
+
+    Scenario Outline: a quoted struct function remains one projected IN value
+      When query
+        """
+        SELECT <value> IN (SELECT <candidate>) AS present
+        """
+      Then query result
+        | present |
+        | true    |
+
+      Examples:
+        | value          | candidate    |
+        | `struct`(1)    | STRUCT(1)    |
+        | `struct`(1, 2) | STRUCT(1, 2) |
+        | `struct`()     | STRUCT()     |
+
+    Scenario Outline: an empty SQL struct constructor supplies no IN values
+      When query
+        """
+        SELECT <value> IN (SELECT STRUCT()) AS present
+        """
+      Then query error (?i)(head of empty list|column count mismatch|empty IN subquery values)
+
+      Examples:
+        | value        |
+        | STRUCT()     |
+        | ((STRUCT())) |
+
+    Scenario Outline: a nested struct constructor supplies exactly one IN value
+      When query
+        """
+        SELECT <value> IN (SELECT <candidate>) AS present
+        """
+      Then query result
+        | present |
+        | true    |
+
+      Examples:
+        | value                    | candidate    |
+        | STRUCT(STRUCT(1))        | STRUCT(1)    |
+        | STRUCT(STRUCT(1, 2))     | STRUCT(1, 2) |
+        | (STRUCT(STRUCT(1, 2)))   | STRUCT(1, 2) |
+        | STRUCT(`struct`(1, 2))   | STRUCT(1, 2) |
+        | STRUCT(STRUCT())        | STRUCT()     |
+
+    Scenario: a quoted struct function cannot supply a scalar IN value
+      When query
+        """
+        SELECT `struct`(1) IN (SELECT 1) AS present
+        """
+      Then query error (?i)(cannot infer common argument type|can.t cast|data.?type.?mismatch)
+
     Scenario: a single-field struct supplies one IN subquery value
       When query
         """

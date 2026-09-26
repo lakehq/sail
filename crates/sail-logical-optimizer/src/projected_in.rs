@@ -15,7 +15,7 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, not_impl_err, plan_err};
+use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{
@@ -23,7 +23,12 @@ use datafusion_expr::{
     SubqueryAlias, Union, expr_fn, lit,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::udf::expr_contains_python_udf;
+
+mod conditional;
+mod local;
 
 /// Spark folds expressions before replacing projected IN with an existence join.
 /// Fold affected expressions and literal NULL operands first, then push their
@@ -135,9 +140,8 @@ fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
     })
 }
 
-/// TODO: Preserve Catalyst's CASE and COALESCE boundaries when normalizing
-/// indirect negation. DataFusion lowers them to Boolean connectives, which can
-/// turn a positive IN existence test into a null-aware NOT IN test.
+/// Keep non-projection conditional subqueries outside this projection rule.
+/// Their normalization still belongs to the ordinary predicate optimizer.
 fn needs_conditional_normalization(expr: &Expr) -> Result<bool> {
     expr.exists(|expr| {
         let coalesce_only = match expr {
@@ -146,7 +150,8 @@ fn needs_conditional_normalization(expr: &Expr) -> Result<bool> {
             _ => return Ok(false),
         };
         expr.exists(|child| {
-            let boundary = matches!(child, Expr::ScalarFunction(function) if function.func.name() == "coalesce")
+            let boundary = matches!(child, Expr::ScalarFunction(function)
+                if matches!(function.func.name(), "coalesce" | "nvl" | "nvl2"))
                 || (!coalesce_only && matches!(child, Expr::Case(_)));
             Ok(boundary && has_uncorrelated_in(child)?)
         })
@@ -361,6 +366,14 @@ fn producer_constants(
             constants.local_relation = false;
             return Ok(constants);
         }
+        LogicalPlan::Extension(extension)
+            if extension.node.as_any().is::<MonotonicIdNode>()
+                || extension.node.as_any().is::<SparkPartitionIdNode>() =>
+        {
+            // Spark evaluates these scalar functions inside local projections.
+            // Their Sail plan nodes do not introduce a local-evaluation boundary.
+            return producer_constants(plan.inputs()[0], config, needed);
+        }
         LogicalPlan::Sort(_)
         | LogicalPlan::Repartition(_)
         | LogicalPlan::Window(_)
@@ -436,7 +449,7 @@ fn producer_constants(
     let constants = producer_constants(input, config, &input_needed)?;
     if constants.local_relation && matches!(plan, LogicalPlan::Projection(_)) {
         let mut local_relation = true;
-        for expr in expressions {
+        for expr in &expressions {
             local_relation &= locally_evaluable(expr)?;
         }
         if local_relation {
@@ -446,13 +459,58 @@ fn producer_constants(
             });
         }
     }
-    let simplifier = simplifier(Arc::clone(input.schema()), config);
+    // Spark extracts regular SELECT expressions below its Window operators.
+    // Sail keeps them in this projection, but their local evaluation still
+    // determines whether a NULL operand is a stored value or a foldable literal.
+    let mut local_window_outputs = HashSet::new();
+    if matches!(plan, LogicalPlan::Projection(_)) {
+        let mut before_window = input.as_ref();
+        let mut window_columns = HashSet::new();
+        let mut evaluable = true;
+        while let LogicalPlan::Window(window) = before_window {
+            window_columns.extend(
+                window
+                    .schema
+                    .columns()
+                    .into_iter()
+                    .skip(window.input.schema().fields().len()),
+            );
+            for expr in &window.window_expr {
+                expr.apply_children(|child| {
+                    evaluable &= locally_evaluable(child)?;
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+            before_window = &window.input;
+        }
+        if !window_columns.is_empty()
+            && producer_constants(before_window, config, &HashSet::new())?.local_relation
+        {
+            for (expr, column) in expressions.iter().zip(plan.schema().columns()) {
+                if expr
+                    .column_refs()
+                    .into_iter()
+                    .all(|column| !window_columns.contains(column))
+                {
+                    evaluable &= locally_evaluable(expr)?;
+                    local_window_outputs.insert(column);
+                }
+            }
+            if !evaluable {
+                local_window_outputs.clear();
+            }
+        }
+    }
     let mut output = ProducerConstants::default();
     for (expr, column) in selected {
-        let expr = simplifier.simplify(replace_constants(
-            expr.clone().unalias(),
-            &constants.columns,
-        )?)?;
+        if local_window_outputs.contains(&column) {
+            continue;
+        }
+        let expr = conditional::simplify(
+            replace_constants(expr.clone().unalias(), &constants.columns)?,
+            Arc::clone(input.schema()),
+            config,
+        )?;
         if matches!(expr, Expr::Literal(_, _)) {
             output.columns.insert(column, expr);
         }
@@ -592,7 +650,7 @@ fn rewrite_projection(
     prepare: bool,
     prepared_marks: &mut HashSet<Column>,
 ) -> Result<Transformed<LogicalPlan>> {
-    let LogicalPlan::Projection(projection) = plan else {
+    let LogicalPlan::Projection(mut projection) = plan else {
         return Ok(Transformed::no(plan));
     };
     let mut found = false;
@@ -601,6 +659,15 @@ fn rewrite_projection(
     }
     if !found {
         return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+    }
+    if prepare {
+        // Early local evaluation also fixes the LHS producer boundary, including
+        // local inputs exposed by empty UNION branches and outer joins. Reuse the
+        // evaluated input so volatile expressions are not run just for analysis.
+        projection.input = Arc::new(local::materialize(
+            Arc::unwrap_or_clone(projection.input),
+            config,
+        )?);
     }
     let needed = projection
         .expr
@@ -629,7 +696,6 @@ fn rewrite_projection(
             if constants.is_empty() {
                 continue;
             }
-            let simplifier = simplifier(Arc::clone(input.schema()), config);
             for expr in &projection.expr {
                 needs_null_propagation |= expr.exists(|expr| {
                     let Expr::InSubquery(subquery) = expr else {
@@ -640,7 +706,11 @@ fn rewrite_projection(
                     {
                         return Ok(false);
                     }
-                    let operand = simplifier.simplify(replace_constants(*subquery.expr.clone(), &constants)?)?;
+                    let operand = conditional::simplify(
+                        replace_constants(*subquery.expr.clone(), &constants)?,
+                        Arc::clone(input.schema()),
+                        config,
+                    )?;
                     Ok(matches!(operand, Expr::Literal(value, _) if value.is_null()))
                 })?;
             }
@@ -671,7 +741,6 @@ fn rewrite_projection(
         HashMap::new()
     };
     let schema = Arc::clone(projection.input.schema());
-    let simplifier = simplifier(Arc::clone(&schema), config);
     let mut rewriter = InRewriter {
         plan: Arc::unwrap_or_clone(projection.input),
         config,
@@ -686,6 +755,13 @@ fn rewrite_projection(
                 return Ok(expr);
             }
             let name = NamePreserver::new_for_projection().save(&expr);
+            // Spark optimizes subqueries before folding the containing expression,
+            // including branches whose IN expression will disappear entirely.
+            let expr = if prepare {
+                prepare_in_subqueries(expr, config)?
+            } else {
+                expr
+            };
             // Spark removes identity casts before deciding whether NOT applies
             // directly to IN (and therefore needs a null-aware existence join).
             let expr = replace_constants(expr, &constants)?
@@ -703,24 +779,57 @@ fn rewrite_projection(
                     expr => Ok(Transformed::no(expr)),
                 })
                 .data()?;
-            let conditional = needs_conditional_normalization(&expr)?;
-            if !prepare && conditional {
-                return not_impl_err!(
-                    "projected IN under conditional negation or Boolean comparison"
-                );
-            }
-            let simplified = simplifier.simplify(expr.clone())?;
-            let expr = if conditional && has_uncorrelated_in(&simplified)? {
-                expr
-            } else {
-                simplified
-            };
+            let expr = conditional::simplify(expr, Arc::clone(&schema), config)?;
             Ok(name.restore(expr.rewrite(&mut rewriter)?.data))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Transformed::yes(LogicalPlan::Projection(
         Projection::try_new_with_schema(expr, Arc::new(rewriter.plan), projection.schema)?,
     )))
+}
+
+fn prepare_in_subqueries(expr: Expr, config: &dyn OptimizerConfig) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        let Expr::InSubquery(mut subquery) = expr else {
+            return Ok(Transformed::no(expr));
+        };
+        if !subquery.subquery.outer_ref_columns.is_empty() {
+            return Ok(Transformed::no(Expr::InSubquery(subquery)));
+        }
+        let query = local::materialize(Arc::unwrap_or_clone(subquery.subquery.subquery), config)?;
+        subquery.subquery.subquery = Arc::new(
+            OptimizeProjections::new()
+                .rewrite(query, config)?
+                .data
+                .transform_up_with_subqueries(|plan| {
+                    if let LogicalPlan::Projection(projection) = &plan {
+                        let schema = Arc::clone(projection.input.schema());
+                        let names = NamePreserver::new_for_projection();
+                        return plan.map_expressions(|expr| {
+                            let name = names.save(&expr);
+                            let simplified =
+                                conditional::simplify(expr.clone(), Arc::clone(&schema), config)?;
+                            let changed = simplified != expr;
+                            Ok(Transformed::new_transformed(
+                                name.restore(simplified),
+                                changed,
+                            ))
+                        });
+                    }
+                    // Nested projected IN was already prepared. Do not erase
+                    // its preserved CASE/COALESCE boundary while folding RHS.
+                    for expr in plan.expressions() {
+                        if needs_conditional_normalization(&expr)? {
+                            return Ok(Transformed::no(plan));
+                        }
+                    }
+                    SimplifyExpressions::default().rewrite(plan, config)
+                })?
+                .data,
+        );
+        Ok(Transformed::yes(Expr::InSubquery(subquery)))
+    })
+    .data()
 }
 
 // TODO: Allow existence-only RHS pruning across local and aggregate subplans
@@ -771,30 +880,11 @@ impl TreeNodeRewriter for InRewriter<'_> {
             return Ok(Transformed::no(Expr::InSubquery(subquery)));
         }
         if self.prepare {
-            // Spark optimizes subqueries before pruning unused outer columns:
-            // constant RHS errors are eager, while runtime RHS work can disappear.
-            subquery.subquery.subquery = Arc::new(
-                OptimizeProjections::new()
-                    .rewrite(
-                        Arc::unwrap_or_clone(subquery.subquery.subquery),
-                        self.config,
-                    )?
-                    .data
-                    .transform_up_with_subqueries(|plan| {
-                        // Nested projected IN was already prepared. Do not erase
-                        // its preserved CASE/COALESCE boundary while folding RHS.
-                        for expr in plan.expressions() {
-                            if needs_conditional_normalization(&expr)? {
-                                return Ok(Transformed::no(plan));
-                            }
-                        }
-                        SimplifyExpressions::default().rewrite(plan, self.config)
-                    })?
-                    .data,
-            );
-            subquery.expr = Box::new(
-                simplifier(Arc::clone(self.plan.schema()), self.config).simplify(*subquery.expr)?,
-            );
+            subquery.expr = Box::new(conditional::simplify(
+                *subquery.expr,
+                Arc::clone(self.plan.schema()),
+                self.config,
+            )?);
         }
         let null_literal = self.prepare
             && matches!(subquery.expr.as_ref(), Expr::Literal(value, _) if value.is_null());
