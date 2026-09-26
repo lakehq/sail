@@ -8,6 +8,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Result, ScalarValue, internal_datafusion_err};
+use datafusion::functions::core::getfield::GetFieldFunc;
+use datafusion::functions_nested::extract::ArrayElement;
+use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
@@ -171,18 +174,18 @@ fn map_value_expression(
 
 fn physical_map_value_key(expression: &Arc<dyn PhysicalExpr>, column: &str) -> Option<String> {
     let function = expression.downcast_ref::<ScalarFunctionExpr>()?;
-    match function.name() {
-        "array_element" => {
-            let [map_extract, index] = function.args() else {
-                return None;
-            };
-            if !physical_literal(index).is_some_and(scalar_is_one) {
-                return None;
-            }
-            physical_map_extract_key(map_extract, column)
+    if function.fun().inner().is::<ArrayElement>() {
+        let [map_extract, index] = function.args() else {
+            return None;
+        };
+        if !physical_literal(index).is_some_and(scalar_is_one) {
+            return None;
         }
-        "get_field" => physical_map_extract_key(expression, column),
-        _ => None,
+        physical_map_extract_key(map_extract, column)
+    } else if function.fun().inner().is::<GetFieldFunc>() {
+        physical_map_extract_key(expression, column)
+    } else {
+        None
     }
 }
 
@@ -202,7 +205,7 @@ fn scalar_is_one(value: &ScalarValue) -> bool {
 
 fn physical_map_extract_key(expression: &Arc<dyn PhysicalExpr>, column: &str) -> Option<String> {
     let function = expression.downcast_ref::<ScalarFunctionExpr>()?;
-    if !matches!(function.name(), "map_extract" | "get_field") {
+    if !function.fun().inner().is::<MapExtract>() && !function.fun().inner().is::<GetFieldFunc>() {
         return None;
     }
     let [map, key] = function.args() else {
@@ -370,18 +373,18 @@ fn logical_map_value_key(expression: &Expr, column: &str) -> Option<String> {
     let Expr::ScalarFunction(function) = expression else {
         return None;
     };
-    match function.name() {
-        "array_element" => {
-            let [map_extract, index] = function.args.as_slice() else {
-                return None;
-            };
-            if !logical_literal(index).is_some_and(scalar_is_one) {
-                return None;
-            }
-            logical_map_extract_key(map_extract, column)
+    if function.func.inner().is::<ArrayElement>() {
+        let [map_extract, index] = function.args.as_slice() else {
+            return None;
+        };
+        if !logical_literal(index).is_some_and(scalar_is_one) {
+            return None;
         }
-        "get_field" => logical_map_extract_key(expression, column),
-        _ => None,
+        logical_map_extract_key(map_extract, column)
+    } else if function.func.inner().is::<GetFieldFunc>() {
+        logical_map_extract_key(expression, column)
+    } else {
+        None
     }
 }
 
@@ -389,7 +392,7 @@ fn logical_map_extract_key(expression: &Expr, column: &str) -> Option<String> {
     let Expr::ScalarFunction(function) = expression else {
         return None;
     };
-    if !matches!(function.name(), "map_extract" | "get_field") {
+    if !function.func.inner().is::<MapExtract>() && !function.func.inner().is::<GetFieldFunc>() {
         return None;
     }
     let [map, key] = function.args.as_slice() else {

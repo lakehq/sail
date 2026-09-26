@@ -726,7 +726,8 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
-                is_internal: None,
+                // Tuple syntax has no explicit struct function alias.
+                is_internal: Some(true),
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,

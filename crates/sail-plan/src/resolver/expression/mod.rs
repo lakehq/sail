@@ -24,6 +24,7 @@ mod udf;
 mod wildcard;
 mod window;
 
+pub(crate) use cast::build_rename_target_type;
 pub(super) use predicate::spark_interval_metadata_for_expression;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +106,31 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
+
+        // Spark 4's SQL BETWEEN retains a non-foldable RuntimeReplaceable wrapper.
+        // Spark 3.5 and the legacy parser mode lower directly to comparisons.
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && !self.config.legacy_duplicate_between_input
+            && matches!(expr, Expr::Between { .. })
+        {
+            return Err(PlanError::invalid(format!(
+                "{parameter} must be a foldable expression"
+            )));
+        }
+
+        if state.config().reject_zip_subqueries
+            && matches!(
+                expr,
+                Expr::ScalarSubquery { .. }
+                    | Expr::Exists { .. }
+                    | Expr::InSubquery { .. }
+                    | Expr::Subquery { .. }
+            )
+        {
+            return Err(PlanError::AnalysisError(
+                "Subquery expressions are not supported within higher-order functions".to_string(),
+            ));
+        }
 
         match expr {
             Expr::Literal(literal) => self.resolve_expression_literal(literal, state),

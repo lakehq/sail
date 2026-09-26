@@ -49,6 +49,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut scope;
+        let state = if matches!(function_name, "zip_with" | "map_zip_with") {
+            scope = state.enter_config_scope();
+            scope.state().config_mut().anonymous_lambda_display = true;
+            scope.state()
+        } else {
+            state
+        };
         enum Slot {
             Resolved(NamedExpr),
             Lambda(spec::Expr, Vec<spec::UnresolvedNamedLambdaVariable>),
@@ -80,7 +88,8 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let mut lambda_params = get_lambda_parameters(function_name, &fields)?.into_iter();
+        let mut lambda_params =
+            get_lambda_parameters(function_name, &self.config, &fields)?.into_iter();
 
         let mut names: Vec<String> = Vec::with_capacity(slots.len());
         let mut exprs: Vec<expr::Expr> = Vec::with_capacity(slots.len());
@@ -167,7 +176,11 @@ impl PlanResolver<'_> {
         let name = format!(
             "lambdafunction({}, {})",
             body.name.clone().one()?,
-            params.join(", ")
+            if state.config().anonymous_lambda_display {
+                vec!["namedlambdavariable()"; params.len()].join(", ")
+            } else {
+                params.join(", ")
+            }
         );
         Ok(NamedExpr::new(
             vec![name],
@@ -197,7 +210,11 @@ impl PlanResolver<'_> {
                 }
             })?;
         Ok(NamedExpr::new(
-            vec![declared.clone()],
+            vec![if state.config().anonymous_lambda_display {
+                "namedlambdavariable()".to_string()
+            } else {
+                declared.clone()
+            }],
             expr::Expr::LambdaVariable(LambdaVariable::new(declared, field)),
         ))
     }

@@ -374,7 +374,7 @@ fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
 /// Build a target type that has the names from `to` but the data types from
 /// `from`. The result is what `SparkStructRename` produces; the subsequent
 /// regular CAST then handles any leaf-type conversion.
-fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
+pub(crate) fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
     match (from, to) {
         (DataType::Struct(src_fields), DataType::Struct(tgt_fields))
             if src_fields.len() == tgt_fields.len() =>
@@ -395,14 +395,16 @@ fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
                 .collect();
             DataType::Struct(fields)
         }
-        (DataType::List(src), DataType::List(tgt)) => DataType::List(Arc::new(
-            Field::new(
-                tgt.name(),
-                build_rename_target_type(src.data_type(), tgt.data_type()),
-                src.is_nullable(),
-            )
-            .with_metadata(src.metadata().clone()),
-        )),
+        (DataType::List(src), DataType::List(tgt) | DataType::LargeList(tgt)) => {
+            DataType::List(Arc::new(
+                Field::new(
+                    tgt.name(),
+                    build_rename_target_type(src.data_type(), tgt.data_type()),
+                    src.is_nullable(),
+                )
+                .with_metadata(src.metadata().clone()),
+            ))
+        }
         (DataType::LargeList(src), DataType::LargeList(tgt)) => DataType::LargeList(Arc::new(
             Field::new(
                 tgt.name(),
@@ -411,19 +413,20 @@ fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
             )
             .with_metadata(src.metadata().clone()),
         )),
-        (DataType::FixedSizeList(src, sa), DataType::FixedSizeList(tgt, _)) => {
-            DataType::FixedSizeList(
-                Arc::new(
-                    Field::new(
-                        tgt.name(),
-                        build_rename_target_type(src.data_type(), tgt.data_type()),
-                        src.is_nullable(),
-                    )
-                    .with_metadata(src.metadata().clone()),
-                ),
-                *sa,
-            )
-        }
+        (
+            DataType::FixedSizeList(src, sa),
+            DataType::List(tgt) | DataType::LargeList(tgt) | DataType::FixedSizeList(tgt, _),
+        ) => DataType::FixedSizeList(
+            Arc::new(
+                Field::new(
+                    tgt.name(),
+                    build_rename_target_type(src.data_type(), tgt.data_type()),
+                    src.is_nullable(),
+                )
+                .with_metadata(src.metadata().clone()),
+            ),
+            *sa,
+        ),
         (DataType::Map(src, sorted), DataType::Map(tgt, _)) => DataType::Map(
             Arc::new(
                 Field::new(

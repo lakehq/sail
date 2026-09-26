@@ -4,21 +4,26 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
-    variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::prelude::SessionContext;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
+    AggregateUDF, AggregateUDFImpl, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr,
+    lit, try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::approx_percentile::ApproxPercentile;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -43,9 +48,9 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    AggFunction, AggFunctionInput, count_min_sketch_args, expr_contains_python_udf,
+    get_arguments_and_null_treatment, get_null_treatment, hll_args_with_default_lg,
+    hll_union_args_with_default_allow_different_lg, theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -803,6 +808,110 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+pub(super) fn approx_percentile_arguments(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchema,
+    ansi_mode: bool,
+    filter: Option<&expr::Expr>,
+    session_context: &SessionContext,
+) -> PlanResult<Vec<expr::Expr>> {
+    if !(2..=3).contains(&arguments.len()) {
+        return Err(PlanError::invalid(
+            "percentile_approx expects 2 or 3 arguments",
+        ));
+    }
+    // Validate before constant folding can erase nullable source elements.
+    // TODO: Sail's shared decimal arithmetic marks non-ANSI constant expressions
+    // non-nullable, unlike Spark BinaryArithmetic.nullable. Correct that inference
+    // so nullable arrays such as array(0.25 + 0.25) are rejected here before folding.
+    if let DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) =
+        arguments[1].get_type(schema)?
+        && field.is_nullable()
+        && field.data_type() != &DataType::Float64
+    {
+        return Err(PlanError::invalid(
+            "percentage array requires non-nullable numeric elements for implicit casting to DOUBLE",
+        ));
+    }
+    for (argument, name) in arguments.iter().skip(1).zip(["percentage", "accuracy"]) {
+        // The resolver checks source-level foldability before lowering. Generated
+        // lambdas and scalar helpers can implement otherwise foldable SQL expressions.
+        if argument.any_column_refs()
+            || argument.is_volatile()
+            || expr_contains_python_udf(argument)?
+        {
+            return Err(PlanError::invalid(format!(
+                "{name} must be a foldable expression"
+            )));
+        }
+    }
+    let arguments = arguments
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            if index < 2 {
+                Ok(coerce_string_sum_arguments(
+                    vec![argument],
+                    if index == 0 { filter } else { None },
+                    schema,
+                    ansi_mode,
+                )?
+                .one()?)
+            } else {
+                Ok(argument)
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    // An empty grouped aggregate never constructs an accumulator. Spark checks
+    // these parameters during analysis regardless of whether any rows survive.
+    let argument_types = arguments
+        .iter()
+        .map(|argument| argument.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let coerced_types = ApproxPercentile::default().coerce_types(&argument_types)?;
+    let state = session_context.state();
+    let simplifier = ExprSimplifier::new(
+        SimplifyContextBuilder::default()
+            .with_schema(Arc::new(schema.clone()))
+            .with_config_options(Arc::clone(state.config_options()))
+            .with_query_execution_start_time(state.execution_props().query_execution_start_time)
+            .build(),
+    );
+    let evaluator = LiteralEvaluator::new();
+    let mut parameters = Vec::with_capacity(arguments.len() - 1);
+    for (argument, target_type) in arguments.iter().zip(coerced_types).skip(1) {
+        let coerced = simplifier.coerce(argument.clone(), schema)?;
+        let simplified = simplifier.simplify(coerced.cast_to(&target_type, schema)?)?;
+        parameters.push(evaluator.evaluate(&simplified)?);
+    }
+    let accuracy = parameters
+        .get(1)
+        .cloned()
+        .unwrap_or(ScalarValue::Int64(Some(10000)));
+    ApproxPercentile::validate_parameters(parameters[0].clone(), accuracy)?;
+    Ok(arguments)
+}
+
+fn approx_percentile(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let arguments = approx_percentile_arguments(
+        input.arguments,
+        input.function_context.schema,
+        input.function_context.plan_config.ansi_mode,
+        input.filter.as_deref(),
+        input.function_context.session_context,
+    )?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ApproxPercentile::default())),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
@@ -912,10 +1021,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(approx_percentile)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
@@ -973,10 +1079,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
-        (
-            "percentile_approx",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(approx_percentile)),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),

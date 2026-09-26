@@ -6,6 +6,7 @@ use datafusion::arrow::compute::take_record_batch;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
+use datafusion::functions_aggregate::count::Count;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::logical_plan::{
@@ -404,7 +405,7 @@ fn is_row_count(expression: &Expr) -> bool {
     let Expr::AggregateFunction(function) = expression else {
         return false;
     };
-    function.func.name().eq_ignore_ascii_case("count")
+    function.func.inner().is::<Count>()
         && !function.params.distinct
         && function.params.filter.is_none()
         && function.params.order_by.is_empty()

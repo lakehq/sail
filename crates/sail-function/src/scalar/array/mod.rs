@@ -13,3 +13,4 @@ pub mod spark_array_min_max;
 pub mod spark_array_sort;
 pub mod spark_array_transform;
 pub mod spark_sequence;
+pub mod spark_zip_with;

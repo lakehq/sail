@@ -17,6 +17,8 @@ mod schema;
 mod state;
 mod tree;
 
+pub(crate) use expression::build_rename_target_type;
+
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,
     config: Arc<PlanConfig>,
