@@ -23,6 +23,7 @@ mod lateral;
 mod lateral_join;
 mod limit;
 mod misc;
+mod missing_input;
 mod na;
 mod pivoting;
 mod project;

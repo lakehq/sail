@@ -23,6 +23,9 @@ use crate::expression::{
     from_ast_order_by, from_ast_window,
 };
 
+/// The table alias that Spark generates for an unaliased derived table.
+pub const AUTO_GENERATED_SUBQUERY_NAME: &str = "__auto_generated_subquery_name";
+
 #[derive(Default)]
 struct QueryModifiers {
     sort_by: Option<Vec<OrderByExpr>>,
@@ -493,6 +496,17 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                 spec::QueryPlan::new(spec::QueryNode::TableSample {
                     input: Box::new(plan),
                     sample,
+                })
+            } else {
+                plan
+            };
+            // Like Spark, alias an unaliased derived table so that enclosing
+            // operators cannot resolve columns hidden inside the subquery.
+            let plan = if alias.is_none() {
+                spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                    input: Box::new(plan),
+                    name: spec::Identifier::from(AUTO_GENERATED_SUBQUERY_NAME),
+                    columns: vec![],
                 })
             } else {
                 plan

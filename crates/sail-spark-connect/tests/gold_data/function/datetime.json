@@ -458,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"current_time\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {

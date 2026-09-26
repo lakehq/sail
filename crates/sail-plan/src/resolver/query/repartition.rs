@@ -44,17 +44,19 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let schema = input.schema();
-        let expr = self
-            .resolve_expressions(partition_expressions, schema, state)
+        let output_schema = Arc::clone(input.schema());
+        // Like a filter, Spark recovers partitioning attributes removed by the input.
+        let (expr, input) = self
+            .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
-        Ok(LogicalPlan::Extension(Extension {
+        let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),
                 num_partitions,
                 ExplicitRepartitionKind::Hash,
                 expr,
             )),
-        }))
+        });
+        Self::restore_missing_input_output(plan, output_schema)
     }
 }

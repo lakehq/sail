@@ -1,4 +1,155 @@
 Feature: Scalar subqueries in distributed execution
+  Scenario: Sampling auxiliaries do not shadow correlated outer attributes
+    When query
+      """
+      WITH filter_sample_input AS (SELECT 1 AS id)
+      SELECT rand_value FROM VALUES (100), (-100) AS outer_t(rand_value)
+      WHERE EXISTS (
+        SELECT 1 FROM filter_sample_input
+        TABLESAMPLE (100 PERCENT) REPEATABLE (42)
+        WHERE rand_value > 1
+      )
+      """
+    Then query result collected
+      | rand_value |
+      | 100        |
+
+  Scenario Outline: Filter subqueries preserve lateral correlation scope
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW lateral_scalar_outer AS
+      SELECT * FROM VALUES (0, 1), (1, 2) AS t(c1, c2)
+      """
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW lateral_scalar_inner AS
+      SELECT * FROM VALUES (0, 2), (0, 3) AS t(c1, c2)
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS lateral_scalar_outer
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS lateral_scalar_inner
+      """
+    When query
+      """
+      SELECT * FROM lateral_scalar_outer
+      WHERE <predicate> (
+        SELECT <projection> FROM lateral_scalar_inner, LATERAL (SELECT c1 AS a)
+        <correlation>
+      )
+      """
+    Then query result collected
+      | c1 | c2 |
+      | 0  | 1  |
+
+    Examples:
+      | predicate | projection | correlation                       |
+      | c1 =      | MIN(a)     |                                   |
+      | c1 =      | MIN(a)     | WHERE c1 = lateral_scalar_outer.c1 |
+      | EXISTS    | 1          | WHERE a = lateral_scalar_outer.c1  |
+      | c1 IN     | a          |                                   |
+
+  Scenario: Filter subqueries resolve columns hidden by unaliased derived tables as outer references
+    When query
+      """
+      SELECT c FROM VALUES (1), (3) AS u(c)
+      WHERE EXISTS (
+        SELECT 1 FROM (SELECT a FROM VALUES (1, 1), (2, 3) AS t(a, c))
+        WHERE a = c
+      )
+      """
+    Then query result collected
+      | c |
+      | 1 |
+
+  Scenario: Filters do not recover columns hidden by unaliased derived tables
+    When query
+      """
+      SELECT * FROM (SELECT a FROM VALUES (1, 10) AS t(a, b)) WHERE b = 10
+      """
+    Then query error (?i)cannot (be )?resolve
+
+  Scenario Outline: Filter subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT a FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      WHERE <predicate> (
+        SELECT c FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      )
+      """
+    Then query result collected
+      | a   |
+      | <a> |
+
+    Examples:
+      | predicate     | a |
+      | EXISTS        | 1 |
+      | NOT EXISTS    | 2 |
+      | b * 10 IN     | 1 |
+      | b * 10 NOT IN | 2 |
+
+  Scenario: Projected scalar subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT a, (
+        SELECT COUNT(*) FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      ) AS n
+      FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      """
+    Then query result collected
+      | a | n |
+      | 1 | 2 |
+      | 2 | 0 |
+
+  # TODO: Match Spark's nullable scalar-subquery schema even for COUNT. The same
+  # mismatch exists without the unaliased derived table before this PR.
+  @sail-bug
+  Scenario: Correlated scalar counts retain nullable schemas through unaliased derived tables
+    When query
+      """
+      SELECT a, (
+        SELECT COUNT(*) FROM (SELECT c FROM VALUES (1, 100), (3, 300), (1, 111) AS u(a, c) WHERE u.a = t.a)
+      ) AS n
+      FROM VALUES (1, 10), (2, 20) AS t(a, b)
+      """
+    Then query result collected
+      | a | n |
+      | 1 | 2 |
+      | 2 | 0 |
+    Then query schema
+      """
+      root
+       |-- a: integer (nullable = false)
+       |-- n: long (nullable = true)
+      """
+
+  Scenario Outline: Lateral subqueries resolve correlation inside unaliased derived tables
+    When query
+      """
+      SELECT t.a, c FROM VALUES (1), (2) AS t(a), LATERAL (SELECT c FROM (<derived>))
+      """
+    Then query result collected
+      | a | c   |
+      | 1 | 100 |
+      | 2 | 200 |
+
+    Examples:
+      | derived                                                            |
+      | SELECT c FROM VALUES (1, 100), (2, 200) AS u(a, c) WHERE u.a = t.a |
+      | SELECT t.a * 100 AS c                                              |
+
+  Scenario: Unaliased derived tables expose columns under the generated qualifier
+    When query
+      """
+      SELECT __auto_generated_subquery_name.a FROM (SELECT a FROM VALUES (1) AS t(a))
+      """
+    Then query result collected
+      | a |
+      | 1 |
+
   Scenario: Scalar subquery in Parquet scan predicate
     Given variable location for temporary directory scalar_subquery_parquet
     Given statement template

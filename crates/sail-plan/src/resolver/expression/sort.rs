@@ -25,57 +25,58 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Sort> {
-        use spec::{NullOrdering, SortDirection};
-
         let spec::SortOrder {
             child,
             direction,
             null_ordering,
         } = sort;
-        let asc = match direction {
-            SortDirection::Ascending => true,
-            SortDirection::Descending => false,
-            SortDirection::Unspecified => true,
-        };
-        let nulls_first = match null_ordering {
-            NullOrdering::NullsFirst => true,
-            NullOrdering::NullsLast => false,
-            NullOrdering::Unspecified => asc,
-        };
-
-        match child.as_ref() {
+        let expression = match child.as_ref() {
             spec::Expr::Literal(literal) if resolve_literals => {
+                // Ordinals refer only to the visible output, even when other sort
+                // keys are resolved against a combined descendant schema.
+                let schema = state.get_local_schema(schema);
                 let num_fields = schema.fields().len();
                 let position = match literal {
-                    spec::Literal::Int32 { value: Some(value) } => *value as usize,
-                    spec::Literal::Int64 { value: Some(value) } => *value as usize,
-                    _ => {
-                        return Ok(expr::Sort {
-                            expr: self.resolve_expression(*child, schema, state).await?,
-                            asc,
-                            nulls_first,
-                        });
-                    }
+                    spec::Literal::Int32 { value: Some(value) } => Some(*value as usize),
+                    spec::Literal::Int64 { value: Some(value) } => Some(*value as usize),
+                    _ => None,
                 };
-                if position > 0 && position <= num_fields {
-                    Ok(expr::Sort {
-                        expr: expr::Expr::Column(Column::from(
-                            schema.qualified_field(position - 1),
-                        )),
-                        asc,
-                        nulls_first,
-                    })
-                } else {
-                    Err(PlanError::invalid(format!(
-                        "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
-                    )))
+                match position {
+                    Some(position) if position > 0 && position <= num_fields => {
+                        expr::Expr::Column(Column::from(schema.qualified_field(position - 1)))
+                    }
+                    Some(position) => {
+                        return Err(PlanError::invalid(format!(
+                            "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
+                        )));
+                    }
+                    None => self.resolve_expression(*child, &schema, state).await?,
                 }
             }
-            _ => Ok(expr::Sort {
-                expr: self.resolve_expression(*child, schema, state).await?,
-                asc,
-                nulls_first,
-            }),
+            _ => self.resolve_expression(*child, schema, state).await?,
+        };
+        Ok(Self::sort_with_options(
+            expression,
+            direction,
+            null_ordering,
+        ))
+    }
+
+    pub(in super::super) fn sort_with_options(
+        expr: expr::Expr,
+        direction: spec::SortDirection,
+        null_ordering: spec::NullOrdering,
+    ) -> expr::Sort {
+        let asc = !matches!(direction, spec::SortDirection::Descending);
+        let nulls_first = match null_ordering {
+            spec::NullOrdering::NullsFirst => true,
+            spec::NullOrdering::NullsLast => false,
+            spec::NullOrdering::Unspecified => asc,
+        };
+        expr::Sort {
+            expr,
+            asc,
+            nulls_first,
         }
     }
 

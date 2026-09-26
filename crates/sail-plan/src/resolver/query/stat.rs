@@ -564,7 +564,8 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(Expr::Column)
             .collect();
-        let rand_column_name: String = state.register_hidden_field_name("rand_value");
+        // Like Spark's `rand(seed)` in the filter, the random column is not referenceable.
+        let rand_column_name: String = state.next_field_id();
 
         let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(Random::new())),
@@ -590,6 +591,7 @@ impl PlanResolver<'_> {
         let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
         Ok(LogicalPlanBuilder::from(plan_with_rand)
             .filter(final_expr)?
+            .project(init_exprs)?
             .build()?)
     }
 }

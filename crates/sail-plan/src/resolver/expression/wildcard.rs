@@ -25,6 +25,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let schema = &state.get_local_schema(schema);
         if plan_id.is_some() {
             return Err(PlanError::todo("wildcard with plan ID"));
         }
@@ -61,11 +62,11 @@ impl PlanResolver<'_> {
             if remaining.is_empty() {
                 let in_input = schema
                     .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier));
+                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier, false));
                 let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
                     outer_schema
                         .iter()
-                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
+                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier, false))
                 });
                 if in_input || in_outer {
                     return Ok(NamedExpr::new(
@@ -90,7 +91,7 @@ impl PlanResolver<'_> {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(q.as_ref(), qualifier)
+                        if qualifier_matches(q.as_ref(), qualifier, false)
                             && info.matches(column.as_ref(), None)
                         {
                             Self::resolve_nested_field_wildcard(

@@ -203,6 +203,8 @@ impl PlanResolver<'_> {
         use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
+        let schema = &state.get_local_schema(schema);
+
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
 
@@ -263,6 +265,52 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        fn is_attribute_path(expr: &spec::Expr) -> bool {
+            match expr {
+                spec::Expr::UnresolvedAttribute { .. } => true,
+                spec::Expr::UnresolvedExtractValue { child, .. } => is_attribute_path(child),
+                spec::Expr::Alias { expr, .. } => is_attribute_path(expr),
+                _ => false,
+            }
+        }
+
+        fn discard_failed_missing_input(
+            expr: &expr::Expr,
+            child_is_attribute_path: bool,
+            schema: &DFSchemaRef,
+            state: &mut PlanResolverState,
+        ) {
+            let Some(index) = state
+                .get_missing_input_schemas(schema)
+                .and_then(|schemas| {
+                    expr.column_refs()
+                        .into_iter()
+                        .filter_map(|column| {
+                            schemas.iter().position(|schema| schema.has_column(column))
+                        })
+                        .max()
+                })
+                .filter(|index| *index > 0)
+            else {
+                return;
+            };
+            if child_is_attribute_path {
+                // Spark discards tentative descendant bindings when extracting a
+                // struct field fails, then retries deeper outputs and outer references.
+                state.discard_missing_input_schema(index);
+            } else {
+                // Spark binds the arguments of a function before resolving the function, so it
+                // keeps those bindings and fails. Retry only earlier outputs and outer references,
+                // which cannot bind a deeper column in place of the failed one.
+                // TODO: Keep the bindings as Spark does once name resolution is staged. Spark
+                //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
+                // TODO: Preserve analyzer staging for native `UpdateFields`: unlike an
+                //   unresolved function, it can fail and discard bindings in this pass.
+                state.discard_missing_input_schemas_from(index);
+            }
+        }
+
+        let child_is_attribute_path = is_attribute_path(&child);
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -284,17 +332,37 @@ impl PlanResolver<'_> {
         }
 
         // For other types (List, Struct), extraction must be a literal.
-        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
-        // literal field name so that the spec can keep the attribute unresolved.
+        // SQL dot selectors are represented as literals; an attribute selector
+        // is a column expression and cannot select a struct field.
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
+                if matches!(data_type, DataType::Struct(_)) {
+                    // A column cannot select a struct field, even if it is named like one.
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                    return Err(PlanError::AnalysisError(
+                        "extraction must be a literal".to_string(),
+                    ));
+                }
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),
                 }
             }
-            _ => return Err(PlanError::invalid("extraction must be a literal")),
+            _ => {
+                // Array-index validation preserves the resolved array binding in Spark.
+                if !matches!(
+                    data_type,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                ) {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                }
+                return Err(PlanError::invalid("extraction must be a literal"));
+            }
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
@@ -352,6 +420,7 @@ impl PlanResolver<'_> {
             }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"
                     )));
@@ -363,6 +432,7 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>()
                     .one()
                 else {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "missing or ambiguous field: {name}"
                     )));
@@ -370,6 +440,7 @@ impl PlanResolver<'_> {
                 expr.field(name)
             }
             _ => {
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
                 )));
