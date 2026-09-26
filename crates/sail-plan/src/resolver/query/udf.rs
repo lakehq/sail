@@ -214,7 +214,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|arg| {
                 Ok(NamedExpr {
-                    expr: Self::replace_generator_expressions(arg.expr, &replacements)?,
+                    expr: Self::replace_grouping_expressions(arg.expr, &replacements)?,
                     ..arg
                 })
             })

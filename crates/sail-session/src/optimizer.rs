@@ -2,8 +2,12 @@ use std::sync::Arc;
 
 use datafusion::optimizer::{AnalyzerRule, OptimizerRule};
 
+mod input_file_metadata;
+
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
-    sail_logical_optimizer::default_analyzer_rules()
+    let mut rules = sail_logical_optimizer::default_analyzer_rules();
+    rules.push(Arc::new(input_file_metadata::ResolveInputFileMetadata));
+    rules
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {

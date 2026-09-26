@@ -56,6 +56,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -280,6 +283,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
@@ -333,6 +342,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

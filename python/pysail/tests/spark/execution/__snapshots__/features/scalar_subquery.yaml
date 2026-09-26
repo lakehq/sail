@@ -36,6 +36,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -482,6 +485,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
@@ -547,6 +556,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -678,6 +690,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -989,6 +1004,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc), (#10@1, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
@@ -1067,6 +1088,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -1198,6 +1222,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -1509,6 +1536,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
@@ -1587,6 +1620,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -1726,6 +1762,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -2263,6 +2302,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
@@ -2357,6 +2402,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -2518,6 +2566,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -2892,6 +2943,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
@@ -3004,6 +3061,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -3154,6 +3214,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -3402,6 +3465,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -3463,6 +3532,9 @@ data:
 
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -3558,6 +3630,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -3824,6 +3899,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
@@ -3894,6 +3975,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -4006,6 +4090,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -4300,6 +4387,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -4367,6 +4460,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -4511,6 +4607,9 @@ data:
               Values: (Int32(1)), (Int32(2))
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -4805,6 +4904,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -4887,6 +4992,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5005,6 +5113,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -5275,6 +5386,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -5342,6 +5459,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5437,6 +5557,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -5699,6 +5822,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -5775,6 +5904,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5900,6 +6032,9 @@ data:
               Values: (Utf8("a"), Int32(2)), (Utf8("b"), Int32(1)), (Utf8("c"), Int32(3))
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -6193,6 +6328,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -6270,6 +6411,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -6388,6 +6532,9 @@ data:
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -6669,6 +6816,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -6751,6 +6904,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -6875,6 +7031,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -7137,6 +7296,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7213,6 +7378,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -7324,6 +7492,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -7586,6 +7757,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7662,6 +7839,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -7789,6 +7969,9 @@ data:
                 Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(4))
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -8057,6 +8240,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -8136,6 +8325,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -8255,6 +8447,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -8579,6 +8774,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc)], dist_by=SinglePartition
@@ -8677,6 +8878,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -8789,6 +8993,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -9091,6 +9298,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc), (#8@1, asc)], dist_by=SinglePartition
@@ -9173,6 +9386,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -9285,6 +9501,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -9555,6 +9774,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -9645,6 +9870,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -9756,6 +9984,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -10026,6 +10257,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -10093,6 +10330,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -10188,6 +10428,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -10450,6 +10693,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -10509,6 +10758,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -10608,6 +10860,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -10872,6 +11127,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
@@ -10945,6 +11206,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -11047,6 +11311,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -11324,6 +11591,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
@@ -11397,6 +11670,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -11512,6 +11788,9 @@ data:
                 Values: (Int32(1)), (Int32(2)), (Int32(3)), (Int32(4))
 
     logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
     analyzed_logical_plan:
@@ -11789,6 +12068,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
@@ -11865,6 +12150,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

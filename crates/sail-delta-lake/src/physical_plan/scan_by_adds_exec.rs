@@ -17,23 +17,32 @@ use async_trait::async_trait;
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, FileSource};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream, apply_expression_roots, execute_stream,
 };
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result, ScalarValue, Statistics, internal_err};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::expressions::{Column, LambdaVariable};
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs, Projector};
+use datafusion_physical_expr::{
+    Distribution, EquivalenceProperties, PhysicalExpr, ScalarFunctionExpr,
+};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::input_file::{
+    InputFileMetadataSource, is_input_file_metadata_function,
+    projection_references_input_file_metadata,
+};
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
 
@@ -62,6 +71,7 @@ struct ScanByAddsStreamState {
     table_version: i64,
     output_schema: SchemaRef,
     scan_schema: SchemaRef,
+    input_file_projection: Option<ProjectionExprs>,
     scan_config: DeltaScanConfig,
     lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
@@ -92,7 +102,9 @@ impl ScanByAddsStreamState {
         context: Arc<TaskContext>,
         table_url: Url,
         table_version: i64,
+        scan_output_schema: SchemaRef,
         output_schema: SchemaRef,
+        input_file_projection: Option<ProjectionExprs>,
         scan_config: DeltaScanConfig,
         lakehouse_table: Option<LakehouseExecutionContext>,
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
@@ -103,14 +115,14 @@ impl ScanByAddsStreamState {
     ) -> Self {
         let scan_schema = match &scan_config.metadata_aggregate {
             Some(aggregate) => Arc::new(Schema::new(
-                output_schema
+                scan_output_schema
                     .fields()
                     .iter()
                     .zip(&aggregate.group_columns)
                     .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
                     .collect::<Vec<_>>(),
             )),
-            None => Arc::clone(&output_schema),
+            None => scan_output_schema,
         };
         Self {
             input,
@@ -119,6 +131,7 @@ impl ScanByAddsStreamState {
             table_version,
             output_schema,
             scan_schema,
+            input_file_projection,
             scan_config,
             lakehouse_table,
             catalog_managed_commits,
@@ -256,7 +269,6 @@ impl ScanByAddsStreamState {
             .snapshot
             .as_deref()
             .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?;
-        let column_mapping_mode = snapshot.effective_column_mapping_mode();
         let log_store = self
             .log_store
             .as_ref()
@@ -286,7 +298,8 @@ impl ScanByAddsStreamState {
             .count();
         let mut adds = self.pending_adds.drain(..chunk_len).collect::<Vec<_>>();
         let mut metadata_batches = Vec::new();
-        if let Some(aggregate) = &self.scan_config.metadata_aggregate
+        if self.input_file_projection.is_none()
+            && let Some(aggregate) = &self.scan_config.metadata_aggregate
             && let Some(metadata) = snapshot.summarize_metadata_files(
                 &adds,
                 &aggregate.group_columns,
@@ -318,22 +331,17 @@ impl ScanByAddsStreamState {
             Some(self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?)
         };
 
-        let scan_schema = Arc::clone(&self.scan_schema);
         let output_schema = Arc::clone(&self.output_schema);
-        let weighted = self.scan_config.metadata_aggregate.is_some();
-        let scanned = stream::iter(scan).flatten().and_then(move |batch| {
-            let scan_schema = Arc::clone(&scan_schema);
-            let output_schema = Arc::clone(&output_schema);
-            async move {
-                let batch =
-                    restore_logical_record_batch(&batch, &scan_schema, column_mapping_mode)?;
-                if weighted {
-                    let mut columns = batch.columns().to_vec();
-                    columns.push(Arc::new(Int64Array::from_value(1, batch.num_rows())));
-                    Ok(RecordBatch::try_new(output_schema, columns)?)
-                } else {
-                    Ok(batch)
-                }
+        let weighted =
+            self.input_file_projection.is_none() && self.scan_config.metadata_aggregate.is_some();
+        let scanned = stream::iter(scan).flatten().map(move |batch| {
+            let batch = batch?;
+            if weighted {
+                let mut columns = batch.columns().to_vec();
+                columns.push(Arc::new(Int64Array::from_value(1, batch.num_rows())));
+                Ok(RecordBatch::try_new(Arc::clone(&output_schema), columns)?)
+            } else {
+                Ok(batch)
             }
         });
         let combined = stream::iter(metadata_batches.into_iter().map(Ok)).chain(scanned);
@@ -360,12 +368,6 @@ impl ScanByAddsStreamState {
             &file_schema,
             file_output_schema,
         )?;
-        let file_logical_names = file_output_schema
-            .fields()
-            .iter()
-            .map(|field| field.name().clone())
-            .collect::<Vec<_>>();
-
         let mut file_scan_config = build_file_scan_config(
             snapshot,
             log_store,
@@ -412,15 +414,48 @@ impl ScanByAddsStreamState {
                 );
             }
         }
+
+        let (scan_schema, projector) = match &self.input_file_projection {
+            Some(projection) => {
+                let (config, schema, projector) = materialize_input_file_metadata(
+                    file_scan_config,
+                    &self.scan_schema,
+                    projection,
+                )?;
+                file_scan_config = config;
+                (schema, Some(projector))
+            }
+            None => (Arc::clone(&self.scan_schema), None),
+        };
         self.scan_metrics
             .lock()
             .map_err(|error| DataFusionError::Execution(error.to_string()))?
             .push(file_scan_config.file_source.metrics().clone());
         let scan_exec =
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
+        let file_logical_names = scan_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
         let scan_exec = rename_physical_plan(scan_exec, &file_logical_names)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        execute_stream(scan_exec, Arc::clone(&self.context))
+        let output_schema = projector
+            .as_ref()
+            .map(|projector| Arc::clone(projector.output_schema()))
+            .unwrap_or_else(|| Arc::clone(&scan_schema));
+        let column_mapping_mode = snapshot.effective_column_mapping_mode();
+        let stream = execute_stream(scan_exec, Arc::clone(&self.context))?.map(move |batch| {
+            let batch = restore_logical_record_batch(&batch?, &scan_schema, column_mapping_mode)?;
+            match &projector {
+                Some(projector) => projector.project_batch(&batch),
+                None => Ok(batch),
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            output_schema,
+            stream,
+        )))
     }
 
     async fn decode_adds_from_meta_batch(
@@ -438,6 +473,90 @@ impl ScanByAddsStreamState {
             Some(&partition_value_columns),
         )
     }
+}
+
+fn materialize_input_file_metadata(
+    config: FileScanConfig,
+    scan_schema: &SchemaRef,
+    projection: &ProjectionExprs,
+) -> Result<(FileScanConfig, SchemaRef, Projector)> {
+    let source_schema = config.projected_schema()?;
+    let mut fields = scan_schema.fields().to_vec();
+    let mut metadata: Vec<ProjectionExpr> = Vec::new();
+    let projection = projection.clone().try_map_exprs(|expression| {
+        expression
+            .transform_up(|expression| {
+                if !expression
+                    .downcast_ref::<ScalarFunctionExpr>()
+                    .is_some_and(|function| is_input_file_metadata_function(function.fun()))
+                {
+                    return Ok(Transformed::no(expression));
+                }
+                let index = match metadata.iter().position(|item| item.expr.eq(&expression)) {
+                    Some(index) => index,
+                    None => {
+                        let mut name = format!("__sail_input_file_metadata_{}", metadata.len());
+                        while fields.iter().any(|field| field.name() == &name)
+                            || source_schema.field_with_name(&name).is_ok()
+                        {
+                            name.push('_');
+                        }
+                        fields.push(Arc::new(
+                            expression
+                                .return_field(scan_schema)?
+                                .as_ref()
+                                .clone()
+                                .with_name(&name),
+                        ));
+                        metadata.push(ProjectionExpr::new(expression, name));
+                        metadata.len() - 1
+                    }
+                };
+                Ok(Transformed::yes(Arc::new(Column::new(
+                    &metadata[index].alias,
+                    scan_schema.fields().len() + index,
+                ))
+                    as Arc<dyn PhysicalExpr>))
+            })
+            .map(|result| result.data)
+    })?;
+    // Lambda parameters follow the input columns in the evaluation schema.
+    let projection = projection.try_map_exprs(|expression| {
+        expression
+            .transform_up(|expression| {
+                if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
+                    Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                        variable.index() + metadata.len(),
+                        Arc::clone(variable.field()),
+                    ))
+                        as Arc<dyn PhysicalExpr>))
+                } else {
+                    Ok(Transformed::no(expression))
+                }
+            })
+            .map(|result| result.data)
+    })?;
+    // Bind metadata per file range, but evaluate user expressions after restoring
+    // logical column names and types, including dictionary-encoded partitions.
+    let identity = ProjectionExprs::from_indices(
+        &(0..source_schema.fields().len()).collect::<Vec<_>>(),
+        &source_schema,
+    );
+    let source = Arc::new(InputFileMetadataSource::try_new_with_projection(
+        Arc::clone(&config.file_source),
+        ProjectionExprs::new(identity.iter().cloned().chain(metadata)),
+    )?);
+    let statistics = Statistics::new_unknown(source.table_schema().table_schema());
+    let config = FileScanConfigBuilder::from(config)
+        .with_source(source)
+        .with_statistics(statistics)
+        .build();
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        scan_schema.metadata().clone(),
+    ));
+    let projector = projection.make_projector(&schema)?;
+    Ok((config, schema, projector))
 }
 
 /// Materialize metadata groups without scaling buffers by their row-count weights.
@@ -491,7 +610,9 @@ pub struct DeltaScanByAddsExec {
     table_url: Url,
     version: i64,
     table_schema: SchemaRef,
+    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
+    input_file_projection: Option<ProjectionExprs>,
     scan_config: DeltaScanConfig,
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
@@ -519,13 +640,16 @@ impl DeltaScanByAddsExec {
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
-        let cache = Self::compute_properties(input.as_ref(), output_schema.clone(), &scan_config);
+        let cache =
+            Self::compute_properties(input.as_ref(), output_schema.clone(), &scan_config, None);
         Self {
             input,
             table_url,
             version,
             table_schema,
+            scan_output_schema: Arc::clone(&output_schema),
             output_schema,
+            input_file_projection: None,
             scan_config,
             projection,
             limit,
@@ -572,6 +696,33 @@ impl DeltaScanByAddsExec {
         &self.output_schema
     }
 
+    pub fn scan_output_schema(&self) -> &SchemaRef {
+        &self.scan_output_schema
+    }
+
+    pub fn input_file_projection(&self) -> Option<&ProjectionExprs> {
+        self.input_file_projection.as_ref()
+    }
+
+    pub fn with_input_file_projection(
+        mut self,
+        projection: Option<ProjectionExprs>,
+    ) -> Result<Self> {
+        self.output_schema = match &projection {
+            Some(projection) => Arc::new(projection.project_schema(&self.scan_output_schema)?),
+            None => Arc::clone(&self.scan_output_schema),
+        };
+        self.input_file_projection = projection;
+        self.statistics = Statistics::new_unknown(self.output_schema.as_ref());
+        self.cache = Self::compute_properties(
+            self.input.as_ref(),
+            Arc::clone(&self.output_schema),
+            &self.scan_config,
+            self.input_file_projection.as_ref(),
+        );
+        Ok(self)
+    }
+
     pub fn scan_config(&self) -> &DeltaScanConfig {
         &self.scan_config
     }
@@ -610,9 +761,11 @@ impl DeltaScanByAddsExec {
         input: &dyn ExecutionPlan,
         schema: SchemaRef,
         scan_config: &DeltaScanConfig,
+        input_file_projection: Option<&ProjectionExprs>,
     ) -> Arc<PlanProperties> {
         // Each Add stays in its metadata partition, including all native file scan splits.
-        let partitioning = if let Some(path_column) = &scan_config.file_column_name
+        let partitioning = if input_file_projection.is_none()
+            && let Some(path_column) = &scan_config.file_column_name
             && let Ok(path_index) = schema.index_of(path_column)
             && let Partitioning::Hash(expressions, count) = input.output_partitioning()
             && let Ok(metadata_path) = DeltaDecodePath::expression(PATH_COLUMN, &input.schema())
@@ -661,7 +814,15 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        apply_expression_roots(self.pushdown_filter.iter(), f)
+        if apply_expression_roots(self.pushdown_filter.iter(), f)? == TreeNodeRecursion::Stop {
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        apply_expression_roots(
+            self.input_file_projection
+                .iter()
+                .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            f,
+        )
     }
 
     #[expect(deprecated)]
@@ -686,8 +847,27 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             cloned.input.as_ref(),
             cloned.output_schema.clone(),
             &cloned.scan_config,
+            cloned.input_file_projection.as_ref(),
         );
         Ok(Arc::new(cloned))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.input_file_projection.is_none()
+            && !projection_references_input_file_metadata(projection.projection_expr())
+        {
+            return Ok(None);
+        }
+        let projection = match &self.input_file_projection {
+            Some(current) => current.try_merge(projection.projection_expr())?,
+            None => projection.projection_expr().clone(),
+        };
+        Ok(Some(Arc::new(
+            self.clone().with_input_file_projection(Some(projection))?,
+        )))
     }
 
     fn execute(
@@ -731,7 +911,9 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             context,
             table_url,
             table_version,
+            Arc::clone(&self.scan_output_schema),
             Arc::clone(&output_schema),
+            self.input_file_projection.clone(),
             scan_config,
             lakehouse_table,
             catalog_managed_commits,
@@ -990,6 +1172,7 @@ mod tests {
                 &input,
                 Arc::clone(&output_schema),
                 &config,
+                None,
             );
             if preserves_hash {
                 let expected: Arc<dyn PhysicalExpr> = Arc::new(Column::new("file", 1));
@@ -1005,7 +1188,7 @@ mod tests {
             }
             let projected_schema = Arc::new(output_schema.project(&[0])?);
             let properties =
-                DeltaScanByAddsExec::compute_properties(&input, projected_schema, &config);
+                DeltaScanByAddsExec::compute_properties(&input, projected_schema, &config, None);
             assert!(matches!(
                 properties.output_partitioning(),
                 Partitioning::UnknownPartitioning(4)

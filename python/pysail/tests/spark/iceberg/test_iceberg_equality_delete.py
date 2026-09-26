@@ -278,6 +278,24 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
         ]
         assert rows == [(1, "keep-1", "keep"), (3, "keep-3", "keep")]
 
+        metadata_rows = spark.sql(
+            """
+            SELECT id,
+                   input_file_name() AS file_name,
+                   input_file_block_start() AS block_start,
+                   input_file_block_length() AS block_length
+            FROM iceberg_sql_equality_delete
+            ORDER BY id
+            """
+        ).collect()
+        assert [row.id for row in metadata_rows] == [1, 3]
+        assert all(row.file_name for row in metadata_rows)
+        for row in metadata_rows:
+            data_file = _local_table_path(row.file_name)
+            assert data_file.is_file()
+            assert row.block_start == 0
+            assert row.block_length == data_file.stat().st_size
+
         metadata = _find_latest_metadata(table_path)
         snapshot = _assert_current_snapshot_metadata(
             table_path,

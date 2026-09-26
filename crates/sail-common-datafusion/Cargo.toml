@@ -11,8 +11,11 @@ sail-common = { path = "../sail-common" }
 
 chrono = { workspace = true }
 datafusion = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+object_store = { workspace = true }
+url = { workspace = true }
 arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 either = { workspace = true }
