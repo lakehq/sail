@@ -48,6 +48,10 @@ pub struct PlanConfig {
     pub allow_subquery_expressions_in_lambdas: bool,
     /// Whether Spark 3.5 permits ENCODE and ARRAY_APPEND in foldable percentile parameters.
     pub legacy_percentile_parameter_foldability: bool,
+    /// Whether SQL BETWEEN lowers to foldable comparisons in percentile parameters.
+    pub legacy_duplicate_between_input: bool,
+    /// Whether LPAD/RPAD use foldable string operations for binary percentile parameters.
+    pub legacy_lpad_rpad_always_return_string: bool,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
@@ -98,6 +102,8 @@ impl Default for PlanConfig {
             ansi_mode: true,
             allow_subquery_expressions_in_lambdas: false,
             legacy_percentile_parameter_foldability: false,
+            legacy_duplicate_between_input: false,
+            legacy_lpad_rpad_always_return_string: false,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,

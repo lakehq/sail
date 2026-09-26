@@ -65,6 +65,7 @@ Feature: Approximate percentile validates source expression foldability
   @spark-4.1
   Scenario Outline: Time and geospatial wrappers remain non-foldable percentile parameters
     Given config spark.sql.timeType.enabled = true
+    Given config spark.sql.geospatial.enabled = true
     When query
       """
       SELECT percentile_approx(v, 0.5D, <accuracy>) <window> AS p
@@ -159,3 +160,191 @@ Feature: Approximate percentile validates source expression foldability
     Then query result
       | p | size |
       | 1 | 2    |
+
+  @spark-4
+  Scenario Outline: SQL between predicates remain non-foldable percentile parameters
+    Given config spark.sql.legacy.duplicateBetweenInput = false
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>, <accuracy>) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                          | accuracy                           | window  |
+      | IF(1 BETWEEN 0 AND 2, 0.5D, 0.25D)  | 100                                |         |
+      | IF(1 NOT BETWEEN 0 AND 2, 0D, 0.5D) | 100                                | OVER () |
+      | 0.5D                                | IF(1 BETWEEN 0 AND 2, 100, 10)     | OVER () |
+      | 0.5D                                | IF(1 NOT BETWEEN 0 AND 2, 10, 100) |         |
+
+  @spark-4
+  Scenario: Between foldability is checked before empty grouped execution
+    Given config spark.sql.legacy.duplicateBetweenInput = false
+    When query
+      """
+      SELECT approx_percentile(v, IF(1 BETWEEN 0 AND 2, 0.5D, 0D)) AS p
+      FROM (SELECT 1 AS v WHERE false) AS t GROUP BY v
+      """
+    Then query error (?i)foldable
+
+  @spark-4
+  Scenario: Legacy between parameters remain foldable
+    Given config spark.sql.legacy.duplicateBetweenInput = true
+    When query
+      """
+      SELECT approx_percentile(v, IF(1 BETWEEN 0 AND 2, 0.5D, 0D),
+               IF(1 NOT BETWEEN 0 AND 2, 10, 100)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p |
+      | 1 |
+
+  @spark-4.1
+  Scenario Outline: Time extractors retain source non-foldability
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT approx_percentile(v, <percentage>, <accuracy>) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                   | accuracy                | window  |
+      | hour(TIME '01:00:00') / 2D   | 100                     |         |
+      | minute(TIME '00:01:00') / 2D | 100                     | OVER () |
+      | second(TIME '00:00:01') / 2D | 100                     |         |
+      | 0.5D                         | hour(TIME '10:00:00')   | OVER () |
+      | 0.5D                         | minute(TIME '00:10:00') |         |
+      | 0.5D                         | second(TIME '00:00:10') | OVER () |
+
+  Scenario: Comparison and timestamp extractor parameters remain foldable
+    When query
+      """
+      SELECT approx_percentile(v, IF(1 >= 0 AND 1 <= 2, 0.5D, 0D),
+               hour(TIMESTAMP '2020-01-01 10:00:00')) AS h,
+             approx_percentile(v, 0.5D, minute(TIMESTAMP '2020-01-01 00:10:00')) AS m,
+             approx_percentile(v, 0.5D, second(TIMESTAMP '2020-01-01 00:00:10')) AS s,
+             approx_percentile(v, IF(typeof(1 BETWEEN 0 AND 2) = 'boolean', 0.5D, 0D)) AS t
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | h | m | s | t |
+      | 1 | 1 | 1 | 1 |
+
+  @spark-4.1
+  Scenario: Typeof suppresses time extractor source restrictions
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT approx_percentile(v, IF(typeof(hour(TIME '01:00:00')) = 'int', 0.5D, 0D)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p |
+      | 1 |
+
+  Scenario Outline: Binary predicates retain non-foldable wrappers
+    When query
+      """
+      SELECT approx_percentile(v, <percentage>, <accuracy>) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | percentage                               | accuracy                                | window  |
+      | IF(contains(X'6162', X'61'), 0.5D, 0D)   | 100                                     |         |
+      | IF(startswith(X'6162', X'61'), 0.5D, 0D) | 100                                     | OVER () |
+      | IF(endswith(X'6162', X'62'), 0.5D, 0D)   | 100                                     |         |
+      | 0.5D                                     | IF(contains(X'6162', X'61'), 100, 10)   | OVER () |
+      | 0.5D                                     | IF(startswith(X'6162', X'61'), 100, 10) |         |
+      | 0.5D                                     | IF(endswith(X'6162', X'62'), 100, 10)   | OVER () |
+
+  Scenario Outline: Binary padding retains its non-foldable wrapper
+    Given config spark.sql.legacy.lpadRpadAlwaysReturnString = false
+    When query
+      """
+      SELECT percentile_approx(v, 0.5D, length(<padding>)) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | padding               | window  |
+      | lpad(X'61', 2, X'62') |         |
+      | rpad(X'61', 2, X'62') | OVER () |
+      | lpad(X'61', 2)        | OVER () |
+      | rpad(X'61', 2)        |         |
+
+  Scenario: String and mixed binary string operations remain foldable
+    Given config spark.sql.legacy.lpadRpadAlwaysReturnString = false
+    When query
+      """
+      SELECT approx_percentile(v, IF(contains('ab', 'a'), 0.5D, 0D)) AS c,
+             approx_percentile(v, IF(startswith('ab', 'a'), 0.5D, 0D)) AS s,
+             approx_percentile(v, IF(endswith('ab', 'b'), 0.5D, 0D)) AS e,
+             approx_percentile(v, IF(contains(X'6162', 'a'), 0.5D, 0D)) AS mixed,
+             approx_percentile(v, 0.5D, length(lpad('a', 2, 'b'))) AS lp,
+             approx_percentile(v, 0.5D, length(rpad(X'61', 2, 'b'))) AS rp,
+             approx_percentile(v,
+               IF(typeof(contains(X'6162', X'61')) = 'boolean', 0.5D, 0D)) AS t
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | c | s | e | mixed | lp | rp | t |
+      | 1 | 1 | 1 | 1     | 1  | 1  | 1 |
+
+  Scenario: Legacy binary padding remains foldable
+    Given config spark.sql.legacy.lpadRpadAlwaysReturnString = true
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D, length(lpad(X'61', 2, X'62'))) AS l,
+             approx_percentile(v, 0.5D, length(rpad(X'61', 2, X'62'))) AS r
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | l | r |
+      | 1 | 1 |
+
+  @spark-4.1
+  Scenario Outline: Date time timestamp constructors retain non-foldable wrappers
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT percentile_approx(v, 0.5D, year(<timestamp>)) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | timestamp                                                         | window  |
+      | make_timestamp(DATE '2020-01-01')                                 |         |
+      | make_timestamp(DATE '2020-01-01', TIME '12:00:00')                | OVER () |
+      | make_timestamp(DATE '2020-01-01', TIME '12:00:00', 'UTC')         |         |
+      | make_timestamp_ltz(DATE '2020-01-01', TIME '12:00:00')            |         |
+      | make_timestamp_ltz(DATE '2020-01-01', TIME '12:00:00', 'UTC')     | OVER () |
+      | try_make_timestamp_ltz(DATE '2020-01-01', TIME '12:00:00')        | OVER () |
+      | try_make_timestamp_ltz(DATE '2020-01-01', TIME '12:00:00', 'UTC') |         |
+
+  @spark-4.1
+  Scenario Outline: Component and NTZ timestamp constructors remain foldable
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT approx_percentile(v, 0.5D, year(<timestamp>)) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p |
+      | 1 |
+
+    Examples:
+      | timestamp                                                  |
+      | make_timestamp(2020, 1, 1, 12, 0, 0)                       |
+      | make_timestamp_ltz(2020, 1, 1, 12, 0, 0)                   |
+      | try_make_timestamp_ltz(2020, 1, 1, 12, 0, 0)               |
+      | make_timestamp_ntz(DATE '2020-01-01', TIME '12:00:00')     |
+      | try_make_timestamp_ntz(DATE '2020-01-01', TIME '12:00:00') |

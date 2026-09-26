@@ -224,6 +224,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         let mut output = PlanConfig::new()?;
         output.legacy_percentile_parameter_foldability =
             std::ptr::eq(config.entries, &SPARK_CONFIG_V3_5);
+        output.legacy_duplicate_between_input = output.legacy_percentile_parameter_foldability
+            || config
+                .get_option(SparkConfigKey::SPARK_SQL_LEGACY_DUPLICATE_BETWEEN_INPUT)
+                .map(|x| x.trim().to_lowercase().parse::<bool>())
+                .transpose()?
+                .unwrap_or(false);
+        output.legacy_lpad_rpad_always_return_string = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_LPAD_RPAD_ALWAYS_RETURN_STRING)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+            .unwrap_or(false);
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)

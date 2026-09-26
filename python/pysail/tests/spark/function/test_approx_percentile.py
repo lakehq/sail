@@ -141,3 +141,26 @@ def test_approx_percentile_legacy_encode_parameter(spark):
     accuracy = F.length(F.encode(F.lit("abcd"), "UTF-8"))
     result = spark.createDataFrame([(1,), (2,)], ["value"]).select(F.percentile_approx("value", F.lit(0.5), accuracy))
     assert result.first()[0] == 1
+
+
+@pytest.mark.parametrize("window", [False, True])
+def test_approx_percentile_column_between_parameter_remains_foldable(spark, window):
+    # Column.between constructs two comparisons; SQL BETWEEN retains its wrapper.
+    percentage = F.when(F.lit(1).between(0, 2), F.lit(0.5)).otherwise(F.lit(0.0))
+    aggregate = F.percentile_approx("id", percentage)
+    if window:
+        aggregate = aggregate.over(Window.partitionBy())
+    assert spark.range(4).select(aggregate).first()[0] == 1
+
+
+@pytest.mark.skipif(pyspark_version() >= (4,), reason="SQL BETWEEN is foldable with constants only before Spark 4")
+@pytest.mark.parametrize("setting", ["false", "invalid"])
+def test_approx_percentile_legacy_between_parameter(spark, setting):
+    # Spark 3.5 ignores this unknown setting and keeps its original parser.
+    spark.conf.set("spark.sql.legacy.duplicateBetweenInput", setting)
+    result = spark.sql("""
+        SELECT approx_percentile(v, IF(1 BETWEEN 0 AND 2, 0.5D, 0D),
+                 IF(1 NOT BETWEEN 0 AND 2, 10, 100)) AS p
+        FROM VALUES (1), (2) AS t(v)
+    """)
+    assert result.first().p == 1

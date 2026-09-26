@@ -107,6 +107,17 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
 
+        // Spark 4's SQL BETWEEN retains a non-foldable RuntimeReplaceable wrapper.
+        // Spark 3.5 and the legacy parser mode lower directly to comparisons.
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && !self.config.legacy_duplicate_between_input
+            && matches!(expr, Expr::Between { .. })
+        {
+            return Err(PlanError::invalid(format!(
+                "{parameter} must be a foldable expression"
+            )));
+        }
+
         if state.config().reject_zip_subqueries
             && matches!(
                 expr,

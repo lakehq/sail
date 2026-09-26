@@ -234,35 +234,62 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        // Catalyst wraps datetime-minus-interval in non-foldable DatetimeSub.
-        // DATE minus a DAY-only interval instead lowers to foldable DateAdd.
+        // Some Catalyst runtime wrappers are selected by argument type or arity.
+        // Validate their source foldability before the shared implementations erase it.
         if let Some(parameter) = state.config().approx_percentile_parameter
-            && canonical_function_name == "-"
             && catalog_manager
                 .get_function(&canonical_function_name)?
                 .is_none()
-            && let [left, right] = arguments.as_slice()
         {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
-            let datetime = matches!(
-                left_type,
-                DataType::Date32
-                    | DataType::Date64
-                    | DataType::Timestamp(_, _)
-                    | DataType::Time32(_)
-                    | DataType::Time64(_)
-            ) || left_type.is_string();
-            let interval = matches!(right_type, DataType::Interval(_) | DataType::Duration(_));
-            let date_minus_days = matches!(left_type, DataType::Date32 | DataType::Date64)
-                && matches!(
-                    spark_interval_metadata_for_expression(right, schema)?,
-                    Some(spec::SparkIntervalMetadata::DayTime {
-                        start_field: spec::DayTimeIntervalField::Day,
-                        end_field: spec::DayTimeIntervalField::Day,
-                    })
-                );
-            if datetime && interval && !date_minus_days {
+            let non_foldable = match (canonical_function_name.as_str(), arguments.as_slice()) {
+                ("hour" | "minute" | "second", [argument]) => matches!(
+                    argument.get_type(schema)?,
+                    DataType::Time32(_) | DataType::Time64(_)
+                ),
+                ("contains" | "startswith" | "endswith", [left, right]) => {
+                    left.get_type(schema)?.is_binary() && right.get_type(schema)?.is_binary()
+                }
+                ("lpad" | "rpad", [value, _]) => {
+                    !self.config.legacy_lpad_rpad_always_return_string
+                        && value.get_type(schema)?.is_binary()
+                }
+                ("lpad" | "rpad", [value, _, padding]) => {
+                    !self.config.legacy_lpad_rpad_always_return_string
+                        && value.get_type(schema)?.is_binary()
+                        && padding.get_type(schema)?.is_binary()
+                }
+                ("make_timestamp", args) => (1..=3).contains(&args.len()),
+                ("make_timestamp_ltz" | "try_make_timestamp_ltz", args) => {
+                    matches!(args.len(), 2 | 3)
+                }
+                ("-", [left, right]) => {
+                    let left_type = left.get_type(schema)?;
+                    let right_type = right.get_type(schema)?;
+                    let datetime = matches!(
+                        left_type,
+                        DataType::Date32
+                            | DataType::Date64
+                            | DataType::Timestamp(_, _)
+                            | DataType::Time32(_)
+                            | DataType::Time64(_)
+                    ) || left_type.is_string();
+                    let interval =
+                        matches!(right_type, DataType::Interval(_) | DataType::Duration(_));
+                    // DATE minus DAY-only intervals lowers to foldable DateAdd;
+                    // other datetime subtraction retains non-foldable DatetimeSub.
+                    let date_minus_days = matches!(left_type, DataType::Date32 | DataType::Date64)
+                        && matches!(
+                            spark_interval_metadata_for_expression(right, schema)?,
+                            Some(spec::SparkIntervalMetadata::DayTime {
+                                start_field: spec::DayTimeIntervalField::Day,
+                                end_field: spec::DayTimeIntervalField::Day,
+                            })
+                        );
+                    datetime && interval && !date_minus_days
+                }
+                _ => false,
+            };
+            if non_foldable {
                 return Err(PlanError::invalid(format!(
                     "{parameter} must be a foldable expression"
                 )));
