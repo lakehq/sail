@@ -329,3 +329,26 @@ Feature: Approximate percentiles follow Spark's rank summary and preserve input 
     Then query result
       | p                     |
       | [10966, 49999, 63265] |
+
+
+  Scenario Outline: Approximate percentile primitive conversion preserves numeric boundaries
+    When query
+      """
+      SELECT <function>(CAST(v AS <type>), array(0D, 1D)) =
+             array(CAST('<expected_minimum>' AS <type>),
+                   CAST('<expected_maximum>' AS <type>)) AS correct
+      FROM VALUES ('<minimum>'), ('<maximum>'), (NULL) AS t(v)
+      """
+    Then query result
+      | correct |
+      | true    |
+
+    Examples:
+      | function          | type     | minimum              | maximum             | expected_minimum     | expected_maximum    |
+      | approx_percentile | tinyint  | -128                 | 127                 | -128                 | 127                 |
+      | percentile_approx | smallint | -32768               | 32767               | -32768               | 32767               |
+      | approx_percentile | int      | -2147483648          | 2147483647          | -2147483648          | 2147483647          |
+      | percentile_approx | bigint   | -9223372036854775808 | 9223372036854775807 | -9223372036854775808 | 9223372036854775807 |
+      | approx_percentile | bigint   | -9007199254740993    | 9007199254740993    | -9007199254740992    | 9007199254740992    |
+      | percentile_approx | float    | -16777217            | 16777217            | -16777216            | 16777216            |
+      | approx_percentile | double   | -9007199254740993    | 9007199254740993    | -9007199254740992    | 9007199254740992    |

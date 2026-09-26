@@ -508,3 +508,67 @@ Feature: Approximate percentile parameters require Spark-foldable expressions
       | v | p |
       | 1 | 1 |
       | 2 | 1 |
+
+
+  Scenario Outline: Remaining non-foldable source wrappers are rejected before simplification
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage                                            | accuracy                                             | window  |
+      | percentile_approx | IF(true, 0.5D, CAST(raise_error('unused') AS DOUBLE)) | 100                                                  |         |
+      | approx_percentile | 0.5D                                                  | coalesce(100, CAST(raise_error('unused') AS BIGINT)) | OVER () |
+      | percentile_approx | IF(assert_true(true) IS NULL, 0.5D, 1D)               | 100                                                  |         |
+      | approx_percentile | 0.5D                                                  | IF(assert_true(true) IS NULL, 100, 200)              | OVER () |
+      | percentile_approx | CAST(btrim(' 0.5 ') AS DOUBLE)                        | 100                                                  |         |
+      | approx_percentile | 0.5D                                                  | length(BTRIM(' abc '))                               | OVER () |
+      | percentile_approx | CAST(elt(1, '0.5', '1.0') AS DOUBLE)                  | 100                                                  |         |
+      | approx_percentile | 0.5D                                                  | length(elt(1, 'abc', 'def'))                         | OVER () |
+
+  @spark-4
+  Scenario Outline: UTF8 validation remains non-foldable in percentile parameters
+    When query
+      """
+      SELECT <function>(v, <percentage>, <accuracy>) <window> AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query error (?i)foldable
+
+    Examples:
+      | function          | percentage                         | accuracy                           | window  |
+      | percentile_approx | IF(is_valid_utf8('abc'), 0.5D, 1D) | 100                                |         |
+      | approx_percentile | 0.5D                               | IF(is_valid_utf8('abc'), 100, 200) | OVER () |
+
+  Scenario: Foldable expressions sharing wrapper implementations remain valid
+    When query
+      """
+      SELECT percentile_approx(v, 1D / 2D) AS division,
+             percentile_approx(v, CAST(trim(' 0.5 ') AS DOUBLE)) AS trimmed,
+             percentile_approx(v, element_at(array(0.5D), 1)) AS lookup,
+             percentile_approx(v, IF(typeof(assert_true(true)) = 'void', 0.5D, 1D)) AS type_only
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | division | trimmed | lookup | type_only |
+      | 1        | 1       | 1      | 1         |
+
+  @sail-bug
+  Scenario Outline: Unreachable literal division errors do not invalidate foldable percentile parameters
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT percentile_approx(v, <percentage>) AS p
+      FROM VALUES (1), (2) AS t(v)
+      """
+    Then query result
+      | p |
+      | 1 |
+
+    Examples:
+      | percentage              |
+      | IF(true, 0.5D, 1D / 0D) |
+      | coalesce(0.5D, 1D / 0D) |

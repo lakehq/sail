@@ -461,6 +461,13 @@ fn as_double(value: ScalarValue) -> Result<f64> {
                 .parse::<f64>()
                 .map_err(|e| DataFusionError::Execution(e.to_string()))
         }
+        value @ (ScalarValue::Int8(_)
+        | ScalarValue::Int16(_)
+        | ScalarValue::Int32(_)
+        | ScalarValue::Int64(_)
+        | ScalarValue::Float16(_)
+        | ScalarValue::Float32(_)
+        | ScalarValue::Float64(_)) => scalar_to_f64(&value),
         value => scalar_to_f64(&value.cast_to(&DataType::Float64)?),
     }
 }

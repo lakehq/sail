@@ -457,3 +457,28 @@ def test_map_zip_with_renames_struct_keys_before_widening_array_representation(s
             source.unpersist()
         spark.catalog.dropTempView("map_zip_struct_array_inputs")
         spark.conf.set("spark.sql.caseSensitive", previous_case_sensitive)
+
+
+@pytest.mark.parametrize("nested_array", [False, True])
+@pytest.mark.parametrize("right_nullable", [False, True])
+def test_map_zip_with_preserves_equal_struct_key_metadata(spark, nested_array, right_nullable):
+    metadata = {"meaning": "identity"}
+    left_struct = T.StructType([T.StructField("a", T.IntegerType(), False, metadata)])
+    right_struct = T.StructType([T.StructField("a", T.IntegerType(), right_nullable, metadata)])
+    source = spark.createDataFrame(
+        [((1,), (1,))],
+        T.StructType([T.StructField("left", left_struct, False), T.StructField("right", right_struct, False)]),
+    ).select(
+        F.create_map(F.array("left") if nested_array else F.col("left"), F.lit(2)).alias("left"),
+        F.create_map(F.array("right") if nested_array else F.col("right"), F.lit(3)).alias("right"),
+    )
+    expected_input_key = T.ArrayType(left_struct, False) if nested_array else left_struct
+    assert source.schema["left"].dataType.keyType == expected_input_key
+
+    result = source.select(F.map_zip_with("left", "right", lambda _key, left, right: left + right).alias("result"))
+    expected_struct = T.StructType(
+        [T.StructField("a", T.IntegerType(), right_nullable, {} if right_nullable else metadata)]
+    )
+    expected_key = T.ArrayType(expected_struct, False) if nested_array else expected_struct
+    assert result.schema[0].dataType.keyType == expected_key
+    assert result.select(F.map_values("result")).first()[0] == [5]

@@ -95,11 +95,16 @@ impl PlanResolver<'_> {
                 canonical_function_name.as_str(),
                 "array_compact"
                     | "array_prepend"
+                    | "assert_true"
+                    | "btrim"
                     | "current_catalog"
                     | "current_database"
                     | "current_schema"
                     | "current_timezone"
                     | "current_user"
+                    | "elt"
+                    | "is_valid_utf8"
+                    | "raise_error"
                     | "session_user"
                     | "try_element_at"
                     | "user"
@@ -411,6 +416,9 @@ impl PlanResolver<'_> {
                 scope.state().config_mut().approx_percentile_parameter =
                     Some(if index == 1 { "percentage" } else { "accuracy" });
             }
+            // TODO: Shared expression resolution rejects literal zero divisors even in
+            // unreachable branches. Once it preserves short-circuiting, accept those
+            // foldable percentile parameters (see the Sail-only BDD regression).
             let NamedExpr { name, expr, .. } = self
                 .resolve_named_expression(expression, schema, scope.state())
                 .await?;

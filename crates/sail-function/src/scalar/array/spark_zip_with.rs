@@ -494,6 +494,7 @@ fn common_key_type(
             }
         }
         (DataType::Struct(left), DataType::Struct(right)) if left.len() == right.len() => {
+            let preserve_metadata = left == right;
             let fields = left
                 .iter()
                 .zip(right)
@@ -517,7 +518,12 @@ fn common_key_type(
                         || right.is_nullable()
                         || key_cast_nullable(left.data_type(), &key)
                         || key_cast_nullable(right.data_type(), &key);
-                    Some(Field::new(left.name(), key, nullable))
+                    let field = Field::new(left.name(), key, nullable);
+                    Some(if preserve_metadata {
+                        field.with_metadata(left.metadata().clone())
+                    } else {
+                        field
+                    })
                 })
                 .collect::<Option<Vec<_>>>()?;
             Some(DataType::Struct(fields.into()))
