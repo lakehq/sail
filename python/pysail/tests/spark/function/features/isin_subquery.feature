@@ -424,7 +424,7 @@ Feature: IN subquery support
         | 1  | false   |
         | 2  | false   |
 
-    Scenario: projected IN propagates constants after a filter eliminates an outer join
+    Scenario Outline: projected IN propagates constants after a filter eliminates an outer join
       When query
         """
         SELECT a.id,
@@ -432,13 +432,97 @@ Feature: IN subquery support
           b.x NOT IN (SELECT 1) AS absent
         FROM range(3) a
         LEFT JOIN (SELECT id, NULLIF(1, 1) AS x FROM range(2)) b ON a.id = b.id
-        WHERE b.id IS NOT NULL
+        WHERE <predicate>
         ORDER BY a.id
         """
       Then query result ordered
         | id | present | absent |
         | 0  | NULL    | NULL   |
         | 1  | NULL    | NULL   |
+
+      Examples:
+        | predicate                                       |
+        | b.id IS NOT NULL                                |
+        | NOT (b.id IS NULL)                              |
+        | CASE WHEN b.id IS NULL THEN false ELSE true END |
+
+    Scenario Outline: projected IN preserves local values after a filter eliminates an outer join
+      When query
+        """
+        SELECT a.id,
+          b.x IN (SELECT 1) AS present,
+          b.x NOT IN (SELECT 1) AS absent
+        FROM range(3) a
+        LEFT JOIN (SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (0), (1)) b
+          ON a.id = b.id
+        WHERE <predicate>
+        ORDER BY a.id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 0  | false   | false  |
+        | 1  | false   | false  |
+
+      Examples:
+        | predicate                                       |
+        | b.id IS NOT NULL                                |
+        | NOT (b.id IS NULL)                              |
+        | CASE WHEN b.id IS NULL THEN false ELSE true END |
+
+    Scenario Outline: projected IN preserves materialized local producer values
+      When query
+        """
+        SELECT id, x IN (SELECT 1) AS present, x NOT IN (SELECT 1) AS absent
+        FROM (<producer>) producer
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 1  | false   | false  |
+        | 2  | false   | false  |
+
+      Examples:
+        | producer                                                                                                                              |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1), (2)                                                                             |
+        | WITH a AS (SELECT col1 AS id FROM VALUES (1), (2)), b AS (SELECT id AS renamed FROM a) SELECT renamed AS id, NULLIF(1, 1) AS x FROM b |
+        | SELECT id, NULLIF(1, 1) AS x FROM (SELECT col1 AS id FROM VALUES (1), (2) WHERE col1 > 0) a                                           |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1), (2) ORDER BY col1 DESC                                                          |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x, rand(1) AS unused FROM VALUES (1), (2)                                                          |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1) UNION ALL SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (2)                   |
+
+    Scenario Outline: projected IN propagates constants beyond local materialization boundaries
+      When query
+        """
+        SELECT id, x IN (SELECT 1) AS present, x NOT IN (SELECT 1) AS absent
+        FROM (<producer>) producer
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 1  | NULL    | NULL   |
+        | 2  | NULL    | NULL   |
+
+      Examples:
+        | producer                                                                                                                |
+        | SELECT id, NULLIF(1, 1) AS x FROM (SELECT col1 AS id FROM VALUES (1), (2) ORDER BY col1 DESC) a                         |
+        | SELECT id, NULLIF(1, 1) AS x FROM (SELECT col1 AS id, COUNT(*) AS n FROM VALUES (1), (1), (2) GROUP BY col1) a          |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x, (SELECT MAX(id) FROM range(3)) AS unused FROM VALUES (1), (2)                     |
+        | SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1), (2) WHERE col1 IN (SELECT id FROM range(3))                       |
+        | SELECT a.col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1), (2) a JOIN VALUES (1), (2) b ON a.col1 = b.col1                 |
+        | WITH v AS (SELECT col1 AS id FROM VALUES (1) UNION ALL SELECT col1 FROM VALUES (2)) SELECT id, NULLIF(1, 1) AS x FROM v |
+
+    Scenario: projected IN preserves local producer values through a literal limit
+      When query
+        """
+        SELECT id, x IN (SELECT 1) AS present, x NOT IN (SELECT 1) AS absent
+        FROM (
+          SELECT id, NULLIF(1, 1) AS x
+          FROM (SELECT col1 AS id FROM VALUES (1), (2) LIMIT 1) a
+        ) producer
+        """
+      Then query result
+        | id | present | absent |
+        | 1  | false   | false  |
 
     Scenario: projected IN preserves column semantics for an empty outer join side
       When query

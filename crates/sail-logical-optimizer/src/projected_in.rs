@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::catalog::MemTable;
+use datafusion::datasource::DefaultTableSource;
 use datafusion::optimizer::eliminate_outer_join::EliminateOuterJoin;
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -15,6 +17,10 @@ use datafusion_expr::{
     Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Projection,
     SubqueryAlias, Union, expr_fn, lit,
 };
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
+use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 /// Spark folds expressions before replacing projected IN with an existence join.
 /// Fold only the affected expressions and their constant producers here; running
@@ -84,6 +90,47 @@ fn constant_columns(
     if needed.is_empty() {
         return Ok(HashMap::new());
     }
+    Ok(producer_constants(plan, config, needed)?.columns)
+}
+
+#[derive(Default)]
+struct ProducerConstants {
+    columns: HashMap<Column, Expr>,
+    local_relation: bool,
+}
+
+/// Spark's ConvertToLocalRelation evaluates whole projections before constant
+/// propagation. Its Unevaluable check includes subqueries and Python UDFs, but
+/// permits ordinary nondeterministic functions such as rand().
+fn locally_evaluable(expr: &Expr) -> Result<bool> {
+    Ok(!expr.exists(|expr| {
+        Ok(match expr {
+            Expr::AggregateFunction(_)
+            | Expr::WindowFunction(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
+            | Expr::ScalarSubquery(_)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::GroupingSet(_)
+            | Expr::Placeholder(_)
+            | Expr::Unnest(_) => true,
+            Expr::ScalarFunction(function) => {
+                let function = function.func.inner();
+                function.is::<PySparkUDF>()
+                    || function.is::<PySparkUnresolvedUDF>()
+                    || function.is::<PySparkCoGroupMapUDF>()
+            }
+            _ => false,
+        })
+    })?)
+}
+
+fn producer_constants(
+    plan: &LogicalPlan,
+    config: &dyn OptimizerConfig,
+    needed: &HashSet<Column>,
+) -> Result<ProducerConstants> {
     let (expressions, input) = match plan {
         LogicalPlan::Projection(projection) => (
             projection.expr.iter().collect::<Vec<_>>(),
@@ -107,37 +154,63 @@ fn constant_columns(
             let input_needed = mapping
                 .filter_map(|(input, output)| needed.contains(&output).then_some(input))
                 .collect();
-            let mut constants = constant_columns(&alias.input, config, &input_needed)?;
-            return Ok(alias
+            let mut constants = producer_constants(&alias.input, config, &input_needed)?;
+            constants.columns = alias
                 .input
                 .schema()
                 .columns()
                 .into_iter()
                 .zip(alias.schema.columns())
-                .filter_map(|(input, output)| constants.remove(&input).map(|value| (output, value)))
-                .collect());
+                .filter_map(|(input, output)| {
+                    constants
+                        .columns
+                        .remove(&input)
+                        .map(|value| (output, value))
+                })
+                .collect();
+            return Ok(constants);
         }
         LogicalPlan::Filter(filter) => {
-            // Spark eliminates null-rejected outer joins before propagating constants.
-            // Inspect that join type on a copy, leaving the query's operators intact.
-            let rewritten = EliminateOuterJoin.rewrite(plan.clone(), config)?;
-            return if rewritten.transformed {
-                constant_columns(&rewritten.data, config, needed)
-            } else {
-                constant_columns(&filter.input, config, needed)
-            };
+            // Spark simplifies null-rejecting predicates before propagating constants.
+            // Inspect the simplified predicate and join type only on a copy.
+            let mut input = filter.input.as_ref();
+            while let LogicalPlan::Projection(projection) = input {
+                input = &projection.input;
+            }
+            if !needed.is_empty()
+                && matches!(input, LogicalPlan::Join(join) if join.join_type.is_outer())
+            {
+                let mut normalized = filter.clone();
+                normalized.predicate = simplifier(Arc::clone(filter.input.schema()), config)
+                    .simplify(normalized.predicate)?;
+                let rewritten =
+                    EliminateOuterJoin.rewrite(LogicalPlan::Filter(normalized), config)?;
+                if rewritten.transformed {
+                    return producer_constants(&rewritten.data, config, needed);
+                }
+            }
+            let mut constants = producer_constants(&filter.input, config, needed)?;
+            if constants.local_relation {
+                constants.local_relation = locally_evaluable(&filter.predicate)?;
+            }
+            return Ok(constants);
         }
-        LogicalPlan::Sort(sort) => return constant_columns(&sort.input, config, needed),
-        LogicalPlan::Limit(limit) => return constant_columns(&limit.input, config, needed),
-        LogicalPlan::Repartition(repartition) => {
-            return constant_columns(&repartition.input, config, needed);
+        LogicalPlan::Limit(limit) => {
+            let mut constants = producer_constants(&limit.input, config, needed)?;
+            constants.local_relation &=
+                limit.skip.is_none() && matches!(limit.fetch.as_deref(), Some(Expr::Literal(_, _)));
+            return Ok(constants);
         }
-        LogicalPlan::Window(window) => return constant_columns(&window.input, config, needed),
-        LogicalPlan::Distinct(Distinct::All(input)) => {
-            return constant_columns(input, config, needed);
+        LogicalPlan::Sort(_)
+        | LogicalPlan::Repartition(_)
+        | LogicalPlan::Window(_)
+        | LogicalPlan::Distinct(Distinct::All(_)) => {
+            let mut constants = producer_constants(plan.inputs()[0], config, needed)?;
+            constants.local_relation = false;
+            return Ok(constants);
         }
         LogicalPlan::Join(join) => {
-            let mut constants = HashMap::new();
+            let mut constants = ProducerConstants::default();
             if matches!(
                 join.join_type,
                 JoinType::Inner
@@ -146,7 +219,9 @@ fn constant_columns(
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
             ) {
-                constants.extend(constant_columns(&join.left, config, needed)?);
+                constants
+                    .columns
+                    .extend(constant_columns(&join.left, config, needed)?);
             }
             if matches!(
                 join.join_type,
@@ -156,17 +231,41 @@ fn constant_columns(
                     | JoinType::RightAnti
                     | JoinType::RightMark
             ) {
-                constants.extend(constant_columns(&join.right, config, needed)?);
+                constants
+                    .columns
+                    .extend(constant_columns(&join.right, config, needed)?);
             }
             return Ok(constants);
         }
-        _ => return Ok(HashMap::new()),
+        LogicalPlan::Values(_) => {
+            return Ok(ProducerConstants {
+                local_relation: true,
+                ..Default::default()
+            });
+        }
+        LogicalPlan::TableScan(scan) => {
+            return Ok(ProducerConstants {
+                local_relation: scan
+                    .source
+                    .downcast_ref::<DefaultTableSource>()
+                    .is_some_and(|source| {
+                        let mut provider = &source.table_provider;
+                        while let Some(renamed) = provider.downcast_ref::<RenameTableProvider>() {
+                            provider = renamed.inner();
+                        }
+                        provider.is::<MemTable>()
+                    }),
+                ..Default::default()
+            });
+        }
+        _ => return Ok(ProducerConstants::default()),
     };
     if expressions.len() != plan.schema().fields().len() {
-        return Ok(HashMap::new());
+        return Ok(ProducerConstants::default());
     }
     let selected = expressions
-        .into_iter()
+        .iter()
+        .copied()
         .zip(plan.schema().columns())
         .filter(|(_, column)| needed.contains(column))
         .collect::<Vec<_>>();
@@ -174,13 +273,28 @@ fn constant_columns(
         .iter()
         .flat_map(|(expr, _)| expr.column_refs().into_iter().cloned())
         .collect();
-    let constants = constant_columns(input, config, &input_needed)?;
+    let constants = producer_constants(input, config, &input_needed)?;
+    if constants.local_relation && matches!(plan, LogicalPlan::Projection(_)) {
+        let mut local_relation = true;
+        for expr in expressions {
+            local_relation &= locally_evaluable(expr)?;
+        }
+        if local_relation {
+            return Ok(ProducerConstants {
+                local_relation: true,
+                ..Default::default()
+            });
+        }
+    }
     let simplifier = simplifier(Arc::clone(input.schema()), config);
-    let mut output = HashMap::new();
+    let mut output = ProducerConstants::default();
     for (expr, column) in selected {
-        let expr = simplifier.simplify(replace_constants(expr.clone().unalias(), &constants)?)?;
+        let expr = simplifier.simplify(replace_constants(
+            expr.clone().unalias(),
+            &constants.columns,
+        )?)?;
         if matches!(expr, Expr::Literal(_, _)) {
-            output.insert(column, expr);
+            output.columns.insert(column, expr);
         }
     }
     Ok(output)
