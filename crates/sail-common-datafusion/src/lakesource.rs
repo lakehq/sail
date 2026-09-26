@@ -107,6 +107,15 @@ pub trait LakeSource: DataSource {
         })
     }
 
+    /// Returns public table properties from the current storage metadata.
+    async fn table_properties(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(self.infer_metadata(ctx, info).await?.properties)
+    }
+
     /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
     /// catalog object is registered. Lake sources that do not need storage metadata
     /// at DDL time can keep the default no-op.

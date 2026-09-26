@@ -324,6 +324,18 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::ShowTableProperties { name, property, .. } => {
+            let property = property
+                .map(|(_, key, _)| {
+                    from_ast_property(PropertyKeyValue { key, value: None }).map(|(key, _)| key)
+                })
+                .transpose()?;
+            let node = spec::CommandNode::ShowTableProperties {
+                table: from_ast_object_name(name)?,
+                property,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowTables {
             show: _,
             tables: _,
