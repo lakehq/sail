@@ -100,7 +100,12 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    SparkGetFieldExprNode spark_get_field = 7;
   }
+}
+
+message SparkGetFieldExprNode {
+  bytes field = 1;
 }
 
 message SchemaEvolutionDefaultExprNode {

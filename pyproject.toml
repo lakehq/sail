@@ -225,6 +225,8 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.9",
     "ibis-framework[pyspark]>=12,<13",
+    # PySpark 3.5's Arrow serializer cannot ingest pandas 3 string columns.
+    "pandas<3",
     # Ibis 12 uses Drop(this=...), but SQLGlot 30.18 requires Drop(tables=[...]).
     "sqlglot>=23.4,<30.18,!=26.32.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.

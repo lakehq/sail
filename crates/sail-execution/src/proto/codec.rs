@@ -101,6 +101,10 @@ use sail_common_datafusion::schema_evolution::{
     StructFieldMatching,
 };
 use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::udf::get_field::SparkGetField;
+use sail_common_datafusion::udf::get_field::physical::{
+    STRUCT_FIELD_DEPENDENCY_NAME, SparkGetFieldExpr,
+};
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;
@@ -3000,6 +3004,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        if name == STRUCT_FIELD_DEPENDENCY_NAME && buf.is_empty() {
+            return Ok(datafusion::functions::core::get_field());
+        }
         // TODO: Implement custom registry to avoid codec for built-in functions.
         // The `match name` below has no session-registry fallback, so every
         // scalar UDF needs an explicit arm or distributed decode fails with
@@ -3274,6 +3281,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
             "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
+            "spark_get_field" => Ok(Arc::new(ScalarUDF::from(SparkGetField::new()))),
+            STRUCT_FIELD_DEPENDENCY_NAME => Ok(datafusion::functions::core::get_field()),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -3479,6 +3488,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
+            || node_inner.is::<SparkGetField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
@@ -4145,6 +4155,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .expr_kind
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
+            ExprKind::SparkGetField(node) => {
+                let [access] = inputs else {
+                    return plan_err!("SparkGetFieldExpr expects exactly one input");
+                };
+                Ok(Arc::new(SparkGetFieldExpr::from_access(
+                    access.clone(),
+                    try_decode_field_ref(&node.field)?,
+                )?))
+            }
             ExprKind::SchemaEvolutionDefault(node) => {
                 if !inputs.is_empty() {
                     return plan_err!("SchemaEvolutionDefaultExpr has no inputs");
@@ -4243,6 +4262,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.timezone_mode(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
+        } else if let Some(access) = node.downcast_ref::<SparkGetFieldExpr>() {
+            ExprKind::SparkGetField(r#gen::SparkGetFieldExprNode {
+                field: try_encode_field_ref(access.field())?,
+            })
         } else if let Some(default) = node.downcast_ref::<SchemaEvolutionDefaultExpr>() {
             ExprKind::SchemaEvolutionDefault(r#gen::SchemaEvolutionDefaultExprNode {
                 field: try_encode_field_ref(default.field())?,
@@ -6255,6 +6278,58 @@ mod tests {
             format!("{:?}", scan_filter.current()?),
             format!("{:?}", lit(false))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_field_access_preserves_null_ancestors() -> Result<()> {
+        use datafusion::arrow::array::{Int64Array, StructArray};
+        use datafusion::arrow::buffer::NullBuffer;
+        use datafusion::physical_expr::expressions::{Column, Literal};
+
+        let leaf = Arc::new(Field::new("value", DataType::Int64, false).with_metadata(
+            HashMap::from([("PARQUET:field_id".to_string(), "7".to_string())]),
+        ));
+        let inner_field = Arc::new(Field::new(
+            "inner",
+            DataType::Struct(vec![leaf.clone()].into()),
+            true,
+        ));
+        let inner = Arc::new(StructArray::new(
+            vec![leaf].into(),
+            vec![Arc::new(Int64Array::from(vec![7, 8, 9, 10]))],
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        ));
+        let outer = Arc::new(StructArray::new(
+            vec![inner_field].into(),
+            vec![inner],
+            Some(NullBuffer::from(vec![true, true, false, true])),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            outer.data_type().clone(),
+            true,
+        )]));
+        let expression: Arc<dyn PhysicalExpr> = Arc::new(SparkGetFieldExpr::try_new(
+            vec![
+                Arc::new(Column::new("s", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("inner".to_string())))),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("value".to_string())))),
+            ],
+            schema.as_ref(),
+            Arc::new(Default::default()),
+        )?);
+        let decoded = round_trip_expr(&expression, &schema)?;
+        assert_eq!(
+            decoded.return_field(&schema)?,
+            expression.return_field(&schema)?
+        );
+        let batch = RecordBatch::try_new(schema, vec![outer])?;
+        let expected = Int64Array::from(vec![Some(7), None, None, Some(10)]);
+        for expression in [expression, decoded] {
+            let actual = expression.evaluate(&batch)?.into_array(4)?;
+            assert_eq!(actual.to_data(), expected.to_data());
+        }
         Ok(())
     }
 

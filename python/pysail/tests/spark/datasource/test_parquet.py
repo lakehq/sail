@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -8,6 +9,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
@@ -710,3 +712,316 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("selected_fields", [("f0",), ("f0", "f2")], ids=["one-field", "siblings"])
+@pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
+def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path, selected_fields, nested):
+    # EXPLAIN syntax and scan metrics differ between Spark and Sail, so use a Python test.
+    count = 100_000
+    values = pa.array(range(count), type=pa.int64())
+    nulls = pa.array([i % 3 == 0 for i in range(count)])
+    payload = pa.StructArray.from_arrays([values] * 8, names=[f"f{i}" for i in range(8)], mask=nulls)
+    prefix = "payload"
+    read_type = "struct<" + ",".join(f"{field}:bigint" for field in selected_fields) + ">"
+    if nested:
+        payload = pa.StructArray.from_arrays(
+            [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
+        )
+        prefix += ".inner"
+        read_type = f"struct<inner:{read_type}>"
+    path = tmp_path / "nested_projection.parquet"
+    pq.write_table(pa.table({"payload": payload}), path, compression=None, use_dictionary=False)
+    expressions = ", ".join(f"SUM({prefix}.{field}) AS {field}" for field in selected_fields)
+    query = f"SELECT {expressions} FROM parquet.`{escape_sql_identifier(str(path))}`"  # noqa: S608
+    total = sum(i for i in range(count) if i % 3 != 0 and (not nested or i % 5 != 0))
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(total,) * len(selected_fields)]
+
+    if is_jvm_spark():
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+        assert f"ReadSchema: struct<payload:{read_type}>" in plan
+    else:
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+        metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+        assert metric is not None
+        scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+        # One or two of eight equal-sized leaves should read well below half the file.
+        assert float(metric[1]) * scale < path.stat().st_size / 2
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("SELECT s.a AS value FROM {source} WHERE s.b % 2 = 0", [Row(value=2)]),
+        (
+            "SELECT transform(array(1L), x -> x + s.a) AS value FROM {source}",
+            [Row(value=[None]), Row(value=[3]), Row(value=[6])],
+        ),
+        ("SELECT s.a AS value FROM (SELECT * FROM {source} LIMIT 2 OFFSET 1)", [Row(value=2), Row(value=5)]),
+    ],
+    ids=["filter", "lambda", "limit"],
+)
+def test_parquet_struct_pruning_does_not_leave_runtime_casts(spark, tmp_path, query, expected):
+    path = tmp_path / "struct_projection_barrier.parquet"
+    payload = pa.StructArray.from_arrays(
+        [pa.array([100, 2, 5]), pa.array([0, 2, 3])],
+        names=["a", "b"],
+        mask=pa.array([True, False, False]),
+    )
+    pq.write_table(pa.table({"s": payload}), path)
+    query = query.format(source=f"parquet.`{escape_sql_identifier(str(path))}`")
+    assert spark.sql(query).collect() == expected
+
+    if not is_jvm_spark():
+        plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN {query}").collect())
+        # Narrowing casts should only exist where the Parquet reader can prune fields.
+        assert all("CAST(" not in line for line in plan.splitlines() if "DataSourceExec:" not in line), plan
+
+
+@pytest.mark.parametrize("selection", ["parent", "intermediate", "null-check", "predicate-sibling"])
+def test_parquet_struct_projection_retains_other_consumers(spark, tmp_path, selection):
+    path = tmp_path / "struct_consumers.parquet"
+    inner_type = pa.struct([("x", pa.int64()), ("label", pa.string())])
+    parent_type = pa.struct([("a", pa.int64()), ("inner", inner_type), ("unused", pa.string())])
+    pq.write_table(
+        pa.table(
+            {
+                "id": [0, 1, 2],
+                "s": pa.array(
+                    [
+                        None,
+                        {"a": 1, "inner": None, "unused": "one"},
+                        {"a": 2, "inner": {"x": 20, "label": "keep"}, "unused": "two"},
+                    ],
+                    type=parent_type,
+                ),
+            }
+        ),
+        path,
+    )
+    data = spark.read.parquet(str(path)).orderBy("id")
+    if selection == "parent":
+        assert data.selectExpr("s", "s.a").collect() == [
+            Row(s=None, a=None),
+            Row(s=Row(a=1, inner=None, unused="one"), a=1),
+            Row(s=Row(a=2, inner=Row(x=20, label="keep"), unused="two"), a=2),
+        ]
+    elif selection == "intermediate":
+        assert data.selectExpr("s.inner", "s.inner.x").collect() == [
+            Row(inner=None, x=None),
+            Row(inner=None, x=None),
+            Row(inner=Row(x=20, label="keep"), x=20),
+        ]
+    elif selection == "null-check":
+        assert data.selectExpr("s IS NULL AS missing", "s.a").collect() == [
+            Row(missing=True, a=None),
+            Row(missing=False, a=1),
+            Row(missing=False, a=2),
+        ]
+    else:
+        assert data.where("s.inner.label = 'keep'").select("s.inner.x").collect() == [Row(x=20)]
+
+
+@pytest.mark.parametrize("null_parent", [False, True], ids=["valid-parents", "null-parent"])
+def test_parquet_struct_fields_preserve_nulls_with_storage_metadata(spark, tmp_path, null_parent):
+    fields = [
+        pa.field("inner", pa.struct([pa.field("x", pa.int64(), metadata={b"PARQUET:field_id": b"4"})])),
+        pa.field("items", pa.list_(pa.field("element", pa.int64(), metadata={b"PARQUET:field_id": b"6"}))),
+        pa.field("mapping", pa.map_(pa.string(), pa.field("value", pa.int64(), metadata={b"PARQUET:field_id": b"9"}))),
+    ]
+    values = [
+        {"inner": {"x": 7}, "items": [1, None], "mapping": {"a": 2, "missing": None}},
+        {"inner": None, "items": None, "mapping": None},
+        {"inner": {"x": None}, "items": [], "mapping": {}},
+        {"inner": {"x": 9}, "items": [3], "mapping": {"b": 4}},
+    ]
+    payload = pa.StructArray.from_arrays(
+        [pa.array([value[field.name] for value in values], type=field.type) for field in fields],
+        fields=fields,
+        mask=pa.array([null_parent, False, False, False]),
+    )
+    path = tmp_path / "struct_field_metadata.parquet"
+    pq.write_table(pa.table({"id": range(len(values)), "s": payload}), path)
+    struct_type = "struct<inner:struct<x:bigint>,items:array<bigint>,mapping:map<string,bigint>>"
+    data = (
+        spark.read.schema(f"id BIGINT, s {struct_type}")
+        .parquet(str(path))
+        # Keep the entire parent so extraction runs on the original struct.
+        .selectExpr("id", "s", "s.inner", "s.items", "s.mapping")
+        .orderBy("id")
+    )
+    assert data.schema.simpleString() == (
+        f"struct<id:bigint,s:{struct_type},inner:struct<x:bigint>,items:array<bigint>,mapping:map<string,bigint>>"
+    )
+    expected = [None if null_parent and i == 0 else value for i, value in enumerate(values)]
+    assert [row.asDict(recursive=True) for row in data.collect()] == [
+        {"id": i, "s": value, **(value if value is not None else dict.fromkeys(["inner", "items", "mapping"]))}
+        for i, value in enumerate(expected)
+    ]
+
+
+def test_parquet_nested_projection_preserves_schema_evolution(spark, tmp_path):
+    path = tmp_path / "nested_evolution.parquet"
+    inner_type = pa.struct([("value", pa.int32()), ("ignored", pa.int64())])
+    payload_type = pa.struct([("inner", inner_type), ("unused", pa.string())])
+    pq.write_table(
+        pa.table(
+            {
+                "id": [0, 1, 2, 3],
+                "payload": pa.array(
+                    [
+                        None,
+                        {"inner": None, "unused": "one"},
+                        {"inner": {"value": None, "ignored": 9}, "unused": "two"},
+                        {"inner": {"value": 7, "ignored": 10}, "unused": "three"},
+                    ],
+                    type=payload_type,
+                ),
+            }
+        ),
+        path,
+    )
+    data = (
+        spark.read.schema(
+            "id BIGINT, payload STRUCT<inner:STRUCT<value:BIGINT,missing:STRING,ignored:BIGINT>,unused:STRING>"
+        )
+        .parquet(str(path))
+        .selectExpr("id", "payload.inner.value", "payload.inner.missing")
+        .orderBy("id")
+    )
+    assert data.schema.simpleString() == "struct<id:bigint,value:bigint,missing:string>"
+    assert data.schema["value"].nullable
+    assert data.schema["missing"].nullable
+    assert data.collect() == [
+        Row(id=0, value=None, missing=None),
+        Row(id=1, value=None, missing=None),
+        Row(id=2, value=None, missing=None),
+        Row(id=3, value=7, missing=None),
+    ]
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
+@pytest.mark.parametrize("nullable", [True, False], ids=["optional-leaves", "required-leaves"])
+def test_parquet_struct_predicate_pushdown_preserves_primitive_nulls(spark, tmp_path, nested, nullable):
+    count = 100_000
+    values = pa.array(range(count), type=pa.int64())
+    fields = [pa.field(f"f{i}", pa.int64(), nullable=nullable) for i in range(8)]
+    payload = pa.StructArray.from_arrays(
+        [values] * len(fields), fields=fields, mask=pa.array([i % 3 == 0 for i in range(count)])
+    )
+    if nested:
+        payload = pa.StructArray.from_arrays(
+            [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
+        )
+    path = tmp_path / "primitive_struct_predicate.parquet"
+    pq.write_table(pa.table({"s": payload}), path, compression=None, use_dictionary=False)
+    data = spark.read.option("pushdown_filters", "true").parquet(str(path))
+    data.createOrReplaceTempView("primitive_struct_predicate")
+    try:
+        query = (
+            "SELECT SUM(s.inner.f1) AS total FROM primitive_struct_predicate WHERE s.inner.f0 % 17 = 1"
+            if nested
+            else "SELECT SUM(s.f1) AS total FROM primitive_struct_predicate WHERE s.f0 % 17 = 1"
+        )
+        expected = sum(i for i in range(count) if i % 17 == 1 and i % 3 != 0 and (not nested or i % 5 != 0))
+        actual = spark.sql(query).collect()
+        assert actual == [Row(total=expected)], (actual, expected)
+        null_query = (
+            "SELECT COUNT(*) AS missing FROM primitive_struct_predicate WHERE s.inner.f0 IS NULL"
+            if nested
+            else "SELECT COUNT(*) AS missing FROM primitive_struct_predicate WHERE s.f0 IS NULL"
+        )
+        missing = sum(i % 3 == 0 or (nested and i % 5 == 0) for i in range(count))
+        assert spark.sql(null_query).collect() == [Row(missing=missing)]
+
+        if is_jvm_spark():
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+            read_type = "struct<f0:bigint,f1:bigint>"
+            if nested:
+                read_type = f"struct<inner:{read_type}>"
+            assert f"ReadSchema: struct<s:{read_type}>" in plan
+        else:
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+            metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+            assert metric is not None
+            scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+            assert float(metric[1]) * scale < path.stat().st_size / 2, plan
+            pruned = re.search(r"pushdown_rows_pruned=([\d.]+)", plan)
+            assert pruned is not None, plan
+            assert float(pruned[1]) > 0, plan
+    finally:
+        spark.catalog.dropTempView("primitive_struct_predicate")
+
+
+@pytest.mark.parametrize("predicate", ["s.items IS NULL", "s.items IS NOT NULL", "array_contains(s.items, 7L)"])
+def test_parquet_struct_list_predicates_prune_unselected_fields(spark, tmp_path, predicate):
+    # Check both Spark's read schema and Sail's decoder/scan metrics.
+    count = 100_000
+    parent_nulls = [i % 13 == 0 for i in range(count)]
+    items = [None if parent_nulls[i] or i % 11 == 0 else [i % 17] for i in range(count)]
+    values = pa.array(range(count), type=pa.int64())
+    payload = pa.StructArray.from_arrays(
+        [pa.array(items, type=pa.list_(pa.int64())), *([values] * 8)],
+        names=["items", *[f"f{i}" for i in range(8)]],
+        mask=pa.array(parent_nulls),
+    )
+    path = tmp_path / "struct_list_predicate.parquet"
+    pq.write_table(pa.table({"s": payload}), path, compression=None, use_dictionary=False)
+    spark.read.option("pushdown_filters", "true").parquet(str(path)).createOrReplaceTempView("struct_list_predicate")
+    try:
+        query = f"SELECT SUM(s.f0) AS total FROM struct_list_predicate WHERE {predicate}"  # noqa: S608
+        if predicate == "s.items IS NULL":
+            selected = [i for i, item in enumerate(items) if item is None]
+        elif predicate == "s.items IS NOT NULL":
+            selected = [i for i, item in enumerate(items) if item is not None]
+        else:
+            selected = [i for i, item in enumerate(items) if item == [7]]
+        expected = sum(i for i in selected if not parent_nulls[i])
+        assert spark.sql(query).collect() == [Row(total=expected)]
+
+        if is_jvm_spark():
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+            assert "ReadSchema: struct<s:struct<items:array<bigint>,f0:bigint>>" in plan
+        else:
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+            metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+            assert metric is not None, plan
+            scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+            assert float(metric[1]) * scale < path.stat().st_size / 2, plan
+            pruned = re.search(r"pushdown_rows_pruned=([\d.]+)", plan)
+            assert pruned is not None, plan
+            assert float(pruned[1]) > 0, plan
+    finally:
+        spark.catalog.dropTempView("struct_list_predicate")
+
+
+@pytest.mark.parametrize("leaf_type", [pa.int64(), pa.string(), pa.binary(), pa.list_(pa.int64())])
+def test_parquet_deep_field_preserves_every_ancestor_mask(spark, tmp_path, leaf_type):
+    count = 145
+    values = list(range(count))
+    if pa.types.is_string(leaf_type):
+        values = [f"{i}:雪" for i in values]
+    elif pa.types.is_binary(leaf_type):
+        values = [bytes([i, 0, 255]) for i in values]
+    elif pa.types.is_list(leaf_type):
+        # Parquet cannot encode nonempty lists hidden by null structs.
+        values = [None if any(i % divisor == 0 for divisor in [3, 5, 7]) else [i, None] for i in values]
+    values = [None if i % 11 == 0 else value for i, value in enumerate(values)]
+    payload = pa.array(values, type=leaf_type)
+    for divisor in [3, 5, 7]:
+        payload = pa.StructArray.from_arrays(
+            [payload], names=["x"], mask=pa.array([i % divisor == 0 for i in range(count)])
+        )
+    path = tmp_path / "deep_masks.parquet"
+    pq.write_table(pa.table({"id": range(count), "s": payload}), path, row_group_size=67)
+    rows = (
+        spark.read.option("pushdown_filters", "true")
+        .parquet(str(path))
+        .where("id >= 65")
+        .selectExpr("id", "s.x.x.x AS value")
+        .orderBy("id")
+        .collect()
+    )
+    assert rows == [
+        Row(id=i, value=None if any(i % divisor == 0 for divisor in [3, 5, 7]) else values[i]) for i in range(65, count)
+    ]

@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
@@ -22,6 +22,8 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
+use crate::udf::get_field::SparkGetField;
+use crate::udf::get_field::physical::SparkGetFieldExpr;
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 pub const FIELD_DEFAULT_METADATA_KEY: &str = "sail.schema_evolution.default";
@@ -350,8 +352,20 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             matching: self.matching,
             timezone_mode: self.timezone_mode,
         };
-        expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
-            .data()
+        expr.transform_down_up(
+            |expr| {
+                if let Some(access) = expr.downcast_ref::<SparkGetFieldExpr>() {
+                    return Ok(Transformed::new(
+                        rewriter.rewrite_parquet_field_access(access)?,
+                        true,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+                Ok(Transformed::no(expr))
+            },
+            |expr| rewriter.rewrite_expr(expr),
+        )
+        .data()
     }
 }
 
@@ -365,6 +379,113 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
+    // Resolve the accessor before adapting its root. A whole-struct cast beneath
+    // get_field hides the leaf path from Parquet's exact predicate eligibility.
+    fn rewrite_parquet_field_access(
+        &self,
+        expression: &SparkGetFieldExpr,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let access = expression.access()?;
+        let column = access.args()[0].downcast_ref::<Column>().ok_or_else(|| {
+            exec_datafusion_err!("Parquet field dependency must be rooted in a column")
+        })?;
+        let logical_index = self.logical_file_schema.index_of(column.name())?;
+        let logical_root = self.logical_file_schema.field(logical_index);
+        let null = || -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Literal::new(
+                ScalarValue::Null.cast_to(expression.field().data_type())?,
+            )))
+        };
+        let Some(physical_index) = self.column_mapping.get(logical_index).copied().flatten() else {
+            // Preserve required-column validation and existing missing-column rules.
+            self.rewrite_column(access.args()[0].clone(), column)?;
+            return null();
+        };
+        let mut logical_field = logical_root;
+        let mut physical_field = self.physical_file_schema.field(physical_index);
+        let mut args: Vec<Arc<dyn PhysicalExpr>> =
+            vec![Arc::new(Column::new(physical_field.name(), physical_index))];
+        for argument in &access.args()[1..] {
+            let name = argument
+                .downcast_ref::<Literal>()
+                .and_then(|literal| literal.value().try_as_str().flatten())
+                .ok_or_else(|| exec_datafusion_err!("invalid Parquet field dependency"))?;
+            let DataType::Struct(logical_fields) = logical_field.data_type() else {
+                return exec_err!(
+                    "Expected struct field '{}', got {}",
+                    logical_field.name(),
+                    logical_field.data_type()
+                );
+            };
+            logical_field = logical_fields
+                .iter()
+                .find(|field| field.name() == name)
+                .ok_or_else(|| exec_datafusion_err!("Logical field '{name}' not found"))?
+                .as_ref();
+            if physical_field.data_type().is_null() {
+                return null();
+            }
+            let DataType::Struct(physical_fields) = physical_field.data_type() else {
+                return exec_err!(
+                    "Expected physical struct field '{}', got {}",
+                    physical_field.name(),
+                    physical_field.data_type()
+                );
+            };
+            let Some((_, matched)) =
+                find_matching_struct_field(physical_fields, logical_field, self.matching)?
+            else {
+                if !logical_field.is_nullable() && self.matching == StructFieldMatching::FieldId {
+                    return exec_err!(
+                        "Required field '{}' is missing and has no default",
+                        logical_field.name()
+                    );
+                }
+                return null();
+            };
+            physical_field = matched.as_ref();
+            args.push(Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                physical_field.name().clone(),
+            )))));
+        }
+        let list_leaf = |data_type: &DataType| {
+            matches!(
+                data_type,
+                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+            )
+        };
+        if physical_field.data_type().is_nested()
+            && !(list_leaf(physical_field.data_type()) && list_leaf(expression.field().data_type()))
+        {
+            // Nested physical values must retain a compatible logical container.
+            // Do not let Parquet silently omit an exact predicate that now needs
+            // an unsupported nested input after adapting the file schema.
+            return exec_err!(
+                "Cannot read nested Parquet field '{}' as type {}",
+                physical_field.name(),
+                expression.field().data_type()
+            );
+        }
+        let physical_access = SparkGetFieldExpr::try_new(
+            args,
+            self.physical_file_schema,
+            Arc::new(access.config_options().clone()),
+        )?;
+        let physical_result = physical_access.field().clone();
+        if physical_result.data_type() == expression.field().data_type() {
+            return Ok(Arc::new(SparkGetFieldExpr::from_access(
+                physical_access.children()[0].clone(),
+                expression.field().clone(),
+            )?));
+        }
+        self.apply_type_cast(
+            Arc::new(physical_access),
+            expression.field(),
+            &physical_result,
+        )
+        .data()
+    }
+
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -383,7 +504,9 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let get_field_expr =
-            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
+            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+                .or_else(|| ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expr.as_ref()))
+            {
                 Some(expr) => expr,
                 None => return Ok(None),
             };

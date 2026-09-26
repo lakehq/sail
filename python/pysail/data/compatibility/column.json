@@ -87,7 +87,8 @@
   {
     "module": "pyspark.sql.Column",
     "function": "getField",
-    "status": "supported"
+    "status": "supported",
+    "note": "Returns NULL when the struct or selected field is NULL, including nested structs."
   },
   {
     "module": "pyspark.sql.Column",

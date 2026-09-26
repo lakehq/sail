@@ -277,8 +277,13 @@ pub(crate) async fn plan_delta_scan(
     };
     // The parquet scan resolves predicate columns against the physical file schema,
     // so column-mapped tables need the predicate rewritten from logical to physical names.
+    let predicate_schema = if kmode == ColumnMappingMode::None {
+        full_logical_schema.as_ref()
+    } else {
+        snapshot.schema()
+    };
     let pushdown_filter = pushdown_filter
-        .map(|expr| rewrite_predicate_for_column_mapping(expr, snapshot.schema(), kmode))
+        .map(|expr| rewrite_predicate_for_column_mapping(expr, predicate_schema, kmode))
         .transpose()?;
 
     let row_index_projected = config

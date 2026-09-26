@@ -73,7 +73,7 @@
     "module": "pyspark.sql.functions",
     "function": "in",
     "status": "supported",
-    "note": "This is Spark SQL only (not available in PySpark)."
+    "note": "This is Spark SQL only (not available in PySpark). IN and NOT IN predicates support uncorrelated subqueries in SELECT expressions, including Boolean comparisons, direct negation, CASE, and COALESCE."
   },
   {
     "module": "pyspark.sql.functions",

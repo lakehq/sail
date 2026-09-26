@@ -7915,8 +7915,10 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "sail-common-datafusion",
  "sail-logical-plan",
  "sail-python-udf",
+ "tokio",
 ]
 
 [[package]]
@@ -7976,6 +7978,7 @@ dependencies = [
  "datafusion",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 

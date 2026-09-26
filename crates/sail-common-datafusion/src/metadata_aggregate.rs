@@ -12,6 +12,8 @@ use datafusion::functions_aggregate::min_max::{Max, Min};
 use datafusion::logical_expr::logical_plan::{Aggregate, EmptyRelation, Projection, TableScan};
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 
+use crate::udf::get_field::SparkGetField;
+
 /// The format validates row selection, deletion effects, and metric precision before
 /// exposing statistics. These are source facts, not propagated physical estimates.
 pub trait ExactAggregateStatistics {
@@ -228,7 +230,10 @@ fn resolve_expression(
             expression: Box::new(resolve_expression(cast.expr.as_ref(), resolve_column)?),
             data_type: cast.field.data_type().clone(),
         }),
-        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
+        Expr::ScalarFunction(function)
+            if function.func.inner().is::<GetFieldFunc>()
+                || function.func.inner().is::<SparkGetField>() =>
+        {
             let [base, field] = function.args.as_slice() else {
                 return None;
             };

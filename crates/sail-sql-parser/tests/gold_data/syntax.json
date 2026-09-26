@@ -615,7 +615,7 @@
                         "nonTerminal": "Operator(LeftParenthesis)"
                       },
                       {
-                        "nonTerminal": "Sequence(NamedExpr, Operator(Comma))"
+                        "nonTerminal": "Option(Sequence(NamedExpr, Operator(Comma)))"
                       },
                       {
                         "nonTerminal": "Operator(RightParenthesis)"
@@ -7761,6 +7761,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Sequence(FunctionArgument, Operator(Comma))"
+                }
+              }
+            },
+            {
+              "name": "Option(Sequence(NamedExpr, Operator(Comma)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Sequence(NamedExpr, Operator(Comma))"
                 }
               }
             },
