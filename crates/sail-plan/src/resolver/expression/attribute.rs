@@ -279,48 +279,40 @@ impl PlanResolver<'_> {
             // Reuse the matching fields for extraction rather than scanning the
             // schema again after choosing a qualifier. Stop even if extraction is
             // unsupported: a matching root still shadows less-qualified roots.
-            let mut fields = schema
-                .iter()
-                .filter(|(qualifier, field)| {
-                    qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
-                        && state.get_field_info(field.name()).is_ok_and(|info| {
-                            !info.is_hidden()
-                                && info.matches(root.as_ref(), plan_id)
-                                && (!self.config.case_sensitive || info.name() == root.as_ref())
-                        })
-                })
-                .peekable();
-            if fields.peek().is_none() {
+            let mut fields = schema.iter().filter(|(qualifier, field)| {
+                qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
+                    && state.get_field_info(field.name()).is_ok_and(|info| {
+                        !info.is_hidden()
+                            && info.matches(root.as_ref(), plan_id)
+                            && (!self.config.case_sensitive || info.name() == root.as_ref())
+                    })
+            });
+            let Some((qualifier, field)) = fields.next() else {
                 continue;
-            }
-            let mut resolved = fields
-                .filter_map(|(qualifier, field)| {
-                    match self.resolve_potentially_nested_field(
-                        col((qualifier, field)),
-                        field.data_type(),
-                        inner,
-                    ) {
-                        Ok(Some(expr)) => {
-                            let name = inner.last().unwrap_or(root).as_ref().to_string();
-                            Some(Ok((name, expr)))
-                        }
-                        Ok(None) => self
-                            .nested_field_extraction_fails(field.data_type(), inner)
-                            .then(|| {
-                                Err(PlanError::analysis(format!(
-                                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
-                                )))
-                            }),
-                        Err(error) => Some(Err(error)),
-                    }
-                })
-                .collect::<PlanResult<Vec<_>>>()?;
-            if resolved.len() > 1 {
+            };
+            // Spark checks root ambiguity before extracting fields. An unsupported
+            // extraction must not hide a second root and bind the first one instead.
+            if fields.next().is_some() {
                 return Err(PlanError::AnalysisError(format!(
                     "ambiguous attribute: {name:?}"
                 )));
             }
-            return Ok(resolved.pop());
+            return match self.resolve_potentially_nested_field(
+                col((qualifier, field)),
+                field.data_type(),
+                inner,
+            )? {
+                Some(expr) => {
+                    let name = inner.last().unwrap_or(root).as_ref().to_string();
+                    Ok(Some((name, expr)))
+                }
+                None if self.nested_field_extraction_fails(field.data_type(), inner) => {
+                    Err(PlanError::analysis(format!(
+                        "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                    )))
+                }
+                None => Ok(None),
+            };
         }
         Ok(None)
     }

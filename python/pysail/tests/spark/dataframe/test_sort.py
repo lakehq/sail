@@ -122,6 +122,18 @@ def test_sort_recovered_key_preserves_renamed_alias(sort_source, operation):
 
 
 @pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
+def test_sort_many_visible_keys_with_one_recovered_key(spark, operation):
+    columns = [f"c{i}" for i in range(128)]
+    source = spark.createDataFrame([(1, 20), (2, 10), (3, None)], "id int, hidden int").coalesce(1)
+    source = source.select("*", *(F.lit(i).alias(name) for i, name in enumerate(columns)))
+    projected = source.select("id", *columns)
+    result = getattr(projected, operation)(*columns, F.col("hidden").asc_nulls_last())
+
+    assert result.schema == projected.schema
+    assert result.collect() == [Row(id=id_, **{name: i for i, name in enumerate(columns)}) for id_ in (2, 1, 3)]
+
+
+@pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
 def test_sort_recovered_replacement_preserves_reference_scope(spark, operation):
     source = spark.createDataFrame([(1, 30), (2, 10), (3, 20)], "a int, b int").coalesce(1)
     projected = source.withColumn("b", F.col("a")).select("a")

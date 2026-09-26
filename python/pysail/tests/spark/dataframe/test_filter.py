@@ -562,6 +562,30 @@ def test_filter_missing_attribute_discards_ambiguous_struct_field(spark):
     assert projected.where("s.x = 1").collect() == [Row(a=7)]
 
 
+@pytest.mark.parametrize("other_root", ["map", "array"])
+@pytest.mark.parametrize("reverse_roots", [False, True])
+def test_missing_input_discards_ambiguous_roots_before_nested_extraction(spark, other_root, reverse_roots):
+    source = spark.createDataFrame([((2,), 7), ((1,), 8)], "s struct<x:int>, key int").coalesce(1)
+    other = F.create_map(F.lit("x"), F.lit(9)) if other_root == "map" else F.array(F.lit(9))
+    roots = [F.struct(F.lit(9).alias("x")), other]
+    if reverse_roots:
+        roots.reverse()
+    intermediate = source.select(*(root.alias("s") for root in roots), "key")
+    projected = intermediate.select("key")
+
+    # Both roots match before field extraction. Discard this ambiguous output
+    # and recover the older struct instead of binding the extractable root.
+    filtered = projected.where("s.x = 1")
+    assert filtered.collect() == [Row(key=8)]
+    assert filtered.schema == projected.schema
+    assert projected.orderBy("s.x").collect() == [Row(key=8), Row(key=7)]
+    assert projected.sortWithinPartitions("s.x").collect() == [Row(key=8), Row(key=7)]
+
+    # An alias prevents recovering the older root, so ambiguity must be rejected.
+    with pytest.raises(AnalysisException):
+        intermediate.alias("t").select("key").where("t.s.x = 1").collect()
+
+
 @pytest.mark.parametrize(
     ("reference", "marker", "expected"),
     [("name", "NEAR", [Row(keep="keep")]), ("name", "OTHER", []), ("plan-id", "NEAR", [Row(keep="keep")])],

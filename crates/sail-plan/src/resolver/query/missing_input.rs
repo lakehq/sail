@@ -79,13 +79,25 @@ impl PlanResolver<'_> {
         // Subquery filters need descendant resolution before outer references. Avoid
         // resolving them speculatively: nested correlated filters would otherwise
         // resolve the entire subquery tree twice at each level.
-        if state.get_outer_query_schema().is_none()
-            && let Ok(resolved) = self
-                .resolve_expressions(expressions.clone(), &output_schema, state)
-                .await
-            && !Self::has_outer_reference(&resolved)?
-        {
-            return Ok((resolved, output_schema));
+        let mut local = Vec::with_capacity(expressions.len());
+        if state.get_outer_query_schema().is_none() {
+            for expression in &expressions {
+                match self
+                    .resolve_expression(expression.clone(), &output_schema, state)
+                    .await
+                {
+                    Ok(expr) if !Self::has_outer_reference(std::slice::from_ref(&expr))? => {
+                        local.push(expr);
+                    }
+                    // Stop at the first missing input rather than speculatively
+                    // resolving every remaining expression against a schema that
+                    // may be missing most of their references.
+                    _ => break,
+                }
+            }
+        }
+        if local.len() == expressions.len() {
+            return Ok((local, output_schema));
         }
         let mut schemas = vec![Arc::clone(&output_schema)];
         let mut plan = input;
@@ -118,8 +130,10 @@ impl PlanResolver<'_> {
         )?);
         // Spark resolves each expression independently, so discarding the bindings to an
         // output for one expression does not affect the others.
-        let mut resolved = Vec::with_capacity(expressions.len());
-        for expression in expressions {
+        // Keep the successfully resolved prefix: one missing sort or partitioning
+        // key must not force preceding visible keys to resolve again.
+        let mut resolved = local;
+        for expression in expressions.into_iter().skip(resolved.len()) {
             let mut schema_count = schemas.len();
             let mut first_error = None;
             let mut scope = state.enter_missing_input_scope(Arc::clone(&schema), schemas.clone());

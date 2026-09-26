@@ -1,5 +1,19 @@
 Feature: inline generator output names
 
+  # TODO: Preserve the non-nullable struct field when the input cannot contain
+  # null structs. Sail already marked this nullable before default-name resolution.
+  @sail-bug
+  Scenario: inline preserves a non-nullable single field schema
+    When query
+      """
+      SELECT inline(array(named_struct('a', 1)))
+      """
+    Then query schema
+      """
+      root
+       |-- a: integer (nullable = false)
+      """
+
   Scenario Outline: <function> preserves the default name of a single struct field
     When query
       """
