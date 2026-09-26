@@ -1,3 +1,5 @@
+import math
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -119,3 +121,48 @@ def test_map_zip_with_preserves_sorted_input_maps(spark, tmp_path, left_sorted, 
         ).alias("entries")
     )
     assert [(entry.key, entry.value) for entry in result.first().entries] == [("b", 1), ("c", 6), ("a", 3)]
+
+
+@pytest.mark.parametrize("shape", ["array", "struct"])
+@pytest.mark.parametrize("java_collections", [False, True])
+def test_map_zip_with_sliced_composite_keys(spark, tmp_path, shape, java_collections):
+    spark.conf.set("spark.sql.mapZipWithUsesJavaCollections", str(java_collections).lower())
+    key_type = pa.list_(pa.float64()) if shape == "array" else pa.struct([("a", pa.float64()), ("b", pa.float64())])
+
+    def key(a, b):
+        return [a, b] if shape == "array" else {"a": a, "b": b}
+
+    left, right = [], []
+    for i in range(258):
+        left.append(
+            None
+            if i % 5 == 0
+            else [(key(float(i), -0.0), i), (key(float(i), 0.0), -999), (key(float("nan"), None), i + 10)]
+        )
+        right.append(None if i % 7 == 0 else [(key(float(i), 0.0), i + 100), (key(float("nan"), None), i + 200)])
+    path = tmp_path / "sliced_composite_keys.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": pa.array(range(258)),
+                "left": pa.array(left, type=pa.map_(key_type, pa.int64())),
+                "right": pa.array(right, type=pa.map_(key_type, pa.int64())),
+            }
+        ).slice(1, 256),
+        path,
+    )
+    source = spark.read.parquet(str(path))
+    result = source.select(
+        "id",
+        F.map_entries(F.map_zip_with("left", "right", lambda _key, x, y: x + y + F.col("id"))).alias("entries"),
+    )
+    for row in result.orderBy("id").collect():
+        if row.id % 5 == 0 or row.id % 7 == 0:
+            assert row.entries is None
+            continue
+        assert [entry.value for entry in row.entries] == [3 * row.id + 100, 3 * row.id + 210]
+        first, second = [entry.key for entry in row.entries]
+        assert first[0] == row.id
+        assert math.copysign(1, first[1]) == -1
+        assert math.isnan(second[0])
+        assert second[1] is None

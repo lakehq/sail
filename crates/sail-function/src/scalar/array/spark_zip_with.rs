@@ -275,7 +275,9 @@ impl HigherOrderUDFImpl for SparkZipWith {
                     let offsets = map.value_offsets();
                     for index in offsets[row] as usize..offsets[row + 1] as usize {
                         let key_index = index + if side == 0 { 0 } else { left.keys().len() };
-                        let key = ScalarValue::try_from_array(&normalized, key_index)?.compacted();
+                        // The normalized array stays alive throughout this lookup, so
+                        // composite keys can share its buffers without copying each key.
+                        let key = ScalarValue::try_from_array(&normalized, key_index)?;
                         // Scala collections use NaN != NaN for atomic floating keys.
                         // Composite keys use Spark ordering in both modes instead.
                         let distinct_nan = self.legacy_map_key_equality

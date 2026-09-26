@@ -2,11 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, Float64Array, ListArray, UInt64Array};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, Float64Type, IntervalUnit, UInt64Type,
+    self as types, DataType, Field, FieldRef, Float64Type, IntervalUnit, TimeUnit, UInt64Type,
 };
 use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -98,6 +98,8 @@ impl ApproxPercentile {
 // TODO: DataFusion aggregate schema names omit argument casts, so selecting
 // percentile_approx(d, p) alongside percentile_approx(CAST(d AS TIMESTAMP_NTZ), p)
 // collides. This also affects existing aggregates; fix the shared naming contract.
+// TODO: Shared array comparisons can retain mismatched element nullability after
+// grouping, also affecting collect_list; see approx_percentile_batches.feature.
 impl AggregateUDFImpl for ApproxPercentile {
     fn name(&self) -> &str {
         "percentile_approx"
@@ -441,6 +443,18 @@ struct ApproxPercentileAccumulator {
     distinct: Option<HashSet<ScalarValue>>,
 }
 
+impl ApproxPercentileAccumulator {
+    fn update_values(&mut self, values: impl Iterator<Item = f64>) {
+        if let Some(window) = &mut self.window {
+            window.extend(values);
+        } else {
+            for value in values {
+                self.summary.insert(value);
+            }
+        }
+    }
+}
+
 fn as_double(value: ScalarValue) -> Result<f64> {
     match value {
         ScalarValue::Date32(Some(v)) | ScalarValue::IntervalYearMonth(Some(v)) => Ok(v as f64),
@@ -540,6 +554,61 @@ fn from_double(value: f64, data_type: &DataType) -> Result<ScalarValue> {
 
 impl Accumulator for ApproxPercentileAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // DISTINCT needs the original scalar values, and decimal-to-double
+        // conversion must retain Spark's decimal rounding. Ordinary primitive
+        // inputs can read their buffers directly without a ScalarValue per row.
+        if self.distinct.is_none() {
+            macro_rules! update_primitive {
+                ($type:ty) => {{
+                    let array = values[0].as_primitive::<$type>();
+                    if let Some(nulls) = array.nulls().filter(|nulls| nulls.null_count() > 0) {
+                        self.update_values(
+                            nulls.valid_indices().map(|index| array.value(index) as f64),
+                        );
+                    } else {
+                        self.update_values(array.values().iter().map(|&value| value as f64));
+                    }
+                    return Ok(());
+                }};
+            }
+            match values[0].data_type() {
+                DataType::Int8 => update_primitive!(types::Int8Type),
+                DataType::Int16 => update_primitive!(types::Int16Type),
+                DataType::Int32 => update_primitive!(types::Int32Type),
+                DataType::Int64 => update_primitive!(types::Int64Type),
+                DataType::Float32 => update_primitive!(types::Float32Type),
+                DataType::Float64 => update_primitive!(Float64Type),
+                DataType::Date32 => update_primitive!(types::Date32Type),
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    update_primitive!(types::IntervalYearMonthType)
+                }
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    update_primitive!(types::TimestampSecondType)
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    update_primitive!(types::TimestampMillisecondType)
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    update_primitive!(types::TimestampMicrosecondType)
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    update_primitive!(types::TimestampNanosecondType)
+                }
+                DataType::Duration(TimeUnit::Second) => {
+                    update_primitive!(types::DurationSecondType)
+                }
+                DataType::Duration(TimeUnit::Millisecond) => {
+                    update_primitive!(types::DurationMillisecondType)
+                }
+                DataType::Duration(TimeUnit::Microsecond) => {
+                    update_primitive!(types::DurationMicrosecondType)
+                }
+                DataType::Duration(TimeUnit::Nanosecond) => {
+                    update_primitive!(types::DurationNanosecondType)
+                }
+                _ => {}
+            }
+        }
         for i in 0..values[0].len() {
             if values[0].is_null(i) {
                 continue;
@@ -654,28 +723,24 @@ impl Accumulator for ApproxPercentileAccumulator {
             ))]);
         }
         self.summary.compress();
-        let values: Vec<_> = self
-            .summary
-            .sampled
-            .iter()
-            .map(|s| ScalarValue::Float64(Some(s.value)))
-            .collect();
-        let gs: Vec<_> = self
-            .summary
-            .sampled
-            .iter()
-            .map(|s| ScalarValue::UInt64(Some(s.g)))
-            .collect();
-        let deltas: Vec<_> = self
-            .summary
-            .sampled
-            .iter()
-            .map(|s| ScalarValue::UInt64(Some(s.delta)))
-            .collect();
+        let list = |values: ArrayRef| {
+            ScalarValue::List(Arc::new(ListArray::new(
+                Arc::new(Field::new_list_field(values.data_type().clone(), false)),
+                OffsetBuffer::from_lengths([values.len()]),
+                values,
+                None,
+            )))
+        };
         Ok(vec![
-            ScalarValue::List(ScalarValue::new_list(&values, &DataType::Float64, false)),
-            ScalarValue::List(ScalarValue::new_list(&gs, &DataType::UInt64, false)),
-            ScalarValue::List(ScalarValue::new_list(&deltas, &DataType::UInt64, false)),
+            list(Arc::new(Float64Array::from_iter_values(
+                self.summary.sampled.iter().map(|s| s.value),
+            ))),
+            list(Arc::new(UInt64Array::from_iter_values(
+                self.summary.sampled.iter().map(|s| s.g),
+            ))),
+            list(Arc::new(UInt64Array::from_iter_values(
+                self.summary.sampled.iter().map(|s| s.delta),
+            ))),
             ScalarValue::UInt64(Some(self.summary.count)),
         ])
     }
