@@ -728,7 +728,6 @@ def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path, sel
         payload = pa.StructArray.from_arrays(
             [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
         )
-        prefix += ".inner"
         read_type = f"struct<inner:{read_type}>"
     path = tmp_path / "nested_projection.parquet"
     pq.write_table(pa.table({"payload": payload}), path, compression=None, use_dictionary=False)
@@ -898,3 +897,56 @@ def test_parquet_nested_projection_preserves_schema_evolution(spark, tmp_path):
         Row(id=2, value=None, missing=None),
         Row(id=3, value=7, missing=None),
     ]
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
+@pytest.mark.parametrize("nullable", [True, False], ids=["optional-leaves", "required-leaves"])
+def test_parquet_struct_predicate_pushdown_preserves_primitive_nulls(spark, tmp_path, nested, nullable):
+    count = 100_000
+    values = pa.array(range(count), type=pa.int64())
+    fields = [pa.field(f"f{i}", pa.int64(), nullable=nullable) for i in range(8)]
+    payload = pa.StructArray.from_arrays(
+        [values] * len(fields), fields=fields, mask=pa.array([i % 3 == 0 for i in range(count)])
+    )
+    if nested:
+        payload = pa.StructArray.from_arrays(
+            [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
+        )
+    path = tmp_path / "primitive_struct_predicate.parquet"
+    pq.write_table(pa.table({"s": payload}), path, compression=None, use_dictionary=False)
+    data = spark.read.option("pushdown_filters", "true").parquet(str(path))
+    data.createOrReplaceTempView("primitive_struct_predicate")
+    try:
+        query = (
+            "SELECT SUM(s.inner.f1) AS total FROM primitive_struct_predicate WHERE s.inner.f0 % 17 = 1"
+            if nested
+            else "SELECT SUM(s.f1) AS total FROM primitive_struct_predicate WHERE s.f0 % 17 = 1"
+        )
+        expected = sum(i for i in range(count) if i % 17 == 1 and i % 3 != 0 and (not nested or i % 5 != 0))
+        actual = spark.sql(query).collect()
+        assert actual == [Row(total=expected)], (actual, expected)
+        null_query = (
+            "SELECT COUNT(*) AS missing FROM primitive_struct_predicate WHERE s.inner.f0 IS NULL"
+            if nested
+            else "SELECT COUNT(*) AS missing FROM primitive_struct_predicate WHERE s.f0 IS NULL"
+        )
+        missing = sum(i % 3 == 0 or (nested and i % 5 == 0) for i in range(count))
+        assert spark.sql(null_query).collect() == [Row(missing=missing)]
+
+        if is_jvm_spark():
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+            read_type = "struct<f0:bigint,f1:bigint>"
+            if nested:
+                read_type = f"struct<inner:{read_type}>"
+            assert f"ReadSchema: struct<s:{read_type}>" in plan
+        else:
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+            metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+            assert metric is not None
+            scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+            assert float(metric[1]) * scale < path.stat().st_size / 2, plan
+            pruned = re.search(r"pushdown_rows_pruned=([\d.]+)", plan)
+            assert pruned is not None, plan
+            assert float(pruned[1]) > 0, plan
+    finally:
+        spark.catalog.dropTempView("primitive_struct_predicate")

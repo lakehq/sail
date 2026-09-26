@@ -1,5 +1,5 @@
-use datafusion::arrow::array::{Array, make_array};
-use datafusion::arrow::buffer::NullBuffer;
+use datafusion::arrow::array::{Array, BooleanArray};
+use datafusion::arrow::compute::nullif;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::functions::core::get_field;
 use datafusion::functions::core::getfield::GetFieldFunc;
@@ -12,6 +12,8 @@ use datafusion_expr::{
 };
 
 use crate::array::record_batch::cast_array_positionally_recursively;
+
+pub mod physical;
 
 /// Extract one field while preserving the validity of its enclosing struct.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -123,10 +125,13 @@ impl ScalarUDFImpl for SparkGetField {
                 }
                 // Arrow children may contain valid values underneath a null struct.
                 // Spark's GetStructField returns NULL whenever the parent is NULL.
-                let child_nulls = array.nulls().filter(|nulls| nulls.null_count() > 0);
-                let nulls = NullBuffer::union(Some(&parent_nulls), child_nulls);
-                let data = array.to_data().into_builder().nulls(nulls).build()?;
-                Ok(ColumnarValue::Array(make_array(data)))
+                // The child is already valid Arrow data; replace only its null mask
+                // without revalidating variable-width payloads.
+                let parent_is_null = BooleanArray::new(!parent_nulls.inner(), None);
+                Ok(ColumnarValue::Array(nullif(
+                    array.as_ref(),
+                    &parent_is_null,
+                )?))
             }
             (value, _) => Ok(value),
         }

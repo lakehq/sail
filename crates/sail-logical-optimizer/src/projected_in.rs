@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::DefaultTableSource;
 use datafusion::optimizer::eliminate_outer_join::EliminateOuterJoin;
@@ -10,11 +11,11 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
+use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, not_impl_err, plan_err};
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{
-    Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Projection,
+    Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
     SubqueryAlias, Union, expr_fn, lit,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
@@ -53,6 +54,30 @@ fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
         Ok(matches!(expr, Expr::InSubquery(subquery)
             if subquery.subquery.outer_ref_columns.is_empty()))
     })
+}
+
+fn validate_indirect_in(expr: &Expr) -> Result<()> {
+    expr.apply(|expr| {
+        let mut inner = expr;
+        while let Expr::Not(child) = inner {
+            inner = child;
+        }
+        if matches!(inner, Expr::InSubquery(subquery)
+            if subquery.subquery.outer_ref_columns.is_empty())
+        {
+            return Ok(TreeNodeRecursion::Continue);
+        }
+        let indirect_negation = matches!(expr, Expr::Not(_))
+            || matches!(expr, Expr::BinaryExpr(binary)
+                if matches!(binary.op, Operator::Eq | Operator::NotEq));
+        if indirect_negation && has_uncorrelated_in(expr)? {
+            // TODO: Normalize indirect negation before decorrelation with the query's
+            // optimizer context; validate only after dead subqueries have folded away.
+            return not_impl_err!("projected IN under indirect negation or Boolean comparison");
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }
 
 fn simplifier(schema: DFSchemaRef, config: &dyn OptimizerConfig) -> ExprSimplifier {
@@ -189,8 +214,27 @@ fn producer_constants(
         }
         LogicalPlan::Limit(limit) => {
             let mut constants = producer_constants(&limit.input, config, needed)?;
-            constants.local_relation &=
-                limit.skip.is_none() && matches!(limit.fetch.as_deref(), Some(Expr::Literal(_, _)));
+            // The analyzer widens SQL's integer literal to Int64. Keep computed
+            // limits and explicit OFFSET as Spark's local-materialization boundaries.
+            let literal_fetch = match limit.fetch.as_deref() {
+                Some(Expr::Literal(_, _)) => true,
+                Some(Expr::Cast(cast)) => {
+                    cast.field.data_type() == &DataType::Int64
+                        && matches!(cast.expr.as_ref(), Expr::Literal(ScalarValue::Int32(_), _))
+                }
+                _ => false,
+            };
+            constants.local_relation &= limit.skip.is_none() && literal_fetch;
+            return Ok(constants);
+        }
+        LogicalPlan::Unnest(unnest) => {
+            let needed = needed
+                .iter()
+                .filter(|column| !unnest.exec_columns.contains(column))
+                .cloned()
+                .collect();
+            let mut constants = producer_constants(&unnest.input, config, &needed)?;
+            constants.local_relation = false;
             return Ok(constants);
         }
         LogicalPlan::Sort(_)
@@ -316,15 +360,23 @@ fn has_volatile_expression(expr: &Expr) -> Result<bool> {
     })
 }
 
-fn union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
+fn union_branches(
+    plan: &LogicalPlan,
+    needed: &HashSet<Column>,
+) -> Result<Option<Vec<LogicalPlan>>> {
     match plan {
         LogicalPlan::Projection(projection) => {
-            for expr in &projection.expr {
+            let mut input_needed = HashSet::new();
+            for (expr, column) in projection.expr.iter().zip(projection.schema.columns()) {
+                if !needed.contains(&column) {
+                    continue;
+                }
                 if has_volatile_expression(expr)? {
                     return Ok(None);
                 }
+                input_needed.extend(expr.column_refs().into_iter().cloned());
             }
-            union_branches(&projection.input)?
+            union_branches(&projection.input, &input_needed)?
                 .map(|inputs| {
                     inputs
                         .into_iter()
@@ -362,19 +414,48 @@ fn union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
                 .collect::<Result<Vec<_>>>()?;
             Ok(Some(inputs))
         }
-        LogicalPlan::SubqueryAlias(alias) => union_branches(&alias.input)?
-            .map(|inputs| {
+        LogicalPlan::SubqueryAlias(alias) => {
+            let input_needed = alias
+                .input
+                .schema()
+                .columns()
+                .into_iter()
+                .zip(alias.schema.columns())
+                .filter_map(|(input, output)| needed.contains(&output).then_some(input))
+                .collect();
+            union_branches(&alias.input, &input_needed)?
+                .map(|inputs| {
+                    inputs
+                        .into_iter()
+                        .map(|input| {
+                            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                                Arc::new(input),
+                                alias.alias.clone(),
+                            )?))
+                        })
+                        .collect()
+                })
+                .transpose()
+        }
+        LogicalPlan::Filter(filter) => {
+            // TODO: Apply Spark's random-bound simplification before deciding
+            // whether a filter blocks UNION branch folding.
+            if has_volatile_expression(&filter.predicate)? {
+                return Ok(None);
+            }
+            let mut input_needed = needed.clone();
+            input_needed.extend(filter.predicate.column_refs().into_iter().cloned());
+            Ok(union_branches(&filter.input, &input_needed)?.map(|inputs| {
                 inputs
                     .into_iter()
                     .map(|input| {
-                        Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                            Arc::new(input),
-                            alias.alias.clone(),
-                        )?))
+                        let mut branch = filter.clone();
+                        branch.input = Arc::new(input);
+                        LogicalPlan::Filter(branch)
                     })
                     .collect()
-            })
-            .transpose(),
+            }))
+        }
         _ => Ok(None),
     }
 }
@@ -405,7 +486,12 @@ fn rewrite_projection(
     for expr in &projection.expr {
         deterministic &= !has_volatile_expression(expr)?;
     }
-    if deterministic && let Some(inputs) = union_branches(&projection.input)? {
+    let projection_needed = projection
+        .expr
+        .iter()
+        .flat_map(|expr| expr.column_refs().into_iter().cloned())
+        .collect();
+    if deterministic && let Some(inputs) = union_branches(&projection.input, &projection_needed)? {
         let mut needs_null_propagation = false;
         for input in &inputs {
             let constants = constant_columns(input, config, &needed)?;
@@ -460,13 +546,35 @@ fn rewrite_projection(
                 return Ok(expr);
             }
             let name = NamePreserver::new_for_projection().save(&expr);
-            let expr = simplifier.simplify(replace_constants(expr, &constants)?)?;
+            let simplified = simplifier.simplify(replace_constants(expr.clone(), &constants)?)?;
+            if has_uncorrelated_in(&simplified)? {
+                validate_indirect_in(&expr)?;
+            }
+            let expr = simplified;
             Ok(name.restore(expr.rewrite(&mut rewriter)?.data))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Transformed::yes(LogicalPlan::Projection(
         Projection::try_new_with_schema(expr, Arc::new(rewriter.plan), projection.schema)?,
     )))
+}
+
+// TODO: Allow existence-only RHS pruning across local and aggregate subplans
+// after matching Spark's eager subquery evaluation order.
+fn can_prune_null_in_rhs(plan: &LogicalPlan, config: &dyn OptimizerConfig) -> Result<bool> {
+    let needed = HashSet::new();
+    let mut can_prune = true;
+    plan.apply_with_subqueries(|plan| {
+        if matches!(plan, LogicalPlan::Aggregate(_))
+            || (matches!(plan, LogicalPlan::Values(_) | LogicalPlan::TableScan(_))
+                && producer_constants(plan, config, &needed)?.local_relation)
+        {
+            can_prune = false;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(can_prune)
 }
 
 struct InRewriter<'a> {
@@ -508,16 +616,28 @@ impl TreeNodeRewriter for InRewriter<'_> {
         let nullable = expr.nullable(self.plan.schema().as_ref())?
             || subquery.subquery.schema().field(0).is_nullable();
         let null_literal = matches!(expr.as_ref(), Expr::Literal(value, _) if value.is_null());
+        let existence_only =
+            null_literal && can_prune_null_in_rhs(&subquery.subquery, self.config)?;
         let alias = self.config.alias_generator().next("__sail_in");
         let predicate = (*expr).eq(Expr::Column(Column::new(Some(alias.clone()), &column.name)));
-        let predicate = if negated || null_literal {
+        let predicate = if existence_only {
+            lit(true)
+        } else if negated || null_literal {
             predicate.clone().or(predicate.is_null())
         } else {
             predicate
         };
-        let query = LogicalPlanBuilder::from(subquery.subquery)
-            .alias(alias.clone())?
-            .build()?;
+        let query = LogicalPlanBuilder::from(subquery.subquery);
+        let query = if existence_only {
+            // Spark rewrites a literal NULL operand to EXISTS: only row existence
+            // matters, and the subquery stops after its first qualifying row.
+            query
+                .project(vec![lit(true).alias(&column.name)])?
+                .limit(0, Some(1))?
+        } else {
+            query
+        };
+        let query = query.alias(alias.clone())?.build()?;
         self.plan = LogicalPlanBuilder::from(mem::take(&mut self.plan))
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;

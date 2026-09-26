@@ -11,9 +11,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{
-    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, expr_fn, ident, lit,
-};
+use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit};
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 
 use crate::resolver::state::PlanResolverState;
@@ -36,32 +34,6 @@ impl<'s> PlanRewriter<'s> for ExistsRewriter<'s> {
 
 impl TreeNodeRewriter for ExistsRewriter<'_> {
     type Node = Expr;
-
-    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        let mut inner = &expr;
-        while let Expr::Not(child) = inner {
-            inner = child;
-        }
-        if matches!(inner, Expr::InSubquery(subquery)
-            if subquery.subquery.outer_ref_columns.is_empty())
-        {
-            return Ok(Transformed::no(expr));
-        }
-        let indirect_negation = matches!(expr, Expr::Not(_))
-            || matches!(&expr, Expr::BinaryExpr(binary)
-                if matches!(binary.op, Operator::Eq | Operator::NotEq));
-        if indirect_negation
-            && expr.exists(|child| {
-                Ok(matches!(child, Expr::InSubquery(subquery)
-                    if subquery.subquery.outer_ref_columns.is_empty()))
-            })?
-        {
-            // TODO: Normalize indirect negation before decorrelation with the query's
-            // optimizer context; early constant folding can change stable functions.
-            return not_impl_err!("projected IN under indirect negation or Boolean comparison");
-        }
-        Ok(Transformed::no(expr))
-    }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         let Expr::Exists(exists) = expr else {
