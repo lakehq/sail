@@ -269,9 +269,10 @@ use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_ki
 use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
-    IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergMetadataScanExec, IcebergPartitionTransformExpr, IcebergProcedureExec,
-    IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergEqualityDeleteWriterExec, IcebergFileTasksExec, IcebergManifestScanExec,
+    IcebergMergeMetadataExec, IcebergMetadataRelationExec, IcebergMetadataScanExec,
+    IcebergPartitionTransformExpr, IcebergProcedureExec, IcebergScanByDataFilesExec,
+    IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
@@ -1620,8 +1621,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
                 snapshot_json,
-                filter_data_files,
-                selected_data_file_paths,
                 pruning_json,
             }) => {
                 let snapshot: sail_iceberg::spec::Snapshot = serde_json::from_str(&snapshot_json)
@@ -1631,13 +1630,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let pruning = serde_json::from_str(&pruning_json).map_err(|error| {
                     plan_datafusion_err!("failed to decode Iceberg pruning: {error}")
                 })?;
-                let scan = IcebergManifestScanExec::new(table_url, snapshot, pruning);
-                let scan = if filter_data_files {
-                    scan.with_selected_data_file_paths(selected_data_file_paths)
-                } else {
-                    scan
-                };
-                Ok(Arc::new(scan))
+                Ok(Arc::new(IcebergManifestScanExec::new(
+                    table_url, snapshot, pruning,
+                )))
             }
             NodeKind::IcebergDiscovery(r#gen::IcebergDiscoveryExecNode {
                 input,
@@ -1662,6 +1657,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 has_projection,
                 predicate,
                 limit,
+                preserve_file_groups,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1693,13 +1689,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(usize::try_from)
                     .transpose()
                     .map_err(|error| plan_datafusion_err!("invalid Iceberg limit: {error}"))?;
-                Ok(Arc::new(IcebergScanByDataFilesExec::new(
+                let scan = IcebergScanByDataFilesExec::new(
                     input,
                     table_url,
                     file_schema,
                     projection,
                     predicate,
                     limit,
+                )?;
+                Ok(Arc::new(if preserve_file_groups {
+                    scan.preserve_file_groups()
+                } else {
+                    scan
+                }))
+            }
+            NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode { groups }) => Ok(Arc::new(
+                IcebergFileTasksExec::try_from_serialized(&groups)?,
+            )),
+            NodeKind::IcebergMetadataRelation(r#gen::IcebergMetadataRelationExecNode {
+                schema,
+                scan,
+            }) => {
+                let schema = Arc::new(try_decode_schema(&schema)?);
+                Ok(Arc::new(IcebergMetadataRelationExec::try_from_serialized(
+                    schema, &scan,
                 )?))
             }
             NodeKind::IcebergMetadataScan(r#gen::IcebergMetadataScanExecNode { input }) => {
@@ -2853,11 +2866,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url: manifest_scan.table_url().to_string(),
                 snapshot_json,
-                filter_data_files: manifest_scan.selected_data_file_paths().is_some(),
-                selected_data_file_paths: manifest_scan
-                    .selected_data_file_paths()
-                    .unwrap_or_default()
-                    .to_vec(),
                 pruning_json: serde_json::to_string(manifest_scan.pruning()).map_err(|error| {
                     plan_datafusion_err!("failed to encode Iceberg pruning: {error}")
                 })?,
@@ -2897,6 +2905,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                     .transpose()?,
                 limit: scan_by_files.limit().map(|limit| limit as u64),
+                preserve_file_groups: scan_by_files.preserves_file_groups(),
+            })
+        } else if let Some(tasks) = node.downcast_ref::<IcebergFileTasksExec>() {
+            NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode {
+                groups: tasks.serialized_groups()?,
+            })
+        } else if let Some(relation) = node.downcast_ref::<IcebergMetadataRelationExec>() {
+            NodeKind::IcebergMetadataRelation(r#gen::IcebergMetadataRelationExecNode {
+                schema: try_encode_schema(relation.original_schema().as_ref())?,
+                scan: relation.serialized_scan()?,
             })
         } else if let Some(metadata_scan) = node.downcast_ref::<IcebergMetadataScanExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5746,11 +5764,80 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_iceberg_metadata_and_file_tasks_preserves_work_assignment() -> Result<()> {
+        use sail_iceberg::physical_plan::file_tasks_exec::IcebergFileTask;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "file_path",
+            DataType::Utf8,
+            false,
+        )]));
+        let scan = serde_json::json!({
+            "table_url": "s3://bucket/table",
+            "metadata_location": "s3://bucket/table/metadata/v7.metadata.json",
+            "relation": "Files", "manifest_groups": [[], []],
+            "projection": [0], "limit": 12
+        });
+        let metadata = IcebergMetadataRelationExec::try_from_serialized(schema, &scan.to_string())?;
+        let expected_scan = metadata.serialized_scan()?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(metadata))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<IcebergMetadataRelationExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected metadata relation scan"))?;
+        assert_eq!(decoded.serialized_scan()?, expected_scan);
+        assert_eq!(
+            decoded.properties().output_partitioning().partition_count(),
+            2
+        );
+
+        let tasks = IcebergFileTasksExec::try_new(
+            (0..6)
+                .map(|group| {
+                    vec![IcebergFileTask {
+                        path: format!("s3://bucket/table/data/{group}.parquet"),
+                        size: 1_000,
+                        records: 10,
+                        spec_id: group,
+                    }]
+                })
+                .collect(),
+        )?;
+        let expected_groups = tasks.serialized_groups()?;
+        let scan = IcebergScanByDataFilesExec::new(
+            Arc::new(tasks),
+            "s3://bucket/table".to_string(),
+            Arc::new(Schema::empty()),
+            None,
+            None,
+            None,
+        )?
+        .preserve_file_groups();
+        let bytes = try_encode_physical_plan(&codec, Arc::new(scan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<IcebergScanByDataFilesExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected grouped data file scan"))?;
+        assert!(decoded.preserves_file_groups());
+        assert_eq!(decoded.benefits_from_input_partitioning(), vec![false]);
+        let decoded = decoded.input();
+        let decoded = decoded
+            .downcast_ref::<IcebergFileTasksExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected file tasks"))?;
+        assert_eq!(decoded.serialized_groups()?, expected_groups);
+        assert_eq!(
+            decoded.properties().output_partitioning().partition_count(),
+            6
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_lake_procedure_preserves_bound_call() -> Result<()> {
         use sail_common_datafusion::lakeprocedure::{
             LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
-            LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureRootPlacement,
-            LakeProcedureTarget,
+            LakeProcedureInvocationId, LakeProcedureRootPlacement, LakeProcedureTarget,
         };
         use sail_iceberg::physical_plan::IcebergProcedureExec;
 
@@ -5760,7 +5847,6 @@ mod tests {
             output: vec![],
             access: LakeProcedureAccess::MetadataCommit,
             target: LakeProcedureTarget::Catalog,
-            retry_policy: LakeProcedureRetryPolicy::Forbidden,
         };
         let call = LakeProcedureCall {
             invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),

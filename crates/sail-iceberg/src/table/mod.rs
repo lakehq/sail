@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod files;
 pub mod metadata_loader;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -36,12 +37,12 @@ pub struct Table {
 impl Table {
     /// Load table metadata and IO context using the provided execution session.
     pub async fn load(ctx: &dyn Session, table_url: Url) -> Result<Self> {
-        Self::load_with_metadata_location(ctx, table_url, None).await
+        Self::load_with_metadata_location(ctx.runtime_env().as_ref(), table_url, None).await
     }
 
     /// Load table metadata from an explicit metadata location when one is provided.
     pub async fn load_with_metadata_location(
-        ctx: &dyn Session,
+        runtime: &datafusion::execution::runtime_env::RuntimeEnv,
         table_url: Url,
         metadata_location: Option<String>,
     ) -> Result<Self> {
@@ -50,8 +51,7 @@ impl Table {
             table_url,
             metadata_location,
         );
-        let object_store = ctx
-            .runtime_env()
+        let object_store = runtime
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

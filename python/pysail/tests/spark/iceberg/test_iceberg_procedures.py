@@ -129,6 +129,51 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(local_cluster_sp
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_rewrite_groups_preserve_transformed_partitions(local_cluster_spark, tmp_path):
+    spark = local_cluster_spark
+    table_name = "distributed_partition_rewrite"
+    location = (tmp_path / table_name).as_uri()
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name} (id BIGINT, ts TIMESTAMP)
+        USING ICEBERG
+        PARTITIONED BY (days(ts))
+        LOCATION '{escape_sql_string_literal(location)}'
+        """
+    )
+    partition_count = 6
+    try:
+        for hour in [10, 11]:
+            values = ", ".join(
+                f"({day}, TIMESTAMP '2024-01-{day:02} {hour}:00:00')" for day in range(1, partition_count + 1)
+            )
+            spark.sql(f"INSERT INTO {table_name} VALUES {values}")  # noqa: S608
+        before = spark.table(f"{table_name}.files").collect()
+        assert len(before) == partition_count * 2
+        expected = spark.table(table_name).orderBy("id", "ts").collect()
+
+        result = spark.sql(
+            f"""
+            CALL system.rewrite_data_files(
+              table => '{table_name}',
+              options => map('rewrite-all', 'true', 'target-file-size-bytes', '1048576'))
+            """
+        ).first()
+
+        assert result.rewritten_data_files_count == len(before)
+        assert result.added_data_files_count == partition_count
+        assert result.rewritten_bytes_count == sum(row.file_size_in_bytes for row in before)
+        assert spark.table(table_name).orderBy("id", "ts").collect() == expected
+        after = spark.table(f"{table_name}.files").collect()
+        assert len(after) == partition_count
+        assert len({tuple(row.partition) for row in after}) == partition_count
+        assert all(row.record_count == 2 for row in after)  # noqa: PLR2004
+        assert spark.table(f"{table_name}.files").select().count() == partition_count
+        assert len(spark.table(f"{table_name}.files").where("record_count = 2").limit(1).collect()) == 1
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 @pytest.fixture
 def multi_catalog_spark():
     catalogs = (

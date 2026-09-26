@@ -123,6 +123,207 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn files_scan_is_lazy_pinned_and_partitioned_on_workers() -> Result<()> {
+        use std::sync::Arc;
+
+        use bytes::Bytes;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use futures::TryStreamExt;
+        use object_store::ObjectStoreExt;
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+        use url::Url;
+
+        use super::metadata_relation_provider;
+        use crate::io::StoreContext;
+        use crate::physical_plan::IcebergMetadataRelationExec;
+        use crate::spec::manifest_list::ManifestListWriter;
+        use crate::spec::{
+            DataFile, ManifestEntry, ManifestMetadata, ManifestStatus, ManifestWriter,
+        };
+
+        let url = Url::parse("memory://bucket/table").expect("table URL");
+        let store = Arc::new(InMemory::new());
+        let storage = StoreContext::new(store.clone(), &url)?;
+        let mut metadata = table_metadata();
+        metadata.location = url.to_string();
+        metadata
+            .snapshots
+            .last_mut()
+            .expect("current snapshot")
+            .manifest_list = "metadata/current.avro".to_string();
+        let mut list = ManifestListWriter::new();
+        let mut manifest_bytes = vec![];
+        for group in 0..2 {
+            let mut writer = ManifestWriter::new(
+                Some(20),
+                None,
+                ManifestMetadata::new(
+                    Arc::new(metadata.schemas[0].clone()),
+                    7,
+                    PartitionSpec::unpartitioned_spec(),
+                    FormatVersion::V2,
+                    ManifestContentType::Data,
+                ),
+            );
+            for index in 0..3 {
+                let file: DataFile = serde_json::from_value(serde_json::json!({
+                    "content": "DATA", "file_path": format!("data/{group}-{index}.parquet"),
+                    "file_format": "PARQUET", "partition": [], "record_count": 10,
+                    "file_size_in_bytes": 100, "partition_spec_id": 0
+                }))
+                .expect("data file");
+                let status = if index == 2 {
+                    ManifestStatus::Deleted
+                } else {
+                    ManifestStatus::Added
+                };
+                writer.add_entry(ManifestEntry::new(status, Some(20), Some(3), Some(3), file));
+            }
+            let path = format!("metadata/m{group}.avro");
+            list.append(
+                writer
+                    .clone()
+                    .into_manifest_file(path.clone(), 3, 20)
+                    .expect("descriptor"),
+            );
+            manifest_bytes.push((
+                path,
+                writer.finish().to_avro_bytes_v2().expect("manifest bytes"),
+            ));
+        }
+        storage
+            .prefixed
+            .put(
+                &Path::from("metadata/current.avro"),
+                Bytes::from(list.to_bytes(FormatVersion::V2).expect("manifest list")).into(),
+            )
+            .await?;
+        storage
+            .prefixed
+            .put(
+                &Path::from("metadata/v1.metadata.json"),
+                Bytes::from(metadata.to_json().expect("metadata JSON")).into(),
+            )
+            .await?;
+
+        let config = SessionConfig::new()
+            .with_target_partitions(2)
+            .with_batch_size(1);
+        let driver = SessionContext::new_with_config(config.clone());
+        driver.register_object_store(&url, store.clone());
+        let provider = metadata_relation_provider(
+            &driver.state(),
+            url.clone(),
+            Some("memory://bucket/table/metadata/v1.metadata.json".to_string()),
+            IcebergMetadataRelationType::Files,
+        )
+        .await?;
+        // Manifests do not exist until after planning.
+        let plan = provider
+            .scan(&driver.state(), Some(&vec![1, 5]), &[], None)
+            .await?;
+        assert_eq!(plan.output_partitioning().partition_count(), 2);
+        let scan = plan
+            .downcast_ref::<IcebergMetadataRelationExec>()
+            .expect("metadata operator");
+        let plan = IcebergMetadataRelationExec::try_from_serialized(
+            scan.original_schema().clone(),
+            &scan.serialized_scan()?,
+        )?;
+        for (path, bytes) in manifest_bytes {
+            storage
+                .prefixed
+                .put(&Path::from(path), Bytes::from(bytes).into())
+                .await?;
+        }
+        // A newer version and a missing manifest list must not rebind the planned scan.
+        metadata.current_snapshot_id = None;
+        metadata.snapshots.clear();
+        storage
+            .prefixed
+            .put(
+                &Path::from("metadata/v2.metadata.json"),
+                Bytes::from(metadata.to_json().expect("new metadata JSON")).into(),
+            )
+            .await?;
+        storage
+            .prefixed
+            .delete(&Path::from("metadata/current.avro"))
+            .await?;
+        let worker = SessionContext::new_with_config(config);
+        worker.register_object_store(&url, store);
+        let mut paths = vec![];
+        for partition in 0..2 {
+            let batches: Vec<_> = plan
+                .execute(partition, worker.task_ctx())?
+                .try_collect()
+                .await?;
+            assert_eq!(batches.len(), 2);
+            for batch in batches {
+                assert_eq!((batch.num_rows(), batch.num_columns()), (1, 2));
+                paths.push(
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .expect("paths")
+                        .value(0)
+                        .to_string(),
+                );
+            }
+        }
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "data/0-0.parquet",
+                "data/0-1.parquet",
+                "data/1-0.parquet",
+                "data/1-1.parquet"
+            ]
+        );
+        assert!(plan.execute(2, worker.task_ctx()).is_err());
+
+        let mut scan: serde_json::Value = serde_json::from_str(&plan.serialized_scan()?)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        scan["projection"] = serde_json::json!([]);
+        let count_plan = IcebergMetadataRelationExec::try_from_serialized(
+            plan.original_schema().clone(),
+            &scan.to_string(),
+        )?;
+        let batches: Vec<_> = count_plan
+            .execute(0, worker.task_ctx())?
+            .try_collect()
+            .await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            2
+        );
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+
+        scan["limit"] = serde_json::json!(0);
+        let limit_plan = IcebergMetadataRelationExec::try_from_serialized(
+            plan.original_schema().clone(),
+            &scan.to_string(),
+        )?;
+        storage
+            .prefixed
+            .delete(&Path::from("metadata/v1.metadata.json"))
+            .await?;
+        assert!(
+            limit_plan
+                .execute(0, worker.task_ctx())?
+                .try_collect::<Vec<_>>()
+                .await?
+                .is_empty()
+        );
+        Ok(())
+    }
+
     #[test]
     fn recognizes_all_iceberg_metadata_table_names_case_insensitively() {
         let names = [

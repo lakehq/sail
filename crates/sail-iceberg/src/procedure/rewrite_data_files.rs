@@ -16,12 +16,12 @@ use crate::lake_source::{
     IcebergLakeSource, IcebergReadPurpose, IcebergWriteNode, IcebergWriteNodeOptions,
     load_iceberg_read_table,
 };
-use crate::metadata_relation::files::current_live_files;
-use crate::spec::{DataContentType, FormatVersion, Snapshot};
+use crate::physical_plan::file_tasks_exec::IcebergFileTask;
+use crate::spec::{DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Snapshot};
+use crate::table::files::{balance_by_size, collect_live_files};
 
 const DEFAULT_TARGET_FILE_SIZE: u64 = 512 * 1024 * 1024;
 const DEFAULT_MIN_INPUT_FILES: usize = 5;
-const MAX_REWRITE_PARTITIONS: usize = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct RewriteDataFilesPlan {
@@ -53,42 +53,25 @@ impl RewriteDataFilesPlan {
 #[educe(PartialOrd)]
 pub(crate) struct RewriteDataFilesScanNode {
     table_url: String,
-    snapshot_json: String,
-    selected_data_file_paths: Vec<String>,
+    groups: Vec<Vec<IcebergFileTask>>,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
 impl RewriteDataFilesScanNode {
-    fn try_new(
-        table_url: String,
-        snapshot: Option<&Snapshot>,
-        selected_data_file_paths: Vec<String>,
-        schema: DFSchemaRef,
-    ) -> Result<Self> {
-        let snapshot_json = snapshot
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error)))?
-            .unwrap_or_default();
-        Ok(Self {
+    fn new(table_url: String, groups: Vec<Vec<IcebergFileTask>>, schema: DFSchemaRef) -> Self {
+        Self {
             table_url,
-            snapshot_json,
-            selected_data_file_paths,
+            groups,
             schema,
-        })
+        }
     }
 
     pub(crate) fn table_url(&self) -> &str {
         &self.table_url
     }
-
-    pub(crate) fn snapshot_json(&self) -> &str {
-        &self.snapshot_json
-    }
-
-    pub(crate) fn selected_data_file_paths(&self) -> &[String] {
-        &self.selected_data_file_paths
+    pub(crate) fn groups(&self) -> &[Vec<IcebergFileTask>] {
+        &self.groups
     }
 
     pub(crate) fn arrow_schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
@@ -116,8 +99,9 @@ impl UserDefinedLogicalNodeCore for RewriteDataFilesScanNode {
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "IcebergRewriteDataFilesScan: selected_files={}",
-            self.selected_data_file_paths.len()
+            "IcebergRewriteDataFilesScan: groups={}, selected_files={}",
+            self.groups.len(),
+            self.groups.iter().map(Vec::len).sum::<usize>()
         )
     }
 
@@ -151,7 +135,13 @@ pub(super) async fn plan_rewrite_data_files(
     let metadata = table.metadata();
     let current_snapshot = metadata.current_snapshot();
     let expected_snapshot_id = current_snapshot.map(Snapshot::snapshot_id);
-    let live_files = current_live_files(&table).await?;
+    let live_files = collect_live_files(
+        table.store_context(),
+        metadata,
+        session.config().target_partitions(),
+        |file| Ok(Some(RewriteFile::from(file))),
+    )
+    .await?;
     let active_delete_files = live_files
         .iter()
         .filter(|file| !matches!(file.content, DataContentType::Data))
@@ -182,7 +172,7 @@ pub(super) async fn plan_rewrite_data_files(
             )
         })
     })?;
-    let write_partitions = rewrite_partitions(rewritten_bytes, rewrite_options.target_file_size)?;
+    let groups = rewrite_groups(&selected_files, rewrite_options.target_file_size)?;
     let plan = RewriteDataFilesPlan {
         expected_snapshot_id,
         removed_data_file_paths: selected_data_file_paths.clone(),
@@ -206,12 +196,11 @@ pub(super) async fn plan_rewrite_data_files(
     let arrow_schema = iceberg_schema_to_arrow(current_schema)?;
     let scan_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
     let scan = LogicalPlan::Extension(Extension {
-        node: Arc::new(RewriteDataFilesScanNode::try_new(
+        node: Arc::new(RewriteDataFilesScanNode::new(
             table.table_url().to_string(),
-            current_snapshot,
-            selected_data_file_paths,
+            groups,
             scan_schema,
-        )?),
+        )),
     });
     let partition_by = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer = LogicalPlan::Extension(Extension {
@@ -227,7 +216,7 @@ pub(super) async fn plan_rewrite_data_files(
                 lakehouse_table,
                 defer_commit: true,
                 target_file_size: Some(rewrite_options.target_file_size),
-                write_partitions: Some(write_partitions),
+                preserve_input_partitions: true,
             },
         )),
     });
@@ -263,6 +252,31 @@ struct RewriteOptions {
     min_file_size: u64,
     max_file_size: u64,
     min_input_files: usize,
+}
+
+/// Only retain fields needed for grouping; manifest column metrics stay out of the driver plan.
+struct RewriteFile {
+    content: DataContentType,
+    file_path: String,
+    file_format: DataFileFormat,
+    partition: Vec<Option<Literal>>,
+    record_count: u64,
+    file_size_in_bytes: u64,
+    partition_spec_id: i32,
+}
+
+impl From<DataFile> for RewriteFile {
+    fn from(file: DataFile) -> Self {
+        Self {
+            content: file.content,
+            file_path: file.file_path,
+            file_format: file.file_format,
+            partition: file.partition,
+            record_count: file.record_count,
+            file_size_in_bytes: file.file_size_in_bytes,
+            partition_spec_id: file.partition_spec_id,
+        }
+    }
 }
 
 fn rewrite_options(
@@ -331,9 +345,9 @@ fn rewrite_options(
 }
 
 fn select_files<'a>(
-    live_files: &'a [crate::spec::DataFile],
+    live_files: &'a [RewriteFile],
     options: &RewriteOptions,
-) -> Result<Vec<&'a crate::spec::DataFile>> {
+) -> Result<Vec<&'a RewriteFile>> {
     let mut candidate_groups = HashMap::new();
     for file in live_files
         .iter()
@@ -370,14 +384,46 @@ fn select_files<'a>(
     Ok(selected)
 }
 
-fn rewrite_partitions(rewritten_bytes: u64, target_file_size: u64) -> Result<usize> {
-    let expected_files = rewritten_bytes.div_ceil(target_file_size).max(1);
-    let expected_files = usize::try_from(expected_files).map_err(|error| {
-        datafusion_common::DataFusionError::Plan(format!(
-            "rewrite_data_files output partition count overflow: {error}"
-        ))
-    })?;
-    Ok(expected_files.min(MAX_REWRITE_PARTITIONS))
+fn rewrite_groups(files: &[&RewriteFile], target_size: u64) -> Result<Vec<Vec<IcebergFileTask>>> {
+    let mut partitions = HashMap::new();
+    for file in files {
+        if file.file_format != DataFileFormat::Parquet {
+            return not_impl_err!("rewrite_data_files supports only Parquet data files");
+        }
+        partitions
+            .entry((file.partition_spec_id, file.partition.clone()))
+            .or_insert_with(Vec::new)
+            .push(IcebergFileTask {
+                path: file.file_path.clone(),
+                size: file.file_size_in_bytes,
+                records: file.record_count,
+                spec_id: file.partition_spec_id,
+            });
+    }
+    let mut groups = Vec::new();
+    for files in partitions.into_values() {
+        let bytes = files.iter().try_fold(0u64, |total, file| {
+            total.checked_add(file.size).ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!("rewrite_data_files group size overflow")
+            })
+        })?;
+        let count = usize::try_from(bytes.div_ceil(target_size).max(1))
+            .unwrap_or(usize::MAX)
+            .min(files.len());
+        groups.extend(balance_by_size(files, count, |file| file.size));
+    }
+    for group in &mut groups {
+        group.sort_by(|left, right| left.path.cmp(&right.path));
+    }
+    groups.sort_by(|left, right| {
+        left.first()
+            .map(|file| &file.path)
+            .cmp(&right.first().map(|file| &file.path))
+    });
+    if groups.is_empty() {
+        groups.push(vec![]);
+    }
+    Ok(groups)
 }
 
 fn option_u64(options: &BTreeMap<String, String>, name: &str) -> Result<Option<u64>> {
@@ -406,35 +452,18 @@ fn option_bool(options: &BTreeMap<String, String>, name: &str) -> Result<Option<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::spec::{DataFile, DataFileFormat, Literal, PrimitiveLiteral};
+    use crate::spec::PrimitiveLiteral;
 
-    fn data_file(path: &str, size: u64, partition: i32) -> DataFile {
-        DataFile {
+    fn data_file(path: &str, size: u64, partition: i32) -> RewriteFile {
+        RewriteFile {
             content: DataContentType::Data,
             file_path: path.to_string(),
             file_format: DataFileFormat::Parquet,
             partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(partition)))],
             record_count: 1,
             file_size_in_bytes: size,
-            column_sizes: HashMap::new(),
-            value_counts: HashMap::new(),
-            null_value_counts: HashMap::new(),
-            nan_value_counts: HashMap::new(),
-            lower_bounds: HashMap::new(),
-            upper_bounds: HashMap::new(),
-            block_size_in_bytes: None,
-            key_metadata: None,
-            split_offsets: vec![],
-            equality_ids: vec![],
-            sort_order_id: None,
-            first_row_id: None,
             partition_spec_id: 0,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
         }
     }
 
@@ -464,10 +493,26 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_parallelism_tracks_expected_outputs_with_a_safe_cap() -> Result<()> {
-        assert_eq!(rewrite_partitions(0, 100)?, 1);
-        assert_eq!(rewrite_partitions(201, 100)?, 3);
-        assert_eq!(rewrite_partitions(1_000, 100)?, MAX_REWRITE_PARTITIONS);
+    fn rewrite_groups_scale_and_keep_partitions_separate() -> Result<()> {
+        let files = (0..20)
+            .map(|index| data_file(&format!("file-{index:02}"), 60, index % 2))
+            .collect::<Vec<_>>();
+        let selected = files.iter().collect::<Vec<_>>();
+        let groups = rewrite_groups(&selected, 100)?;
+        assert_eq!(groups.len(), 12);
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), files.len());
+        for group in groups {
+            let partitions = group
+                .iter()
+                .map(|task| {
+                    files
+                        .iter()
+                        .find(|file| file.file_path == task.path)
+                        .map(|file| file.partition.clone())
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(partitions.len(), 1);
+        }
         Ok(())
     }
 }

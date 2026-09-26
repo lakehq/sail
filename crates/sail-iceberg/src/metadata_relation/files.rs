@@ -6,12 +6,10 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, Schem
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 
 use crate::datasource::type_converter::iceberg_type_to_arrow;
-use crate::io::{load_manifest, load_manifest_list_with_version};
 use crate::spec::schema::visit_fields_bfs;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
-use crate::spec::{DataContentType, DataFile, DataFileFormat, ManifestStatus, TableMetadata};
-use crate::table::Table;
+use crate::spec::{DataContentType, DataFile, DataFileFormat, TableMetadata};
 use crate::utils::conversions::to_scalar;
 
 #[derive(Clone)]
@@ -21,7 +19,7 @@ struct ReadableField {
     primitive: PrimitiveType,
 }
 
-pub(super) fn schema(metadata: &TableMetadata) -> Result<SchemaRef> {
+pub(crate) fn schema(metadata: &TableMetadata) -> Result<SchemaRef> {
     let partition_type = unified_partition_type(metadata)?;
     let readable_fields = readable_fields(metadata)?;
     let mut fields = vec![
@@ -95,84 +93,111 @@ pub(super) fn schema(metadata: &TableMetadata) -> Result<SchemaRef> {
     Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
-pub(super) async fn batch(table: &Table) -> Result<RecordBatch> {
-    let metadata = table.metadata();
-    let output_schema = schema(metadata)?;
-    let partition_type = unified_partition_type(metadata)?;
-    let readable_fields = readable_fields(metadata)?;
-    let files = current_live_files(table).await?;
-    if files.is_empty() {
-        let columns = output_schema
-            .fields()
-            .iter()
-            .map(|field| new_empty_array(field.data_type()))
-            .collect();
-        return RecordBatch::try_new(output_schema, columns).map_err(Into::into);
-    }
-
-    let mut columns = vec![Vec::with_capacity(files.len()); output_schema.fields().len()];
-    for file in &files {
-        let values = file_values(metadata, file, &partition_type, &readable_fields)?;
-        if values.len() != columns.len() {
-            return Err(DataFusionError::Internal(format!(
-                "Iceberg files row has {} values for a {}-column schema",
-                values.len(),
-                columns.len()
-            )));
-        }
-        for (column, value) in columns.iter_mut().zip(values) {
-            column.push(value);
-        }
-    }
-    let columns = columns
-        .into_iter()
-        .map(ScalarValue::iter_to_array)
-        .collect::<Result<Vec<ArrayRef>>>()?;
-    RecordBatch::try_new(output_schema, columns).map_err(Into::into)
+pub(crate) struct FilesProjection<'a> {
+    metadata: &'a TableMetadata,
+    schema: SchemaRef,
+    partition_type: StructType,
+    readable_fields: Vec<ReadableField>,
 }
 
-fn file_values(
+impl<'a> FilesProjection<'a> {
+    pub(crate) fn try_new(metadata: &'a TableMetadata, projection: &[usize]) -> Result<Self> {
+        let schema = Arc::new(schema(metadata)?.project(projection)?);
+        let partition_type = unified_partition_type(metadata)?;
+        let readable_fields = if schema
+            .fields()
+            .iter()
+            .any(|field| field.name() == "readable_metrics")
+        {
+            readable_fields(metadata)?
+        } else {
+            vec![]
+        };
+        Ok(Self {
+            metadata,
+            schema,
+            partition_type,
+            readable_fields,
+        })
+    }
+
+    pub(crate) fn batch(&self, files: &[DataFile]) -> Result<RecordBatch> {
+        if files.is_empty() {
+            let columns = self
+                .schema
+                .fields()
+                .iter()
+                .map(|field| new_empty_array(field.data_type()))
+                .collect();
+            return RecordBatch::try_new(self.schema.clone(), columns).map_err(Into::into);
+        }
+        let mut columns = vec![Vec::with_capacity(files.len()); self.schema.fields().len()];
+        for file in files {
+            for (column, field) in columns.iter_mut().zip(self.schema.fields()) {
+                column.push(file_value(
+                    self.metadata,
+                    file,
+                    &self.partition_type,
+                    &self.readable_fields,
+                    field.name(),
+                )?);
+            }
+        }
+        let columns = columns
+            .into_iter()
+            .map(ScalarValue::iter_to_array)
+            .collect::<Result<Vec<ArrayRef>>>()?;
+        RecordBatch::try_new_with_options(
+            self.schema.clone(),
+            columns,
+            &datafusion::arrow::array::RecordBatchOptions::new().with_row_count(Some(files.len())),
+        )
+        .map_err(Into::into)
+    }
+}
+
+fn file_value(
     metadata: &TableMetadata,
     file: &DataFile,
     partition_type: &StructType,
     readable_fields: &[ReadableField],
-) -> Result<Vec<ScalarValue>> {
-    let mut values = vec![
-        ScalarValue::Int32(Some(match file.content {
+    name: &str,
+) -> Result<ScalarValue> {
+    Ok(match name {
+        "content" => ScalarValue::Int32(Some(match file.content {
             DataContentType::Data => 0,
             DataContentType::PositionDeletes => 1,
             DataContentType::EqualityDeletes => 2,
         })),
-        ScalarValue::Utf8(Some(file.file_path.clone())),
-        ScalarValue::Utf8(Some(file_format_name(file.file_format).to_string())),
-        ScalarValue::Int32(Some(file.partition_spec_id)),
-    ];
-    if !partition_type.fields().is_empty() {
-        values.push(partition_value(metadata, file, partition_type)?);
-    }
-    values.extend([
-        ScalarValue::Int64(Some(u64_to_i64(file.record_count, "record_count")?)),
-        ScalarValue::Int64(Some(u64_to_i64(
-            file.file_size_in_bytes,
-            "file_size_in_bytes",
-        )?)),
-        count_map_scalar(&file.column_sizes)?,
-        count_map_scalar(&file.value_counts)?,
-        count_map_scalar(&file.null_value_counts)?,
-        count_map_scalar(&file.nan_value_counts)?,
-        bound_map_scalar(&file.lower_bounds)?,
-        bound_map_scalar(&file.upper_bounds)?,
-        ScalarValue::Binary(file.key_metadata.clone()),
-        i64_list_scalar(&file.split_offsets)?,
-        i32_list_scalar(&file.equality_ids)?,
-        ScalarValue::Int32(file.sort_order_id),
-        ScalarValue::Int64(file.first_row_id),
-        ScalarValue::Utf8(file.referenced_data_file.clone()),
-        ScalarValue::Int64(file.content_offset),
-        ScalarValue::Int64(file.content_size_in_bytes),
-        readable_metrics_scalar(file, readable_fields)?,
-    ]);
-    Ok(values)
+        "file_path" => ScalarValue::Utf8(Some(file.file_path.clone())),
+        "file_format" => ScalarValue::Utf8(Some(file_format_name(file.file_format).to_string())),
+        "spec_id" => ScalarValue::Int32(Some(file.partition_spec_id)),
+        "partition" => partition_value(metadata, file, partition_type)?,
+        "record_count" => ScalarValue::Int64(Some(u64_to_i64(file.record_count, name)?)),
+        "file_size_in_bytes" => {
+            ScalarValue::Int64(Some(u64_to_i64(file.file_size_in_bytes, name)?))
+        }
+        "column_sizes" => count_map_scalar(&file.column_sizes)?,
+        "value_counts" => count_map_scalar(&file.value_counts)?,
+        "null_value_counts" => count_map_scalar(&file.null_value_counts)?,
+        "nan_value_counts" => count_map_scalar(&file.nan_value_counts)?,
+        "lower_bounds" => bound_map_scalar(&file.lower_bounds)?,
+        "upper_bounds" => bound_map_scalar(&file.upper_bounds)?,
+        "key_metadata" => ScalarValue::Binary(file.key_metadata.clone()),
+        "split_offsets" => i64_list_scalar(&file.split_offsets)?,
+        "equality_ids" => i32_list_scalar(&file.equality_ids)?,
+        "sort_order_id" => ScalarValue::Int32(file.sort_order_id),
+        "first_row_id" => ScalarValue::Int64(file.first_row_id),
+        "referenced_data_file" => ScalarValue::Utf8(file.referenced_data_file.clone()),
+        "content_offset" => ScalarValue::Int64(file.content_offset),
+        "content_size_in_bytes" => ScalarValue::Int64(file.content_size_in_bytes),
+        "readable_metrics" => readable_metrics_scalar(file, readable_fields)?,
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Unknown Iceberg file metadata column: {name}"
+            )));
+        }
+    })
 }
 
 fn count_map_type() -> Type {
@@ -512,42 +537,4 @@ fn file_format_name(format: DataFileFormat) -> &'static str {
         DataFileFormat::Parquet => "PARQUET",
         DataFileFormat::Puffin => "PUFFIN",
     }
-}
-
-/// Loads the live content-file entries referenced by the current snapshot.
-///
-/// The manifest entry carries the file's own spec ID only in newer encodings, so the authoritative
-/// manifest-list value is copied onto every returned file.
-pub(crate) async fn current_live_files(table: &Table) -> Result<Vec<DataFile>> {
-    let metadata = table.metadata();
-    let Some(snapshot) = metadata.current_snapshot() else {
-        return Ok(Vec::new());
-    };
-    if snapshot.manifest_list().is_empty() {
-        return Err(DataFusionError::NotImplemented(
-            "Iceberg files metadata table does not yet support V1 snapshots without a manifest list"
-                .to_string(),
-        ));
-    }
-    let manifest_list = load_manifest_list_with_version(
-        table.store_context(),
-        snapshot.manifest_list(),
-        metadata.format_version,
-    )
-    .await?;
-    let mut files = Vec::new();
-    for manifest_file in manifest_list.entries() {
-        let manifest = load_manifest(table.store_context(), &manifest_file.manifest_path).await?;
-        for entry in manifest.entries().iter().filter(|entry| {
-            matches!(
-                entry.status,
-                ManifestStatus::Added | ManifestStatus::Existing
-            )
-        }) {
-            let mut file = entry.data_file.clone();
-            file.partition_spec_id = manifest_file.partition_spec_id;
-            files.push(file);
-        }
-    }
-    Ok(files)
 }

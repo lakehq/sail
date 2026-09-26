@@ -1,6 +1,6 @@
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureField,
-    LakeProcedureParameter, LakeProcedureRetryPolicy, LakeProcedureTarget,
+    LakeProcedureParameter, LakeProcedureTarget,
 };
 
 /// Procedures in the Iceberg catalog's `system` namespace.
@@ -206,10 +206,6 @@ impl IcebergProcedureType {
             output,
             access,
             target: LakeProcedureTarget::table("table"),
-            retry_policy: match access {
-                LakeProcedureAccess::MetadataRead => LakeProcedureRetryPolicy::Safe,
-                LakeProcedureAccess::MetadataCommit => LakeProcedureRetryPolicy::Forbidden,
-            },
         })
     }
 

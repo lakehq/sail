@@ -139,7 +139,7 @@ impl DataSource for IcebergLakeSource {
                     lakehouse_table,
                     defer_commit: false,
                     target_file_size: None,
-                    write_partitions: None,
+                    preserve_input_partitions: false,
                 },
             )),
         }))
@@ -383,8 +383,8 @@ pub struct IcebergWriteNodeOptions {
     pub defer_commit: bool,
     /// Operation-specific Parquet target size. Ordinary writes use the writer default.
     pub target_file_size: Option<u64>,
-    /// Operation-specific writer parallelism. Ordinary writes use the builder default.
-    pub write_partitions: Option<usize>,
+    /// Keep independently planned file groups together through their writers.
+    pub preserve_input_partitions: bool,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -466,7 +466,7 @@ pub(crate) async fn plan_iceberg_write(
         lakehouse_table,
         defer_commit,
         target_file_size,
-        write_partitions,
+        preserve_input_partitions,
     } = node.options().clone();
 
     let mut mode = match mode {
@@ -539,8 +539,12 @@ pub(crate) async fn plan_iceberg_write(
 
     let table = if let Ok(metadata_path) = &exists_res {
         Some(
-            Table::load_with_metadata_location(ctx, table_url.clone(), Some(metadata_path.clone()))
-                .await?,
+            Table::load_with_metadata_location(
+                ctx.runtime_env().as_ref(),
+                table_url.clone(),
+                Some(metadata_path.clone()),
+            )
+            .await?,
         )
     } else {
         None
@@ -641,8 +645,8 @@ pub(crate) async fn plan_iceberg_write(
         physical_sort,
         ctx,
     );
-    if let Some(write_partitions) = write_partitions {
-        builder = builder.with_write_partitions(write_partitions)?;
+    if preserve_input_partitions {
+        builder = builder.preserve_input_partitions();
     }
     if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
         builder = builder
@@ -800,8 +804,12 @@ pub(crate) async fn load_iceberg_read_table(
     read_purpose: IcebergReadPurpose,
 ) -> Result<(Table, IcebergReadOptions)> {
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
-    let table =
-        Table::load_with_metadata_location(ctx, read.table_url, read.metadata_location).await?;
+    let table = Table::load_with_metadata_location(
+        ctx.runtime_env().as_ref(),
+        read.table_url,
+        read.metadata_location,
+    )
+    .await?;
     Ok((table, read.options))
 }
 

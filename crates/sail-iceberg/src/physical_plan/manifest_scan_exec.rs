@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -61,7 +60,6 @@ pub struct IcebergManifestScanExec {
     snapshot: Snapshot,
     pruning: ManifestPruning,
     output_schema: SchemaRef,
-    selected_data_file_paths: Option<Vec<String>>,
     cache: Arc<PlanProperties>,
 }
 
@@ -79,14 +77,8 @@ impl IcebergManifestScanExec {
             snapshot,
             pruning,
             output_schema,
-            selected_data_file_paths: None,
             cache,
         }
-    }
-
-    pub fn with_selected_data_file_paths(mut self, paths: Vec<String>) -> Self {
-        self.selected_data_file_paths = Some(paths);
-        self
     }
 
     pub fn table_url(&self) -> &str {
@@ -99,10 +91,6 @@ impl IcebergManifestScanExec {
 
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
-    }
-
-    pub fn selected_data_file_paths(&self) -> Option<&[String]> {
-        self.selected_data_file_paths.as_deref()
     }
 }
 
@@ -181,7 +169,6 @@ impl ExecutionPlan for IcebergManifestScanExec {
     ) -> Result<SendableRecordBatchStream> {
         let table_url = self.table_url.clone();
         let snapshot = self.snapshot.clone();
-        let selected_data_file_paths = self.selected_data_file_paths.clone();
         let schema = self.output_schema.clone();
         let pruning = self.pruning.clone();
 
@@ -221,138 +208,95 @@ impl ExecutionPlan for IcebergManifestScanExec {
                 .cloned()
                 .collect();
 
-            let selected_data_file_paths =
-                selected_data_file_paths.map(|paths| paths.into_iter().collect::<HashSet<_>>());
-            Ok::<_, DataFusionError>((
-                store_ctx,
-                data_manifests,
-                schema,
-                selected_data_file_paths,
-                pruning,
-            ))
+            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema, pruning))
         };
 
         // Phase 2: Stream one RecordBatch per manifest file to cap peak memory usage
         // and improve time-to-first-row for large tables.
         let stream = stream::once(init)
-            .map_ok(
-                |(store_ctx, manifests, schema, selected_data_file_paths, pruning)| {
-                    stream::try_unfold(
-                        (
-                            store_ctx,
-                            manifests,
-                            0usize,
-                            schema,
-                            selected_data_file_paths,
-                            pruning,
-                        ),
-                        |(
-                            store_ctx,
-                            manifests,
-                            mut idx,
-                            schema,
-                            selected_data_file_paths,
-                            mut pruning,
-                        )| async move {
-                            while idx < manifests.len() {
+            .map_ok(|(store_ctx, manifests, schema, pruning)| {
+                stream::try_unfold(
+                    (store_ctx, manifests, 0usize, schema, pruning),
+                    |(store_ctx, manifests, mut idx, schema, mut pruning)| async move {
+                        while idx < manifests.len() {
+                            if pruning.limit == Some(0) {
+                                return Ok(None);
+                            }
+                            let manifest_path = manifests[idx].manifest_path.clone();
+                            let partition_spec_id = manifests[idx].partition_spec_id;
+                            idx += 1;
+
+                            let manifest =
+                                io_load_manifest(&store_ctx, manifest_path.as_str()).await?;
+
+                            let mut file_paths = Vec::new();
+                            let mut file_formats = Vec::new();
+                            let mut record_counts = Vec::new();
+                            let mut file_sizes = Vec::new();
+                            let mut partition_spec_ids = Vec::new();
+                            let mut content_types = Vec::new();
+                            let mut nan_free = Vec::new();
+
+                            for entry_ref in manifest.entries() {
                                 if pruning.limit == Some(0) {
-                                    return Ok(None);
+                                    break;
                                 }
-                                let manifest_path = manifests[idx].manifest_path.clone();
-                                let partition_spec_id = manifests[idx].partition_spec_id;
-                                idx += 1;
-
-                                let manifest =
-                                    io_load_manifest(&store_ctx, manifest_path.as_str()).await?;
-
-                                let mut file_paths = Vec::new();
-                                let mut file_formats = Vec::new();
-                                let mut record_counts = Vec::new();
-                                let mut file_sizes = Vec::new();
-                                let mut partition_spec_ids = Vec::new();
-                                let mut content_types = Vec::new();
-                                let mut nan_free = Vec::new();
-
-                                for entry_ref in manifest.entries() {
-                                    if pruning.limit == Some(0) {
-                                        break;
-                                    }
-                                    let entry = entry_ref.as_ref();
-                                    if !matches!(
-                                        entry.status,
-                                        ManifestStatus::Added | ManifestStatus::Existing
-                                    ) {
-                                        continue;
-                                    }
-
-                                    let df = &entry.data_file;
-                                    if selected_data_file_paths
-                                        .as_ref()
-                                        .is_some_and(|paths| !paths.contains(df.file_path()))
-                                    {
-                                        continue;
-                                    }
-                                    let spec = pruning
-                                        .specs
-                                        .iter()
-                                        .find(|spec| spec.spec_id() == partition_spec_id);
-                                    if !pruning.predicate.file(df, spec).may_match() {
-                                        continue;
-                                    }
-                                    if let Some(remaining) = &mut pruning.limit {
-                                        *remaining = remaining.saturating_sub(
-                                            usize::try_from(df.record_count())
-                                                .unwrap_or(usize::MAX),
-                                        );
-                                    }
-                                    file_paths.push(df.file_path().to_string());
-                                    file_formats.push(df.file_format().as_action_str().to_string());
-                                    record_counts.push(df.record_count());
-                                    file_sizes.push(df.file_size_in_bytes());
-                                    partition_spec_ids.push(partition_spec_id);
-                                    content_types
-                                        .push(df.content_type().as_action_str().to_string());
-                                    nan_free.push(pruning.floating_field_ids.as_ref().is_some_and(
-                                        |ids| {
-                                            ids.iter()
-                                                .all(|id| df.nan_value_counts.get(id) == Some(&0))
-                                        },
-                                    ));
-                                }
-
-                                if file_paths.is_empty() {
+                                let entry = entry_ref.as_ref();
+                                if !matches!(
+                                    entry.status,
+                                    ManifestStatus::Added | ManifestStatus::Existing
+                                ) {
                                     continue;
                                 }
 
-                                let batch = RecordBatch::try_new(
-                                    schema.clone(),
-                                    vec![
-                                        Arc::new(StringArray::from(file_paths)),
-                                        Arc::new(StringArray::from(file_formats)),
-                                        Arc::new(UInt64Array::from(record_counts)),
-                                        Arc::new(UInt64Array::from(file_sizes)),
-                                        Arc::new(Int32Array::from(partition_spec_ids)),
-                                        Arc::new(StringArray::from(content_types)),
-                                        Arc::new(BooleanArray::from(nan_free)),
-                                    ],
-                                )?;
-                                return Ok(Some((
-                                    batch,
-                                    (
-                                        store_ctx,
-                                        manifests,
-                                        idx,
-                                        schema,
-                                        selected_data_file_paths,
-                                        pruning,
-                                    ),
-                                )));
+                                let df = &entry.data_file;
+                                let spec = pruning
+                                    .specs
+                                    .iter()
+                                    .find(|spec| spec.spec_id() == partition_spec_id);
+                                if !pruning.predicate.file(df, spec).may_match() {
+                                    continue;
+                                }
+                                if let Some(remaining) = &mut pruning.limit {
+                                    *remaining = remaining.saturating_sub(
+                                        usize::try_from(df.record_count()).unwrap_or(usize::MAX),
+                                    );
+                                }
+                                file_paths.push(df.file_path().to_string());
+                                file_formats.push(df.file_format().as_action_str().to_string());
+                                record_counts.push(df.record_count());
+                                file_sizes.push(df.file_size_in_bytes());
+                                partition_spec_ids.push(partition_spec_id);
+                                content_types.push(df.content_type().as_action_str().to_string());
+                                nan_free.push(pruning.floating_field_ids.as_ref().is_some_and(
+                                    |ids| {
+                                        ids.iter().all(|id| df.nan_value_counts.get(id) == Some(&0))
+                                    },
+                                ));
                             }
-                            Ok(None)
-                        },
-                    )
-                },
-            )
+
+                            if file_paths.is_empty() {
+                                continue;
+                            }
+
+                            let batch = RecordBatch::try_new(
+                                schema.clone(),
+                                vec![
+                                    Arc::new(StringArray::from(file_paths)),
+                                    Arc::new(StringArray::from(file_formats)),
+                                    Arc::new(UInt64Array::from(record_counts)),
+                                    Arc::new(UInt64Array::from(file_sizes)),
+                                    Arc::new(Int32Array::from(partition_spec_ids)),
+                                    Arc::new(StringArray::from(content_types)),
+                                    Arc::new(BooleanArray::from(nan_free)),
+                                ],
+                            )?;
+                            return Ok(Some((batch, (store_ctx, manifests, idx, schema, pruning))));
+                        }
+                        Ok(None)
+                    },
+                )
+            })
             .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(

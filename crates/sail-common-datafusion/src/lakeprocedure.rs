@@ -149,13 +149,6 @@ impl LakeProcedureTarget {
     }
 }
 
-/// Whether the distributed scheduler may automatically re-run the procedure.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum LakeProcedureRetryPolicy {
-    Safe,
-    Forbidden,
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LakeProcedure {
     pub name: String,
@@ -163,7 +156,6 @@ pub struct LakeProcedure {
     pub output: Vec<LakeProcedureField>,
     pub access: LakeProcedureAccess,
     pub target: LakeProcedureTarget,
-    pub retry_policy: LakeProcedureRetryPolicy,
 }
 
 impl LakeProcedure {
@@ -362,7 +354,6 @@ mod tests {
             )],
             access: LakeProcedureAccess::MetadataRead,
             target: LakeProcedureTarget::Catalog,
-            retry_policy: LakeProcedureRetryPolicy::Safe,
         }
     }
 

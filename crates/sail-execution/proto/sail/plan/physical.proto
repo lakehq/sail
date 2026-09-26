@@ -73,6 +73,8 @@ message ExtendedPhysicalPlanNode {
     IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
     LakeProcedureExecNode lake_procedure = 59;
     IcebergProcedureExecNode iceberg_procedure = 60;
+    IcebergMetadataRelationExecNode iceberg_metadata_relation = 61;
+    IcebergFileTasksExecNode iceberg_file_tasks = 62;
   }
 }
 
@@ -1062,9 +1064,6 @@ message IcebergManifestScanExecNode {
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
   string pruning_json = 3;
-  // Whether selected_data_file_paths is an allowlist. False means scan all live data files.
-  bool filter_data_files = 4;
-  repeated string selected_data_file_paths = 5;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1082,6 +1081,7 @@ message IcebergScanByDataFilesExecNode {
   bool has_projection = 5;
   optional bytes predicate = 6;
   optional uint64 limit = 7;
+  bool preserve_file_groups = 8;
 }
 
 message IcebergMetadataScanExecNode {
@@ -1229,4 +1229,13 @@ message BarrierExecNode {
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+message IcebergMetadataRelationExecNode {
+  bytes schema = 1;
+  string scan = 2;
+}
+
+message IcebergFileTasksExecNode {
+  string groups = 1;
 }

@@ -21,6 +21,37 @@ Feature: Iceberg Query Optimization
         """
       Then query plan matches snapshot
 
+    Scenario: Metadata files use a projected manifest scan
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN SELECT file_path, record_count FROM procedure_plan_table.files
+        """
+      Then query plan matches snapshot
+
+    Scenario: Rewrite uses planned file groups
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN CALL system.rewrite_data_files(
+          table => 'procedure_plan_table', options => map('rewrite-all', 'true'))
+        """
+      Then query plan matches snapshot
+
   Rule: Verify EXPLAIN output for partition pruning
     Background:
       Given variable location for temporary directory iceberg_explain_prune

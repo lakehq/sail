@@ -5,11 +5,11 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema};
 use datafusion::common::Result;
 
-use super::{files, history, manifests, metadata_log_entries, refs, snapshots};
+use super::{history, manifests, metadata_log_entries, refs, snapshots};
 use crate::table::Table;
 
 /// Metadata relations owned by an Iceberg table rather than by its catalog.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum IcebergMetadataRelationType {
     /// Manifest entries in the current snapshot, including their add/delete status and sequence
     /// lineage.
@@ -130,7 +130,7 @@ impl IcebergMetadataRelationType {
         }
     }
 
-    pub(super) async fn record_batch(self, table: &Table) -> Result<RecordBatch> {
+    pub(crate) async fn record_batch(self, table: &Table) -> Result<RecordBatch> {
         match self {
             Self::History => history::batch(table.metadata()),
             Self::MetadataLogEntries => {
@@ -139,7 +139,9 @@ impl IcebergMetadataRelationType {
             Self::Refs => refs::batch(table.metadata()),
             Self::Snapshots => snapshots::batch(table.metadata()),
             Self::Manifests => manifests::batch(table).await,
-            Self::Files => files::batch(table).await,
+            Self::Files => Err(datafusion::common::DataFusionError::Internal(
+                "files requires a manifest scan".to_string(),
+            )),
             unsupported => Err(datafusion::common::DataFusionError::NotImplemented(
                 unsupported.unsupported_reason(),
             )),

@@ -1,8 +1,6 @@
-use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
-use object_store::ObjectStoreExt;
 
 use super::operation::SnapshotOperation;
 use crate::catalog_support::commit::{
@@ -14,13 +12,13 @@ use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
     resolve_iceberg_metadata_location,
 };
-use crate::spec::metadata::table_metadata::{MetadataLog, SnapshotLog};
-use crate::spec::snapshots::MAIN_BRANCH;
-use crate::spec::{TableMetadata, TableUpdate};
+use crate::operations::metadata_commit::{
+    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, apply_snapshot_updates,
+};
+use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
-    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string,
-    table_metadata_location, write_version_hint,
+    load_metadata_file_bytes, metadata_file_version_from_path,
+    metadata_location_to_object_path_string,
 };
 use crate::utils::metadata::metadata_files_for_version;
 
@@ -122,64 +120,23 @@ pub(in crate::procedure) async fn commit_snapshot_operation(
                 return Err(procedure_commit_conflict());
             }
         }
-        apply_snapshot_update(
+        apply_snapshot_updates(
             &mut metadata,
-            &prepared.update,
+            std::slice::from_ref(&prepared.update),
             metadata_location.as_deref().unwrap_or(&metadata_file),
         )?;
-        let metadata_json = metadata
-            .to_json()
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let extension = metadata_file_extension_from_properties(&metadata.properties)?;
-        let new_metadata_file = if use_metadata_location_fallback {
-            format!(
-                "metadata/{next_version:05}-{}{extension}",
-                uuid::Uuid::new_v4()
-            )
+        let style = if use_metadata_location_fallback {
+            MetadataFileStyle::Unique
         } else {
-            format!("metadata/v{next_version}{extension}")
+            MetadataFileStyle::Versioned
         };
-        let new_metadata_location = table_metadata_location(table_url, &new_metadata_file)?;
-        let encoded = encode_metadata_file(&new_metadata_file, &metadata_json)
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let metadata_path = object_store::path::Path::from(new_metadata_file.as_str());
-        let result = store_context
-            .prefixed
-            .put_opts(
-                &metadata_path,
-                object_store::PutPayload::from(Bytes::from(encoded)),
-                object_store::PutOptions {
-                    mode: object_store::PutMode::Create,
-                    ..Default::default()
-                },
-            )
-            .await;
-        match result {
-            Ok(_) => {}
-            Err(object_store::Error::AlreadyExists { .. })
-                if attempt < MAX_PROCEDURE_COMMIT_RETRIES =>
-            {
-                continue;
-            }
-            Err(object_store::Error::AlreadyExists { .. }) => {
-                return Err(procedure_commit_conflict());
-            }
-            Err(error) => return Err(DataFusionError::External(Box::new(error))),
+        let prepared_metadata =
+            MetadataFileCommit::prepare(table_url, &metadata, next_version, style)?;
+        match prepared_metadata.write(&store_context).await? {
+            MetadataWriteOutcome::Written => {}
+            MetadataWriteOutcome::Conflict if attempt < MAX_PROCEDURE_COMMIT_RETRIES => continue,
+            MetadataWriteOutcome::Conflict => return Err(procedure_commit_conflict()),
         }
-        if !use_metadata_location_fallback {
-            let version_files = metadata_files_for_version(&store_context, next_version).await?;
-            if version_files
-                .iter()
-                .any(|candidate| candidate != &new_metadata_file)
-            {
-                let _ = store_context.prefixed.delete(&metadata_path).await;
-                if attempt < MAX_PROCEDURE_COMMIT_RETRIES {
-                    continue;
-                }
-                return Err(procedure_commit_conflict());
-            }
-        }
-
         if let Some(table) = catalog_table.as_ref()
             && (use_metadata_location_fallback
                 || matches!(commit_mode, IcebergCatalogCommitMode::Filesystem))
@@ -188,55 +145,14 @@ pub(in crate::procedure) async fn commit_snapshot_operation(
                 .update_metadata_location(
                     table_properties,
                     recorded_metadata_location.as_deref(),
-                    &new_metadata_location,
+                    prepared_metadata.location(),
                 )
                 .await?;
         }
-        let version_hint = if use_metadata_location_fallback {
-            new_metadata_file
-                .rsplit('/')
-                .next()
-                .unwrap_or(new_metadata_file.as_str())
-                .to_string()
-        } else {
-            next_version.to_string()
-        };
-        write_version_hint(&store_context.prefixed, &version_hint).await;
+        prepared_metadata.write_hint(&store_context).await;
         return Ok(prepared.output);
     }
     Err(procedure_commit_conflict())
-}
-
-fn apply_snapshot_update(
-    metadata: &mut TableMetadata,
-    update: &TableUpdate,
-    previous_metadata_file: &str,
-) -> Result<()> {
-    let TableUpdate::SetSnapshotRef {
-        ref_name,
-        reference,
-    } = update
-    else {
-        return Err(DataFusionError::Internal(
-            "Iceberg snapshot procedure produced a non-reference update".to_string(),
-        ));
-    };
-    let previous_timestamp = metadata.last_updated_ms;
-    let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
-    if ref_name == MAIN_BRANCH {
-        metadata.current_snapshot_id = Some(reference.snapshot_id);
-        metadata.snapshot_log.push(SnapshotLog {
-            timestamp_ms,
-            snapshot_id: reference.snapshot_id,
-        });
-    }
-    metadata.refs.insert(ref_name.clone(), reference.clone());
-    metadata.last_updated_ms = timestamp_ms;
-    metadata.metadata_log.push(MetadataLog {
-        timestamp_ms: previous_timestamp,
-        metadata_file: previous_metadata_file.to_string(),
-    });
-    Ok(())
 }
 
 fn procedure_commit_conflict() -> DataFusionError {

@@ -21,7 +21,6 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
 use crate::operations::SnapshotUpdateKind;
@@ -45,8 +44,7 @@ pub struct IcebergPlanBuilder<'a> {
     expected_snapshot_id: Option<Option<i64>>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
-    write_partitions: usize,
-    preserve_write_partitions: bool,
+    preserve_input_partitions: bool,
     #[expect(unused)]
     session: &'a dyn Session,
 }
@@ -67,8 +65,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             expected_snapshot_id: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
-            write_partitions: 4,
-            preserve_write_partitions: false,
+            preserve_input_partitions: false,
             session,
         }
     }
@@ -88,15 +85,9 @@ impl<'a> IcebergPlanBuilder<'a> {
         self
     }
 
-    pub fn with_write_partitions(mut self, write_partitions: usize) -> Result<Self> {
-        if write_partitions == 0 {
-            return Err(datafusion::common::DataFusionError::Plan(
-                "Iceberg writer partition count must be positive".to_string(),
-            ));
-        }
-        self.write_partitions = write_partitions;
-        self.preserve_write_partitions = true;
-        Ok(self)
+    pub fn preserve_input_partitions(mut self) -> Self {
+        self.preserve_input_partitions = true;
+        self
     }
 
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -166,8 +157,11 @@ impl<'a> IcebergPlanBuilder<'a> {
         &self,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if self.preserve_input_partitions {
+            return Ok(input);
+        }
         let repartitioning = if self.table_config.partition_columns.is_empty() {
-            Partitioning::RoundRobinBatch(self.write_partitions)
+            Partitioning::RoundRobinBatch(4)
         } else {
             let schema = input.schema();
             let partition_source_columns = self.partition_source_columns()?;
@@ -183,17 +177,10 @@ impl<'a> IcebergPlanBuilder<'a> {
                     Ok(Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Partitioning::Hash(exprs, self.write_partitions)
+            Partitioning::Hash(exprs, 4)
         };
 
-        if self.preserve_write_partitions {
-            Ok(Arc::new(ExplicitRepartitionExec::new(
-                input,
-                repartitioning,
-            )))
-        } else {
-            Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
-        }
+        Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
     }
 
     fn partition_source_columns(&self) -> Result<Vec<String>> {
@@ -229,7 +216,10 @@ impl<'a> IcebergPlanBuilder<'a> {
                 let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
                     datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
                 })?;
-                Ok(Arc::new(SortExec::new(lex, input)))
+                Ok(Arc::new(
+                    SortExec::new(lex, input)
+                        .with_preserve_partitioning(self.preserve_input_partitions),
+                ))
             }
             _ => Ok(input),
         }

@@ -40,7 +40,6 @@ pub enum TaskRunnerMessage {
     CreateLocalStream {
         key: TaskStreamKey,
         replicas: usize,
-        buffered: bool,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
