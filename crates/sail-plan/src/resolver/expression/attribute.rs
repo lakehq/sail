@@ -61,10 +61,6 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        let missing_input_schemas = state
-            .get_missing_input_schemas(schema)
-            .unwrap_or(&[])
-            .to_vec();
         let local_schema = &state.get_local_schema(schema);
         if let Some((name, expr)) =
             self.resolve_field_or_nested_field(&name, plan_id, local_schema, state)?
@@ -110,6 +106,10 @@ impl PlanResolver<'_> {
             };
             return Ok(NamedExpr::new(vec![name], expr));
         }
+        let missing_input_schemas = state
+            .get_missing_input_schemas(schema)
+            .unwrap_or(&[])
+            .to_vec();
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.
         if !missing_input_schemas.is_empty()

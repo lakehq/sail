@@ -163,6 +163,62 @@ def test_filter_missing_attribute_preserves_nulls_and_output_schema(spark):
     assert result.schema == projected.schema
 
 
+@pytest.mark.parametrize("grouped", [False, True], ids=["rows", "aggregate"])
+@pytest.mark.parametrize("operation", ["filter", "sort", "repartition"])
+def test_missing_input_recovery_preserves_complex_projection(spark, grouped, operation):
+    source = spark.createDataFrame([(1, 10), (2, None), (3, 30)], "key int, value int")
+    if grouped:
+        source = source.groupBy("key").agg(F.sum("value").alias("value"))
+    projected = source.select(
+        "key",
+        F.struct(F.col("value").alias("amount", metadata={"unit": "cents"})).alias("payload"),
+        F.array("value").alias("items", metadata={"description": "nullable elements"}),
+        F.lit(7).alias("constant"),
+    ).select("payload", "items", "constant")
+    if operation == "filter":
+        result = projected.where("key > 0 AND (payload.amount IS NULL OR payload.amount >= 10)")
+    elif operation == "sort":
+        result = projected.orderBy("key")
+    else:
+        result = projected.repartition(2, "key")
+
+    assert result.schema == projected.schema
+    assert result.schema["payload"].dataType["amount"].metadata == {"unit": "cents"}
+    assert result.schema["items"].metadata == {"description": "nullable elements"}
+    assert not result.schema["constant"].nullable
+    assert sorted(result.collect(), key=lambda row: row.payload.amount or 0) == [
+        Row(payload=Row(amount=None), items=[None], constant=7),
+        Row(payload=Row(amount=10), items=[10], constant=7),
+        Row(payload=Row(amount=30), items=[30], constant=7),
+    ]
+
+
+@pytest.mark.parametrize("grouped", [False, True], ids=["rows", "aggregate"])
+def test_unaliased_derived_tables_preserve_schema(spark, grouped):
+    source = spark.createDataFrame(
+        [(1, 10), (2, None)],
+        StructType(
+            [
+                StructField("key", IntegerType(), False, {"description": "key"}),
+                StructField("amount", IntegerType(), True, {"unit": "cents"}),
+            ]
+        ),
+    )
+    if grouped:
+        source = source.groupBy("key").agg(F.sum("amount").alias("amount", metadata={"unit": "cents"}))
+    source = source.select("key", F.struct("amount").alias("payload", metadata={"description": "value"}))
+    source.createOrReplaceTempView("derived_schema_source")
+    try:
+        result = spark.sql("SELECT * FROM (SELECT * FROM (SELECT * FROM derived_schema_source))")
+        assert result.schema == source.schema
+        assert result.orderBy("key").collect() == [
+            Row(key=1, payload=Row(amount=10)),
+            Row(key=2, payload=Row(amount=None)),
+        ]
+    finally:
+        spark.catalog.dropTempView("derived_schema_source")
+
+
 @pytest.mark.parametrize("operation", ["filter", "limit", "sort", "repartition"])
 def test_filter_missing_attribute_through_unary_plan(filter_source, operation):
     projected = filter_source.select("key", "value")

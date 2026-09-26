@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::TableReference;
+use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use sail_common::spec;
 use sail_sql_analyzer::query::AUTO_GENERATED_SUBQUERY_NAME;
@@ -72,12 +72,45 @@ impl PlanResolver<'_> {
                 .map(|(col, name)| NamedExpr::new(vec![name], Expr::Column(col)))
                 .collect();
             let mut expr = self.rewrite_named_expressions(expr, state)?;
-            for expr in &mut expr {
+            let mut fields = Vec::with_capacity(expr.len());
+            for (expr, field) in expr.iter_mut().zip(input.schema().fields()) {
                 if let Expr::Alias(expr) = expr {
                     expr.relation = Some(alias.clone());
+                    fields.push((
+                        expr.relation.clone(),
+                        Arc::new(field.as_ref().clone().with_name(expr.name.clone())),
+                    ));
                 }
             }
-            let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+            // This projection only renames fields, preserving their types, metadata,
+            // and positions. Reuse the schema instead of re-inferring every column;
+            // functional dependency indices are unchanged as well.
+            let schema = Arc::new(
+                DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
+                    .with_functional_dependencies(
+                        input.schema().functional_dependencies().clone(),
+                    )?,
+            );
+            // Each input field is used exactly once, so an existing projection can
+            // supply the expressions directly without another layer in the plan.
+            let input = if let LogicalPlan::Projection(projection) = input {
+                for (alias, expr) in expr.iter_mut().zip(projection.expr) {
+                    if let Expr::Alias(alias) = alias {
+                        match expr {
+                            Expr::Alias(inner) => {
+                                alias.expr = inner.expr;
+                                alias.metadata = inner.metadata;
+                            }
+                            expr => *alias.expr = expr,
+                        }
+                    }
+                }
+                projection.input
+            } else {
+                Arc::new(input)
+            };
+            let plan =
+                LogicalPlan::Projection(Projection::try_new_with_schema(expr, input, schema)?);
             state.register_missing_input_boundary(&plan);
             return Ok(plan);
         }

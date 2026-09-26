@@ -30,13 +30,14 @@ impl PlanResolver<'_> {
         if Arc::ptr_eq(&schema, input.schema()) {
             return Ok((resolved, input));
         }
-        let mut columns = resolved
-            .iter()
-            .flat_map(|expr| expr.column_refs())
-            .collect::<HashSet<_>>();
+        let mut columns = HashSet::new();
         for expr in &resolved {
             expr.apply(|expr| {
                 let subquery = match expr {
+                    Expr::Column(column) => {
+                        columns.insert(column);
+                        return Ok(TreeNodeRecursion::Continue);
+                    }
                     Expr::Exists(exists) => &exists.subquery,
                     Expr::InSubquery(in_subquery) => &in_subquery.subquery,
                     Expr::ScalarSubquery(subquery) => subquery,
@@ -108,9 +109,7 @@ impl PlanResolver<'_> {
         let fields = schemas
             .iter()
             .flat_map(|schema| schema.iter())
-            .filter(|(qualifier, field)| {
-                columns.insert(Column::new(qualifier.cloned(), field.name()))
-            })
+            .filter(|(qualifier, field)| columns.insert((*qualifier, field.name())))
             .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
             .collect();
         let schema = Arc::new(DFSchema::new_with_metadata(
@@ -245,18 +244,40 @@ impl PlanResolver<'_> {
         };
         if let LogicalPlan::Projection(projection) = plan {
             let mut expr = projection.expr.clone();
-            expr.extend(
-                child
-                    .schema()
-                    .columns()
-                    .into_iter()
-                    .filter(|column| missing.contains(column))
-                    .map(Expr::Column),
-            );
-            Ok(Some(LogicalPlan::Projection(Projection::try_new(
-                expr,
-                Arc::new(child),
-            )?)))
+            let mut fields = child
+                .schema()
+                .functional_dependencies()
+                .is_empty()
+                .then(|| {
+                    projection
+                        .schema
+                        .iter()
+                        .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+                        .collect::<Vec<_>>()
+                });
+            for (qualifier, field) in child.schema().iter() {
+                let column = Column::new(qualifier.cloned(), field.name());
+                if missing.contains(&column) {
+                    expr.push(Expr::Column(column));
+                    if let Some(fields) = &mut fields {
+                        fields.push((qualifier.cloned(), Arc::clone(field)));
+                    }
+                }
+            }
+            // Carrying extra columns leaves the original projection's fields unchanged.
+            // Reuse them instead of resolving every expression against the wider child
+            // again, which is quadratic in the width for column projections.
+            // Let DataFusion recompute dependencies when the input has any to propagate.
+            let projection = if let Some(fields) = fields {
+                let schema = Arc::new(DFSchema::new_with_metadata(
+                    fields,
+                    child.schema().metadata().clone(),
+                )?);
+                Projection::try_new_with_schema(expr, Arc::new(child), schema)?
+            } else {
+                Projection::try_new(expr, Arc::new(child))?
+            };
+            Ok(Some(LogicalPlan::Projection(projection)))
         } else {
             let expressions = if matches!(plan, LogicalPlan::Unnest(_)) {
                 vec![]

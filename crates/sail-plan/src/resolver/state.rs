@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
@@ -269,8 +269,25 @@ impl PlanResolverState {
 
     pub fn is_missing_input_boundary(&self, plan: &LogicalPlan) -> bool {
         // Rewriters can rebuild a projection's schema while preserving its field IDs.
-        self.missing_input_boundaries
-            .contains(&Self::missing_input_boundary_key(plan))
+        // Compare borrowed columns instead of allocating both schemas' column lists
+        // at every step of missing-input recovery.
+        let matches = |columns: &[Column], schema: &DFSchema| {
+            columns.len() == schema.fields().len()
+                && columns
+                    .iter()
+                    .map(|column| (column.relation.as_ref(), column.name.as_str()))
+                    .eq(schema
+                        .iter()
+                        .map(|(qualifier, field)| (qualifier, field.name().as_str())))
+        };
+        self.missing_input_boundaries.iter().any(|(output, input)| {
+            matches(output, plan.schema())
+                && match (input, plan.inputs().first()) {
+                    (Some(columns), Some(child)) => matches(columns, child.schema()),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
     }
 
     fn missing_input_boundary_key(plan: &LogicalPlan) -> (Vec<Column>, Option<Vec<Column>>) {
