@@ -134,7 +134,9 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // We have to remove unnecessary repartitioning explicitly here
         // since no physical optimizer will run afterward.
-        let plan = if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
+        let plan = if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>()
+            && coalesce.fetch().is_none()
+        {
             Arc::clone(coalesce.input())
         } else if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
             Arc::clone(repartition.input())
@@ -154,6 +156,26 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
 
         if join.mode != PartitionMode::CollectLeft {
             return Ok(Transformed::no(plan));
+        }
+
+        if join.null_aware {
+            // NULL and empty-input decisions require the entire probe side, and workers
+            // cannot share DataFusion's probe flags or build-side match bitmap.
+            let children = join
+                .children()
+                .into_iter()
+                .map(|input| {
+                    if input.output_partitioning().partition_count() > 1 {
+                        Arc::new(CoalescePartitionsExec::new(Arc::clone(input)))
+                            as Arc<dyn ExecutionPlan>
+                    } else {
+                        Arc::clone(input)
+                    }
+                })
+                .collect();
+            return Ok(Transformed::yes(replace_children_if_necessary(
+                plan, children,
+            )?));
         }
 
         if !matches!(
@@ -934,7 +956,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion::common::ScalarValue;
+    use datafusion::common::{JoinType, NullEquality, ScalarValue};
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
@@ -948,9 +970,12 @@ mod tests {
         Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
@@ -1004,6 +1029,102 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn hash_join_repartition_preserves_input_fetch() {
+        for join_type in [
+            JoinType::Left,
+            JoinType::LeftAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftMark,
+            JoinType::Full,
+        ] {
+            for limited_side in [0, 1] {
+                for fetch in [0, 3] {
+                    let inputs = [0, 1].map(|side| {
+                        let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+                        if side == limited_side {
+                            Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(fetch)))
+                                as Arc<dyn ExecutionPlan>
+                        } else {
+                            input
+                        }
+                    });
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        Arc::clone(&inputs[0]),
+                        Arc::clone(&inputs[1]),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &join_type,
+                        None,
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap();
+                    let graph =
+                        JobGraph::try_new(Arc::new(join), flight_shuffle_options()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    let join = stage.plan.downcast_ref::<HashJoinExec>().unwrap();
+                    assert_eq!(*join.partition_mode(), PartitionMode::Partitioned);
+                    let input = join.children()[limited_side]
+                        .downcast_ref::<StageInputExec<usize>>()
+                        .unwrap();
+                    let producer = &graph.stages[stage.inputs[*input.input()].stage];
+                    let limit = producer.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+                    assert_eq!(limit.skip(), 0);
+                    assert_eq!(limit.fetch(), Some(fetch));
+                    assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn null_aware_hash_join_consumes_both_inputs_in_one_task() {
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            for (left_partitions, right_partitions) in [(1, 1), (1, 4), (4, 1), (4, 4)] {
+                for null_aware in [false, true] {
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        UnionExec::try_new(vec![empty_plan(); left_partitions]).unwrap(),
+                        UnionExec::try_new(vec![empty_plan(); right_partitions]).unwrap(),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &JoinType::LeftAnti,
+                        Some(vec![0]),
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        null_aware,
+                    )
+                    .unwrap();
+                    let expected_schema = join.schema();
+                    let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    let join = stage.plan.downcast_ref::<HashJoinExec>().unwrap();
+                    assert_eq!(join.null_aware, null_aware);
+                    assert_eq!(join.schema(), expected_schema);
+                    assert_eq!(
+                        *join.partition_mode(),
+                        if null_aware {
+                            PartitionMode::CollectLeft
+                        } else {
+                            PartitionMode::Partitioned
+                        }
+                    );
+                    let partitions = if null_aware { 1 } else { right_partitions };
+                    assert_eq!(
+                        stage.plan.output_partitioning().partition_count(),
+                        partitions
+                    );
+                    for input in join.children() {
+                        assert_eq!(input.output_partitioning().partition_count(), partitions);
+                    }
+                }
+            }
         }
     }
 
