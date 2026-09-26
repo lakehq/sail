@@ -3,15 +3,17 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{Result, internal_err};
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{Result, ScalarValue, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::functions::core::get_field;
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
 use super::SparkGetField;
+use crate::schema_evolution::FIELD_DEFAULT_METADATA_KEY;
 
 // Keep the dependency distinct from an ordinary, unmasked native field access.
 // Projection rewrites must never substitute an already evaluated native result.
@@ -19,10 +21,23 @@ pub const STRUCT_FIELD_DEPENDENCY_NAME: &str = "__sail_struct_field_dependency";
 
 /// Expose the native field path to Parquet while preserving every ancestor's validity.
 /// The native child is a dependency description and is never evaluated directly.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct SparkGetFieldExpr {
     access: Arc<dyn PhysicalExpr>,
     field: FieldRef,
+}
+
+impl PartialEq for SparkGetFieldExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.access.eq(&other.access) && self.field == other.field
+    }
+}
+
+impl std::hash::Hash for SparkGetFieldExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.access.hash(state);
+        self.field.hash(state);
+    }
 }
 
 impl SparkGetFieldExpr {
@@ -164,4 +179,85 @@ impl PhysicalExpr for SparkGetFieldExpr {
             self.field.clone(),
         )?))
     }
+}
+
+/// Restore null-safe field paths recognized by the Parquet decoder.
+pub fn rewrite_parquet_field_access(
+    expression: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    expression.transform_down(|expression| {
+        let Some(access) =
+            ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
+        else {
+            return Ok(Transformed::no(expression));
+        };
+        // Restore the primitive and list paths accepted by Parquet decoder predicates.
+        // Keep schema-evolution defaults on the existing structural-cast path.
+        if access.return_type().is_nested()
+            && !matches!(
+                access.return_type(),
+                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+            )
+        {
+            return Ok(Transformed::no(expression));
+        }
+        let Some((index, path)) = struct_field_path(&expression) else {
+            return Ok(Transformed::no(expression));
+        };
+        let Some(mut field) = schema.fields().get(index) else {
+            return Ok(Transformed::no(expression));
+        };
+        if field.metadata().contains_key(FIELD_DEFAULT_METADATA_KEY) {
+            return Ok(Transformed::no(expression));
+        }
+        for name in &path {
+            let DataType::Struct(fields) = field.data_type() else {
+                return Ok(Transformed::no(expression));
+            };
+            let Some(child) = fields.iter().find(|field| field.name() == name) else {
+                return Ok(Transformed::no(expression));
+            };
+            field = child;
+            if field.metadata().contains_key(FIELD_DEFAULT_METADATA_KEY) {
+                return Ok(Transformed::no(expression));
+            }
+        }
+        let mut args: Vec<Arc<dyn PhysicalExpr>> =
+            vec![Arc::new(Column::new(schema.field(index).name(), index))];
+        args.extend(path.into_iter().map(|name| {
+            Arc::new(Literal::new(ScalarValue::Utf8(Some(name)))) as Arc<dyn PhysicalExpr>
+        }));
+        Ok(Transformed::yes(Arc::new(SparkGetFieldExpr::try_new(
+            args,
+            schema,
+            Arc::new(access.config_options().clone()),
+        )?) as Arc<dyn PhysicalExpr>))
+    })
+}
+
+/// Extract a named field path rooted at an input column.
+pub fn struct_field_path(expression: &Arc<dyn PhysicalExpr>) -> Option<(usize, Vec<String>)> {
+    let mut expression = expression;
+    let mut path = vec![];
+    while let Some(access) =
+        ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
+    {
+        let [parent, field] = access.args() else {
+            return None;
+        };
+        let field = field
+            .downcast_ref::<Literal>()?
+            .value()
+            .try_as_str()
+            .flatten()?;
+        path.push(field.to_string());
+        expression = parent;
+    }
+    if path.is_empty() {
+        return None;
+    }
+    let column = expression.downcast_ref::<Column>()?;
+    path.reverse();
+    Some((column.index(), path))
 }

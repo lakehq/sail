@@ -320,9 +320,7 @@ Feature: IN subquery support
         | TRY_CAST('invalid' AS INT)    |
         | id                            |
 
-    @sail-bug
     Scenario Outline: projected IN normalizes indirect negation before decorrelation
-      # TODO: Preserve Spark's optimizer ordering for wrappers that become NOT IN.
       When query
         """
         SELECT id, <predicate> AS absent
@@ -339,6 +337,9 @@ Feature: IN subquery support
         | predicate                                                          |
         | NOT CAST(id IN (SELECT x FROM VALUES (1), (NULL) t(x)) AS BOOLEAN) |
         | (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) = FALSE            |
+        | (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) <> TRUE            |
+        | NOT (FALSE OR (id IN (SELECT x FROM VALUES (1), (NULL) t(x))))     |
+        | NOT (TRUE AND (id IN (SELECT x FROM VALUES (1), (NULL) t(x))))     |
 
     Scenario: folded projected IN stays null when filtered through its result alias
       When query
@@ -593,3 +594,229 @@ Feature: IN subquery support
         | id |
         | 1  |
         | 3  |
+
+  Rule: Filters referencing projected IN aliases
+
+    Scenario Outline: negating a projected IN alias uses a null-aware predicate
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id IN (SELECT x FROM VALUES (1), (NULL) t(x)) AS present
+          FROM VALUES (1), (2), (NULL) u(id)
+        ) q
+        WHERE <predicate>
+        """
+      Then query result
+        | id |
+
+      Examples:
+        | predicate       |
+        | NOT present     |
+        | present = FALSE |
+
+    Scenario: negating a projected NOT IN alias restores the positive predicate
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id NOT IN (SELECT x FROM VALUES (1), (NULL) t(x)) AS absent
+          FROM VALUES (1), (2), (NULL) u(id)
+        ) q
+        WHERE NOT absent
+        """
+      Then query result
+        | id |
+        | 1  |
+
+    Scenario: Boolean comparison aliases remain available to predicate pushdown
+      When query
+        """
+        SELECT id
+        FROM (SELECT id, (id IN (SELECT 1)) = TRUE AS present FROM range(3)) q
+        WHERE present
+        """
+      Then query result
+        | id |
+        | 1  |
+
+    Scenario: unused Boolean comparisons of projected IN can be pruned
+      When query
+        """
+        SELECT id
+        FROM (SELECT id, (id IN (SELECT 1)) = TRUE AS present FROM range(3)) q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+
+    Scenario: a limit keeps an IN alias materialized below its outer filter
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id IN (SELECT x FROM VALUES (1), (NULL) t(x)) AS present
+          FROM VALUES (1), (2), (NULL) u(id)
+          LIMIT 2
+        ) q
+        WHERE NOT present
+        """
+      Then query result
+        | id |
+        | 2  |
+
+    Scenario: Boolean equality and null-safe tests retain different IN null semantics
+      When query
+        """
+        SELECT id,
+          (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) = TRUE AS present,
+          (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) <> FALSE AS also_present,
+          (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) = FALSE AS absent,
+          (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) IS FALSE AS is_false,
+          (id IN (SELECT x FROM VALUES (1), (NULL) t(x))) <=> FALSE AS null_safe_false
+        FROM VALUES (1), (2), (NULL) u(id)
+        ORDER BY id NULLS LAST
+        """
+      Then query result ordered
+        | id   | present | also_present | absent | is_false | null_safe_false |
+        | 1    | true    | true         | false  | false    | false           |
+        | 2    | false   | false        | false  | true     | true            |
+        | NULL | false   | false        | false  | true     | true            |
+
+    Scenario: unused conditional negation of projected IN can be pruned
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, NOT (CASE WHEN id = 2
+            THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x))
+            ELSE FALSE END) AS present
+          FROM range(3)
+        ) q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+
+    Scenario: pruning unused conditional IN preserves materialized local null operands
+      When query
+        """
+        SELECT present
+        FROM (
+          SELECT x IN (SELECT 1) AS present,
+            NOT (CASE WHEN id = 2
+              THEN id IN (SELECT value FROM VALUES (1), (NULL) candidates(value))
+              ELSE FALSE END) AS unused
+          FROM (SELECT col1 AS id, NULLIF(1, 1) AS x FROM VALUES (1), (2)) producer
+        ) q
+        """
+      Then query result
+        | present |
+        | false   |
+        | false   |
+
+    Scenario: unused projected IN does not execute its right side
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id IN (
+            SELECT CAST(CASE WHEN id = 1 THEN 'invalid' ELSE '1' END AS INT)
+            FROM range(3)
+          ) AS unused
+          FROM range(3)
+        ) q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+
+    Scenario: unused literal null IN does not execute its right-side filter
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, NULL IN (
+            SELECT id FROM range(3)
+            WHERE CAST(CASE WHEN id = 1 THEN 'invalid' ELSE 'false' END AS BOOLEAN)
+          ) AS unused
+          FROM range(3)
+        ) q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+
+    Scenario Outline: unused projected IN preserves constant subquery errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, <operand> IN (SELECT CAST('invalid' AS INT)) AS unused
+          FROM range(3)
+        ) q
+        """
+      Then query error (?i)(cast_invalid_input|cannot cast string)
+
+      Examples:
+        | operand |
+        | id      |
+        | NULL    |
+
+    Scenario: an unused projected IN preserves required RHS constant errors beside conditional IN
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id IN (
+            SELECT bad FROM (
+              SELECT CAST('invalid' AS INT) AS bad,
+                NOT (CASE WHEN id = 2
+                  THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x))
+                  ELSE FALSE END) AS unused
+              FROM range(3)
+            ) rhs
+          ) AS unused
+          FROM range(3)
+        ) q
+        """
+      Then query error (?i)(cast_invalid_input|cannot cast string)
+
+    Scenario: projected IN prunes unused constant RHS siblings before folding
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id
+        FROM (
+          SELECT id, id IN (
+            SELECT value FROM (
+              SELECT id AS value, CAST('invalid' AS INT) AS bad,
+                NOT (CASE WHEN id = 2
+                  THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x))
+                  ELSE FALSE END) AS unused
+              FROM range(3)
+            ) rhs
+          ) AS unused
+          FROM range(3)
+        ) q
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |

@@ -448,14 +448,22 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 physical_field.name().clone(),
             )))));
         }
-        if physical_field.data_type().is_nested() {
-            // Spark rejects reading a physical LIST/MAP/STRUCT as a primitive.
+        let list_leaf = |data_type: &DataType| {
+            matches!(
+                data_type,
+                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+            )
+        };
+        if physical_field.data_type().is_nested()
+            && !(list_leaf(physical_field.data_type()) && list_leaf(expression.field().data_type()))
+        {
+            // Nested physical values must retain a compatible logical container.
             // Do not let Parquet silently omit an exact predicate that now needs
             // an unsupported nested input after adapting the file schema.
             return exec_err!(
-                "Cannot read nested Parquet field '{}' as primitive type {}",
+                "Cannot read nested Parquet field '{}' as type {}",
                 physical_field.name(),
-                expression.field().data_type(),
+                expression.field().data_type()
             );
         }
         let physical_access = SparkGetFieldExpr::try_new(

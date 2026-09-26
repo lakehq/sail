@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{Result, ScalarValue, internal_err};
+use datafusion::common::{Result, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::expressions::{CastExpr, Column, LambdaVariable, Literal};
+use datafusion::physical_expr::expressions::{CastExpr, Column, LambdaVariable};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
@@ -21,9 +21,10 @@ use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions, replace_children_if_necessary,
 };
-use sail_common_datafusion::schema_evolution::FIELD_DEFAULT_METADATA_KEY;
 use sail_common_datafusion::udf::get_field::SparkGetField;
-use sail_common_datafusion::udf::get_field::physical::SparkGetFieldExpr;
+use sail_common_datafusion::udf::get_field::physical::{
+    rewrite_parquet_field_access, struct_field_path,
+};
 
 /// Runs DataFusion projection pushdown without moving physical lambda variables
 /// across their planned schema boundary. Struct narrowing is limited to projections
@@ -64,7 +65,7 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
     }
 }
 
-/// Preserve decoder predicate pushdown for primitive fields read from Parquet.
+/// Preserve decoder predicate pushdown for supported fields read from Parquet.
 /// The accessor retains ancestor nulls while exposing the leaf dependency to the reader.
 #[derive(Debug, Default)]
 pub struct ParquetFieldFilterPushdown {
@@ -83,7 +84,7 @@ impl PhysicalOptimizerRule for ParquetFieldFilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = plan.transform_up(restore_parquet_primitive_access)?.data;
+        let plan = plan.transform_up(restore_parquet_field_access)?.data;
         self.datafusion_filter_pushdown.optimize(plan, config)
     }
 
@@ -96,7 +97,45 @@ impl PhysicalOptimizerRule for ParquetFieldFilterPushdown {
     }
 }
 
-fn restore_parquet_primitive_access(
+// Follow only column aliases: substituting a computed struct beneath the native
+// dependency would hide its leaf path from the Parquet schema adapter.
+fn is_parquet_column(plan: &Arc<dyn ExecutionPlan>, index: usize) -> bool {
+    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        let Some(column) = projection
+            .expr()
+            .get(index)
+            .and_then(|expression| expression.expr.downcast_ref::<Column>())
+        else {
+            return false;
+        };
+        if projection.schema().field(index).metadata()
+            != projection.input().schema().field(column.index()).metadata()
+        {
+            return false;
+        }
+        return is_parquet_column(projection.input(), column.index());
+    }
+    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+        let index = filter
+            .projection()
+            .as_ref()
+            .map_or(index, |projection| projection[index]);
+        return is_parquet_column(filter.input(), index);
+    }
+    plan.downcast_ref::<DataSourceExec>()
+        .and_then(|scan| scan.data_source().downcast_ref::<FileScanConfig>())
+        .is_some_and(|config| {
+            config.file_source.file_type() == "parquet"
+                && config.file_source.projection().is_none_or(|expressions| {
+                    expressions
+                        .as_ref()
+                        .get(index)
+                        .is_some_and(|expression| expression.expr.is::<Column>())
+                })
+        })
+}
+
+fn restore_parquet_field_access(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input = if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
@@ -106,26 +145,22 @@ fn restore_parquet_primitive_access(
     } else {
         return Ok(Transformed::no(plan));
     };
-    let Some(scan) = input.downcast_ref::<DataSourceExec>() else {
-        return Ok(Transformed::no(plan));
-    };
-    let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
-        return Ok(Transformed::no(plan));
-    };
-    if config.file_source.file_type() != "parquet"
-        || config.file_source.projection().is_some_and(|expressions| {
-            expressions
-                .iter()
-                .any(|expression| !expression.expr.is::<Column>())
-        })
-    {
-        return Ok(Transformed::no(plan));
-    }
     let schema = input.schema();
+    let rewrite = |expression: Arc<dyn PhysicalExpr>| {
+        // Filter pushdown and projection merging can absorb alias/extraction
+        // chains together. Convert their column-backed field accesses first.
+        if expression.exists(|expression| {
+            Ok(struct_field_path(expression)
+                .is_some_and(|(index, _)| !is_parquet_column(input, index)))
+        })? {
+            return Ok(Transformed::no(expression));
+        }
+        rewrite_parquet_field_access(expression, &schema)
+    };
     if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
         let mut transformed = false;
         let expressions = ProjectionExprs::from(projection.expr()).try_map_exprs(|expression| {
-            let result = native_parquet_primitive_access(expression, &schema)?;
+            let result = rewrite(expression)?;
             transformed |= result.transformed;
             Ok(result.data)
         })?;
@@ -143,7 +178,7 @@ fn restore_parquet_primitive_access(
     let Some(filter) = plan.downcast_ref::<FilterExec>() else {
         return Ok(Transformed::no(plan));
     };
-    let predicate = native_parquet_primitive_access(Arc::clone(filter.predicate()), &schema)?;
+    let predicate = rewrite(Arc::clone(filter.predicate()))?;
     if !predicate.transformed {
         return Ok(Transformed::no(plan));
     }
@@ -152,55 +187,6 @@ fn restore_parquet_primitive_access(
             .with_predicate(predicate.data)
             .build()?,
     )))
-}
-
-fn native_parquet_primitive_access(
-    expression: Arc<dyn PhysicalExpr>,
-    schema: &Schema,
-) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    expression.transform_down(|expression| {
-        let Some(access) =
-            ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
-        else {
-            return Ok(Transformed::no(expression));
-        };
-        // Restore the primitive paths accepted by Parquet decoder predicates.
-        // Keep schema-evolution defaults on the existing structural-cast path.
-        if access.return_type().is_nested() {
-            return Ok(Transformed::no(expression));
-        }
-        let Some((index, path)) = struct_access(&expression) else {
-            return Ok(Transformed::no(expression));
-        };
-        let Some(mut field) = schema.fields().get(index) else {
-            return Ok(Transformed::no(expression));
-        };
-        if field.metadata().contains_key(FIELD_DEFAULT_METADATA_KEY) {
-            return Ok(Transformed::no(expression));
-        }
-        for name in &path {
-            let DataType::Struct(fields) = field.data_type() else {
-                return Ok(Transformed::no(expression));
-            };
-            let Some(child) = fields.iter().find(|field| field.name() == name) else {
-                return Ok(Transformed::no(expression));
-            };
-            field = child;
-            if field.metadata().contains_key(FIELD_DEFAULT_METADATA_KEY) {
-                return Ok(Transformed::no(expression));
-            }
-        }
-        let mut args: Vec<Arc<dyn PhysicalExpr>> =
-            vec![Arc::new(Column::new(schema.field(index).name(), index))];
-        args.extend(path.into_iter().map(|name| {
-            Arc::new(Literal::new(ScalarValue::Utf8(Some(name)))) as Arc<dyn PhysicalExpr>
-        }));
-        Ok(Transformed::yes(Arc::new(SparkGetFieldExpr::try_new(
-            args,
-            schema,
-            Arc::new(access.config_options().clone()),
-        )?) as Arc<dyn PhysicalExpr>))
-    })
 }
 
 /// A terminal selection consumes the whole field, including all its descendants.
@@ -239,31 +225,6 @@ impl StructSelection {
     }
 }
 
-fn struct_access(expression: &Arc<dyn PhysicalExpr>) -> Option<(usize, Vec<String>)> {
-    let mut expression = expression;
-    let mut path = vec![];
-    while let Some(access) =
-        ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
-    {
-        let [parent, field] = access.args() else {
-            return None;
-        };
-        let field = field
-            .downcast_ref::<Literal>()?
-            .value()
-            .try_as_str()
-            .flatten()?;
-        path.push(field.to_string());
-        expression = parent;
-    }
-    if path.is_empty() {
-        return None;
-    }
-    let column = expression.downcast_ref::<Column>()?;
-    path.reverse();
-    Some((column.index(), path))
-}
-
 fn prune_struct_projection(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
@@ -290,7 +251,7 @@ fn prune_struct_projection(
     let mut selections = BTreeMap::<usize, StructSelection>::new();
     for expression in projection.expr() {
         expression.expr.apply(|expression| {
-            if let Some((index, path)) = struct_access(expression) {
+            if let Some((index, path)) = struct_field_path(expression) {
                 selections.entry(index).or_default().insert(&path);
                 return Ok(TreeNodeRecursion::Jump);
             }

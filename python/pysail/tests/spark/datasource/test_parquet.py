@@ -728,6 +728,7 @@ def test_parquet_nested_projection_prunes_unselected_fields(spark, tmp_path, sel
         payload = pa.StructArray.from_arrays(
             [payload, values], names=["inner", "unused"], mask=pa.array([i % 5 == 0 for i in range(count)])
         )
+        prefix += ".inner"
         read_type = f"struct<inner:{read_type}>"
     path = tmp_path / "nested_projection.parquet"
     pq.write_table(pa.table({"payload": payload}), path, compression=None, use_dictionary=False)
@@ -950,3 +951,45 @@ def test_parquet_struct_predicate_pushdown_preserves_primitive_nulls(spark, tmp_
             assert float(pruned[1]) > 0, plan
     finally:
         spark.catalog.dropTempView("primitive_struct_predicate")
+
+
+@pytest.mark.parametrize("predicate", ["s.items IS NULL", "s.items IS NOT NULL", "array_contains(s.items, 7L)"])
+def test_parquet_struct_list_predicates_prune_unselected_fields(spark, tmp_path, predicate):
+    # Check both Spark's read schema and Sail's decoder/scan metrics.
+    count = 100_000
+    parent_nulls = [i % 13 == 0 for i in range(count)]
+    items = [None if parent_nulls[i] or i % 11 == 0 else [i % 17] for i in range(count)]
+    values = pa.array(range(count), type=pa.int64())
+    payload = pa.StructArray.from_arrays(
+        [pa.array(items, type=pa.list_(pa.int64())), *([values] * 8)],
+        names=["items", *[f"f{i}" for i in range(8)]],
+        mask=pa.array(parent_nulls),
+    )
+    path = tmp_path / "struct_list_predicate.parquet"
+    pq.write_table(pa.table({"s": payload}), path, compression=None, use_dictionary=False)
+    spark.read.option("pushdown_filters", "true").parquet(str(path)).createOrReplaceTempView("struct_list_predicate")
+    try:
+        query = f"SELECT SUM(s.f0) AS total FROM struct_list_predicate WHERE {predicate}"  # noqa: S608
+        if predicate == "s.items IS NULL":
+            selected = [i for i, item in enumerate(items) if item is None]
+        elif predicate == "s.items IS NOT NULL":
+            selected = [i for i, item in enumerate(items) if item is not None]
+        else:
+            selected = [i for i, item in enumerate(items) if item == [7]]
+        expected = sum(i for i in selected if not parent_nulls[i])
+        assert spark.sql(query).collect() == [Row(total=expected)]
+
+        if is_jvm_spark():
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN FORMATTED {query}").collect())
+            assert "ReadSchema: struct<s:struct<items:array<bigint>,f0:bigint>>" in plan
+        else:
+            plan = "\n".join(row[0] for row in spark.sql(f"EXPLAIN ANALYZE {query}").collect())
+            metric = re.search(r"bytes_scanned=([\d.]+)\s*([KMG]?)", plan)
+            assert metric is not None, plan
+            scale = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[metric[2]]
+            assert float(metric[1]) * scale < path.stat().st_size / 2, plan
+            pruned = re.search(r"pushdown_rows_pruned=([\d.]+)", plan)
+            assert pruned is not None, plan
+            assert float(pruned[1]) > 0, plan
+    finally:
+        spark.catalog.dropTempView("struct_list_predicate")

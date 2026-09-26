@@ -6,7 +6,11 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::DefaultTableSource;
 use datafusion::optimizer::eliminate_outer_join::EliminateOuterJoin;
-use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
+use datafusion::optimizer::optimize_projections::OptimizeProjections;
+use datafusion::optimizer::push_down_filter::PushDownFilter;
+use datafusion::optimizer::simplify_expressions::{
+    ExprSimplifier, SimplifyContext, SimplifyExpressions,
+};
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -22,8 +26,9 @@ use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_python_udf::udf::expr_contains_python_udf;
 
 /// Spark folds expressions before replacing projected IN with an existence join.
-/// Fold only the affected expressions and their constant producers here; running
-/// another optimizer over the query would change unrelated rule ordering.
+/// Fold affected expressions and literal NULL operands first, then push their
+/// alias filters before materializing the remaining existence joins. Restrict
+/// pushdown to these predicates so unrelated optimizer ordering is preserved.
 #[derive(Debug)]
 pub struct RewriteProjectedIn;
 
@@ -37,7 +42,7 @@ impl OptimizerRule for RewriteProjectedIn {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
+        None
     }
 
     fn rewrite(
@@ -45,7 +50,81 @@ impl OptimizerRule for RewriteProjectedIn {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        rewrite_projection(plan, config)
+        let mut prepared_marks = HashSet::new();
+        let prepared = plan.transform_up_with_subqueries(|plan| {
+            rewrite_projection(plan, config, true, &mut prepared_marks)
+        })?;
+        if !prepared.transformed {
+            return Ok(prepared);
+        }
+        let pushed = prepared.data.transform_down_with_subqueries(|plan| {
+            let LogicalPlan::Filter(filter) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let needed = filter
+                .predicate
+                .column_refs()
+                .into_iter()
+                .cloned()
+                .collect();
+            if references_projected_in(&filter.input, &needed)? {
+                PushDownFilter::new().rewrite(plan, config)
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        })?;
+        // Prune unused IN expressions before they become joins, including those
+        // referenced only by a filter that was just pushed down. NULL producers
+        // were classified before projection merging can inline their operands.
+        let mut remaining = false;
+        pushed.data.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Projection(projection) = plan {
+                for expr in &projection.expr {
+                    remaining |= has_uncorrelated_in(expr)?;
+                }
+            }
+            Ok(if remaining {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        let original = (!remaining).then(|| pushed.data.clone());
+        let pruned = OptimizeProjections::new()
+            .rewrite(pushed.data, config)?
+            .data;
+        // Literal NULL operands already became existence joins during preparation.
+        // Remove only joins created here whose mark disappeared during pruning.
+        let mut referenced = HashSet::new();
+        referenced.extend(pruned.schema().columns());
+        pruned.apply_with_subqueries(|plan| {
+            for expr in plan.expressions() {
+                referenced.extend(expr.column_refs().into_iter().cloned());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let pruned = pruned.transform_up_with_subqueries(|plan| {
+            if let LogicalPlan::Join(join) = &plan
+                && join.join_type == JoinType::LeftMark
+                && let Some(mark) = join.schema.columns().last()
+                && prepared_marks.contains(mark)
+                && !referenced.contains(mark)
+            {
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(Arc::clone(
+                    &join.left,
+                ))));
+            }
+            Ok(Transformed::no(plan))
+        })?;
+        // Keep unrelated inputs intact when no IN expression or join was pruned.
+        let plan = match original {
+            Some(original) if !pruned.transformed => original,
+            _ => pruned.data,
+        };
+        let rewritten = plan.transform_up_with_subqueries(|plan| {
+            rewrite_projection(plan, config, false, &mut prepared_marks)
+        })?;
+        Ok(Transformed::yes(rewritten.data))
     }
 }
 
@@ -56,28 +135,71 @@ fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
     })
 }
 
-fn validate_indirect_in(expr: &Expr) -> Result<()> {
-    expr.apply(|expr| {
-        let mut inner = expr;
-        while let Expr::Not(child) = inner {
-            inner = child;
+/// TODO: Preserve Catalyst's CASE and COALESCE boundaries when normalizing
+/// indirect negation. DataFusion lowers them to Boolean connectives, which can
+/// turn a positive IN existence test into a null-aware NOT IN test.
+fn needs_conditional_normalization(expr: &Expr) -> Result<bool> {
+    expr.exists(|expr| {
+        let coalesce_only = match expr {
+            Expr::Not(_) => false,
+            Expr::BinaryExpr(binary) if matches!(binary.op, Operator::Eq | Operator::NotEq) => true,
+            _ => return Ok(false),
+        };
+        expr.exists(|child| {
+            let boundary = matches!(child, Expr::ScalarFunction(function) if function.func.name() == "coalesce")
+                || (!coalesce_only && matches!(child, Expr::Case(_)));
+            Ok(boundary && has_uncorrelated_in(child)?)
+        })
+    })
+}
+
+/// Only push filters whose referenced producers contain projected IN. Spark does
+/// this before existence joins are introduced, and does not cross LIMIT/OFFSET or
+/// a projection with nondeterministic expressions.
+fn references_projected_in(plan: &LogicalPlan, needed: &HashSet<Column>) -> Result<bool> {
+    if needed.is_empty() || plan.fetch()?.is_some() || plan.skip()?.is_some() {
+        return Ok(false);
+    }
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            let mut input_needed = HashSet::new();
+            for expr in &projection.expr {
+                if has_volatile_expression(expr)? {
+                    return Ok(false);
+                }
+            }
+            for (expr, column) in projection.expr.iter().zip(projection.schema.columns()) {
+                if needed.contains(&column) {
+                    if has_uncorrelated_in(expr)? {
+                        return Ok(true);
+                    }
+                    input_needed.extend(expr.column_refs().into_iter().cloned());
+                }
+            }
+            references_projected_in(&projection.input, &input_needed)
         }
-        if matches!(inner, Expr::InSubquery(subquery)
-            if subquery.subquery.outer_ref_columns.is_empty())
-        {
-            return Ok(TreeNodeRecursion::Continue);
+        LogicalPlan::SubqueryAlias(alias) => {
+            let input_needed = alias
+                .input
+                .schema()
+                .columns()
+                .into_iter()
+                .zip(alias.schema.columns())
+                .filter_map(|(input, output)| needed.contains(&output).then_some(input))
+                .collect();
+            references_projected_in(&alias.input, &input_needed)
         }
-        let indirect_negation = matches!(expr, Expr::Not(_))
-            || matches!(expr, Expr::BinaryExpr(binary)
-                if matches!(binary.op, Operator::Eq | Operator::NotEq));
-        if indirect_negation && has_uncorrelated_in(expr)? {
-            // TODO: Normalize indirect negation before decorrelation with the query's
-            // optimizer context; validate only after dead subqueries have folded away.
-            return not_impl_err!("projected IN under indirect negation or Boolean comparison");
+        LogicalPlan::Filter(filter) => references_projected_in(&filter.input, needed),
+        LogicalPlan::Sort(_)
+        | LogicalPlan::Repartition(_)
+        | LogicalPlan::Window(_)
+        | LogicalPlan::Distinct(Distinct::All(_)) => {
+            references_projected_in(plan.inputs()[0], needed)
         }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(())
+        LogicalPlan::Join(join) => Ok(references_projected_in(&join.left, needed)?
+            || references_projected_in(&join.right, needed)?),
+        _ => Ok(false),
+    }
 }
 
 fn simplifier(schema: DFSchemaRef, config: &dyn OptimizerConfig) -> ExprSimplifier {
@@ -190,6 +312,8 @@ fn producer_constants(
         LogicalPlan::Filter(filter) => {
             // Spark simplifies null-rejecting predicates before propagating constants.
             // Inspect the simplified predicate and join type only on a copy.
+            // TODO: Normalize aliases above the join before checking whether a
+            // null-rejecting predicate exposes its nullable-side constants.
             let mut input = filter.input.as_ref();
             while let LogicalPlan::Projection(projection) = input {
                 input = &projection.input;
@@ -456,6 +580,8 @@ fn union_branches(
                     .collect()
             }))
         }
+        // TODO: Push deterministic projected IN through LIMIT/OFFSET before
+        // UNION branch folding while retaining the global cardinality boundary.
         _ => Ok(None),
     }
 }
@@ -463,6 +589,8 @@ fn union_branches(
 fn rewrite_projection(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
+    prepare: bool,
+    prepared_marks: &mut HashSet<Column>,
 ) -> Result<Transformed<LogicalPlan>> {
     let LogicalPlan::Projection(projection) = plan else {
         return Ok(Transformed::no(plan));
@@ -491,7 +619,10 @@ fn rewrite_projection(
         .iter()
         .flat_map(|expr| expr.column_refs().into_iter().cloned())
         .collect();
-    if deterministic && let Some(inputs) = union_branches(&projection.input, &projection_needed)? {
+    if prepare
+        && deterministic
+        && let Some(inputs) = union_branches(&projection.input, &projection_needed)?
+    {
         let mut needs_null_propagation = false;
         for input in &inputs {
             let constants = constant_columns(input, config, &needed)?;
@@ -523,7 +654,9 @@ fn rewrite_projection(
                         Arc::new(input),
                         Arc::clone(&projection.schema),
                     )?);
-                    Ok(Arc::new(rewrite_projection(branch, config)?.data))
+                    Ok(Arc::new(
+                        rewrite_projection(branch, config, true, prepared_marks)?.data,
+                    ))
                 })
                 .collect::<Result<Vec<_>>>()?;
             return Ok(Transformed::yes(LogicalPlan::Union(Union {
@@ -532,11 +665,18 @@ fn rewrite_projection(
             })));
         }
     }
-    let constants = constant_columns(&projection.input, config, &needed)?;
-    let simplifier = simplifier(Arc::clone(projection.input.schema()), config);
+    let constants = if prepare {
+        constant_columns(&projection.input, config, &needed)?
+    } else {
+        HashMap::new()
+    };
+    let schema = Arc::clone(projection.input.schema());
+    let simplifier = simplifier(Arc::clone(&schema), config);
     let mut rewriter = InRewriter {
         plan: Arc::unwrap_or_clone(projection.input),
         config,
+        prepare,
+        prepared_marks,
     };
     let expr = projection
         .expr
@@ -546,11 +686,35 @@ fn rewrite_projection(
                 return Ok(expr);
             }
             let name = NamePreserver::new_for_projection().save(&expr);
-            let simplified = simplifier.simplify(replace_constants(expr.clone(), &constants)?)?;
-            if has_uncorrelated_in(&simplified)? {
-                validate_indirect_in(&expr)?;
+            // Spark removes identity casts before deciding whether NOT applies
+            // directly to IN (and therefore needs a null-aware existence join).
+            let expr = replace_constants(expr, &constants)?
+                .transform_up(|expr| match expr {
+                    Expr::Cast(cast)
+                        if cast.expr.get_type(schema.as_ref())? == *cast.field.data_type() =>
+                    {
+                        Ok(Transformed::yes(*cast.expr))
+                    }
+                    Expr::TryCast(cast)
+                        if cast.expr.get_type(schema.as_ref())? == *cast.field.data_type() =>
+                    {
+                        Ok(Transformed::yes(*cast.expr))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+                .data()?;
+            let conditional = needs_conditional_normalization(&expr)?;
+            if !prepare && conditional {
+                return not_impl_err!(
+                    "projected IN under conditional negation or Boolean comparison"
+                );
             }
-            let expr = simplified;
+            let simplified = simplifier.simplify(expr.clone())?;
+            let expr = if conditional && has_uncorrelated_in(&simplified)? {
+                expr
+            } else {
+                simplified
+            };
             Ok(name.restore(expr.rewrite(&mut rewriter)?.data))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -580,6 +744,8 @@ fn can_prune_null_in_rhs(plan: &LogicalPlan, config: &dyn OptimizerConfig) -> Re
 struct InRewriter<'a> {
     plan: LogicalPlan,
     config: &'a dyn OptimizerConfig,
+    prepare: bool,
+    prepared_marks: &'a mut HashSet<Column>,
 }
 
 impl TreeNodeRewriter for InRewriter<'_> {
@@ -598,10 +764,41 @@ impl TreeNodeRewriter for InRewriter<'_> {
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        let Expr::InSubquery(subquery) = expr else {
+        let Expr::InSubquery(mut subquery) = expr else {
             return Ok(Transformed::no(expr));
         };
         if !subquery.subquery.outer_ref_columns.is_empty() {
+            return Ok(Transformed::no(Expr::InSubquery(subquery)));
+        }
+        if self.prepare {
+            // Spark optimizes subqueries before pruning unused outer columns:
+            // constant RHS errors are eager, while runtime RHS work can disappear.
+            subquery.subquery.subquery = Arc::new(
+                OptimizeProjections::new()
+                    .rewrite(
+                        Arc::unwrap_or_clone(subquery.subquery.subquery),
+                        self.config,
+                    )?
+                    .data
+                    .transform_up_with_subqueries(|plan| {
+                        // Nested projected IN was already prepared. Do not erase
+                        // its preserved CASE/COALESCE boundary while folding RHS.
+                        for expr in plan.expressions() {
+                            if needs_conditional_normalization(&expr)? {
+                                return Ok(Transformed::no(plan));
+                            }
+                        }
+                        SimplifyExpressions::default().rewrite(plan, self.config)
+                    })?
+                    .data,
+            );
+            subquery.expr = Box::new(
+                simplifier(Arc::clone(self.plan.schema()), self.config).simplify(*subquery.expr)?,
+            );
+        }
+        let null_literal = self.prepare
+            && matches!(subquery.expr.as_ref(), Expr::Literal(value, _) if value.is_null());
+        if self.prepare && !null_literal {
             return Ok(Transformed::no(Expr::InSubquery(subquery)));
         }
         let InSubquery {
@@ -615,7 +812,6 @@ impl TreeNodeRewriter for InRewriter<'_> {
         };
         let nullable = expr.nullable(self.plan.schema().as_ref())?
             || subquery.subquery.schema().field(0).is_nullable();
-        let null_literal = matches!(expr.as_ref(), Expr::Literal(value, _) if value.is_null());
         let existence_only =
             null_literal && can_prune_null_in_rhs(&subquery.subquery, self.config)?;
         let alias = self.config.alias_generator().next("__sail_in");
@@ -631,6 +827,8 @@ impl TreeNodeRewriter for InRewriter<'_> {
         let query = if existence_only {
             // Spark rewrites a literal NULL operand to EXISTS: only row existence
             // matters, and the subquery stops after its first qualifying row.
+            // TODO: Preserve this error boundary when physical repartitioning
+            // speculatively evaluates later RHS batches despite the limit.
             query
                 .project(vec![lit(true).alias(&column.name)])?
                 .limit(0, Some(1))?
@@ -641,7 +839,11 @@ impl TreeNodeRewriter for InRewriter<'_> {
         self.plan = LogicalPlanBuilder::from(mem::take(&mut self.plan))
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;
-        let mark = Expr::Column(Column::new(Some(alias), "mark"));
+        let mark = Column::new(Some(alias), "mark");
+        if self.prepare {
+            self.prepared_marks.insert(mark.clone());
+        }
+        let mark = Expr::Column(mark);
         let result = if null_literal {
             expr_fn::when(mark, lit(ScalarValue::Boolean(None))).otherwise(lit(negated))?
         } else {

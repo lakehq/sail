@@ -174,6 +174,44 @@ def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Pa
     assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [Row(value=10)]
 
 
+@pytest.mark.parametrize("mapping_mode", ["name", "id"])
+@pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
+def test_nested_predicate_skips_column_mapped_files(spark, tmp_path: Path, mapping_mode, nested):
+    # Removing a prunable data file makes metadata pruning observable without engine-specific metrics.
+    path = tmp_path / "nested_predicate"
+    value = "named_struct('a', CAST(id AS INT))"
+    field = "s.a"
+    if nested:
+        value = f"named_struct('inner', {value})"
+        field = "s.inner.a"
+    excluded_files = []
+    for start, end, mode in [(-3, 0, "overwrite"), (1, 4, "append")]:
+        (
+            spark.range(start, end)
+            .selectExpr(f"{value} AS s")
+            .coalesce(1)
+            .write.format("delta")
+            .option("delta.columnMapping.mode", mapping_mode)
+            .mode(mode)
+            .save(str(path))
+        )
+        if mode == "overwrite":
+            excluded_files = _latest_added_parquet_files(path)
+    assert excluded_files
+    for data_file in excluded_files:
+        data_file.unlink()
+    rows = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(path))
+        .where(f"{field} > 0")
+        .selectExpr(f"{field} AS value")
+        .orderBy("value")
+        .collect()
+    )
+    assert rows == [Row(value=1), Row(value=2), Row(value=3)]
+
+
 def test_explicit_stats_columns_parse_escaped_top_level_names(spark, tmp_path: Path):
     base = tmp_path / "delta_explicit_stats_escaped_names"
     schema = StructType(

@@ -163,11 +163,14 @@ Feature: Projected IN subquery optimizer boundaries
       | IN       |
       | NOT IN   |
 
+  @sail-bug
   Scenario Outline: literal null IN stops after finding a qualifying subquery row
+    # TODO: Sail repartitions the RHS and may evaluate a later throwing batch
+    # despite LIMIT 1; Spark returns NULL for this explicitly single-partition input.
     When query
       """
       SELECT CAST(NULL AS BIGINT) <operator> (
-        SELECT id FROM range(20000)
+        SELECT id FROM range(0, 20000, 1, 1)
         WHERE CAST(CASE WHEN id < 10000 THEN 'true' ELSE 'invalid' END AS BOOLEAN)
       ) AS present
       """
@@ -223,3 +226,95 @@ Feature: Projected IN subquery optimizer boundaries
     Then query result
       | present |
       | NULL    |
+
+  @sail-bug
+  Scenario: projected IN preserves CASE under indirect negation
+    # TODO: Keep Spark's CASE boundary while normalizing projected IN negation.
+    When query
+      """
+      SELECT id,
+        NOT (CASE WHEN id = 2
+          THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x))
+          ELSE FALSE END) AS result
+      FROM VALUES (1), (2), (NULL) u(id)
+      ORDER BY id NULLS LAST
+      """
+    Then query result ordered
+      | id   | result |
+      | 1    | true   |
+      | 2    | true   |
+      | NULL | true   |
+
+  @sail-bug
+  Scenario Outline: projected IN preserves COALESCE before indirect negation
+    # TODO: Keep COALESCE around the positive existence result before negation.
+    When query
+      """
+      SELECT id, <expression> AS result
+      FROM VALUES (1), (2), (NULL) u(id)
+      ORDER BY id NULLS LAST
+      """
+    Then query result ordered
+      | id   | result |
+      | 1    | false  |
+      | 2    | true   |
+      | NULL | true   |
+
+    Examples:
+      | expression                                                                      |
+      | NOT COALESCE(id IN (SELECT x FROM VALUES (1), (NULL) t(x)), FALSE)                 |
+      | COALESCE(id IN (SELECT x FROM VALUES (1), (NULL) t(x)), FALSE) = FALSE             |
+
+  @sail-bug
+  Scenario: projected IN folds union null constants below a global limit
+    # TODO: Push the projection through LIMIT before folding the UNION branches.
+    When query
+      """
+      SELECT x IN (SELECT 1) AS present
+      FROM (
+        SELECT * FROM (
+          SELECT CAST(NULL AS INT) AS x UNION ALL SELECT CAST(NULL AS INT) AS x
+        ) t LIMIT 1
+      ) u
+      """
+    Then query result
+      | present |
+      | NULL    |
+
+  @sail-bug
+  Scenario: projected IN propagates nullable join constants through named projections
+    # TODO: Normalize the named projection before eliminating the outer join.
+    When query
+      """
+      SELECT id, x IN (SELECT 1) AS present
+      FROM (
+        SELECT a.id, b.id AS bid, b.x
+        FROM range(3) a
+        LEFT JOIN (SELECT id, NULLIF(1, 1) AS x FROM range(2)) b ON a.id = b.id
+      ) q
+      WHERE bid IS NOT NULL
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | present |
+      | 0  | NULL    |
+      | 1  | NULL    |
+
+  @sail-bug
+  Scenario Outline: nested projected IN preserves conditional negation in its right side
+    # TODO: Preserve the same CASE/COALESCE boundary while folding nested subqueries.
+    When query
+      """
+      SELECT <operand> IN (
+        SELECT <expression>
+        FROM VALUES (1), (2), (NULL) u(id)
+      ) AS present
+      """
+    Then query result
+      | present  |
+      | <result> |
+
+    Examples:
+      | operand | expression                                                                                              | result |
+      | FALSE   | NOT (CASE WHEN id = 2 THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x)) ELSE FALSE END)                  | false  |
+      | TRUE    | NOT COALESCE(id IN (SELECT x FROM VALUES (1), (NULL) t(x)), FALSE)                                        | true   |

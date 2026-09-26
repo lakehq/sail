@@ -38,7 +38,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // it into a CrossJoin + Projection. The remaining complex cases (OuterRef
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
-        // Materialize projected IN before filters can push its expressions down.
+        // Preserve Spark folding and predicate pushdown before IN materialization.
         Arc::new(RewriteProjectedIn),
         Arc::new(DecorrelateLateralProjection::new()),
     ];
