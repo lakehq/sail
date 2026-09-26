@@ -162,8 +162,9 @@ impl PlanResolver<'_> {
                 match expr {
                     Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
-                            ScalarValue::Int32(Some(position)) => *position as i64,
-                            ScalarValue::Int64(Some(position)) => *position,
+                            // Spark's IntegerLiteral extractor accepts only INT; BIGINT,
+                            // SMALLINT and TINYINT literals remain constant grouping keys.
+                            ScalarValue::Int32(Some(position)) => i64::from(*position),
                             _ => return Ok(named_expr),
                         };
                         if position > 0_i64 && position <= num_projections {

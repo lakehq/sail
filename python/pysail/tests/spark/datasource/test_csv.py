@@ -675,3 +675,161 @@ def test_csv_read_field_count_mismatch(spark, tmp_path):
     _write_csv(path, "data", b"a,b,c\n1\n1,2\n")
     df = spark.read.option("header", True).option("allowTruncatedRows", True).csv(str(path))
     assert df.select("c", "a").collect() == [Row(c=None, a="1"), Row(c=None, a="1")]
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param({"data": b"a\n2\n-5\n"}, "int", id="fits-an-int"),
+        pytest.param({"data": b"a\n-2147483648\n2147483647\n"}, "int", id="int-bounds"),
+        pytest.param({"data": b"a\n\n7\n"}, "int", id="with-a-null"),
+        pytest.param({"data": b"a\n2\n2147483648\n"}, "bigint", id="past-an-int"),
+        pytest.param({"a": b"a\n2\n", "b": b"a\n3000000000\n"}, "bigint", id="past-an-int-in-another-file"),
+    ],
+)
+def test_csv_infer_schema_types_an_integer_column_as_int_when_it_fits(spark, tmp_path, files, expected):
+    # `CSVInferSchema.tryParseInteger` tries INT before BIGINT (`CSVInferSchema.scala:138-139,159`).
+    path = tmp_path / "csv_infer_integer"
+    for name, content in files.items():
+        _write_csv(path, name, content)
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+    assert df.schema["a"].dataType.simpleString() == expected
+
+
+def test_csv_inferred_int_column_is_a_date_offset(spark, tmp_path):
+    # The type decides the arithmetic: `DateAdd` takes an INT but not a BIGINT, so an inferred
+    # integer column shifts a DATE in Spark and has to here too.
+    path = tmp_path / "csv_inferred_date_offset"
+    _write_csv(path, "data", b"a\n2\n")
+    spark.read.option("header", True).option("inferSchema", True).csv(str(path)).createOrReplaceTempView("csv_offset")
+    try:
+        rows = spark.sql(
+            "SELECT CAST(DATE'2024-01-15' + a AS STRING) AS p, CAST(DATE'2024-01-15' - a AS STRING) AS m FROM csv_offset"
+        ).collect()
+        assert rows == [Row(p="2024-01-17", m="2024-01-13")]
+    finally:
+        spark.catalog.dropTempView("csv_offset")
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(b"a\n" + b"1\n" * 5000, "int", id="many-rows-that-fit"),
+        pytest.param(b"a\n" + b"1\n" * 5000 + b"3000000000\n", "bigint", id="past-an-int-after-the-type-sample"),
+    ],
+)
+def test_csv_infer_schema_reads_every_row_to_type_an_integer_column(spark, tmp_path, content, expected):
+    # `inferSchema` reads every row (`samplingRatio` defaults to 1.0), so a value past an INT far
+    # beyond the first rows still makes the column a BIGINT, and a large file of small values is INT.
+    path = tmp_path / "csv_infer_integer_long"
+    _write_csv(path, "data", content)
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+    assert df.schema["a"].dataType.simpleString() == expected
+    assert df.agg({"a": "max"}).collect()[0][0] == (1 if expected == "int" else 3000000000)
+
+
+def test_csv_temporary_view_using_infer_schema_describes_an_int_column(spark, tmp_path):
+    # The statements of `temp_view_using.feature` ("SQL-only temporary data source views ..."), which
+    # only runs against Sail because the catalog suite starts its own server; here Spark checks them.
+    path = str(tmp_path / "view_csv_data")
+    insert = f"INSERT OVERWRITE DIRECTORY '{path}' USING csv OPTIONS (header 'true') SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)"  # noqa: S608
+    spark.sql(insert)
+    spark.sql(
+        f"CREATE OR REPLACE TEMPORARY VIEW v_csv_infer USING csv OPTIONS (path '{path}', header 'true', inferSchema 'true')"
+    )
+    try:
+        assert [tuple(row) for row in spark.sql("DESCRIBE TABLE v_csv_infer").collect()] == [
+            ("id", "int", None),
+            ("name", "string", None),
+        ]
+    finally:
+        spark.catalog.dropTempView("v_csv_infer")
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    ("content", "null_value", "expected"),
+    [
+        pytest.param(b"a,s\n1,x\nNA,NA\n", "NA", [("1", "x"), (None, None)], id="a-marker"),
+        pytest.param(b"a,s\n1,x\n3000000000,NA\n", "3000000000", [("1", "x"), (None, "NA")], id="past-an-int"),
+    ],
+)
+def test_csv_null_value_reads_as_null(spark, tmp_path, infer_schema, content, null_value, expected):
+    # `nullValue` turns the matching field into NULL whatever the column type, so an integer column
+    # inferred around it reads back, and a marker past an INT does not widen or break the column.
+    path = tmp_path / "csv_null_value"
+    _write_csv(path, "data", content)
+    df = (
+        spark.read.option("header", True)
+        .option("inferSchema", infer_schema)
+        .option("nullValue", null_value)
+        .csv(str(path))
+    )
+    if infer_schema:
+        assert df.schema["a"].dataType.simpleString() == "int"
+    rows = [tuple(None if v is None else str(v) for v in row) for row in df.orderBy("s").collect()]
+    assert sorted(rows, key=str) == sorted(expected, key=str)
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    ("content", "null_value", "expected"),
+    [
+        pytest.param(b"a,s\n1,x\n,\nNA,NA\n", "NA", [("1", "x"), (None, None), (None, None)], id="an-empty-field"),
+        pytest.param(b"s\nNAME\nNA\nBANANA\n", "NA", [("BANANA",), ("NAME",), (None,)], id="a-field-containing-it"),
+        pytest.param(b"a\n-5\n-\n7\n", "-", [("-5",), ("7",), (None,)], id="a-negative-number"),
+    ],
+)
+def test_csv_null_value_matches_a_whole_field(spark, tmp_path, infer_schema, content, null_value, expected):
+    # A field is NULL when it EQUALS `nullValue` or is empty (`UnivocityParser.scala:307`,
+    # `CSVInferSchema.scala:134`): `nullValue` does not match part of a field, and it does not
+    # stop an empty field from being NULL.
+    path = tmp_path / "csv_null_value_whole_field"
+    _write_csv(path, "data", content)
+    df = (
+        spark.read.option("header", True)
+        .option("inferSchema", infer_schema)
+        .option("nullValue", null_value)
+        .csv(str(path))
+    )
+    rows = [tuple(None if v is None else str(v) for v in row) for row in df.collect()]
+    assert sorted(rows, key=str) == sorted(expected, key=str)
+
+
+def test_csv_null_value_reads_an_empty_field_under_a_schema_as_null(spark, tmp_path):
+    path = tmp_path / "csv_null_value_schema"
+    _write_csv(path, "data", b"a,s\n1,x\n,\nNA,NA\n")
+    df = spark.read.schema("a INT, s STRING").option("header", True).option("nullValue", "NA").csv(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(
+        [Row(a=1, s="x"), Row(a=None, s=None), Row(a=None, s=None)], key=safe_sort_key
+    )
+
+
+@pytest.mark.parametrize("content", [b"a,b\n1,x\n#tail", b"a,b\r1,x\r#c\r2,y\r"], ids=["comment-at-eof", "comment-cr"])
+def test_csv_null_value_keeps_comment_handling_of_a_string_read(spark, tmp_path, content):
+    # A string-only read with `nullValue` ends a comment at the record terminator and drops an
+    # unterminated comment at the end of the file, like the same read without `nullValue`.
+    path = tmp_path / "csv_null_value_comment"
+    _write_csv(path, "data", content)
+    df = spark.read.option("header", True).option("comment", "#").option("nullValue", "NA").csv(str(path))
+    expected = {b"a,b\n1,x\n#tail": [Row(a="1", b="x")], b"a,b\r1,x\r#c\r2,y\r": [Row(a="1", b="x"), Row(a="2", b="y")]}
+    assert df.collect() == expected[content]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({}, id="no-null-value"),
+        pytest.param({"nullValue": "NA"}, id="null-value"),
+        pytest.param({"nullValue": ""}, id="empty-null-value"),
+    ],
+)
+def test_csv_all_null_column_is_inferred_as_a_string(spark, tmp_path, options):
+    # A column whose every value is null has no type to infer, and `toStructFields` reads that as a
+    # STRING (`CSVInferSchema.scala:105-109`). Arrow infers `Null`, and a `void` column breaks a
+    # write or a join downstream.
+    path = tmp_path / "all_null.csv"
+    path.write_text("a,b\n,\n,\n")
+    frame = spark.read.options(header=True, inferSchema=True, **options).csv(str(path))
+    assert frame.schema.simpleString() == "struct<a:string,b:string>"
+    assert frame.collect() == [Row(a=None, b=None), Row(a=None, b=None)]

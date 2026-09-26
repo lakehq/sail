@@ -34,28 +34,12 @@
       "input": "-1.23E10BD",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": [
-              "-"
-            ],
-            "arguments": [
-              {
-                "literal": {
-                  "decimal128": {
-                    "precision": 11,
-                    "scale": 0,
-                    "value": "12300000000"
-                  }
-                }
-              }
-            ],
-            "namedArguments": [],
-            "isDistinct": false,
-            "isUserDefinedFunction": false,
-            "isInternal": null,
-            "ignoreNulls": null,
-            "filter": null,
-            "orderBy": null
+          "literal": {
+            "decimal128": {
+              "precision": 11,
+              "scale": 0,
+              "value": "-12300000000"
+            }
           }
         }
       }
@@ -64,33 +48,17 @@
       "input": "-1.8E308D",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal -1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n-1.8E308D\n^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: out-of-range double: 1.8E308"
+        "failure": "invalid argument: out-of-range double: -1.8E308"
       }
     },
     {
       "input": "-9e1",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": [
-              "-"
-            ],
-            "arguments": [
-              {
-                "literal": {
-                  "float64": {
-                    "value": 90.0
-                  }
-                }
-              }
-            ],
-            "namedArguments": [],
-            "isDistinct": false,
-            "isUserDefinedFunction": false,
-            "isInternal": null,
-            "ignoreNulls": null,
-            "filter": null,
-            "orderBy": null
+          "literal": {
+            "float64": {
+              "value": -90.0
+            }
           }
         }
       }

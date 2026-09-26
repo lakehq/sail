@@ -7,8 +7,8 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DurationSecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
@@ -16,11 +16,12 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::scalar::math::spark_negative::spark_decimal128_abs;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAbs {
@@ -60,19 +61,23 @@ impl ScalarUDFImpl for SparkAbs {
         true
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_numeric()
-            || arg_types[0].is_null()
-            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
-        {
-            Ok(arg_types[0].clone())
-        } else {
-            Err(unsupported_data_type_exec_err(
-                "abs",
-                "Numeric, Interval, or Duration type",
-                &arg_types[0],
-            ))
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark's `Abs` is `nullIntolerant`, so it keeps its child's nullability
+    /// (`arithmetic.scala:152-160`).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let argument = args.arg_fields.first().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal("abs expects one argument".to_string())
+        })?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            argument.data_type().clone(),
+            argument.is_nullable(),
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -95,22 +100,29 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Float/Decimal/UInt/Null have no ANSI overflow concerns; delegate to
+        // Float, DECIMAL128 at Spark's exact 34-digit range, Decimal256, UInt and Null have no
+        // context-induced overflow concern; delegate to
         // DataFusion's built-in abs so the kernel stays correct even on
         // bypass paths where `simplify` has not rewritten the call.
+        let data_type = args.args[0].data_type();
         if matches!(
-            args.args[0].data_type(),
+            data_type,
             DataType::Float32
                 | DataType::Float64
-                | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _)
                 | DataType::UInt8
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
                 | DataType::Null
-        ) {
+        ) || matches!(data_type, DataType::Decimal128(precision, _) if precision <= 34)
+        {
             return datafusion::functions::math::abs::AbsFunc::new().invoke_with_args(args);
+        }
+        if let [argument] = args.args.as_slice()
+            && let Some(result) = spark_decimal128_abs(argument)?
+        {
+            return Ok(result);
         }
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
@@ -451,16 +463,21 @@ impl ScalarUDFImpl for SparkAbs {
 
         let dt = info.get_data_type(&args[0])?;
         match dt {
-            // Keep in invoke_with_args: interval/duration, and signed integers
+            // Keep in invoke_with_args: interval/duration, signed integers, and expanded DECIMAL128
             // (where invoke branches on self.ansi_mode between wrapping_abs and
-            // checked_abs to honour Spark's ANSI semantics).
+            // checked_abs to honour Spark's ANSI semantics). Spark's Decimal.abs also routes a
+            // negative expanded decimal through unary minus, whose DECIMAL128 context can round
+            // it into an overflow; DataFusion's literal simplifier cannot model that branch.
             DataType::Interval(_)
             | DataType::Duration(_)
             | DataType::Int8
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64 => Ok(ExprSimplifyResult::Original(args)),
-            // Floats, decimals, unsigned, null: no ANSI overflow concern — delegate.
+            DataType::Decimal128(precision, _) if precision > 34 => {
+                Ok(ExprSimplifyResult::Original(args))
+            }
+            // Floats, ordinary decimals, unsigned, null: no ANSI overflow concern — delegate.
             _ => Ok(ExprSimplifyResult::Simplified(abs(args.one()?))),
         }
     }

@@ -73,10 +73,15 @@ impl CsvReadOptions {
                     cause: None,
                 });
             }
-            (nv, _) if !nv.is_empty() => Some(regex::escape(nv)),
+            // A field is NULL when it EQUALS `nullValue` or is empty (`UnivocityParser.scala:307`,
+            // `CSVInferSchema.scala:134`). arrow's null regex is unanchored and REPLACES its
+            // empty-field rule, so the pattern is anchored and keeps the empty field.
+            (nv, _) if !nv.is_empty() => Some(format!("^(?:{})?$", regex::escape(nv))),
             (_, nr) if !nr.is_empty() => Some(nr.to_string()),
             _ => None,
         };
+        // Kept beside the pattern so the string-only decoder can match `nullValue` exactly.
+        let null_value = (!null_value.is_empty()).then_some(null_value);
         let delimiter =
             char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
                 key: "delimiter".to_string(),
@@ -139,6 +144,7 @@ impl CsvReadOptions {
             terminator,
             escape,
             comment,
+            null_value,
             null_regex,
             schema_infer_max_rec,
             compression,
@@ -265,8 +271,9 @@ mod tests {
         assert_eq!(options.escape, Some(b'*'));
         assert_eq!(options.comment, Some(b'^'));
         assert_eq!(options.has_header, Some(true));
-        assert_eq!(options.null_value, None);
-        assert_eq!(options.null_regex, Some("MEOW".to_string()));
+        assert_eq!(options.null_value, Some("MEOW".to_string()));
+        // Anchored, and the empty field stays NULL: `nullValue` matches a whole field.
+        assert_eq!(options.null_regex, Some("^(?:MEOW)?$".to_string()));
         assert_eq!(options.terminator, Some(b'@'));
         // `inferSchema` defaults to `false` (Spark parity), which collapses
         // `schema_infer_max_rec` to `Some(0)` regardless of the user-supplied

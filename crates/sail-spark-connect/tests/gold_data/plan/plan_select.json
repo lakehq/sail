@@ -4906,6 +4906,7 @@
                 "cast": {
                   "expr": {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "/"
                       ],
@@ -5413,6 +5414,7 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "=="
                       ],
@@ -5846,6 +5848,7 @@
               ],
               "having": {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "<"
                   ],
@@ -5908,6 +5911,7 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         ">="
                       ],
@@ -5992,6 +5996,7 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "<="
                       ],
@@ -6076,6 +6081,7 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "<"
                       ],

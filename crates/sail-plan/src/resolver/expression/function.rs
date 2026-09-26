@@ -1,7 +1,8 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -33,6 +34,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         let spec::UnresolvedFunction {
+            is_sql_operator,
             function_name,
             arguments,
             named_arguments,
@@ -93,6 +95,13 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
+        let sql_left =
+            if is_sql_operator && canonical_function_name == "-" && !self.config.ansi_mode {
+                arguments.first().cloned()
+            } else {
+                None
+            };
+
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
@@ -110,6 +119,19 @@ impl PlanResolver<'_> {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        if let Some(left) = sql_left
+            && let [left_expr, right_expr] = arguments.as_slice()
+            && left_expr.get_type(schema)?.is_string()
+            && right_expr.get_type(schema)? == DataType::Date32
+            && self
+                .sql_string_operand_needs_coercion(left, schema, state)
+                .await?
+        {
+            return Err(PlanError::analysis(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] cannot resolve SQL string subtraction: the first parameter requires DATE, but string promotion produces DOUBLE. SQLSTATE: 42K09",
+            ));
+        }
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
@@ -298,6 +320,63 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// The SQL datetime rewrite precedes argument coercion. A string-producing expression
+    /// whose immediate inputs still need coercion misses that rewrite; StringPromotion then
+    /// casts it to DOUBLE (StringPromotionTypeCoercion.scala:49-51), which SubtractDates refuses.
+    /// Connect DataFrame expressions are resolved in a different order and must not use this check.
+    async fn sql_string_operand_needs_coercion(
+        &self,
+        operand: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<bool> {
+        let spec::Expr::UnresolvedFunction(function) = operand else {
+            return Ok(false);
+        };
+        let Ok(name) = Vec::<String>::from(function.function_name).one() else {
+            return Ok(false);
+        };
+        let name = name.to_ascii_lowercase();
+        if !matches!(
+            name.as_str(),
+            "coalesce"
+                | "nvl"
+                | "ifnull"
+                | "least"
+                | "greatest"
+                | "nullif"
+                | "if"
+                | "nvl2"
+                | "when"
+                | "concat"
+                | "md5"
+                | "base64"
+        ) {
+            return Ok(false);
+        }
+        let (_, arguments) = self
+            .resolve_expressions_and_names(function.arguments, schema, state)
+            .await?;
+        let types = arguments
+            .iter()
+            .map(|a| a.get_type(schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        let inputs: Vec<_> = match name.as_str() {
+            "if" | "nvl2" => types.iter().skip(1).collect(),
+            "when" => types
+                .iter()
+                .enumerate()
+                .filter_map(|(i, t)| {
+                    (i % 2 == 1 || (types.len() % 2 == 1 && i == types.len() - 1)).then_some(t)
+                })
+                .collect(),
+            "md5" | "base64" => return Ok(types.iter().any(|t| !t.is_binary())),
+            "concat" => return Ok(types.iter().any(|t| !t.is_string())),
+            _ => types.iter().collect(),
+        };
+        Ok(inputs.windows(2).any(|pair| pair[0] != pair[1]))
+    }
+
     pub(super) async fn resolve_expression_call_function(
         &self,
         function_name: spec::ObjectName,
@@ -306,6 +385,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let function = spec::UnresolvedFunction {
+            is_sql_operator: false,
             function_name,
             arguments,
             named_arguments: vec![],

@@ -95,14 +95,8 @@ Feature: abs comprehensive tests
         | CAST(0 AS DECIMAL(10,2))      | 0.00   |
         | CAST(-0.001 AS DECIMAL(10,3)) | 0.001  |
 
-    @sail-bug
-    # Tagged @sail-bug purely for Spark-compat tracking — Sail's behaviour here
-    # is arguably MORE correct mathematically. Divergence lives in CAST, not abs:
-    # JVM applies half-up rounding during CAST to DECIMAL(38,0) and rounds 37
-    # nines up to 10^37; Sail preserves precision and returns 37 nines. Whether
-    # to "fix" this (align with Spark) or keep Sail's precise behaviour is a
-    # policy call. Out of scope for `abs` either way — fix path is the decimal
-    # CAST kernel (arrow-rs `cast_decimal` semantics or a Sail-side override).
+    # Decimal.abs negates a negative expanded decimal through Scala BigDecimal's
+    # DECIMAL128 context (`Decimal.scala:543-551`), so 37 nines round to 10^37.
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -112,9 +106,8 @@ Feature: abs comprehensive tests
         | result                                 |
         | 10000000000000000000000000000000000000 |
 
-    @sail-bug
-    # Same root cause as the scenario above (CAST rounding) — JVM rounds
-    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines.
+    # The same DECIMAL128 rounding turns 38 nines into 10^38, which does not
+    # fit DECIMAL(38,0) and raises regardless of ANSI mode.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
@@ -145,16 +138,9 @@ Feature: abs comprehensive tests
         | CAST(-2147483648 AS INT)             | -2147483648          |
         | CAST(-9223372036854775808 AS BIGINT) | -9223372036854775808 |
 
-    @sail-bug
-    # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
-    # Root cause: Sail's SQL parses `-2147483648` as unary-minus + positive
-    # literal; the positive side overflows INT32 (max 2147483647) and gets
-    # widened to BIGINT. Spark has a special rule that recognises the whole
-    # `-INT32_MIN` (and `-LONG_MIN`) literal and keeps the narrow type.
-    # Fix path: `sail-sql-analyzer` (or parser) — add constant-folding rule
-    # for `UnaryMinus(IntegerLiteral(N))` that narrows when `-N` fits in a
-    # smaller signed type. Affects every expression with negative-MIN
-    # literals, not just abs.
+    # Spark's grammar folds the minus into the literal (`number: MINUS? INTEGER_VALUE`), so
+    # `-2147483648` is an INT and `abs` wraps it back to MIN. Sail used to negate a BIGINT
+    # `2147483648` instead; it folds the sign the same way now.
     Scenario: abs INT literal MIN preserves INT type and wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -621,7 +607,6 @@ Feature: abs comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -633,7 +618,6 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
@@ -655,3 +639,39 @@ Feature: abs comprehensive tests
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: abs takes a numeric or an ANSI interval, not a calendar one
+
+    # `Abs` is `ImplicitCastInputTypes` over `NumericAndAnsiInterval` (`arithmetic.scala:158`), which
+    # leaves out the legacy CALENDAR interval `make_interval` builds, so Spark refuses it while it
+    # answers a DAY TO SECOND or a YEAR TO MONTH one.
+    Scenario Outline: abs of a calendar interval is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(make_interval(0, 1, 0, 1, 0, 0, 0)) AS v
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    # The value, not the rendering: Spark keeps the interval's field range in the text
+    # (`INTERVAL '02' HOUR`) and Sail spells every day-time interval DAY TO SECOND, which
+    # `arithmetic_result_type.feature` pins on its own.
+    Scenario Outline: abs of an ANSI interval answers it: <case>
+      When query
+        """
+        SELECT abs(<expression>) = <expected> AS v
+        """
+      Then query result
+        | v    |
+        | true |
+
+      Examples:
+        | case                    | expression           | expected              |
+        | a day-time interval     | INTERVAL '1' DAY     | INTERVAL '1' DAY      |
+        | a negative day-time     | INTERVAL '-2' HOUR   | INTERVAL '2' HOUR     |
+        | a year-month interval   | INTERVAL '-1' MONTH  | INTERVAL '1' MONTH    |

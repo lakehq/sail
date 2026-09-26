@@ -168,7 +168,7 @@ Feature: convert_timezone
           TIMESTAMP_NTZ '2024-01-01 00:00:00'
         ) AS result
         """
-      Then query error (?i)(DIVIDE_BY_ZERO|divide by zero)
+      Then query error (?i)(DIVIDE_BY_ZERO|divi(de|sion) by zero)
 
     Scenario: per-row time zones are not parsed when another value is null
       When query

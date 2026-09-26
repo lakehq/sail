@@ -27,7 +27,6 @@ Feature: datediff output schema
          |-- result: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a nullable column input to datediff stays nullable
       When query
         """
@@ -38,3 +37,21 @@ Feature: datediff output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: a CASE, IF or UNION with an INT branch beside a BIGINT one is a BIGINT
+
+    # `CaseWhenCoercion` and `WidenSetOperationTypes` widen every branch to the common type, so an
+    # INT branch beside a BIGINT one is a BIGINT; `datediff` is an INT now and meets it.
+    Scenario Outline: <expression> is a BIGINT
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t      |
+        | bigint |
+
+      Examples:
+        | expression                                                                        |
+        | CASE WHEN false THEN datediff(DATE'2024-01-15', DATE'2024-01-01') ELSE 3000000000L END |
+        | if(false, regexp_count('aaa', 'a'), 3000000000L)                                  |

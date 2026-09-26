@@ -56,6 +56,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],
@@ -357,6 +358,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -1536,6 +1538,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -1716,6 +1719,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -1978,6 +1982,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -2375,6 +2380,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -2548,6 +2554,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -2810,6 +2817,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -3078,6 +3086,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -3251,6 +3260,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -3424,6 +3434,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -3604,6 +3615,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -3777,6 +3789,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -4597,6 +4610,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],
@@ -4727,6 +4741,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],
@@ -4784,6 +4799,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -4900,6 +4916,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],
@@ -5020,6 +5037,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],
@@ -5061,6 +5079,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -5181,6 +5200,7 @@
                   "joinCriteria": {
                     "on": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -5302,6 +5322,7 @@
                       "joinCriteria": {
                         "on": {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "=="
                             ],

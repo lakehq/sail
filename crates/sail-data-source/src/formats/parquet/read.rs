@@ -107,6 +107,15 @@ impl ReadFormat for ParquetReadFormat {
             merged
         };
 
+        // TODO: this is the ARROW schema of the file, and Spark's reader does not answer that. Spark
+        //  has no unsigned integer type and no dictionary type, so it widens each unsigned width to
+        //  the next signed one -- `UINT_8` to SMALLINT, `UINT_16` to INT, `UINT_32` to BIGINT and
+        //  `UINT_64` to `DECIMAL(20,0)` -- and reads a dictionary-encoded column as its value type
+        //  (`ParquetSchemaConverter.scala:290-296,311-317`). Handing the Arrow type through gives a
+        //  column no Spark client can convert and no operator can take: over a `uint8` column from a
+        //  file written by pandas, polars or DuckDB, `-c` raises where Spark answers `-1`, and
+        //  `df.schema` says `tinyint` where Spark says `smallint`. `test_parquet.py` pins the rule
+        //  (`WIDENED_PARQUET_XFAIL`); the fix belongs to the reader, not to the arithmetic guards.
         Ok(Arc::new(merged))
     }
 

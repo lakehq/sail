@@ -90,6 +90,7 @@
               "condition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],

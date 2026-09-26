@@ -211,3 +211,194 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query result
         | id |
+
+  Rule: a set operation widens its numeric columns to the common type
+
+    # `WidenSetOperationTypes` widens each positional pair to their common type
+    # (`TypeCoercion.scala`), so an INT branch beside a BIGINT one is a BIGINT. Sail built the plan
+    # from the LEFT input's schema, so the column declared INT while carrying a BIGINT value: the
+    # rows came back right and the schema lied, which broke `toArrow` and `CREATE TABLE AS SELECT`.
+    Scenario Outline: <case> is <type>
+      When query
+        """
+        SELECT typeof(v) AS t FROM (<query>) LIMIT 1
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                                     | query                                                                                  | type          |
+        | an int beside a bigint                   | SELECT -2147483648 AS v UNION ALL SELECT 3000000000L AS v                              | bigint        |
+        | a bigint beside an int                   | SELECT 3000000000L AS v UNION ALL SELECT -2147483648 AS v                              | bigint        |
+        | an int beside a double                   | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DOUBLE) AS v                                | double        |
+        | an int beside a decimal                  | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DECIMAL(10,2)) AS v                         | decimal(12,2) |
+        | capped decimals preserve integral digits | SELECT CAST(1 AS DECIMAL(38,0)) AS v UNION ALL SELECT CAST(1.5 AS DECIMAL(38,10)) AS v | decimal(38,0) |
+        | a distinct union                         | SELECT -2147483648 AS v UNION SELECT 3000000000L AS v                                  | bigint        |
+
+    Scenario: default decimal widening preserves integral digits when precision caps
+      When query
+        """
+        SELECT typeof(v) AS t FROM (
+          SELECT CAST(1 AS DECIMAL(38,0)) AS v
+          UNION ALL
+          SELECT CAST(1.5 AS DECIMAL(38,10)) AS v
+        ) LIMIT 1
+        """
+      Then query result
+        | t             |
+        | decimal(38,0) |
+
+    # TODO: thread spark.sql.legacy.decimal.retainFractionDigitsOnTruncate through PlanConfig and the decimal
+    # widening rule. Spark's DecimalPrecisionTypeCoercion uses DecimalType.bounded here rather
+    # than boundedPreferIntegralDigits, retaining scale 10 instead of integral digits.
+    @sail-bug
+    Scenario: legacy decimal widening retains fraction digits when precision caps
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT typeof(v) AS t FROM (
+          SELECT CAST(1 AS DECIMAL(38,0)) AS v
+          UNION ALL
+          SELECT CAST(1.5 AS DECIMAL(38,10)) AS v
+        ) LIMIT 1
+        """
+      Then query result
+        | t              |
+        | decimal(38,10) |
+
+    Scenario: every row of a widened union survives
+      When query
+        """
+        SELECT v FROM (SELECT -2147483648 AS v UNION ALL SELECT 3000000000L AS v) ORDER BY v
+        """
+      Then query result ordered
+        | v           |
+        | -2147483648 |
+        | 3000000000  |
+
+    # `WidenSetOperationTypes` covers `Except` (`TypeCoercionBase.scala:194`) and `Intersect`
+    # (`:208`), not only `Union` (`:222`).
+    Scenario Outline: <case> widens too
+      When query
+        """
+        SELECT typeof(v) AS t FROM (<query>) LIMIT 1
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                        | query                                                          | type          |
+        | an except with a decimal    | SELECT 1 AS v EXCEPT SELECT CAST(0.5 AS DECIMAL(10,1)) AS v    | decimal(11,1) |
+        | an intersect with a bigint  | SELECT 1 AS v INTERSECT SELECT 1L AS v                         | bigint        |
+        | an intersect with a decimal | SELECT CAST(1.0 AS DECIMAL(10,1)) AS v INTERSECT SELECT 1 AS v | decimal(11,1) |
+
+    Scenario: an except keeps the widened value
+      When query
+        """
+        SELECT v FROM (SELECT 1 AS v EXCEPT SELECT CAST(0.5 AS DECIMAL(10,1)) AS v)
+        """
+      Then query result
+        | v   |
+        | 1.0 |
+
+    Scenario: a union of the same type is not rewritten
+      When query
+        """
+        SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2 AS v) ORDER BY v
+        """
+      Then query result ordered
+        | v |
+        | 1 |
+        | 2 |
+
+  Rule: set operations use Spark's numeric precedence and reject incompatible arithmetic families
+
+    # These are the nontrivial leaves of WidenSetOperationTypes which are shared with arithmetic
+    # coercion: narrow integrals, FLOAT's ANSI precision protection, DECIMAL precedence, and the
+    # precision cap. Values deliberately sit on each side of the common type so a left-schema-only
+    # implementation cannot pass by reporting a correct type for just one branch.
+    Scenario Outline: <operation> resolves <left> and <right> as <type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(v) AS t FROM (<left> AS v <operation> <right> AS v) LIMIT 1
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | operation | left                              | right                          | ansi  | type         |
+        | UNION ALL | SELECT CAST(1 AS TINYINT)         | SELECT CAST(2 AS SMALLINT)     | false | smallint     |
+        | UNION ALL | SELECT 9007199254740993L          | SELECT CAST(1.5 AS FLOAT)      | false | float        |
+        | UNION ALL | SELECT 9007199254740993L          | SELECT CAST(1.5 AS FLOAT)      | true  | double       |
+        | UNION ALL | SELECT CAST(2.5 AS FLOAT)         | SELECT 16777217                | true  | double       |
+        | UNION ALL | SELECT CAST(2.5 AS FLOAT)         | SELECT 1.5D                    | false | double       |
+        | UNION ALL | SELECT CAST(1.25 AS DECIMAL(5,2)) | SELECT CAST(2.5 AS FLOAT)      | false | double       |
+        | UNION ALL | SELECT CAST(1 AS TINYINT)         | SELECT CAST(2 AS DECIMAL(2,0)) | false | decimal(3,0) |
+        | INTERSECT | SELECT CAST(1 AS FLOAT)           | SELECT 1                       | true  | double       |
+
+    # BOOLEAN has no common arithmetic type with an integral. Spark rejects at analysis for all
+    # set-operation forms, rather than coercing true to 1 or preserving the left schema.
+    Scenario Outline: <operation> refuses a boolean beside an integer
+      When query
+        """
+        SELECT true AS v <operation> SELECT 1 AS v
+        """
+      Then query error (?i)INCOMPATIBLE_COLUMN_TYPE|incompatible|Cannot infer common argument type
+
+      Examples:
+        | operation     |
+        | UNION ALL     |
+        | INTERSECT ALL |
+        | EXCEPT ALL    |
+
+  Rule: set operations whose columns have no common type are refused
+
+    # TODO: `WidenSetOperationTypes` finds no wider type for an INT beside a DATE or an ARRAY, so
+    #  Spark refuses with `INCOMPATIBLE_COLUMN_TYPE` (`TypeCoercionBase.scala:190-222`). Sail keeps
+    #  the left input's type; the numeric widening this PR added does not reach these pairs.
+    Scenario Outline: a UNION of <case> is refused
+      When query
+        """
+        SELECT <query>
+        """
+      Then query error (?i)INCOMPATIBLE_COLUMN_TYPE|can only be performed
+
+      Examples:
+        | case                | query                                         |
+        | an INT and a DATE   | 1 AS v UNION ALL SELECT DATE'2024-01-01' AS v |
+        | an INT and an ARRAY | 1 AS v UNION ALL SELECT array(1) AS v         |
+
+    Scenario: a fourth incompatible column identifies its ordinal
+      When query
+        """
+        SELECT 1, 2, 3, DATE'2020-01-01'
+        UNION ALL
+        SELECT 1, 2, 3, 4
+        """
+      Then query error (?i)4th column
+
+  Rule: only ANSI widens an integral beside a FLOAT in a set operation
+
+    # `WidenSetOperationTypes` uses the same `findWiderTypeForTwo` as the branches of a CASE, so the
+    # FLOAT survives with ANSI off (`TypeCoercion.scala:89-92`) and becomes a DOUBLE with it on
+    # (`AnsiTypeCoercion.scala:117-121`).
+    Scenario Outline: <case> is <type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT DISTINCT typeof(c) AS t FROM (<query>)
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                       | ansi  | query                                                          | type   |
+        | a union of int and float   | false | SELECT CAST(1 AS INT) AS c UNION ALL SELECT CAST(0.1 AS FLOAT) | float  |
+        | a union of int and float   | true  | SELECT CAST(1 AS INT) AS c UNION ALL SELECT CAST(0.1 AS FLOAT) | double |
+        | an except of int and float | false | SELECT CAST(1 AS INT) AS c EXCEPT SELECT CAST(0.1 AS FLOAT)    | float  |
+        | a union of int and bigint  | false | SELECT CAST(1 AS INT) AS c UNION ALL SELECT 3000000000L        | bigint |

@@ -9,6 +9,7 @@ use sail_sql_parser::ast::expression::{
     WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
+use sail_sql_parser::ast::literal::{NumberLiteral, NumberSuffix};
 use sail_sql_parser::ast::query::{
     ClusterByClause, DistributeByClause, IdentList, NamedExpr, OrderByClause, PartitionByClause,
     SortByClause,
@@ -84,6 +85,7 @@ impl TryFrom<Vec<WindowModifier>> for WindowModifiers {
 }
 fn negated(expr: spec::Expr) -> spec::Expr {
     spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+        is_sql_operator: false,
         function_name: spec::ObjectName::bare("not"),
         arguments: vec![expr],
         named_arguments: vec![],
@@ -245,11 +247,66 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
     }
 }
 
+/// A DECIMAL literal whose value is zero (`0.0`, `0.00`, `0BD`).
+///
+/// TODO: `-0.0` is one literal in Spark's grammar too, but folding it hands the zero-divisor
+///   short-circuit in `spark_divide`, `spark_modulo` and `spark_div` a literal zero, which refuses at
+///   analysis a query Spark only fails when the division is evaluated. The INT and floating zeros
+///   were already folded by `negate_literal`, so only the DECIMAL ones stay a negation until that
+///   short-circuit is removed.
+fn is_decimal_zero(literal: &NumberLiteral) -> bool {
+    let decimal = match literal.suffix {
+        Some(NumberSuffix::Bd) => true,
+        None => literal.value.contains('.') && !literal.value.contains(['e', 'E']),
+        Some(_) => false,
+    };
+    decimal && literal.value.chars().all(|c| matches!(c, '0' | '.'))
+}
+
+/// Whether a minus written right before this expression belongs to a NUMBER: the literal itself, or
+/// a literal under the postfix `::` casts applied to it. A parenthesized operand is
+/// `AtomExpr::Nested` and anything else is not a literal, so neither folds.
+fn minus_folds_into_number(expr: &Expr) -> bool {
+    match expr {
+        Expr::Atom(AtomExpr::NumberLiteral(literal)) => !is_decimal_zero(literal),
+        Expr::Cast(inner, _, _) => minus_folds_into_number(inner),
+        _ => false,
+    }
+}
+
+/// Moves that minus into the literal, keeping the casts around it: the grammar reads
+/// `-1::BOOLEAN` as `CAST(-1 AS BOOLEAN)`, not as a negation of `1::BOOLEAN`.
+fn fold_minus_into_number(expr: Expr) -> Expr {
+    match expr {
+        Expr::Atom(AtomExpr::NumberLiteral(literal)) => {
+            Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+                value: format!("-{}", literal.value),
+                ..literal
+            }))
+        }
+        Expr::Cast(inner, colon, data_type) => {
+            Expr::Cast(Box::new(fold_minus_into_number(*inner)), colon, data_type)
+        }
+        expr => expr,
+    }
+}
+
 pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
+        // Spark's grammar folds a minus written right before a number INTO the literal
+        // (`number: MINUS? INTEGER_VALUE`, and likewise for every suffix), so the literal's type is
+        // chosen WITH its sign: `-2147483648` is an INT, `-128Y` is a valid TINYINT, and the column
+        // is named `-1`. Negating the unsigned literal instead typed `-2147483648` as a BIGINT, which
+        // is a date offset Spark accepts and Sail then refused, refused `-128Y` outright, and named
+        // the column `(- 1)`. A parenthesized number is `AtomExpr::Nested`, so `-(2147483648)` is not
+        // folded and stays a BIGINT negation, as in Spark.
+        Expr::UnaryOperator(UnaryOperator::Minus(_), expr) if minus_folds_into_number(&expr) => {
+            from_ast_expression(fold_minus_into_number(*expr))
+        }
         Expr::UnaryOperator(op, expr) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare(from_ast_unary_operator(op)?),
                 arguments: vec![from_ast_expression(*expr)?],
                 named_arguments: vec![],
@@ -264,6 +321,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::BinaryOperator(left, op, right) => {
             let op = from_ast_binary_operator(op)?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: true,
                 function_name: spec::ObjectName::bare(op),
                 arguments: vec![from_ast_expression(*left)?, from_ast_expression(*right)?],
                 named_arguments: vec![],
@@ -413,6 +471,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 }))
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("like"),
                 arguments,
                 named_arguments: vec![],
@@ -439,6 +498,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 }));
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("ilike"),
                 arguments,
                 named_arguments: vec![],
@@ -459,6 +519,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("rlike"),
                 arguments: vec![expr, pattern],
                 named_arguments: vec![],
@@ -479,6 +540,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("regexp"),
                 arguments: vec![expr, pattern],
                 named_arguments: vec![],
@@ -721,6 +783,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("struct"),
                 arguments,
                 named_arguments: vec![],
@@ -738,6 +801,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("struct"),
                 arguments,
                 named_arguments: vec![],
@@ -771,6 +835,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     let condition = from_ast_expression(condition)?;
                     let condition = if let Some(ref operand) = operand {
                         spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                            is_sql_operator: false,
                             function_name: spec::ObjectName::bare("=="),
                             arguments: vec![operand.clone(), condition],
                             named_arguments: vec![],
@@ -793,6 +858,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(result)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("when"),
                 arguments,
                 named_arguments: vec![],
@@ -818,6 +884,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("extract"),
                 arguments: vec![
                     spec::Expr::Literal(spec::Literal::Utf8 {
@@ -843,6 +910,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("substring"),
                 arguments,
                 named_arguments: vec![],
@@ -873,6 +941,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 ),
             };
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare(name),
                 arguments,
                 named_arguments: vec![],
@@ -894,6 +963,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("overlay"),
                 arguments,
                 named_arguments: vec![],
@@ -907,6 +977,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::Position(_, _, what, _, e, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("strpos"),
                 arguments: vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
                 named_arguments: vec![],
@@ -920,6 +991,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentUser(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_user"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -933,6 +1005,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentTimestamp(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_timestamp"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -946,6 +1019,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentDate(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name: spec::ObjectName::bare("current_date"),
                 arguments: vec![],
                 named_arguments: vec![],
@@ -1043,6 +1117,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 })
                 .transpose()?;
             let function = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                is_sql_operator: false,
                 function_name,
                 arguments,
                 named_arguments,
@@ -1158,6 +1233,7 @@ fn from_ast_quantified_pattern(
         })
         .collect::<SqlResult<Vec<_>>>()?;
     Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+        is_sql_operator: false,
         function_name: spec::ObjectName::bare(quantifier),
         arguments,
         named_arguments: vec![],

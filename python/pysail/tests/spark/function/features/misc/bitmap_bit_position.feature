@@ -27,7 +27,6 @@ Feature: bitmap_bit_position output schema
          |-- result: long (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to bitmap_bit_position stays nullable
       When query
         """
@@ -38,3 +37,52 @@ Feature: bitmap_bit_position output schema
         root
          |-- result: long (nullable = true)
         """
+
+  Rule: the argument of bitmap_bit_position is read as a BIGINT
+
+    # `inputTypes = Seq(LongType)` under `ImplicitCastInputTypes` (`bitmapExpressions.scala`): a
+    # number or a string is cast to BIGINT, and a BOOLEAN, DATE, TIMESTAMP or INTERVAL is refused
+    # at analysis in both ANSI modes.
+    Scenario Outline: bitmap_bit_position refuses a <case> argument with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT bitmap_bit_position(<argument>) AS result
+        """
+      Then query error (?i)cannot resolve|data type mismatch
+
+      Examples:
+        | case      | ansi  | argument                       |
+        | boolean   | false | true                           |
+        | boolean   | true  | true                           |
+        | date      | false | DATE'2020-01-01'               |
+        | date      | true  | DATE'2020-01-01'               |
+        | timestamp | false | TIMESTAMP'2020-01-01 00:00:00' |
+        | timestamp | true  | TIMESTAMP'2020-01-01 00:00:00' |
+        | interval  | false | INTERVAL '1' DAY               |
+        | interval  | true  | INTERVAL '1' DAY               |
+
+    Scenario: bitmap_bit_position casts a string argument to BIGINT
+      When query
+        """
+        SELECT bitmap_bit_position('123') AS result
+        """
+      Then query result
+        | result |
+        | 122    |
+
+    # `BitmapExpressionUtils.bitmapBitPosition` is `(-value) % NUM_BITS` on a Java long, which wraps
+    # on the minimum and gives 0 (`BitmapExpressionUtils.java:37-43`).
+    Scenario: bitmap_bit_position of negative values
+      When query
+        """
+        SELECT
+          bitmap_bit_position(-9223372036854775808) AS a,
+          bitmap_bit_position(CAST(-9223372036854775808 AS BIGINT)) AS b,
+          bitmap_bit_position(-5) AS c,
+          bitmap_bit_position(-32768) AS d,
+          bitmap_bit_position(-32769) AS e
+        """
+      Then query result
+        | a | b | c | d | e |
+        | 0 | 0 | 5 | 0 | 1 |

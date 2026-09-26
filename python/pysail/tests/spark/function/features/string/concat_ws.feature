@@ -22,6 +22,15 @@ Feature: concat_ws function
         | concat_ws coerces double arguments to string  | '-', 'a', 1.5         | a-1.5        |
         | concat_ws coerces boolean arguments to string | '-', 'a', true, false | a-true-false |
 
+    Scenario: concat_ws retains a day-time interval qualifier
+      When query
+        """
+        SELECT concat_ws(',', INTERVAL '2' HOUR) AS result
+        """
+      Then query result
+        | result              |
+        | INTERVAL '02' HOUR |
+
   Rule: concat_ws with array arguments
 
     Scenario Outline: Array arguments: <case>

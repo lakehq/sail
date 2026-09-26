@@ -19,6 +19,12 @@ pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 /// (e.g. extension type keys).
 pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 
+/// Prefix of every Arrow field metadata key that is internal to Sail.
+///
+/// Keys under this prefix must never reach a client: they are stripped from the schema of the
+/// Arrow stream (`sail-spark-connect/src/schema.rs`), and Spark sends no such metadata.
+pub const SAIL_INTERNAL_METADATA_PREFIX: &str = "SAIL::";
+
 /// Sail metadata key for Spark UDT information stored in Arrow field metadata.
 ///
 /// This is internal to Sail and should not be exposed as Spark column metadata.
@@ -601,6 +607,42 @@ pub enum IntervalFieldType {
 }
 
 pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "__sail_spark_interval";
+
+/// The interval qualifiers attached to a nested Spark value while it is formatted as STRING.
+///
+/// Arrow fields carry these qualifiers during planning, but the physical expression codec does
+/// not retain nested field metadata.  This tree is passed to the formatting UDF as a constant and
+/// is applied only to its local formatting field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SparkIntervalMetadataTree {
+    Interval {
+        metadata: SparkIntervalMetadata,
+    },
+    List {
+        element: Box<SparkIntervalMetadataTree>,
+    },
+    Map {
+        key: Option<Box<SparkIntervalMetadataTree>>,
+        value: Option<Box<SparkIntervalMetadataTree>>,
+    },
+    Struct {
+        fields: Vec<Option<SparkIntervalMetadataTree>>,
+    },
+}
+
+impl SparkIntervalMetadataTree {
+    pub fn from_json(value: &str) -> CommonResult<Self> {
+        serde_json::from_str(value)
+            .map_err(|error| CommonError::invalid(format!("Spark interval metadata tree: {error}")))
+    }
+
+    pub fn to_json(&self) -> CommonResult<String> {
+        serde_json::to_string(self).map_err(|error| {
+            CommonError::internal(format!("Spark interval metadata tree: {error}"))
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(

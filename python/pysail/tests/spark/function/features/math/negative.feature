@@ -88,6 +88,15 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | 2  | -0.0   |
         | 3  | NULL   |
 
+    Scenario: negating a cast negative-zero double column yields negative zero
+      When query
+        """
+        SELECT -value AS result FROM VALUES (CAST(-0.0 AS DOUBLE)) AS t(value)
+        """
+      Then query result
+        | result |
+        | -0.0   |
+
     Scenario Outline: Floating-point predicate: <case>
       When query
         """
@@ -156,24 +165,40 @@ Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the maximum decimal overflows its precision
 
-    # Spark promotes `-DECIMAL(38,0)` to DECIMAL(39,0), which exceeds the max
-    # precision (38), so negating the maximum value raises NUMERIC_VALUE_OUT_OF_RANGE.
-    # This is a TYPE-precision overflow, so it errors regardless of ANSI mode (unlike
-    # a value overflow, which only errors under ANSI on). Sail keeps DECIMAL(38,0)
-    # and returns the value in both modes.
-    @sail-bug
+    # UnaryMinus retains DECIMAL(p,s), then Spark validates the negated value against
+    # that declared precision. Its physical integer may fit Arrow storage while the
+    # value does not fit DECIMAL(p,s), so this raises NUMERIC_VALUE_OUT_OF_RANGE in
+    # both ANSI modes. Sail used to validate only physical integer overflow.
     Scenario Outline: Negating the maximum decimal overflows its precision: <case>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS result
+        SELECT <expression> AS result
         """
       Then query error (?i)out.of.range
 
       Examples:
-        | case                                                        | ansi  |
-        | negate the maximum DECIMAL(38,0) errors under ANSI on       | true  |
-        | negate the maximum DECIMAL(38,0) also errors under ANSI off | false |
+        | case                                                        | expression                                                            | ansi  |
+        | unary minus rejects the maximum DECIMAL(38,0) under ANSI on | -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))    | true  |
+        | unary minus rejects the maximum DECIMAL(38,0) under ANSI off| -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))    | false |
+        | negative rejects the maximum DECIMAL(38,0) under ANSI on    | negative(CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))) | true |
+        | negative rejects the maximum DECIMAL(38,0) under ANSI off   | negative(CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))) | false |
+
+  Rule: Negating expanded decimals uses Spark's DECIMAL128 context
+
+    Scenario Outline: negation rounds expanded DECIMAL values: <case>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                  | expression                                                                  | result                                |
+        | unary minus rounds to 34 digits       | -CAST('12345678901234567890123456789012345' AS DECIMAL(38,0))              | -12345678901234567890123456789012340 |
+        | negative function rounds to 34 digits | negative(CAST('12345678901234567890123456789012345' AS DECIMAL(38,0)))     | -12345678901234567890123456789012340 |
 
   @function(nullability)
   Rule: Output schema
@@ -189,7 +214,6 @@ Feature: unary minus (negative) honors ANSI overflow semantics
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """

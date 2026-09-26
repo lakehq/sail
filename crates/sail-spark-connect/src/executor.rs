@@ -20,7 +20,7 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
-use crate::schema::to_spark_schema;
+use crate::schema::{to_client_schema, to_spark_schema};
 use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
 use crate::spark::connect::{
     CheckpointCommandResult, DataType, StreamingQueryCommandResult,
@@ -467,7 +467,10 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+        // Only the schema message carries field metadata; the record batch message carries
+        // buffers, so the batch itself does not have to be rebuilt to hide Sail's internals.
+        let schema = to_client_schema(&batch.schema());
+        let mut writer = StreamWriter::try_new(cursor, schema.as_ref())?;
         writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;

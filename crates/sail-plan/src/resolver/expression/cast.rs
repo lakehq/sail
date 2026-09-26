@@ -1,7 +1,7 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
@@ -16,6 +16,8 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
+use sail_function::scalar::spark_cast_integral_to_binary::SparkCastIntegralToBinary;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -23,7 +25,11 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
+use crate::coercion::{
+    SAIL_DATE_DIFFERENCE_METADATA_KEY, build_rename_target_type, needs_struct_field_rename,
+};
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::{is_spark_udt_field, spark_type_name};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -83,6 +89,71 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_field = expr.to_field(schema)?.1;
         let expr_type = expr_field.data_type().clone();
+        // `dayTimeIntervalToLong` reads an ANSI interval in units of its END field
+        // (`IntervalUtils.scala:921-928`): an INTERVAL DAY is therefore a count of days,
+        // while DAY TO SECOND is a count of seconds. Arrow stores both as microseconds, so keep
+        // the declared field alongside the physical type for the reverse cast too.
+        let source_day_time_interval_field = expr_field
+            .metadata()
+            .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+            .map(|value| spec::SparkIntervalMetadata::from_json(value))
+            .transpose()?
+            .and_then(|metadata| match metadata {
+                spec::SparkIntervalMetadata::DayTime { end_field, .. } => Some(end_field),
+                spec::SparkIntervalMetadata::YearMonth { .. } => None,
+            });
+        // Cast.scala:92-180, 223-318: numeric-to-DATE is never legal. Numeric-to-BINARY
+        // is legal only for integral input in legacy CAST; TRY_CAST uses canAnsiCast.
+        // Check before building an Arrow cast, which permits additional storage conversions.
+        if expr_type.is_numeric() {
+            let source = spark_type_name(&expr_type);
+            // Spark has no numeric-to-TIME cast in any evaluation mode. Arrow's
+            // integer storage conversion must not make TIME arithmetic accept it.
+            if matches!(cast_to_type, DataType::Time32(_) | DataType::Time64(_)) {
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve cast: cannot cast \"{source}\" to \"TIME\". SQLSTATE: 42K09"
+                )));
+            }
+            if matches!(cast_to_type, DataType::Date32 | DataType::Date64) {
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION] cannot resolve cast: cannot cast \"{source}\" to \"DATE\". To convert values from \"{source}\" to \"DATE\", use the function `DATE_FROM_UNIX_DATE` instead. SQLSTATE: 42K09"
+                )));
+            }
+            if cast_to_type.is_binary()
+                && (self.config.ansi_mode || is_try || !expr_type.is_integer())
+            {
+                let subclass = if self.config.ansi_mode && !is_try && expr_type.is_integer() {
+                    "CAST_WITH_CONF_SUGGESTION"
+                } else {
+                    "CAST_WITHOUT_SUGGESTION"
+                };
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.{subclass}] cannot resolve cast: cannot cast \"{source}\" to \"BINARY\". SQLSTATE: 42K09"
+                )));
+            }
+        }
+        if (cast_to_type.is_binary()
+            && matches!(
+                expr_type,
+                DataType::Boolean | DataType::Date32 | DataType::Date64
+            ))
+            || ((is_try || self.config.ansi_mode)
+                && matches!(expr_type, DataType::Date32 | DataType::Date64)
+                && (cast_to_type.is_numeric() || cast_to_type == DataType::Boolean))
+        {
+            let source = spark_type_name(&expr_type);
+            let target = spark_type_name(&cast_to_type);
+            let subclass = if cast_to_type.is_numeric() {
+                "CAST_WITH_FUNC_SUGGESTION"
+            } else if self.config.ansi_mode && !is_try && cast_to_type == DataType::Boolean {
+                "CAST_WITH_CONF_SUGGESTION"
+            } else {
+                "CAST_WITHOUT_SUGGESTION"
+            };
+            return Err(PlanError::analysis(format!(
+                "[DATATYPE_MISMATCH.{subclass}] cannot resolve cast: cannot cast \"{source}\" to \"{target}\". SQLSTATE: 42K09"
+            )));
+        }
         let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -97,6 +168,14 @@ impl PlanResolver<'_> {
             )]
         } else {
             name
+        };
+        // A cast yields its target type, never the UDT it is applied to. DataFusion copies the
+        // source field's metadata through a cast, UDT marker included, so the UDT is read as its
+        // storage first, or a column projected from the cast would still be a UDT.
+        let expr = if is_spark_udt_field(&expr_field) {
+            ScalarUDF::from(SparkUdtStorage::new()).call(vec![expr])
+        } else {
+            expr
         };
         let override_string_cast = matches!(
             expr_type,
@@ -116,6 +195,11 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64, to, false)
+                if to.is_binary() && !self.config.ansi_mode =>
+            {
+                ScalarUDF::new_from_impl(SparkCastIntegralToBinary::new()).call(vec![expr])
+            }
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
@@ -175,10 +259,11 @@ impl PlanResolver<'_> {
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
             {
+                let divisor = source_day_time_interval_field
+                    .map(|field| day_time_field_to_microseconds(field.into()))
+                    .unwrap_or_else(|| time_unit_to_multiplier(&time_unit));
                 cast(
-                    lit(1.0)
-                        .div(lit(time_unit_to_multiplier(&time_unit)))
-                        .mul(cast(expr, DataType::Int64)),
+                    lit(1.0).div(lit(divisor)).mul(cast(expr, DataType::Int64)),
                     to,
                 )
             }
@@ -249,6 +334,21 @@ impl PlanResolver<'_> {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new())
                     .call(spark_string_cast_arguments(expr, schema)?)
             }
+            // TODO: Spark has no cast from a numeric to DATE in either mode (`Cast.scala:223-255` and
+            //  `:92-122`), and takes an INTEGRAL to BINARY only in the non-ANSI `canCast`
+            //  (`Cast.scala:234`), never through `TRY_CAST`. Sail casts the underlying integer and
+            //  answers. That is an ACCEPT-more gap, and it is left open on purpose: refusing it broke
+            //  existing users of the cast -- the ClickBench fixture reads `EventDate` with
+            //  `cast("int").cast("date")`. `cast.feature` pins both directions.
+            // `castToBoolean` is `value != 0` for every numeric (`Cast.scala:840-847`), and
+            // `canAnsiCast` admits the whole family (`Cast.scala:105`). Arrow has no DECIMAL to
+            // BOOLEAN kernel, so the comparison is spelled out here rather than refused.
+            (DataType::Decimal128(precision, scale), DataType::Boolean, _) => {
+                expr.not_eq(lit(ScalarValue::Decimal128(Some(0), precision, scale)))
+            }
+            (DataType::Decimal256(precision, scale), DataType::Boolean, _) => expr.not_eq(lit(
+                ScalarValue::Decimal256(Some(i256::ZERO), precision, scale),
+            )),
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
             {
@@ -285,6 +385,32 @@ impl PlanResolver<'_> {
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
+        };
+        // An explicit conversion consumes the date-difference identity. Otherwise a
+        // type-only Arrow cast inherits it and a later projection mistakes the INT
+        // result for an interval when checking arithmetic operands.
+        let expr = if expr_field
+            .metadata()
+            .contains_key(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+        {
+            let field = expr.to_field(schema)?.1;
+            let mut metadata = field.metadata().clone();
+            metadata.insert(
+                SAIL_DATE_DIFFERENCE_METADATA_KEY.to_string(),
+                "false".to_string(),
+            );
+            let field = Arc::new(field.as_ref().clone().with_metadata(metadata));
+            match expr {
+                expr::Expr::Cast(cast) => {
+                    expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                }
+                expr::Expr::TryCast(cast) => {
+                    expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                }
+                expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+            }
+        } else {
+            expr
         };
         Ok(match spark_interval_metadata {
             Some(metadata) => {
@@ -337,107 +463,212 @@ fn spark_string_cast_arguments(
     expr: expr::Expr,
     schema: &DFSchemaRef,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let tree = spark_interval_metadata_tree(&expr, schema)?;
     let mut arguments = vec![expr];
-    if let Some(interval) = interval {
-        // Physical expression serialization does not preserve intermediate field metadata.
-        arguments.push(lit(interval.to_json()?));
+    if let Some(tree) = tree {
+        // Physical expression serialization drops nested Arrow field metadata. Preserve the
+        // complete field tree for the string UDF without changing the physical input type.
+        arguments.push(lit(tree.to_json()?));
     }
     Ok(arguments)
 }
 
-/// Returns true if the cast from `from` to `to` involves a Struct
-/// (possibly nested in a List/LargeList/FixedSizeList/Map) whose field names
-/// don't share enough overlap for DataFusion's struct cast validator.
-fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
-    match (from, to) {
-        (DataType::Struct(a), DataType::Struct(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .any(|(fa, fb)| fa.name() != fb.name())
+fn spark_interval_metadata_tree(
+    expression: &expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    let data_type = expression.to_field(schema.as_ref())?.1.data_type().clone();
+    spark_interval_metadata_tree_for_type(expression, &data_type, schema)
+}
+
+fn spark_interval_metadata_tree_for_type(
+    expression: &expr::Expr,
+    data_type: &DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    use spec::SparkIntervalMetadataTree as Tree;
+
+    match data_type {
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth) => {
+            Ok(spark_interval_metadata_for_expression(expression, schema)?
+                .map(|metadata| Tree::Interval { metadata }))
         }
-        (DataType::List(a), DataType::List(b))
-        | (DataType::LargeList(a), DataType::LargeList(b)) => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
+        DataType::List(element) => {
+            let Some(arguments) = array_arguments(expression) else {
+                return Ok(None);
+            };
+            let children = arguments
+                .iter()
+                .map(|argument| {
+                    spark_interval_metadata_tree_for_type(argument, element.data_type(), schema)
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            Ok(
+                merge_interval_metadata_trees(children)?.map(|element| Tree::List {
+                    element: Box::new(element),
+                }),
+            )
         }
-        (DataType::FixedSizeList(a, sa), DataType::FixedSizeList(b, sb)) if sa == sb => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
+        DataType::Map(entries, _) => {
+            let DataType::Struct(fields) = entries.data_type() else {
+                return Ok(None);
+            };
+            let (Some(key), Some(value)) = (fields.first(), fields.get(1)) else {
+                return Ok(None);
+            };
+            if let Some((keys, values)) = map_arguments(expression) {
+                let key = list_element_tree(keys, key.data_type(), schema)?;
+                let value = list_element_tree(values, value.data_type(), schema)?;
+                return Ok((key.is_some() || value.is_some()).then(|| Tree::Map {
+                    key: key.map(Box::new),
+                    value: value.map(Box::new),
+                }));
+            }
+            let Some(branches) = conditional_branches(expression) else {
+                return Ok(None);
+            };
+            let branches = branches
+                .iter()
+                .map(|branch| spark_interval_metadata_tree_for_type(branch, data_type, schema))
+                .collect::<PlanResult<Vec<_>>>()?;
+            merge_interval_metadata_trees(branches)
         }
-        (DataType::Map(a, _), DataType::Map(b, _)) => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
+        DataType::Struct(fields) => {
+            let Some(arguments) = struct_arguments(expression) else {
+                return Ok(None);
+            };
+            if arguments.len() != fields.len() {
+                return Ok(None);
+            }
+            let fields = arguments
+                .iter()
+                .zip(fields.iter())
+                .map(|(argument, field)| {
+                    spark_interval_metadata_tree_for_type(argument, field.data_type(), schema)
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            if fields.iter().all(Option::is_none) {
+                Ok(None)
+            } else {
+                Ok(Some(Tree::Struct { fields }))
+            }
         }
-        _ => false,
+        _ => Ok(None),
     }
 }
 
-/// Build a target type that has the names from `to` but the data types from
-/// `from`. The result is what `SparkStructRename` produces; the subsequent
-/// regular CAST then handles any leaf-type conversion.
-fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
-    match (from, to) {
-        (DataType::Struct(src_fields), DataType::Struct(tgt_fields))
-            if src_fields.len() == tgt_fields.len() =>
-        {
-            let fields: Fields = src_fields
-                .iter()
-                .zip(tgt_fields.iter())
-                .map(|(src, tgt)| {
-                    Arc::new(
-                        Field::new(
-                            tgt.name(),
-                            build_rename_target_type(src.data_type(), tgt.data_type()),
-                            src.is_nullable(),
-                        )
-                        .with_metadata(src.metadata().clone()),
-                    )
-                })
-                .collect();
-            DataType::Struct(fields)
-        }
-        (DataType::List(src), DataType::List(tgt)) => DataType::List(Arc::new(
-            Field::new(
-                tgt.name(),
-                build_rename_target_type(src.data_type(), tgt.data_type()),
-                src.is_nullable(),
-            )
-            .with_metadata(src.metadata().clone()),
-        )),
-        (DataType::LargeList(src), DataType::LargeList(tgt)) => DataType::LargeList(Arc::new(
-            Field::new(
-                tgt.name(),
-                build_rename_target_type(src.data_type(), tgt.data_type()),
-                src.is_nullable(),
-            )
-            .with_metadata(src.metadata().clone()),
-        )),
-        (DataType::FixedSizeList(src, sa), DataType::FixedSizeList(tgt, _)) => {
-            DataType::FixedSizeList(
-                Arc::new(
-                    Field::new(
-                        tgt.name(),
-                        build_rename_target_type(src.data_type(), tgt.data_type()),
-                        src.is_nullable(),
-                    )
-                    .with_metadata(src.metadata().clone()),
-                ),
-                *sa,
-            )
-        }
-        (DataType::Map(src, sorted), DataType::Map(tgt, _)) => DataType::Map(
-            Arc::new(
-                Field::new(
-                    tgt.name(),
-                    build_rename_target_type(src.data_type(), tgt.data_type()),
-                    src.is_nullable(),
-                )
-                .with_metadata(src.metadata().clone()),
-            ),
-            *sorted,
-        ),
-        // Leaves: keep the source data type unchanged.
-        _ => from.clone(),
+fn array_arguments(expression: &expr::Expr) -> Option<&[expr::Expr]> {
+    let function = scalar_function(expression)?;
+    matches!(function.name(), "array" | "make_array" | "spark_array")
+        .then_some(function.args.as_slice())
+}
+
+fn scalar_function(expression: &expr::Expr) -> Option<&expr::ScalarFunction> {
+    match expression {
+        expr::Expr::ScalarFunction(function) => Some(function),
+        expr::Expr::Alias(alias) => scalar_function(alias.expr.as_ref()),
+        expr::Expr::Cast(cast) => scalar_function(cast.expr.as_ref()),
+        expr::Expr::TryCast(cast) => scalar_function(cast.expr.as_ref()),
+        _ => None,
     }
+}
+
+fn map_arguments(expression: &expr::Expr) -> Option<(&expr::Expr, &expr::Expr)> {
+    let function = scalar_function(expression)?;
+    (function.name() == "map_from_arrays").then(|| {
+        let [keys, values] = function.args.as_slice() else {
+            return None;
+        };
+        Some((keys, values))
+    })?
+}
+
+fn conditional_branches(expression: &expr::Expr) -> Option<Vec<&expr::Expr>> {
+    let function = scalar_function(expression)?;
+    match function.name() {
+        "coalesce" | "nvl" => Some(function.args.iter().collect()),
+        "if" if function.args.len() == 3 => Some(function.args.iter().skip(1).collect()),
+        _ => None,
+    }
+}
+
+fn list_element_tree(
+    expression: &expr::Expr,
+    element_type: &DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    let Some(arguments) = array_arguments(expression) else {
+        return Ok(None);
+    };
+    let children = arguments
+        .iter()
+        .map(|argument| spark_interval_metadata_tree_for_type(argument, element_type, schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    merge_interval_metadata_trees(children)
+}
+
+fn struct_arguments(expression: &expr::Expr) -> Option<Vec<&expr::Expr>> {
+    let expr::Expr::ScalarFunction(function) = expression else {
+        return None;
+    };
+    match function.name() {
+        "struct" => Some(function.args.iter().collect()),
+        "named_struct" if function.args.len().is_multiple_of(2) => {
+            Some(function.args.iter().skip(1).step_by(2).collect())
+        }
+        _ => None,
+    }
+}
+
+fn merge_interval_metadata_trees(
+    trees: Vec<Option<spec::SparkIntervalMetadataTree>>,
+) -> PlanResult<Option<spec::SparkIntervalMetadataTree>> {
+    use spec::SparkIntervalMetadataTree as Tree;
+
+    let mut trees = trees.into_iter().flatten();
+    let Some(first) = trees.next() else {
+        return Ok(None);
+    };
+    trees
+        .try_fold(first, |current, next| match (current, next) {
+            (Tree::Interval { metadata: left }, Tree::Interval { metadata: right }) => left
+                .wider(right)
+                .map(|metadata| Tree::Interval { metadata })
+                .ok_or_else(|| PlanError::analysis("incompatible Spark interval metadata")),
+            (Tree::List { element: left }, Tree::List { element: right }) => {
+                merge_interval_metadata_trees(vec![Some(*left), Some(*right)])?
+                    .map(|element| Tree::List {
+                        element: Box::new(element),
+                    })
+                    .ok_or_else(|| PlanError::analysis("incompatible Spark interval list metadata"))
+            }
+            (
+                Tree::Map {
+                    key: left_key,
+                    value: left_value,
+                },
+                Tree::Map {
+                    key: right_key,
+                    value: right_value,
+                },
+            ) => Ok(Tree::Map {
+                key: merge_interval_metadata_trees(vec![
+                    left_key.map(|tree| *tree),
+                    right_key.map(|tree| *tree),
+                ])?
+                .map(Box::new),
+                value: merge_interval_metadata_trees(vec![
+                    left_value.map(|tree| *tree),
+                    right_value.map(|tree| *tree),
+                ])?
+                .map(Box::new),
+            }),
+            (left, right) if left == right => Ok(left),
+            _ => Err(PlanError::analysis(
+                "incompatible Spark nested interval metadata",
+            )),
+        })
+        .map(Some)
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {

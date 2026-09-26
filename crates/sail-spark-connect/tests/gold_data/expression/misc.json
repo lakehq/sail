@@ -37,6 +37,7 @@
           "unresolvedExtractValue": {
             "child": {
               "unresolvedFunction": {
+                "isSqlOperator": true,
                 "functionName": [
                   "+"
                 ],
@@ -467,6 +468,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               ">"
             ],
@@ -549,6 +551,7 @@
           "lambdaFunction": {
             "function": {
               "unresolvedFunction": {
+                "isSqlOperator": true,
                 "functionName": [
                   "+"
                 ],
@@ -700,6 +703,7 @@
           "alias": {
             "expr": {
               "unresolvedFunction": {
+                "isSqlOperator": true,
                 "functionName": [
                   "+"
                 ],
@@ -744,6 +748,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "-"
             ],
@@ -1046,6 +1051,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               ">="
             ],
@@ -1085,6 +1091,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "!="
             ],
@@ -1124,6 +1131,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "<="
             ],
@@ -1163,6 +1171,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "%"
             ],
@@ -1202,6 +1211,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "&"
             ],
@@ -1241,6 +1251,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "*"
             ],
@@ -1280,12 +1291,14 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "|"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "*"
                   ],
@@ -1320,6 +1333,7 @@
               },
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "^"
                   ],
@@ -1335,6 +1349,7 @@
                     },
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "&"
                         ],
@@ -1350,12 +1365,14 @@
                           },
                           {
                             "unresolvedFunction": {
+                              "isSqlOperator": true,
                               "functionName": [
                                 "+"
                               ],
                               "arguments": [
                                 {
                                   "unresolvedFunction": {
+                                    "isSqlOperator": true,
                                     "functionName": [
                                       "-"
                                     ],
@@ -1390,24 +1407,28 @@
                                 },
                                 {
                                   "unresolvedFunction": {
+                                    "isSqlOperator": true,
                                     "functionName": [
                                       "*"
                                     ],
                                     "arguments": [
                                       {
                                         "unresolvedFunction": {
+                                          "isSqlOperator": true,
                                           "functionName": [
                                             "/"
                                           ],
                                           "arguments": [
                                             {
                                               "unresolvedFunction": {
+                                                "isSqlOperator": true,
                                                 "functionName": [
                                                   "div"
                                                 ],
                                                 "arguments": [
                                                   {
                                                     "unresolvedFunction": {
+                                                      "isSqlOperator": true,
                                                       "functionName": [
                                                         "%"
                                                       ],
@@ -1544,6 +1565,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "+"
             ],
@@ -1583,6 +1605,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "-"
             ],
@@ -1622,6 +1645,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "/"
             ],
@@ -1661,6 +1685,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "<"
             ],
@@ -1700,6 +1725,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "<="
             ],
@@ -1739,6 +1765,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "<=>"
             ],
@@ -1778,6 +1805,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "!="
             ],
@@ -1817,6 +1845,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "=="
             ],
@@ -1881,6 +1910,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "=="
             ],
@@ -1921,6 +1951,7 @@
         "success": {
           "isNotNull": {
             "unresolvedFunction": {
+              "isSqlOperator": true,
               "functionName": [
                 "=="
               ],
@@ -1962,6 +1993,7 @@
         "success": {
           "isNull": {
             "unresolvedFunction": {
+              "isSqlOperator": true,
               "functionName": [
                 "=="
               ],
@@ -2002,6 +2034,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "=="
             ],
@@ -2041,6 +2074,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               ">"
             ],
@@ -2080,6 +2114,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               ">="
             ],
@@ -2119,6 +2154,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "div"
             ],
@@ -2158,6 +2194,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "^"
             ],
@@ -2197,6 +2234,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "and"
             ],
@@ -2236,30 +2274,35 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "and"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "and"
                   ],
                   "arguments": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "and"
                         ],
                         "arguments": [
                           {
                             "unresolvedFunction": {
+                              "isSqlOperator": true,
                               "functionName": [
                                 "and"
                               ],
                               "arguments": [
                                 {
                                   "unresolvedFunction": {
+                                    "isSqlOperator": true,
                                     "functionName": [
                                       "and"
                                     ],
@@ -2375,12 +2418,14 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "and"
                   ],
@@ -2415,6 +2460,7 @@
               },
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "and"
                   ],
@@ -2889,6 +2935,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "or"
             ],
@@ -2928,12 +2975,14 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "or"
                   ],
@@ -2968,6 +3017,7 @@
               },
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "and"
                   ],
@@ -3017,30 +3067,35 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "or"
                   ],
                   "arguments": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "or"
                         ],
                         "arguments": [
                           {
                             "unresolvedFunction": {
+                              "isSqlOperator": true,
                               "functionName": [
                                 "or"
                               ],
                               "arguments": [
                                 {
                                   "unresolvedFunction": {
+                                    "isSqlOperator": true,
                                     "functionName": [
                                       "or"
                                     ],
@@ -3193,6 +3248,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "|"
             ],
@@ -3396,6 +3452,7 @@
             },
             "extraction": {
               "unresolvedFunction": {
+                "isSqlOperator": true,
                 "functionName": [
                   "+"
                 ],
@@ -3585,6 +3642,7 @@
                 "charset",
                 {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "concat"
                     ],
@@ -3794,6 +3852,7 @@
                     },
                     "condition": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -4247,6 +4306,7 @@
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     ">"
                   ],
@@ -4300,6 +4360,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
+            "isSqlOperator": true,
             "functionName": [
               "*"
             ],
@@ -4315,6 +4376,7 @@
               },
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "+"
                   ],
@@ -4451,6 +4513,7 @@
           "lambdaFunction": {
             "function": {
               "unresolvedFunction": {
+                "isSqlOperator": true,
                 "functionName": [
                   "+"
                 ],
