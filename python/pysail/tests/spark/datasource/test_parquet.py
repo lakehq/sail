@@ -793,6 +793,44 @@ def test_parquet_struct_projection_retains_other_consumers(spark, tmp_path, sele
         assert data.where("s.inner.label = 'keep'").select("s.inner.x").collect() == [Row(x=20)]
 
 
+@pytest.mark.parametrize("null_parent", [False, True], ids=["valid-parents", "null-parent"])
+def test_parquet_struct_fields_preserve_nulls_with_storage_metadata(spark, tmp_path, null_parent):
+    fields = [
+        pa.field("inner", pa.struct([pa.field("x", pa.int64(), metadata={b"PARQUET:field_id": b"4"})])),
+        pa.field("items", pa.list_(pa.field("element", pa.int64(), metadata={b"PARQUET:field_id": b"6"}))),
+        pa.field("mapping", pa.map_(pa.string(), pa.field("value", pa.int64(), metadata={b"PARQUET:field_id": b"9"}))),
+    ]
+    values = [
+        {"inner": {"x": 7}, "items": [1, None], "mapping": {"a": 2, "missing": None}},
+        {"inner": None, "items": None, "mapping": None},
+        {"inner": {"x": None}, "items": [], "mapping": {}},
+        {"inner": {"x": 9}, "items": [3], "mapping": {"b": 4}},
+    ]
+    payload = pa.StructArray.from_arrays(
+        [pa.array([value[field.name] for value in values], type=field.type) for field in fields],
+        fields=fields,
+        mask=pa.array([null_parent, False, False, False]),
+    )
+    path = tmp_path / "struct_field_metadata.parquet"
+    pq.write_table(pa.table({"id": range(len(values)), "s": payload}), path)
+    struct_type = "struct<inner:struct<x:bigint>,items:array<bigint>,mapping:map<string,bigint>>"
+    data = (
+        spark.read.schema(f"id BIGINT, s {struct_type}")
+        .parquet(str(path))
+        # Keep the entire parent so extraction runs on the original struct.
+        .selectExpr("id", "s", "s.inner", "s.items", "s.mapping")
+        .orderBy("id")
+    )
+    assert data.schema.simpleString() == (
+        f"struct<id:bigint,s:{struct_type},inner:struct<x:bigint>,items:array<bigint>,mapping:map<string,bigint>>"
+    )
+    expected = [None if null_parent and i == 0 else value for i, value in enumerate(values)]
+    assert [row.asDict(recursive=True) for row in data.collect()] == [
+        {"id": i, "s": value, **(value if value is not None else dict.fromkeys(["inner", "items", "mapping"]))}
+        for i, value in enumerate(expected)
+    ]
+
+
 def test_parquet_nested_projection_preserves_schema_evolution(spark, tmp_path):
     path = tmp_path / "nested_evolution.parquet"
     inner_type = pa.struct([("value", pa.int32()), ("ignored", pa.int64())])
