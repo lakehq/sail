@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion_common::Column;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{Alias, Sort};
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
@@ -149,7 +149,11 @@ impl PlanResolver<'_> {
                 if let Expr::Column(ref col) = e
                     && let Some(expr) = find(col)
                 {
-                    return Ok(Transformed::yes(expr));
+                    // The expression comes from the projection, so it is already written in terms
+                    // of the plan below it and must not be rebased again. Descending into it would
+                    // not terminate for a projection that aliases an expression to the name of a
+                    // column the expression itself reads.
+                    return Ok(Transformed::new(expr, true, TreeNodeRecursion::Jump));
                 }
                 Ok(Transformed::no(e))
             })

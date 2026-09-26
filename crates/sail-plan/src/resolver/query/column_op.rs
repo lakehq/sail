@@ -59,21 +59,62 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            // Spark matches the input column by `conf.resolver`, which honors
+            // `spark.sql.caseSensitive`, and the ambiguity check below counts the same matches.
+            let name_matches = |input_name: &str| {
+                if self.config.case_sensitive {
+                    input_name == target_name
+                } else {
+                    input_name.eq_ignore_ascii_case(target_name)
+                }
+            };
+            let matched = input_names
                 .iter()
-                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+                .enumerate()
+                .filter(|(_, input_name)| name_matches(input_name))
+                .collect::<Vec<_>>();
+            // Spark rejects an input that has more than one column of this name rather than
+            // reading the first one: `Project.matchSchema` raises `AMBIGUOUS_COLUMN_OR_FIELD`.
+            if matched.len() > 1 {
+                return Err(PlanError::AnalysisError(format!(
+                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field {target_name} is ambiguous and has {} matches.",
+                    matched.len()
+                )));
+            }
+            let (input_idx, _) = matched.into_iter().next().ok_or_else(|| {
+                PlanError::invalid(format!("field not found in input schema: {target_name}"))
+            })?;
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
-            let expr = if input_field.data_type() == target_field.data_type() {
-                expr
+            // A column that needs no reconciliation keeps the qualifier of the relation it
+            // reads, so `t.col` still resolves. A column that is cast becomes a new expression
+            // and loses it, which is what Spark does: `Project.matchSchema` renames a
+            // pass-through column with `Attribute.withName`, which carries the qualifier over,
+            // and wraps a reconciled one in an `Alias`, which is built without one.
+            let (expr, qualifier) = if input_field.data_type() == target_field.data_type() {
+                (expr, input_qualifier.cloned())
             } else {
-                expr.cast_to(target_field.data_type(), &input.schema())?
-                    .alias_qualified(input_qualifier.cloned(), input_field.name())
+                (
+                    expr.cast_to(target_field.data_type(), &input.schema())?,
+                    None,
+                )
             };
-            projected_exprs.push(expr);
+            // The reconciled column is a new column rather than the one it reads, so it gets a
+            // field ID of its own. Naming it after the field it reads leaves the projection with
+            // an output field that has the same ID as the one below it, and rebasing a sort key
+            // onto such a projection does not terminate: `rebase_sort_to_projection_input`
+            // replaces the column with the aliased expression, which contains the very column it
+            // just replaced. It also makes the output carry the name of the input rather than
+            // the name of the target schema, which is the one Spark reports.
+            //
+            // The plan IDs of the input are kept, since they are what a `df["col"]` reference
+            // resolves against.
+            let plan_ids = state.get_field_info(input_field.name())?.plan_ids();
+            let field_id = state.register_field_name(target_name.clone());
+            for plan_id in plan_ids {
+                state.register_plan_id_for_field(&field_id, plan_id)?;
+            }
+            projected_exprs.push(expr.alias_qualified(qualifier, field_id));
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
