@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::optimizer::eliminate_outer_join::EliminateOuterJoin;
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion::optimizer::{Optimizer, OptimizerConfig, OptimizerRule};
+use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -16,18 +17,10 @@ use datafusion_expr::{
 };
 
 /// Spark folds expressions before replacing projected IN with an existence join.
+/// Fold only the affected expressions and their constant producers here; running
+/// another optimizer over the query would change unrelated rule ordering.
 #[derive(Debug)]
-pub struct RewriteProjectedIn {
-    normalization: Optimizer,
-}
-
-impl RewriteProjectedIn {
-    pub fn new(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
-        Self {
-            normalization: Optimizer::with_rules(rules),
-        }
-    }
-}
+pub struct RewriteProjectedIn;
 
 impl OptimizerRule for RewriteProjectedIn {
     fn name(&self) -> &str {
@@ -38,99 +31,17 @@ impl OptimizerRule for RewriteProjectedIn {
         true
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
     fn rewrite(
         &self,
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let mut found = false;
-        let mut normalize = false;
-        plan.apply_with_subqueries(|plan| {
-            if let LogicalPlan::Projection(projection) = plan {
-                for expr in &projection.expr {
-                    expr.apply(|expr| {
-                        if let Expr::InSubquery(subquery) = expr
-                            && subquery.subquery.outer_ref_columns.is_empty()
-                        {
-                            found = true;
-                            normalize |= match subquery.expr.as_ref() {
-                                Expr::Literal(_, _) => false,
-                                // Scalar subquery fields can be nonnullable even
-                                // though an empty scalar result is NULL.
-                                expr if !expr.nullable(projection.input.schema())?
-                                    && !expr.exists(|expr| {
-                                        Ok(matches!(expr, Expr::ScalarSubquery(_)))
-                                    })? =>
-                                {
-                                    false
-                                }
-                                Expr::Column(_) => !has_only_column_producers(&projection.input)?,
-                                _ => true,
-                            };
-                        }
-                        Ok(if normalize {
-                            TreeNodeRecursion::Stop
-                        } else {
-                            TreeNodeRecursion::Continue
-                        })
-                    })?;
-                }
-            }
-            Ok(if normalize {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        if !found {
-            return Ok(Transformed::no(plan));
-        }
-
-        // Literals need no folding, a nonnullable operand cannot fold to NULL,
-        // and ordinary data columns have no producer constants to expose.
-        // Avoid an extra optimizer pass for these queries. Computed operands
-        // use the real query context.
-        let plan = if normalize {
-            self.normalization.optimize(plan, config, |_, _| {})?
-        } else {
-            plan
-        };
-        let plan = plan
-            .transform_up_with_subqueries(|plan| rewrite_projection(plan, config))?
-            .data;
-        Ok(Transformed::yes(plan))
+        rewrite_projection(plan, config)
     }
-}
-
-/// Prove that a nullable column comes only from data or column renames. Check
-/// every UNION arm, and leave joins and computed producers to normalization.
-fn has_only_column_producers(plan: &LogicalPlan) -> Result<bool> {
-    let mut columns_only = true;
-    plan.apply(|plan| {
-        columns_only &= match plan {
-            LogicalPlan::Projection(projection) => projection.expr.iter().all(|expr| {
-                let mut expr = expr;
-                while let Expr::Alias(alias) = expr {
-                    expr = &alias.expr;
-                }
-                matches!(expr, Expr::Column(_))
-            }),
-            LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(Distinct::All(_)) => true,
-            _ => plan.inputs().is_empty(),
-        };
-        Ok(if columns_only {
-            TreeNodeRecursion::Continue
-        } else {
-            TreeNodeRecursion::Stop
-        })
-    })?;
-    Ok(columns_only)
 }
 
 fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
@@ -170,6 +81,9 @@ fn constant_columns(
     config: &dyn OptimizerConfig,
     needed: &HashSet<Column>,
 ) -> Result<HashMap<Column, Expr>> {
+    if needed.is_empty() {
+        return Ok(HashMap::new());
+    }
     let (expressions, input) = match plan {
         LogicalPlan::Projection(projection) => (
             projection.expr.iter().collect::<Vec<_>>(),
@@ -203,7 +117,16 @@ fn constant_columns(
                 .filter_map(|(input, output)| constants.remove(&input).map(|value| (output, value)))
                 .collect());
         }
-        LogicalPlan::Filter(filter) => return constant_columns(&filter.input, config, needed),
+        LogicalPlan::Filter(filter) => {
+            // Spark eliminates null-rejected outer joins before propagating constants.
+            // Inspect that join type on a copy, leaving the query's operators intact.
+            let rewritten = EliminateOuterJoin.rewrite(plan.clone(), config)?;
+            return if rewritten.transformed {
+                constant_columns(&rewritten.data, config, needed)
+            } else {
+                constant_columns(&filter.input, config, needed)
+            };
+        }
         LogicalPlan::Sort(sort) => return constant_columns(&sort.input, config, needed),
         LogicalPlan::Limit(limit) => return constant_columns(&limit.input, config, needed),
         LogicalPlan::Repartition(repartition) => {
@@ -504,5 +427,51 @@ impl TreeNodeRewriter for InRewriter<'_> {
             if negated { !mark } else { mark }
         };
         Ok(Transformed::yes(result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::optimizer::OptimizerContext;
+    use datafusion_expr::{col, in_subquery};
+
+    use super::*;
+
+    #[test]
+    fn projected_in_does_not_optimize_its_input() -> Result<()> {
+        let input = LogicalPlanBuilder::empty(true)
+            .project(vec![(lit(1_i32) + lit(2_i32)).alias("value")])?
+            .filter(lit(true))?
+            .build()?;
+        let config = OptimizerContext::new();
+        let unrelated = LogicalPlanBuilder::from(input.clone())
+            .project(vec![col("value")])?
+            .build()?;
+        let unchanged = RewriteProjectedIn.rewrite(unrelated.clone(), &config)?;
+        assert!(!unchanged.transformed);
+        assert_eq!(unchanged.data, unrelated);
+
+        let subquery = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1_i32).alias("candidate")])?
+            .build()?;
+        // A computed nullable operand used to run a nested optimizer, which
+        // also folded the unrelated input projection and removed its filter.
+        let operand = lit(ScalarValue::Int32(None)) + lit(1_i32);
+        let plan = LogicalPlanBuilder::from(input.clone())
+            .project(vec![
+                in_subquery(operand, Arc::new(subquery)).alias("present"),
+            ])?
+            .build()?;
+        let rewritten = RewriteProjectedIn.rewrite(plan, &config)?;
+        assert!(rewritten.transformed);
+        let LogicalPlan::Projection(projection) = rewritten.data else {
+            return plan_err!("expected a projection");
+        };
+        let LogicalPlan::Join(join) = projection.input.as_ref() else {
+            return plan_err!("expected an existence join");
+        };
+        assert_eq!(join.join_type, JoinType::LeftMark);
+        assert_eq!(join.left.as_ref(), &input);
+        Ok(())
     }
 }

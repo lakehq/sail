@@ -424,6 +424,37 @@ Feature: IN subquery support
         | 1  | false   |
         | 2  | false   |
 
+    Scenario: projected IN propagates constants after a filter eliminates an outer join
+      When query
+        """
+        SELECT a.id,
+          b.x IN (SELECT 1) AS present,
+          b.x NOT IN (SELECT 1) AS absent
+        FROM range(3) a
+        LEFT JOIN (SELECT id, NULLIF(1, 1) AS x FROM range(2)) b ON a.id = b.id
+        WHERE b.id IS NOT NULL
+        ORDER BY a.id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 0  | NULL    | NULL   |
+        | 1  | NULL    | NULL   |
+
+    Scenario: projected IN preserves column semantics for an empty outer join side
+      When query
+        """
+        SELECT a.id,
+          b.x IN (SELECT 1) AS present,
+          b.x NOT IN (SELECT 1) AS absent
+        FROM range(2) a
+        LEFT JOIN (SELECT id, 1 AS x FROM range(1) WHERE false) b ON a.id = b.id
+        ORDER BY a.id
+        """
+      Then query result ordered
+        | id | present | absent |
+        | 0  | false   | false  |
+        | 1  | false   | false  |
+
     Scenario: projected IN uses one query time while folding stable expressions
       Given config spark.sql.session.timeZone = America/Los_Angeles
       When query

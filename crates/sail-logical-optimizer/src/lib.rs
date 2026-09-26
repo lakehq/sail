@@ -37,27 +37,16 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // Projection expressions (e.g. `LATERAL (SELECT t1.a + 1)`), rewriting
     // it into a CrossJoin + Projection. The remaining complex cases (OuterRef
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
-    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
-        vec![Arc::new(DecorrelateLateralProjection::new())];
+    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
+        // Materialize projected IN before filters can push its expressions down.
+        Arc::new(RewriteProjectedIn),
+        Arc::new(DecorrelateLateralProjection::new()),
+    ];
     custom.extend(rules);
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function
     // arguments, and the lambda variable fields must be refreshed to match.
     custom.push(Arc::new(ResolveLambdaVariables));
-    // Fold projected IN with the query's context before filters can push these
-    // expressions into a different decorrelation path. The normal optimizer still
-    // runs filter pushdown after the projected results have been materialized.
-    let normalization = custom
-        .iter()
-        .filter(|rule| {
-            !matches!(
-                rule.name(),
-                "push_down_leaf_projections" | "push_down_filter"
-            )
-        })
-        .cloned()
-        .collect();
-    custom.insert(0, Arc::new(RewriteProjectedIn::new(normalization)));
     custom
 }
