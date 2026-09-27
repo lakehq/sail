@@ -51,57 +51,57 @@ name: "test_derived_tpcds_query_plan[02]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#192@0 as d_week_seq1, #193@1 as round((sun_sales1 / sun_sales2), 2), #194@2 as round((mon_sales1 / mon_sales2), 2), #195@3 as round((tue_sales1 / tue_sales2), 2), #196@4 as round((wed_sales1 / wed_sales2), 2), #197@5 as round((thu_sales1 / thu_sales2), 2), #198@6 as round((fri_sales1 / fri_sales2), 2), #199@7 as round((sat_sales1 / sat_sales2), 2)]
-      SortPreservingMergeExec: [#192@0 ASC]
-        SortExec: expr=[#192@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#140@0 as #192, round(#141@1 / CASE WHEN #185@2 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #185@2 END, 2) as #193, round(#142@3 / CASE WHEN #186@4 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #186@4 END, 2) as #194, round(#143@5 / CASE WHEN #187@6 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #187@6 END, 2) as #195, round(#144@7 / CASE WHEN #188@8 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #188@8 END, 2) as #196, round(#145@9 / CASE WHEN #189@10 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #189@10 END, 2) as #197, round(#146@11 / CASE WHEN #190@12 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #190@12 END, 2) as #198, round(#147@13 / CASE WHEN #191@14 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #191@14 END, 2) as #199]
-            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#140@0, z.#184 - Int64(53)@8)], projection=[#140@0, #141@1, #185@9, #142@2, #186@10, #143@3, #187@11, #144@4, #188@12, #145@5, #189@13, #146@6, #190@14, #147@7, #191@15]
-              ProjectionExec: expr=[#104@0 as #140, #105@1 as #141, #106@2 as #142, #107@3 as #143, #108@4 as #144, #109@5 as #145, #110@6 as #146, #111@7 as #147]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#116@0, #104@0)], projection=[#104@1, #105@2, #106@3, #107@4, #108@5, #109@6, #110@7, #111@8]
+    ProjectionExec: expr=[#190@0 as d_week_seq1, #191@1 as round((sun_sales1 / sun_sales2), 2), #192@2 as round((mon_sales1 / mon_sales2), 2), #193@3 as round((tue_sales1 / tue_sales2), 2), #194@4 as round((wed_sales1 / wed_sales2), 2), #195@5 as round((thu_sales1 / thu_sales2), 2), #196@6 as round((fri_sales1 / fri_sales2), 2), #197@7 as round((sat_sales1 / sat_sales2), 2)]
+      SortPreservingMergeExec: [#190@0 ASC]
+        SortExec: expr=[#190@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#138@0 as #190, round(#139@1 / CASE WHEN #183@2 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #183@2 END, 2) as #191, round(#140@3 / CASE WHEN #184@4 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #184@4 END, 2) as #192, round(#141@5 / CASE WHEN #185@6 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #185@6 END, 2) as #193, round(#142@7 / CASE WHEN #186@8 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #186@8 END, 2) as #194, round(#143@9 / CASE WHEN #187@10 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #187@10 END, 2) as #195, round(#144@11 / CASE WHEN #188@12 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #188@12 END, 2) as #196, round(#145@13 / CASE WHEN #189@14 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(17, 2)) ELSE #189@14 END, 2) as #197]
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#138@0, z.#182 - Int64(53)@8)], projection=[#138@0, #139@1, #183@9, #140@2, #184@10, #141@3, #185@11, #142@4, #186@12, #143@5, #187@13, #144@6, #188@14, #145@7, #189@15]
+              ProjectionExec: expr=[#102@0 as #138, #103@1 as #139, #104@2 as #140, #105@3 as #141, #106@4 as #142, #107@5 as #143, #108@6 as #144, #109@7 as #145]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#114@0, #102@0)], projection=[#102@1, #103@2, #104@3, #105@4, #106@5, #107@6, #108@7, #109@8]
                   CoalescePartitionsExec
-                    ProjectionExec: expr=[_4@0 as #116]
+                    ProjectionExec: expr=[_4@0 as #114]
                       FilterExec: _6@1 = 2000, projection=[_4@0]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#80@0 as #104, sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@1 as #105, sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@2 as #106, sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@3 as #107, sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@4 as #108, sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@5 as #109, sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@6 as #110, sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@7 as #111]
-                    AggregateExec: mode=FinalPartitioned, gby=[#80@0 as #80], aggr=[sum(CASE WHEN date_dim.#90 = Sunday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Monday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Tuesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Wednesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Thursday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Friday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Saturday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)]
-                      RepartitionExec: partitioning=Hash([#80@0], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[#80@1 as #80], aggr=[sum(CASE WHEN date_dim.#90 = Sunday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Monday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Tuesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Wednesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Thursday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Friday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Saturday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#74@0, CAST(date_dim.#76 AS Float64)@3)], projection=[#75@1, #80@3, #90@4]
+                  ProjectionExec: expr=[#78@0 as #102, sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@1 as #103, sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@2 as #104, sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@3 as #105, sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@4 as #106, sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@5 as #107, sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@6 as #108, sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@7 as #109]
+                    AggregateExec: mode=FinalPartitioned, gby=[#78@0 as #78], aggr=[sum(CASE WHEN date_dim.#88 = Sunday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Monday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Tuesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Wednesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Thursday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Friday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Saturday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)]
+                      RepartitionExec: partitioning=Hash([#78@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#78@1 as #78], aggr=[sum(CASE WHEN date_dim.#88 = Sunday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Monday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Tuesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Wednesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Thursday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Friday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Saturday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#72@0, CAST(date_dim.#74 AS Float64)@3)], projection=[#73@1, #78@3, #88@4]
                             CoalescePartitionsExec
-                              ProjectionExec: expr=[#34@0 as #74, #35@1 as #75]
+                              ProjectionExec: expr=[#34@0 as #72, #35@1 as #73]
                                 UnionExec
                                   ProjectionExec: expr=[_0@0 as #34, _23@1 as #35]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #34, _23@1 as #35]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                            ProjectionExec: expr=[#76@0 as #76, #80@1 as #80, #90@2 as #90, CAST(#76@0 AS Float64) as CAST(date_dim.#76 AS Float64)]
+                            ProjectionExec: expr=[#74@0 as #74, #78@1 as #78, #88@2 as #88, CAST(#74@0 AS Float64) as CAST(date_dim.#74 AS Float64)]
                               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                ProjectionExec: expr=[_0@0 as #76, _4@1 as #80, _14@2 as #90]
+                                ProjectionExec: expr=[_0@0 as #74, _4@1 as #78, _14@2 as #88]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-              RepartitionExec: partitioning=Hash([z.#184 - Int64(53)@8], 4), input_partitions=4
-                ProjectionExec: expr=[#148@0 as #184, #149@1 as #185, #150@2 as #186, #151@3 as #187, #152@4 as #188, #153@5 as #189, #154@6 as #190, #155@7 as #191, #148@0 - 53 as z.#184 - Int64(53)]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#160@0, #148@0)], projection=[#148@1, #149@2, #150@3, #151@4, #152@5, #153@6, #154@7, #155@8]
+              RepartitionExec: partitioning=Hash([z.#182 - Int64(53)@8], 4), input_partitions=4
+                ProjectionExec: expr=[#146@0 as #182, #147@1 as #183, #148@2 as #184, #149@3 as #185, #150@4 as #186, #151@5 as #187, #152@6 as #188, #153@7 as #189, #146@0 - 53 as z.#182 - Int64(53)]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#158@0, #146@0)], projection=[#146@1, #147@2, #148@3, #149@4, #150@5, #151@6, #152@7, #153@8]
                     CoalescePartitionsExec
-                      ProjectionExec: expr=[_4@0 as #160]
+                      ProjectionExec: expr=[_4@0 as #158]
                         FilterExec: _6@1 = 2001, projection=[_4@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                    ProjectionExec: expr=[#80@0 as #148, sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@1 as #149, sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@2 as #150, sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@3 as #151, sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@4 as #152, sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@5 as #153, sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@6 as #154, sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)@7 as #155]
-                      AggregateExec: mode=FinalPartitioned, gby=[#80@0 as #80], aggr=[sum(CASE WHEN date_dim.#90 = Sunday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Monday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Tuesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Wednesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Thursday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Friday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Saturday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)]
-                        RepartitionExec: partitioning=Hash([#80@0], 4), input_partitions=4
-                          AggregateExec: mode=Partial, gby=[#80@1 as #80], aggr=[sum(CASE WHEN date_dim.#90 = Sunday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Sunday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Monday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Monday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Tuesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Tuesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Wednesday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Wednesday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Thursday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Thursday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Friday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Friday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#90 = Saturday THEN wscs.#75 ELSE NULL END) as sum(CASE WHEN date_dim.#90 = Utf8("Saturday") THEN wscs.#75 WHEN Boolean(true) THEN NULL END)]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#74@0, CAST(date_dim.#76 AS Float64)@3)], projection=[#75@1, #80@3, #90@4]
+                    ProjectionExec: expr=[#78@0 as #146, sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@1 as #147, sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@2 as #148, sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@3 as #149, sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@4 as #150, sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@5 as #151, sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@6 as #152, sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)@7 as #153]
+                      AggregateExec: mode=FinalPartitioned, gby=[#78@0 as #78], aggr=[sum(CASE WHEN date_dim.#88 = Sunday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Monday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Tuesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Wednesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Thursday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Friday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Saturday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)]
+                        RepartitionExec: partitioning=Hash([#78@0], 4), input_partitions=4
+                          AggregateExec: mode=Partial, gby=[#78@1 as #78], aggr=[sum(CASE WHEN date_dim.#88 = Sunday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Sunday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Monday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Monday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Tuesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Tuesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Wednesday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Wednesday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Thursday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Thursday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Friday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Friday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#88 = Saturday THEN wscs.#73 ELSE NULL END) as sum(CASE WHEN date_dim.#88 = Utf8("Saturday") THEN wscs.#73 WHEN Boolean(true) THEN NULL END)]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#72@0, CAST(date_dim.#74 AS Float64)@3)], projection=[#73@1, #78@3, #88@4]
                               CoalescePartitionsExec
-                                ProjectionExec: expr=[#34@0 as #74, #35@1 as #75]
+                                ProjectionExec: expr=[#34@0 as #72, #35@1 as #73]
                                   UnionExec
                                     ProjectionExec: expr=[_0@0 as #34, _23@1 as #35]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                     ProjectionExec: expr=[_0@0 as #34, _23@1 as #35]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[#76@0 as #76, #80@1 as #80, #90@2 as #90, CAST(#76@0 AS Float64) as CAST(date_dim.#76 AS Float64)]
+                              ProjectionExec: expr=[#74@0 as #74, #78@1 as #78, #88@2 as #88, CAST(#74@0 AS Float64) as CAST(date_dim.#74 AS Float64)]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                  ProjectionExec: expr=[_0@0 as #76, _4@1 as #80, _14@2 as #90]
+                                  ProjectionExec: expr=[_0@0 as #74, _4@1 as #78, _14@2 as #88]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpcds_query_plan[03]"
@@ -801,310 +801,307 @@ name: "test_derived_tpcds_query_plan[14]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#727@0 as channel, #728@1 as i_brand_id, #729@2 as i_class_id, #730@3 as i_category_id, #731@4 as sum(sales), #732@5 as sum(number_sales)]
+    ProjectionExec: expr=[#724@0 as channel, #725@1 as i_brand_id, #726@2 as i_class_id, #727@3 as i_category_id, #728@4 as sum(sales), #729@5 as sum(number_sales)]
       ScalarSubqueryExec: subqueries=3
-        SortPreservingMergeExec: [#727@0 ASC, #728@1 ASC, #729@2 ASC, #730@3 ASC], fetch=100
-          SortExec: TopK(fetch=100), expr=[#727@0 ASC, #728@1 ASC, #729@2 ASC, #730@3 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#533@0 as #727, #534@1 as #728, #535@2 as #729, #536@3 as #730, sum(y.#537)@5 as #731, sum(y.#538)@6 as #732]
-              AggregateExec: mode=FinalPartitioned, gby=[#533@0 as #533, #534@1 as #534, #535@2 as #535, #536@3 as #536, __grouping_id@4 as __grouping_id], aggr=[sum(y.#537), sum(y.#538)]
-                RepartitionExec: partitioning=Hash([#533@0, #534@1, #535@2, #536@3, __grouping_id@4], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[(NULL as #533, NULL as #534, NULL as #535, NULL as #536), (#533@0 as #533, NULL as #534, NULL as #535, NULL as #536), (#533@0 as #533, #534@1 as #534, NULL as #535, NULL as #536), (#533@0 as #533, #534@1 as #534, #535@2 as #535, NULL as #536), (#533@0 as #533, #534@1 as #534, #535@2 as #535, #536@3 as #536)], aggr=[sum(y.#537), sum(y.#538)]
+        SortPreservingMergeExec: [#724@0 ASC, #725@1 ASC, #726@2 ASC, #727@3 ASC], fetch=100
+          SortExec: TopK(fetch=100), expr=[#724@0 ASC, #725@1 ASC, #726@2 ASC, #727@3 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#530@0 as #724, #531@1 as #725, #532@2 as #726, #533@3 as #727, sum(y.#534)@5 as #728, sum(y.#535)@6 as #729]
+              AggregateExec: mode=FinalPartitioned, gby=[#530@0 as #530, #531@1 as #531, #532@2 as #532, #533@3 as #533, __grouping_id@4 as __grouping_id], aggr=[sum(y.#534), sum(y.#535)]
+                RepartitionExec: partitioning=Hash([#530@0, #531@1, #532@2, #533@3, __grouping_id@4], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[(NULL as #530, NULL as #531, NULL as #532, NULL as #533), (#530@0 as #530, NULL as #531, NULL as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, NULL as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, #532@2 as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, #532@2 as #532, #533@3 as #533)], aggr=[sum(y.#534), sum(y.#535)]
                     InterleaveExec
-                      ProjectionExec: expr=[store as #533, #488@0 as #534, #490@1 as #535, #492@2 as #536, sum(store_sales.#468 * store_sales.#470)@3 as #537, count(Int64(1))@4 as #538]
-                        FilterExec: sum(store_sales.#468 * store_sales.#470)@3 > scalar_subquery(<pending>)
-                          AggregateExec: mode=FinalPartitioned, gby=[#488@0 as #488, #490@1 as #490, #492@2 as #492], aggr=[sum(store_sales.#468 * store_sales.#470), count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#488@0, #490@1, #492@2], 4), input_partitions=4
-                              AggregateExec: mode=Partial, gby=[#488@2 as #488, #490@3 as #490, #492@4 as #492], aggr=[sum(store_sales.#468 * store_sales.#470), count(Int64(1))]
-                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#531@0, #460@0)], projection=[#468@1, #470@2, #488@3, #490@4, #492@5]
-                                  ProjectionExec: expr=[#0@0 as #531]
-                                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#272@0, #7@1), (#273@1, #9@2), (#274@2, #11@3)], projection=[#0@0]
-                                      CoalescePartitionsExec
-                                        ProjectionExec: expr=[#95@0 as #272, #96@1 as #273, #97@2 as #274]
-                                          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
-                                            CoalescePartitionsExec
-                                              AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                  AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
-                                                      CoalescePartitionsExec
-                                                        AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                          RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                            AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                              ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
-                                                                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
-                                                                  CoalescePartitionsExec
-                                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
-                                                                      ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                      ProjectionExec: expr=[store as #530, #485@0 as #531, #487@1 as #532, #489@2 as #533, sum(store_sales.#465 * store_sales.#467)@3 as #534, count(Int64(1))@4 as #535]
+                        FilterExec: sum(store_sales.#465 * store_sales.#467)@3 > scalar_subquery(<pending>)
+                          AggregateExec: mode=FinalPartitioned, gby=[#485@0 as #485, #487@1 as #487, #489@2 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
+                            RepartitionExec: partitioning=Hash([#485@0, #487@1, #489@2], 4), input_partitions=4
+                              AggregateExec: mode=Partial, gby=[#485@2 as #485, #487@3 as #487, #489@4 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
+                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#528@0, #457@0)], projection=[#465@1, #467@2, #485@3, #487@4, #489@5]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[#0@0 as #528]
+                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#7@1, #95@0), (#9@2, #96@1), (#11@3, #97@2)], projection=[#0@0]
+                                        ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
+                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
+                                          CoalescePartitionsExec
+                                            AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                              RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                  HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
+                                                    CoalescePartitionsExec
+                                                      AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                        RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                          AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                            ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
+                                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
+                                                                CoalescePartitionsExec
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
+                                                                    ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
                                                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
-                                                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                  ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
-                                                                    FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                                      ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
-                                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
-                                                          CoalescePartitionsExec
-                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
-                                                              ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                                ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
+                                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                    ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
+                                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
+                                                        CoalescePartitionsExec
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
+                                                            ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
                                                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
-                                                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                                                          ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
-                                                            FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                            ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
-                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
-                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
-                                                  ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                        ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
+                                                          FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                          ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
+                                            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
+                                                ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                                ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                              ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
+                                                FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                                                  ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                                ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
-                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                      ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#458@0, CAST(date_dim.#503 AS Float64)@1)], projection=[#460@1, #468@2, #470@3, #488@4, #490@5, #492@6]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#455@0, CAST(date_dim.#500 AS Float64)@1)], projection=[#457@1, #465@2, #467@3, #485@4, #487@5, #489@6]
                                     CoalescePartitionsExec
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#481@0, #460@1)], projection=[#458@4, #460@5, #468@6, #470@7, #488@1, #490@2, #492@3]
-                                        ProjectionExec: expr=[_0@0 as #481, _7@1 as #488, _9@2 as #490, _11@3 as #492]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#478@0, #457@1)], projection=[#455@4, #457@5, #465@6, #467@7, #485@1, #487@2, #489@3]
+                                        ProjectionExec: expr=[_0@0 as #478, _7@1 as #485, _9@2 as #487, _11@3 as #489]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_0@0 as #458, _2@1 as #460, _10@2 as #468, _12@3 as #470]
+                                          ProjectionExec: expr=[_0@0 as #455, _2@1 as #457, _10@2 as #465, _12@3 as #467]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[_0@0 as #503, CAST(_0@0 AS Float64) as CAST(date_dim.#503 AS Float64)]
+                                    ProjectionExec: expr=[_0@0 as #500, CAST(_0@0 AS Float64) as CAST(date_dim.#500 AS Float64)]
                                       FilterExec: _6@1 = 2001 AND _8@2 = 11, projection=[_0@0]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[catalog as #533, #580@0 as #534, #582@1 as #535, #584@2 as #536, sum(catalog_sales.#557 * catalog_sales.#559)@3 as #537, count(Int64(1))@4 as #538]
-                        FilterExec: sum(catalog_sales.#557 * catalog_sales.#559)@3 > scalar_subquery(<pending>)
-                          AggregateExec: mode=FinalPartitioned, gby=[#580@0 as #580, #582@1 as #582, #584@2 as #584], aggr=[sum(catalog_sales.#557 * catalog_sales.#559), count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#580@0, #582@1, #584@2], 4), input_partitions=4
-                              AggregateExec: mode=Partial, gby=[#580@2 as #580, #582@3 as #582, #584@4 as #584], aggr=[sum(catalog_sales.#557 * catalog_sales.#559), count(Int64(1))]
-                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#624@0, #554@0)], projection=[#557@1, #559@2, #580@3, #582@4, #584@5]
-                                  ProjectionExec: expr=[#0@0 as #624]
-                                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#272@0, #7@1), (#273@1, #9@2), (#274@2, #11@3)], projection=[#0@0]
-                                      CoalescePartitionsExec
-                                        ProjectionExec: expr=[#95@0 as #272, #96@1 as #273, #97@2 as #274]
-                                          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
-                                            CoalescePartitionsExec
-                                              AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                  AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
-                                                      CoalescePartitionsExec
-                                                        AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                          RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                            AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                              ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
-                                                                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
-                                                                  CoalescePartitionsExec
-                                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
-                                                                      ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                      ProjectionExec: expr=[catalog as #530, #577@0 as #531, #579@1 as #532, #581@2 as #533, sum(catalog_sales.#554 * catalog_sales.#556)@3 as #534, count(Int64(1))@4 as #535]
+                        FilterExec: sum(catalog_sales.#554 * catalog_sales.#556)@3 > scalar_subquery(<pending>)
+                          AggregateExec: mode=FinalPartitioned, gby=[#577@0 as #577, #579@1 as #579, #581@2 as #581], aggr=[sum(catalog_sales.#554 * catalog_sales.#556), count(Int64(1))]
+                            RepartitionExec: partitioning=Hash([#577@0, #579@1, #581@2], 4), input_partitions=4
+                              AggregateExec: mode=Partial, gby=[#577@2 as #577, #579@3 as #579, #581@4 as #581], aggr=[sum(catalog_sales.#554 * catalog_sales.#556), count(Int64(1))]
+                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#621@0, #551@0)], projection=[#554@1, #556@2, #577@3, #579@4, #581@5]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[#0@0 as #621]
+                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#7@1, #95@0), (#9@2, #96@1), (#11@3, #97@2)], projection=[#0@0]
+                                        ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
+                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
+                                          CoalescePartitionsExec
+                                            AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                              RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                  HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
+                                                    CoalescePartitionsExec
+                                                      AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                        RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                          AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                            ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
+                                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
+                                                                CoalescePartitionsExec
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
+                                                                    ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
                                                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
-                                                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                  ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
-                                                                    FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                                      ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
-                                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
-                                                          CoalescePartitionsExec
-                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
-                                                              ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                                ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
+                                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                    ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
+                                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
+                                                        CoalescePartitionsExec
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
+                                                            ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
                                                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
-                                                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                                                          ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
-                                                            FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                            ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
-                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
-                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
-                                                  ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                        ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
+                                                          FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                          ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
+                                            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
+                                                ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                                ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                              ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
+                                                FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                                                  ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                                ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
-                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                      ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#539@0, CAST(date_dim.#595 AS Float64)@1)], projection=[#554@1, #557@2, #559@3, #580@4, #582@5, #584@6]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#536@0, CAST(date_dim.#592 AS Float64)@1)], projection=[#551@1, #554@2, #556@3, #577@4, #579@5, #581@6]
                                     CoalescePartitionsExec
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#573@0, #554@1)], projection=[#539@4, #554@5, #557@6, #559@7, #580@1, #582@2, #584@3]
-                                        ProjectionExec: expr=[_0@0 as #573, _7@1 as #580, _9@2 as #582, _11@3 as #584]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#570@0, #551@1)], projection=[#536@4, #551@5, #554@6, #556@7, #577@1, #579@2, #581@3]
+                                        ProjectionExec: expr=[_0@0 as #570, _7@1 as #577, _9@2 as #579, _11@3 as #581]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_0@0 as #539, _15@1 as #554, _18@2 as #557, _20@3 as #559]
+                                          ProjectionExec: expr=[_0@0 as #536, _15@1 as #551, _18@2 as #554, _20@3 as #556]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[_0@0 as #595, CAST(_0@0 AS Float64) as CAST(date_dim.#595 AS Float64)]
+                                    ProjectionExec: expr=[_0@0 as #592, CAST(_0@0 AS Float64) as CAST(date_dim.#592 AS Float64)]
                                       FilterExec: _6@1 = 2001 AND _8@2 = 11, projection=[_0@0]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[web as #533, #674@0 as #534, #676@1 as #535, #678@2 as #536, sum(web_sales.#651 * web_sales.#653)@3 as #537, count(Int64(1))@4 as #538]
-                        FilterExec: sum(web_sales.#651 * web_sales.#653)@3 > scalar_subquery(<pending>)
-                          AggregateExec: mode=FinalPartitioned, gby=[#674@0 as #674, #676@1 as #676, #678@2 as #678], aggr=[sum(web_sales.#651 * web_sales.#653), count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#674@0, #676@1, #678@2], 4), input_partitions=4
-                              AggregateExec: mode=Partial, gby=[#674@2 as #674, #676@3 as #676, #678@4 as #678], aggr=[sum(web_sales.#651 * web_sales.#653), count(Int64(1))]
-                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#718@0, #636@0)], projection=[#651@1, #653@2, #674@3, #676@4, #678@5]
-                                  ProjectionExec: expr=[#0@0 as #718]
-                                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#272@0, #7@1), (#273@1, #9@2), (#274@2, #11@3)], projection=[#0@0]
-                                      CoalescePartitionsExec
-                                        ProjectionExec: expr=[#95@0 as #272, #96@1 as #273, #97@2 as #274]
-                                          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
-                                            CoalescePartitionsExec
-                                              AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                  AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
-                                                      CoalescePartitionsExec
-                                                        AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                          RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
-                                                            AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
-                                                              ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
-                                                                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
-                                                                  CoalescePartitionsExec
-                                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
-                                                                      ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                      ProjectionExec: expr=[web as #530, #671@0 as #531, #673@1 as #532, #675@2 as #533, sum(web_sales.#648 * web_sales.#650)@3 as #534, count(Int64(1))@4 as #535]
+                        FilterExec: sum(web_sales.#648 * web_sales.#650)@3 > scalar_subquery(<pending>)
+                          AggregateExec: mode=FinalPartitioned, gby=[#671@0 as #671, #673@1 as #673, #675@2 as #675], aggr=[sum(web_sales.#648 * web_sales.#650), count(Int64(1))]
+                            RepartitionExec: partitioning=Hash([#671@0, #673@1, #675@2], 4), input_partitions=4
+                              AggregateExec: mode=Partial, gby=[#671@2 as #671, #673@3 as #673, #675@4 as #675], aggr=[sum(web_sales.#648 * web_sales.#650), count(Int64(1))]
+                                HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#715@0, #633@0)], projection=[#648@1, #650@2, #671@3, #673@4, #675@5]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[#0@0 as #715]
+                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#7@1, #95@0), (#9@2, #96@1), (#11@3, #97@2)], projection=[#0@0]
+                                        ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
+                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #269@0), (#96@1, #270@1), (#97@2, #271@2)], NullsEqual: true
+                                          CoalescePartitionsExec
+                                            AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                              RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                  HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#95@0, #182@0), (#96@1, #183@1), (#97@2, #184@2)], NullsEqual: true
+                                                    CoalescePartitionsExec
+                                                      AggregateExec: mode=FinalPartitioned, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                        RepartitionExec: partitioning=Hash([#95@0, #96@1, #97@2], 4), input_partitions=4
+                                                          AggregateExec: mode=Partial, gby=[#95@0 as #95, #96@1 as #96, #97@2 as #97], aggr=[]
+                                                            ProjectionExec: expr=[#52@0 as #95, #54@1 as #96, #56@2 as #97]
+                                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, CAST(d1.#67 AS Float64)@1)], projection=[#52@1, #54@2, #56@3]
+                                                                CoalescePartitionsExec
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#45@0, #24@1)], projection=[#22@4, #52@1, #54@2, #56@3]
+                                                                    ProjectionExec: expr=[_0@0 as #45, _7@1 as #52, _9@2 as #54, _11@3 as #56]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
                                                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        ProjectionExec: expr=[_0@0 as #22, _2@1 as #24]
-                                                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                                                  ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
-                                                                    FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                                      ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
-                                                        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
-                                                          CoalescePartitionsExec
-                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
-                                                              ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                                ProjectionExec: expr=[_0@0 as #67, CAST(_0@0 AS Float64) as CAST(d1.#67 AS Float64)]
+                                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                                    ProjectionExec: expr=[#139@0 as #182, #141@1 as #183, #143@2 as #184]
+                                                      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#98@0, CAST(d2.#154 AS Float64)@1)], projection=[#139@1, #141@2, #143@3]
+                                                        CoalescePartitionsExec
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#132@0, #113@1)], projection=[#98@4, #139@1, #141@2, #143@3]
+                                                            ProjectionExec: expr=[_0@0 as #132, _7@1 as #139, _9@2 as #141, _11@3 as #143]
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
                                                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                ProjectionExec: expr=[_0@0 as #98, _15@1 as #113]
-                                                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                                                          ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
-                                                            FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                            ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
-                                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
-                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
-                                                  ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                        ProjectionExec: expr=[_0@0 as #154, CAST(_0@0 AS Float64) as CAST(d2.#154 AS Float64)]
+                                                          FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                          ProjectionExec: expr=[#226@0 as #269, #228@1 as #270, #230@2 as #271]
+                                            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#185@0, CAST(d3.#241 AS Float64)@1)], projection=[#226@1, #228@2, #230@3]
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#219@0, #188@1)], projection=[#185@4, #226@1, #228@2, #230@3]
+                                                ProjectionExec: expr=[_0@0 as #219, _7@1 as #226, _9@2 as #228, _11@3 as #230]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                                ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                              ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
+                                                FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                                                  ProjectionExec: expr=[_0@0 as #185, _3@1 as #188]
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                                ProjectionExec: expr=[_0@0 as #241, CAST(_0@0 AS Float64) as CAST(d3.#241 AS Float64)]
-                                                  FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                      ProjectionExec: expr=[_0@0 as #0, _7@1 as #7, _9@2 as #9, _11@3 as #11]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#630@0, CAST(date_dim.#686 AS Float64)@1)], projection=[#633@1, #648@2, #650@3, #671@4, #673@5, #675@6]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#664@0, #633@1)], projection=[#630@4, #633@5, #648@6, #650@7, #671@1, #673@2, #675@3]
+                                      ProjectionExec: expr=[_0@0 as #664, _7@1 as #671, _9@2 as #673, _11@3 as #675]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#633@0, CAST(date_dim.#689 AS Float64)@1)], projection=[#636@1, #651@2, #653@3, #674@4, #676@5, #678@6]
-                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#667@0, #636@1)], projection=[#633@4, #636@5, #651@6, #653@7, #674@1, #676@2, #678@3]
-                                      ProjectionExec: expr=[_0@0 as #667, _7@1 as #674, _9@2 as #676, _11@3 as #678]
+                                      ProjectionExec: expr=[_0@0 as #630, _3@1 as #633, _18@2 as #648, _20@3 as #650]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                      ProjectionExec: expr=[_0@0 as #633, _3@1 as #636, _18@2 as #651, _20@3 as #653]
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[_0@0 as #689, CAST(_0@0 AS Float64) as CAST(date_dim.#689 AS Float64)]
+                                    ProjectionExec: expr=[_0@0 as #686, CAST(_0@0 AS Float64) as CAST(date_dim.#686 AS Float64)]
                                       FilterExec: _6@1 = 2001 AND _8@2 = 11, projection=[_0@0]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#327 * x.#328)@0 as #532]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#327 * x.#328)]
+        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #529]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#327 * x.#328)]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
                 UnionExec
-                  ProjectionExec: expr=[#286@0 as #327, #288@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#276@0, CAST(date_dim.#299 AS Float64)@1)], projection=[#286@1, #288@2]
-                      ProjectionExec: expr=[_0@0 as #276, _10@1 as #286, _12@2 as #288]
+                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
+                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #299, CAST(_0@0 AS Float64) as CAST(date_dim.#299 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#347@0 as #327, #349@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#329@0, CAST(date_dim.#363 AS Float64)@1)], projection=[#347@1, #349@2]
-                      ProjectionExec: expr=[_0@0 as #329, _18@1 as #347, _20@2 as #349]
+                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
+                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #363, CAST(_0@0 AS Float64) as CAST(date_dim.#363 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#411@0 as #327, #413@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#393@0, CAST(date_dim.#427 AS Float64)@1)], projection=[#411@1, #413@2]
-                      ProjectionExec: expr=[_0@0 as #393, _18@1 as #411, _20@2 as #413]
+                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
+                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #427, CAST(_0@0 AS Float64) as CAST(date_dim.#427 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#327 * x.#328)@0 as #626]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#327 * x.#328)]
+        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #623]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#327 * x.#328)]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
                 UnionExec
-                  ProjectionExec: expr=[#286@0 as #327, #288@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#276@0, CAST(date_dim.#299 AS Float64)@1)], projection=[#286@1, #288@2]
-                      ProjectionExec: expr=[_0@0 as #276, _10@1 as #286, _12@2 as #288]
+                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
+                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #299, CAST(_0@0 AS Float64) as CAST(date_dim.#299 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#347@0 as #327, #349@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#329@0, CAST(date_dim.#363 AS Float64)@1)], projection=[#347@1, #349@2]
-                      ProjectionExec: expr=[_0@0 as #329, _18@1 as #347, _20@2 as #349]
+                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
+                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #363, CAST(_0@0 AS Float64) as CAST(date_dim.#363 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#411@0 as #327, #413@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#393@0, CAST(date_dim.#427 AS Float64)@1)], projection=[#411@1, #413@2]
-                      ProjectionExec: expr=[_0@0 as #393, _18@1 as #411, _20@2 as #413]
+                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
+                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #427, CAST(_0@0 AS Float64) as CAST(date_dim.#427 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#327 * x.#328)@0 as #720]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#327 * x.#328)]
+        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #717]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#327 * x.#328)]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
                 UnionExec
-                  ProjectionExec: expr=[#286@0 as #327, #288@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#276@0, CAST(date_dim.#299 AS Float64)@1)], projection=[#286@1, #288@2]
-                      ProjectionExec: expr=[_0@0 as #276, _10@1 as #286, _12@2 as #288]
+                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
+                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #299, CAST(_0@0 AS Float64) as CAST(date_dim.#299 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#347@0 as #327, #349@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#329@0, CAST(date_dim.#363 AS Float64)@1)], projection=[#347@1, #349@2]
-                      ProjectionExec: expr=[_0@0 as #329, _18@1 as #347, _20@2 as #349]
+                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
+                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #363, CAST(_0@0 AS Float64) as CAST(date_dim.#363 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#411@0 as #327, #413@1 as #328]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#393@0, CAST(date_dim.#427 AS Float64)@1)], projection=[#411@1, #413@2]
-                      ProjectionExec: expr=[_0@0 as #393, _18@1 as #411, _20@2 as #413]
+                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
+                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #427, CAST(_0@0 AS Float64) as CAST(date_dim.#427 AS Float64)]
+                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1625,106 +1622,105 @@ name: "test_derived_tpcds_query_plan[23]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#332@0 as sum(sales)]
+    ProjectionExec: expr=[#329@0 as sum(sales)]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[sum(__auto_generated_subquery_name.#331)@0 as #332]
+        ProjectionExec: expr=[sum(__auto_generated_subquery_name.#257)@0 as #329]
           GlobalLimitExec: skip=0, fetch=100
-            AggregateExec: mode=Final, gby=[], aggr=[sum(__auto_generated_subquery_name.#331)]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(__auto_generated_subquery_name.#257)]
               CoalescePartitionsExec
-                AggregateExec: mode=Partial, gby=[], aggr=[sum(__auto_generated_subquery_name.#331)]
-                  ProjectionExec: expr=[#259@0 as #331]
-                    UnionExec
-                      ProjectionExec: expr=[#213@0 * CAST(#215@1 AS Float64) as #259]
-                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#258@0, #198@0)], projection=[#213@1, #215@2]
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[CAST(#174@0 AS Float64) as #258]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
-                                AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                  RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
-                                    AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#174 AS Float64)@1, #154@0)], projection=[#161@3, #164@4, #174@0]
-                                        ProjectionExec: expr=[_0@0 as #174, CAST(_0@0 AS Float64) as CAST(customer.#174 AS Float64)]
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(__auto_generated_subquery_name.#257)]
+                  UnionExec
+                    ProjectionExec: expr=[#211@0 * CAST(#213@1 AS Float64) as #257]
+                      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#256@0, #196@0)], projection=[#211@1, #213@2]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[CAST(#172@0 AS Float64) as #256]
+                            FilterExec: sum(store_sales.#159 * store_sales.#162)@1 > 0.95 * scalar_subquery(<pending>), projection=[#172@0]
+                              AggregateExec: mode=FinalPartitioned, gby=[#172@0 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                RepartitionExec: partitioning=Hash([#172@0], 4), input_partitions=4
+                                  AggregateExec: mode=Partial, gby=[#172@2 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#172 AS Float64)@1, #152@0)], projection=[#159@3, #162@4, #172@0]
+                                      ProjectionExec: expr=[_0@0 as #172, CAST(_0@0 AS Float64) as CAST(customer.#172 AS Float64)]
+                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                        ProjectionExec: expr=[_3@0 as #152, _10@1 as #159, _13@2 as #162]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_3@0 as #154, _10@1 as #161, _13@2 as #164]
-                                            DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#257@0, #210@1)], projection=[#198@0, #213@2, #215@3]
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[#51@0 as #257]
-                                FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
-                                  ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
-                                    AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
-                                      RepartitionExec: partitioning=Hash([substr(item.#55,Int32(1),Int32(30))@0, #51@1, #25@2], 4), input_partitions=4
-                                        AggregateExec: mode=Partial, gby=[substr(#55@2, 1, 30) as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@0 as #25], aggr=[count(Int64(1))]
-                                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #51@0)], projection=[#25@1, #51@2, #55@3]
-                                              CoalescePartitionsExec
-                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(date_dim.#23 AS Float64)@2, #0@0)], projection=[#2@4, #25@1]
-                                                  CoalescePartitionsExec
-                                                    ProjectionExec: expr=[_0@0 as #23, _2@1 as #25, CAST(_0@0 AS Float64) as CAST(date_dim.#23 AS Float64)]
-                                                      FilterExec: _6@2 IN (SET) ([2000, 2001, 2002, 2003]), projection=[_0@0, _2@1]
-                                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                    ProjectionExec: expr=[_0@0 as #0, _2@1 as #2]
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                              ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#195@0, CAST(date_dim.#229 AS Float64)@1)], projection=[#198@1, #210@2, #213@3, #215@4]
-                              ProjectionExec: expr=[_0@0 as #195, _3@1 as #198, _15@2 as #210, _18@3 as #213, _20@4 as #215]
-                                DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as #229, CAST(_0@0 AS Float64) as CAST(date_dim.#229 AS Float64)]
-                                FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
-                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[#278@0 * CAST(#280@1 AS Float64) as #259]
-                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#329@0, #264@0)], projection=[#278@1, #280@2]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#255@0, #208@1)], projection=[#196@0, #211@2, #213@3]
                           CoalescePartitionsExec
-                            ProjectionExec: expr=[CAST(#174@0 AS Float64) as #329]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
-                                AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                  RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
-                                    AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#174 AS Float64)@1, #154@0)], projection=[#161@3, #164@4, #174@0]
-                                        ProjectionExec: expr=[_0@0 as #174, CAST(_0@0 AS Float64) as CAST(customer.#174 AS Float64)]
-                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[#51@0 as #255]
+                              FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
+                                ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
+                                  AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
+                                    RepartitionExec: partitioning=Hash([substr(item.#55,Int32(1),Int32(30))@0, #51@1, #25@2], 4), input_partitions=4
+                                      AggregateExec: mode=Partial, gby=[substr(#55@2, 1, 30) as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@0 as #25], aggr=[count(Int64(1))]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_3@0 as #154, _10@1 as #161, _13@2 as #164]
-                                            DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#326@0, #263@0)], projection=[#264@1, #278@2, #280@3]
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[#51@0 as #326]
-                                FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
-                                  ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
-                                    AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
-                                      RepartitionExec: partitioning=Hash([substr(item.#55,Int32(1),Int32(30))@0, #51@1, #25@2], 4), input_partitions=4
-                                        AggregateExec: mode=Partial, gby=[substr(#55@2, 1, 30) as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@0 as #25], aggr=[count(Int64(1))]
-                                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #51@0)], projection=[#25@1, #51@2, #55@3]
-                                              CoalescePartitionsExec
-                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(date_dim.#23 AS Float64)@2, #0@0)], projection=[#2@4, #25@1]
-                                                  CoalescePartitionsExec
-                                                    ProjectionExec: expr=[_0@0 as #23, _2@1 as #25, CAST(_0@0 AS Float64) as CAST(date_dim.#23 AS Float64)]
-                                                      FilterExec: _6@2 IN (SET) ([2000, 2001, 2002, 2003]), projection=[_0@0, _2@1]
-                                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                                    ProjectionExec: expr=[_0@0 as #0, _2@1 as #2]
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                              ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#260@0, CAST(date_dim.#294 AS Float64)@1)], projection=[#263@1, #264@2, #278@3, #280@4]
-                              ProjectionExec: expr=[_0@0 as #260, _3@1 as #263, _4@2 as #264, _18@3 as #278, _20@4 as #280]
-                                DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as #294, CAST(_0@0 AS Float64) as CAST(date_dim.#294 AS Float64)]
-                                FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
-                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[max(__auto_generated_subquery_name.#149)@0 as #192]
-          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#149)]
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #51@0)], projection=[#25@1, #51@2, #55@3]
+                                            CoalescePartitionsExec
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(date_dim.#23 AS Float64)@2, #0@0)], projection=[#2@4, #25@1]
+                                                CoalescePartitionsExec
+                                                  ProjectionExec: expr=[_0@0 as #23, _2@1 as #25, CAST(_0@0 AS Float64) as CAST(date_dim.#23 AS Float64)]
+                                                    FilterExec: _6@2 IN (SET) ([2000, 2001, 2002, 2003]), projection=[_0@0, _2@1]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                  ProjectionExec: expr=[_0@0 as #0, _2@1 as #2]
+                                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                            ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#193@0, CAST(date_dim.#227 AS Float64)@1)], projection=[#196@1, #208@2, #211@3, #213@4]
+                            ProjectionExec: expr=[_0@0 as #193, _3@1 as #196, _15@2 as #208, _18@3 as #211, _20@4 as #213]
+                              DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[_0@0 as #227, CAST(_0@0 AS Float64) as CAST(date_dim.#227 AS Float64)]
+                              FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
+                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                    ProjectionExec: expr=[#276@0 * CAST(#278@1 AS Float64) as #257]
+                      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#327@0, #262@0)], projection=[#276@1, #278@2]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[CAST(#172@0 AS Float64) as #327]
+                            FilterExec: sum(store_sales.#159 * store_sales.#162)@1 > 0.95 * scalar_subquery(<pending>), projection=[#172@0]
+                              AggregateExec: mode=FinalPartitioned, gby=[#172@0 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                RepartitionExec: partitioning=Hash([#172@0], 4), input_partitions=4
+                                  AggregateExec: mode=Partial, gby=[#172@2 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#172 AS Float64)@1, #152@0)], projection=[#159@3, #162@4, #172@0]
+                                      ProjectionExec: expr=[_0@0 as #172, CAST(_0@0 AS Float64) as CAST(customer.#172 AS Float64)]
+                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                        ProjectionExec: expr=[_3@0 as #152, _10@1 as #159, _13@2 as #162]
+                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#324@0, #261@0)], projection=[#262@1, #276@2, #278@3]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[#51@0 as #324]
+                              FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
+                                ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
+                                  AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
+                                    RepartitionExec: partitioning=Hash([substr(item.#55,Int32(1),Int32(30))@0, #51@1, #25@2], 4), input_partitions=4
+                                      AggregateExec: mode=Partial, gby=[substr(#55@2, 1, 30) as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@0 as #25], aggr=[count(Int64(1))]
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #51@0)], projection=[#25@1, #51@2, #55@3]
+                                            CoalescePartitionsExec
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(date_dim.#23 AS Float64)@2, #0@0)], projection=[#2@4, #25@1]
+                                                CoalescePartitionsExec
+                                                  ProjectionExec: expr=[_0@0 as #23, _2@1 as #25, CAST(_0@0 AS Float64) as CAST(date_dim.#23 AS Float64)]
+                                                    FilterExec: _6@2 IN (SET) ([2000, 2001, 2002, 2003]), projection=[_0@0, _2@1]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                  ProjectionExec: expr=[_0@0 as #0, _2@1 as #2]
+                                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                            ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#258@0, CAST(date_dim.#292 AS Float64)@1)], projection=[#261@1, #262@2, #276@3, #278@4]
+                            ProjectionExec: expr=[_0@0 as #258, _3@1 as #261, _4@2 as #262, _18@3 as #276, _20@4 as #278]
+                              DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[_0@0 as #292, CAST(_0@0 AS Float64) as CAST(date_dim.#292 AS Float64)]
+                              FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
+                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[max(__auto_generated_subquery_name.#147)@0 as #190]
+          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#149)]
-                ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #149]
+              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
+                ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #147]
                   AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
                     RepartitionExec: partitioning=Hash([#100@0], 4), input_partitions=4
                       AggregateExec: mode=Partial, gby=[#100@2 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
@@ -1745,32 +1741,32 @@ name: "test_derived_tpcds_query_plan[23].1"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#374@0 as c_last_name, #375@1 as c_first_name, #376@2 as sales]
+    ProjectionExec: expr=[#369@0 as c_last_name, #370@1 as c_first_name, #371@2 as sales]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [#374@0 ASC, #375@1 ASC, #376@2 ASC], fetch=100
-          ProjectionExec: expr=[#277@0 as #374, #278@1 as #375, #279@2 as #376]
-            SortExec: TopK(fetch=100), expr=[#277@0 ASC, #278@1 ASC, #279@2 ASC], preserve_partitioning=[true]
+        SortPreservingMergeExec: [#369@0 ASC, #370@1 ASC, #371@2 ASC], fetch=100
+          ProjectionExec: expr=[#275@0 as #369, #276@1 as #370, #277@2 as #371]
+            SortExec: TopK(fetch=100), expr=[#275@0 ASC, #276@1 ASC, #277@2 ASC], preserve_partitioning=[true]
               InterleaveExec
-                ProjectionExec: expr=[#238@0 as #277, #237@1 as #278, sum(catalog_sales.#213 * catalog_sales.#215)@2 as #279]
-                  AggregateExec: mode=FinalPartitioned, gby=[#238@0 as #238, #237@1 as #237], aggr=[sum(catalog_sales.#213 * catalog_sales.#215)]
-                    RepartitionExec: partitioning=Hash([#238@0, #237@1], 4), input_partitions=4
-                      AggregateExec: mode=Partial, gby=[#238@3 as #238, #237@2 as #237], aggr=[sum(catalog_sales.#213 * catalog_sales.#215)]
-                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#276@0, #198@0)], projection=[#213@1, #215@2, #237@3, #238@4]
+                ProjectionExec: expr=[#236@0 as #275, #235@1 as #276, sum(catalog_sales.#211 * catalog_sales.#213)@2 as #277]
+                  AggregateExec: mode=FinalPartitioned, gby=[#236@0 as #236, #235@1 as #235], aggr=[sum(catalog_sales.#211 * catalog_sales.#213)]
+                    RepartitionExec: partitioning=Hash([#236@0, #235@1], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[#236@3 as #236, #235@2 as #235], aggr=[sum(catalog_sales.#211 * catalog_sales.#213)]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#274@0, #196@0)], projection=[#211@1, #213@2, #235@3, #236@4]
                           CoalescePartitionsExec
-                            ProjectionExec: expr=[CAST(#174@0 AS Float64) as #276]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
-                                AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                  RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
-                                    AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#174 AS Float64)@1, #154@0)], projection=[#161@3, #164@4, #174@0]
-                                        ProjectionExec: expr=[_0@0 as #174, CAST(_0@0 AS Float64) as CAST(customer.#174 AS Float64)]
+                            ProjectionExec: expr=[CAST(#172@0 AS Float64) as #274]
+                              FilterExec: sum(store_sales.#159 * store_sales.#162)@1 > 0.95 * scalar_subquery(<pending>), projection=[#172@0]
+                                AggregateExec: mode=FinalPartitioned, gby=[#172@0 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                  RepartitionExec: partitioning=Hash([#172@0], 4), input_partitions=4
+                                    AggregateExec: mode=Partial, gby=[#172@2 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#172 AS Float64)@1, #152@0)], projection=[#159@3, #162@4, #172@0]
+                                        ProjectionExec: expr=[_0@0 as #172, CAST(_0@0 AS Float64) as CAST(customer.#172 AS Float64)]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_3@0 as #154, _10@1 as #161, _13@2 as #164]
+                                          ProjectionExec: expr=[_3@0 as #152, _10@1 as #159, _13@2 as #162]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#275@0, #210@1)], projection=[#198@0, #213@2, #215@3, #237@4, #238@5]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#273@0, #208@1)], projection=[#196@0, #211@2, #213@3, #235@4, #236@5]
                             CoalescePartitionsExec
-                              ProjectionExec: expr=[#51@0 as #275]
+                              ProjectionExec: expr=[#51@0 as #273]
                                 FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
                                   ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
                                     AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
@@ -1790,36 +1786,36 @@ data:
                                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                               ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
                                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#195@0, CAST(date_dim.#247 AS Float64)@1)], projection=[#198@1, #210@2, #213@3, #215@4, #237@5, #238@6]
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#198@1, CAST(customer.#229 AS Float64)@3)], projection=[#195@0, #198@1, #210@2, #213@3, #215@4, #237@6, #238@7]
-                                ProjectionExec: expr=[_0@0 as #195, _3@1 as #198, _15@2 as #210, _18@3 as #213, _20@4 as #215]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#193@0, CAST(date_dim.#245 AS Float64)@1)], projection=[#196@1, #208@2, #211@3, #213@4, #235@5, #236@6]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#196@1, CAST(customer.#227 AS Float64)@3)], projection=[#193@0, #196@1, #208@2, #211@3, #213@4, #235@6, #236@7]
+                                ProjectionExec: expr=[_0@0 as #193, _3@1 as #196, _15@2 as #208, _18@3 as #211, _20@4 as #213]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                                ProjectionExec: expr=[_0@0 as #229, _8@1 as #237, _9@2 as #238, CAST(_0@0 AS Float64) as CAST(customer.#229 AS Float64)]
+                                ProjectionExec: expr=[_0@0 as #227, _8@1 as #235, _9@2 as #236, CAST(_0@0 AS Float64) as CAST(customer.#227 AS Float64)]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as #247, CAST(_0@0 AS Float64) as CAST(date_dim.#247 AS Float64)]
+                              ProjectionExec: expr=[_0@0 as #245, CAST(_0@0 AS Float64) as CAST(date_dim.#245 AS Float64)]
                                 FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                ProjectionExec: expr=[#323@0 as #277, #322@1 as #278, sum(web_sales.#298 * web_sales.#300)@2 as #279]
-                  AggregateExec: mode=FinalPartitioned, gby=[#323@0 as #323, #322@1 as #322], aggr=[sum(web_sales.#298 * web_sales.#300)]
-                    RepartitionExec: partitioning=Hash([#323@0, #322@1], 4), input_partitions=4
-                      AggregateExec: mode=Partial, gby=[#323@3 as #323, #322@2 as #322], aggr=[sum(web_sales.#298 * web_sales.#300)]
-                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#367@0, #284@0)], projection=[#298@1, #300@2, #322@3, #323@4]
+                ProjectionExec: expr=[#321@0 as #275, #320@1 as #276, sum(web_sales.#296 * web_sales.#298)@2 as #277]
+                  AggregateExec: mode=FinalPartitioned, gby=[#321@0 as #321, #320@1 as #320], aggr=[sum(web_sales.#296 * web_sales.#298)]
+                    RepartitionExec: partitioning=Hash([#321@0, #320@1], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[#321@3 as #321, #320@2 as #320], aggr=[sum(web_sales.#296 * web_sales.#298)]
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#365@0, #282@0)], projection=[#296@1, #298@2, #320@3, #321@4]
                           CoalescePartitionsExec
-                            ProjectionExec: expr=[CAST(#174@0 AS Float64) as #367]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
-                                AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                  RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
-                                    AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
-                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#174 AS Float64)@1, #154@0)], projection=[#161@3, #164@4, #174@0]
-                                        ProjectionExec: expr=[_0@0 as #174, CAST(_0@0 AS Float64) as CAST(customer.#174 AS Float64)]
+                            ProjectionExec: expr=[CAST(#172@0 AS Float64) as #365]
+                              FilterExec: sum(store_sales.#159 * store_sales.#162)@1 > 0.95 * scalar_subquery(<pending>), projection=[#172@0]
+                                AggregateExec: mode=FinalPartitioned, gby=[#172@0 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                  RepartitionExec: partitioning=Hash([#172@0], 4), input_partitions=4
+                                    AggregateExec: mode=Partial, gby=[#172@2 as #172], aggr=[sum(store_sales.#159 * store_sales.#162)]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer.#172 AS Float64)@1, #152@0)], projection=[#159@3, #162@4, #172@0]
+                                        ProjectionExec: expr=[_0@0 as #172, CAST(_0@0 AS Float64) as CAST(customer.#172 AS Float64)]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                          ProjectionExec: expr=[_3@0 as #154, _10@1 as #161, _13@2 as #164]
+                                          ProjectionExec: expr=[_3@0 as #152, _10@1 as #159, _13@2 as #162]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#364@0, #283@0)], projection=[#284@1, #298@2, #300@3, #322@4, #323@5]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#362@0, #281@0)], projection=[#282@1, #296@2, #298@3, #320@4, #321@5]
                             CoalescePartitionsExec
-                              ProjectionExec: expr=[#51@0 as #364]
+                              ProjectionExec: expr=[#51@0 as #362]
                                 FilterExec: count(Int64(1))@1 > 4, projection=[#51@0]
                                   ProjectionExec: expr=[#51@1 as #51, count(Int64(1))@3 as count(Int64(1))]
                                     AggregateExec: mode=FinalPartitioned, gby=[substr(item.#55,Int32(1),Int32(30))@0 as substr(item.#55,Int32(1),Int32(30)), #51@1 as #51, #25@2 as #25], aggr=[count(Int64(1))]
@@ -1839,21 +1835,21 @@ data:
                                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                               ProjectionExec: expr=[_0@0 as #51, _4@1 as #55]
                                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#280@0, CAST(date_dim.#332 AS Float64)@1)], projection=[#283@1, #284@2, #298@3, #300@4, #322@5, #323@6]
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#284@2, CAST(customer.#314 AS Float64)@3)], projection=[#280@0, #283@1, #284@2, #298@3, #300@4, #322@6, #323@7]
-                                ProjectionExec: expr=[_0@0 as #280, _3@1 as #283, _4@2 as #284, _18@3 as #298, _20@4 as #300]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#278@0, CAST(date_dim.#330 AS Float64)@1)], projection=[#281@1, #282@2, #296@3, #298@4, #320@5, #321@6]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#282@2, CAST(customer.#312 AS Float64)@3)], projection=[#278@0, #281@1, #282@2, #296@3, #298@4, #320@6, #321@7]
+                                ProjectionExec: expr=[_0@0 as #278, _3@1 as #281, _4@2 as #282, _18@3 as #296, _20@4 as #298]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                                ProjectionExec: expr=[_0@0 as #314, _8@1 as #322, _9@2 as #323, CAST(_0@0 AS Float64) as CAST(customer.#314 AS Float64)]
+                                ProjectionExec: expr=[_0@0 as #312, _8@1 as #320, _9@2 as #321, CAST(_0@0 AS Float64) as CAST(customer.#312 AS Float64)]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as #332, CAST(_0@0 AS Float64) as CAST(date_dim.#332 AS Float64)]
+                              ProjectionExec: expr=[_0@0 as #330, CAST(_0@0 AS Float64) as CAST(date_dim.#330 AS Float64)]
                                 FilterExec: _6@1 = 2000 AND _8@2 = 3, projection=[_0@0]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[max(__auto_generated_subquery_name.#149)@0 as #192]
-          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#149)]
+        ProjectionExec: expr=[max(__auto_generated_subquery_name.#147)@0 as #190]
+          AggregateExec: mode=Final, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#149)]
-                ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #149]
+              AggregateExec: mode=Partial, gby=[], aggr=[max(__auto_generated_subquery_name.#147)]
+                ProjectionExec: expr=[sum(store_sales.#87 * store_sales.#90)@1 as #147]
                   AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
                     RepartitionExec: partitioning=Hash([#100@0], 4), input_partitions=4
                       AggregateExec: mode=Partial, gby=[#100@2 as #100], aggr=[sum(store_sales.#87 * store_sales.#90)]
@@ -3282,9 +3278,9 @@ name: "test_derived_tpcds_query_plan[49]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#296@0 as channel, #297@1 as item, #298@2 as return_ratio, #299@3 as return_rank, #300@4 as currency_rank]
-      SortPreservingMergeExec: [#296@0 ASC, #299@3 ASC, #300@4 ASC, #297@1 ASC], fetch=100
-        ProjectionExec: expr=[#96@0 as #296, #97@1 as #297, #98@2 as #298, #99@3 as #299, #100@4 as #300]
+    ProjectionExec: expr=[#291@0 as channel, #292@1 as item, #293@2 as return_ratio, #294@3 as return_rank, #295@4 as currency_rank]
+      SortPreservingMergeExec: [#291@0 ASC, #294@3 ASC, #295@4 ASC, #292@1 ASC], fetch=100
+        ProjectionExec: expr=[#96@0 as #291, #97@1 as #292, #98@2 as #293, #99@3 as #294, #100@4 as #295]
           SortExec: TopK(fetch=100), expr=[#96@0 ASC, #99@3 ASC, #100@4 ASC, #97@1 ASC], preserve_partitioning=[true]
             AggregateExec: mode=FinalPartitioned, gby=[#96@0 as #96, #97@1 as #97, #98@2 as #98, #99@3 as #99, #100@4 as #100], aggr=[]
               RepartitionExec: partitioning=Hash([#96@0, #97@1, #98@2, #99@3, #100@4], 4), input_partitions=12
