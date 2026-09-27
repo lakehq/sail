@@ -14,9 +14,8 @@ Feature: format_string function
         | result     |
         | 7200000000 |
 
-    # TODO: route printf through the same physical interval conversion as format_string. Spark's
-    # FunctionRegistry registers both names as FormatString, but Sail still bypasses that resolver.
-    @sail-bug
+    # Spark registers `printf` as an alias of FormatString, so it receives the same physical
+    # interval value as `format_string`.
     Scenario: printf forwards the physical value like format_string
       When query
         """
@@ -26,9 +25,7 @@ Feature: format_string function
         | result     |
         | 7200000000 |
 
-    # TODO: pass year-month intervals to FormatString as their physical month count, as Spark's
-    # AnyDataType argument does. Sail currently cannot cast that physical interval storage.
-    @sail-bug
+    # A year-month interval reaches FormatString as its physical month count.
     Scenario Outline: formatting <case> uses its month count
       When query
         """
@@ -86,13 +83,21 @@ Feature: format_string function
 
   Rule: format_string forwards the physical value of every other type
 
-    # TODO: preserve decimal scale when FormatString receives its physical Decimal128 value.
-    # Sail currently forwards the unscaled integer (150) rather than Spark's decimal (1.50).
-    @sail-bug
+    # Spark renders a DECIMAL through Decimal.toString(), preserving its declared scale.
     Scenario: formatting a decimal keeps its scale
       When query
         """
         SELECT format_string('%s', CAST(1.50 AS DECIMAL(5,2))) AS result
+        """
+      Then query result
+        | result |
+        | 1.50   |
+
+    Scenario: formatting a decimal column keeps its scale
+      When query
+        """
+        SELECT format_string('%s', value) AS result
+        FROM VALUES (CAST(1.50 AS DECIMAL(5,2))) AS t(value)
         """
       Then query result
         | result |
@@ -118,3 +123,72 @@ Feature: format_string function
 
     # BINARY has no pinnable expectation: Spark prints the Java array's identity hash
     # (`[B@7bb6161c`), which differs on every run, so this leaf is measured and left untested.
+
+  Rule: format_string applies Java Formatter conversions to decimal text
+
+    # Decimal.toString() preserves the scale before Formatter applies string precision and width.
+    Scenario Outline: formatting a decimal with <format> applies string formatting
+      When query
+        """
+        SELECT format_string('[<format>]', CAST(<input> AS DECIMAL(5,2))) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | format | input | result   |
+        | %S     | 1.50  | [1.50]     |
+        | %.1s   | 1.50  | [1]        |
+        | %8s    | -1.50 | [   -1.50] |
+
+    Scenario: formatting a null decimal prints the null marker
+      When query
+        """
+        SELECT format_string('%s', CAST(NULL AS DECIMAL(5,2))) AS result
+        """
+      Then query result
+        | result |
+        | null   |
+
+    Scenario: formatting a decimal with a column format keeps its scale
+      When query
+        """
+        SELECT format_string(format, value) AS result
+        FROM VALUES ('%s', CAST(1.50 AS DECIMAL(5,2))) AS t(format, value)
+        """
+      Then query result
+        | result |
+        | 1.50   |
+
+    # java.util.Formatter rejects a Decimal for floating-point conversions.
+    Scenario: formatting a decimal as a floating point value errors
+      When query
+        """
+        SELECT format_string('%f', CAST(1.50 AS DECIMAL(5,2))) AS result
+        """
+      Then query error .*
+
+    # java.util.Formatter prints true for every non-null Decimal; DataFusion only accepts BOOLEAN.
+    # This is confirmed on main too.
+    @sail-bug
+    Scenario: formatting a decimal as a boolean reports that it is non-null
+      When query
+        """
+        SELECT format_string('%b', CAST(1.50 AS DECIMAL(5,2))) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    # Spark delegates %h to Decimal.hashCode(), while DataFusion's Formatter has not implemented
+    # hexadecimal hash conversions (datafusion#17093). This is confirmed on main too.
+    @sail-bug
+    Scenario: formatting a decimal hash uses Decimal hashCode
+      When query
+        """
+        SELECT format_string('%h', CAST(1.50 AS DECIMAL(5,2))) AS result
+        """
+      Then query result
+        | result   |
+        | 3fc00000 |

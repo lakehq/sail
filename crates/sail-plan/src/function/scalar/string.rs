@@ -14,6 +14,7 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_interval::YearMonthIntervalMonths;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -443,7 +444,15 @@ fn format_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
             match argument.get_type(schema.as_ref())? {
                 DataType::Duration(TimeUnit::Microsecond) => Ok(cast(argument, DataType::Int64)),
-                DataType::Interval(IntervalUnit::YearMonth) => Ok(cast(argument, DataType::Int32)),
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    Ok(ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![argument]))
+                }
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+                    // TODO: DataFusion's Formatter cannot apply Java Formatter's `%b`/`%B` or
+                    // `%h`/`%H` decimal rules. The pattern can vary per row, so supporting those
+                    // conversions requires extending the formatter rather than a fixed coercion.
+                    Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![argument]))
+                }
                 _ => Ok(argument),
             }
         })
@@ -681,7 +690,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("octet_length", F::custom(octet_length)),
         ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),
-        ("printf", F::udf(FormatStringFunc::new())),
+        ("printf", F::custom(format_string)),
         ("quote", F::udf(SparkQuote::new())),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::custom(regexp_count)),

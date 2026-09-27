@@ -200,6 +200,36 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | unary minus rounds to 34 digits       | -CAST('12345678901234567890123456789012345' AS DECIMAL(38,0))              | -12345678901234567890123456789012340 |
         | negative function rounds to 34 digits | negative(CAST('12345678901234567890123456789012345' AS DECIMAL(38,0)))     | -12345678901234567890123456789012340 |
 
+    Scenario: overflowing negation reports its rounded and original decimal values
+      When query
+        """
+        SELECT -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS result
+        """
+      Then query error (?s)The -100000000000000000000000000000000000000 rounded half up from -1\.000000000000000000000000000000000E\+38 cannot be represented as Decimal\(38, 0\)
+
+    # Negation only flips the sign, so it can never overflow below 35 digits: the value's
+    # magnitude is unchanged, and whatever precision already held it still holds it. Overflow
+    # first becomes possible at 35 digits, the smallest precision where Spark's 34-significant-digit
+    # BigDecimal context (arithmetic.scala:46-106) can round a value up into an extra digit. Below
+    # this boundary Sail must not raise at all; a prior review round worried this boundary might
+    # instead hit Spark's `.WITH_SUGGESTION` (no "rounded half up from" clause) fast path used for
+    # precision <= 18 -- that path is unreachable here since negation cannot overflow there.
+    Scenario: negation at 34 digits (the widest precision that cannot overflow) stays in range
+      When query
+        """
+        SELECT -CAST('9999999999999999999999999999999999' AS DECIMAL(34,0)) AS result
+        """
+      Then query result
+        | result                                |
+        | -9999999999999999999999999999999999   |
+
+    Scenario: negation overflow first appears at 35 digits
+      When query
+        """
+        SELECT -CAST('99999999999999999999999999999999999' AS DECIMAL(35,0)) AS result
+        """
+      Then query error (?s)The -100000000000000000000000000000000000 rounded half up from -1\.000000000000000000000000000000000E\+35 cannot be represented as Decimal\(35, 0\)
+
   @function(nullability)
   Rule: Output schema
 

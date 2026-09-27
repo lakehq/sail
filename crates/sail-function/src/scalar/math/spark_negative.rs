@@ -14,6 +14,8 @@ use datafusion_expr::{
 use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegative;
 use num::traits::CheckedNeg;
 
+use crate::error::generic_internal_err;
+
 /// `ConfigOptions` snapshots with `execution.enable_ansi_mode` pinned. Negation
 /// only reads the ANSI flag, so the two possible snapshots are built once and
 /// shared process-wide; each batch clones an `Arc` instead of deep-cloning the
@@ -77,6 +79,47 @@ fn decimal_overflow<T: DecimalType>(value: T::Native, precision: u8, scale: i8) 
     ))
 }
 
+fn format_decimal128(value: i128, scale: i8) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let digits = value.unsigned_abs().to_string();
+    if scale <= 0 {
+        return format!(
+            "{sign}{digits}{}",
+            "0".repeat(scale.unsigned_abs() as usize)
+        );
+    }
+    let scale = scale as usize;
+    if digits.len() <= scale {
+        format!("{sign}0.{}{}", "0".repeat(scale - digits.len()), digits)
+    } else {
+        let split = digits.len() - scale;
+        format!("{sign}{}.{}", &digits[..split], &digits[split..])
+    }
+}
+
+fn decimal128_context_string(value: i128, scale: i8) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let digits = value.unsigned_abs().to_string();
+    if digits.len() <= 34 {
+        return format_decimal128(value, scale);
+    }
+    let significant = &digits[..34];
+    let exponent = digits.len() as i32 - 1 - i32::from(scale);
+    format!(
+        "{sign}{}.{}E{exponent:+}",
+        &significant[..1],
+        &significant[1..]
+    )
+}
+
+fn decimal128_overflow(rounded: i128, precision: u8, scale: i8) -> ArrowError {
+    ArrowError::ComputeError(format!(
+        "[NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION] The {} rounded half up from {} cannot be represented as Decimal({precision}, {scale}). SQLSTATE: 22003",
+        format_decimal128(rounded, scale),
+        decimal128_context_string(rounded, scale),
+    ))
+}
+
 /// `Decimal.unary_-` uses Scala `BigDecimal`, whose DECIMAL128 context keeps 34
 /// significant digits. Arrow stores the unscaled integer exactly, therefore we
 /// reproduce that context explicitly before validating the declared precision.
@@ -110,7 +153,7 @@ fn spark_decimal128_negate(value: i128, precision: u8, scale: i8) -> Result<i128
         .checked_mul(divisor)
         .ok_or_else(|| decimal_overflow::<Decimal128Type>(negated, precision, scale))?;
     Decimal128Type::validate_decimal_precision(rounded, precision, scale)
-        .map_err(|_| decimal_overflow::<Decimal128Type>(rounded, precision, scale))?;
+        .map_err(|_| decimal128_overflow(rounded, precision, scale))?;
     Ok(rounded)
 }
 
@@ -270,11 +313,10 @@ impl ScalarUDFImpl for SparkNegative {
     /// Spark's `UnaryMinus` is `nullIntolerant`, so it is nullable precisely when its child is
     /// nullable (`arithmetic.scala:50`).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let argument = args.arg_fields.first().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "negative expects one argument".to_string(),
-            )
-        })?;
+        let argument = args
+            .arg_fields
+            .first()
+            .ok_or_else(|| generic_internal_err("negative", "expects one argument"))?;
         Ok(Arc::new(Field::new(
             self.name(),
             argument.data_type().clone(),

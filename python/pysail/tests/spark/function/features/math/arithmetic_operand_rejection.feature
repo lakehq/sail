@@ -6895,6 +6895,51 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
         | 14 | true | SELECT (NULL - make_interval(0, 1, 0, 1, 0, 0, 0)) IS NULL AS result |
         | 15 | true | SELECT (make_interval(0, 1, 0, 1, 0, 0, 0) - NULL) IS NULL AS result |
 
+  Rule: resolved calendar interval expressions beside an untyped NULL
+
+    # An explicit calendar cast keeps the interval result and accepts the NULL operand.
+    Scenario Outline: an explicit calendar cast <op> NULL stays legal
+      When query
+        """
+        SELECT (CAST(make_interval(0, 1, 0, 1, 0, 0, 0) AS INTERVAL) <op> NULL) IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | op |
+        | +  |
+        | -  |
+
+    Scenario Outline: NULL <op> an explicit calendar cast stays legal
+      When query
+        """
+        SELECT (NULL <op> CAST(make_interval(0, 1, 0, 1, 0, 0, 0) AS INTERVAL)) IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | op |
+        | +  |
+        | -  |
+
+    # A resolved coalesce takes the datetime rewrite path and Spark rejects the resulting
+    # TIMESTAMP-to-VOID cast.
+    Scenario Outline: a calendar coalesce <expression> NULL is refused
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | expression |
+        | coalesce(make_interval(0, 1, 0, 1, 0, 0, 0), make_interval()) + NULL |
+        | NULL + coalesce(make_interval(0, 1, 0, 1, 0, 0, 0), make_interval()) |
+
   Rule: arithmetic errors retain geospatial field metadata
 
     @spark-4.2

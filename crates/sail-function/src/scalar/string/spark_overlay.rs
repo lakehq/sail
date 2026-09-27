@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
+
+use crate::error::invalid_arg_count_exec_err;
 
 /// DataFusion's vectorized `overlay` kernel with Spark's null-intolerant output field.
 ///
@@ -53,7 +55,11 @@ impl ScalarUDFImpl for SparkOverlay {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if !(3..=4).contains(&args.arg_fields.len()) {
-            return exec_err!("spark_overlay expects input, replacement, position [, length]");
+            return Err(invalid_arg_count_exec_err(
+                "spark_overlay",
+                (3, 4),
+                args.arg_fields.len(),
+            ));
         }
         let data_type = datafusion_functions::core::overlay().return_type(
             &args

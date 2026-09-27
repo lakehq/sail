@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::functions_utils::make_scalar_function;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBinarySubstring {
@@ -65,10 +66,19 @@ impl ScalarUDFImpl for SparkBinarySubstring {
         )
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if !(2..=3).contains(&args.arg_fields.len())
-            || args.arg_fields[0].data_type() != &DataType::Binary
-        {
-            return exec_err!("spark_binary_substring expects BINARY, position [, length]");
+        if !(2..=3).contains(&args.arg_fields.len()) {
+            return Err(invalid_arg_count_exec_err(
+                "spark_binary_substring",
+                (2, 3),
+                args.arg_fields.len(),
+            ));
+        }
+        if args.arg_fields[0].data_type() != &DataType::Binary {
+            return Err(unsupported_data_types_exec_err(
+                "spark_binary_substring",
+                "BINARY, integral position [, integral length]",
+                &args.arg_fields.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>(),
+            ));
         }
         Ok(Arc::new(Field::new(
             self.name(),
@@ -107,7 +117,7 @@ fn slice(bytes: &[u8], pos: i64, length: i64) -> Vec<u8> {
 
 fn binary_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
     let ([input, position] | [input, position, _]) = args else {
-        return exec_err!("spark_binary_substring expects 2 or 3 arguments");
+        return Err(invalid_arg_count_exec_err("spark_binary_substring", (2, 3), args.len()));
     };
     let input = input.as_binary::<i32>();
     let position = position.as_primitive::<Int64Type>();
@@ -144,11 +154,21 @@ impl ScalarUDFImpl for SparkBinaryOverlay {
         )
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if !(3..=4).contains(&args.arg_fields.len())
-            || args.arg_fields[0].data_type() != &DataType::Binary
+        if !(3..=4).contains(&args.arg_fields.len()) {
+            return Err(invalid_arg_count_exec_err(
+                "spark_binary_overlay",
+                (3, 4),
+                args.arg_fields.len(),
+            ));
+        }
+        if args.arg_fields[0].data_type() != &DataType::Binary
             || args.arg_fields[1].data_type() != &DataType::Binary
         {
-            return exec_err!("spark_binary_overlay expects BINARY, BINARY, position [, length]");
+            return Err(unsupported_data_types_exec_err(
+                "spark_binary_overlay",
+                "BINARY, BINARY, integral position [, integral length]",
+                &args.arg_fields.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>(),
+            ));
         }
         Ok(Arc::new(Field::new(
             self.name(),
@@ -163,7 +183,7 @@ impl ScalarUDFImpl for SparkBinaryOverlay {
 
 fn binary_overlay(args: &[ArrayRef]) -> Result<ArrayRef> {
     let ([input, replacement, position] | [input, replacement, position, _]) = args else {
-        return exec_err!("spark_binary_overlay expects 3 or 4 arguments");
+        return Err(invalid_arg_count_exec_err("spark_binary_overlay", (3, 4), args.len()));
     };
     let input = input.as_binary::<i32>();
     let replacement = replacement.as_binary::<i32>();

@@ -20,7 +20,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::error::{generic_internal_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::math::spark_negative::spark_decimal128_abs;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -70,9 +70,10 @@ impl ScalarUDFImpl for SparkAbs {
     /// Spark's `Abs` is `nullIntolerant`, so it keeps its child's nullability
     /// (`arithmetic.scala:152-160`).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let argument = args.arg_fields.first().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal("abs expects one argument".to_string())
-        })?;
+        let argument = args
+            .arg_fields
+            .first()
+            .ok_or_else(|| generic_internal_err("abs", "expects one argument"))?;
         Ok(Arc::new(Field::new(
             self.name(),
             argument.data_type().clone(),

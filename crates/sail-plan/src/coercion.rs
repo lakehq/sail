@@ -9,6 +9,16 @@ use icu_casemap::CaseMapper;
 use regex::Regex;
 use sail_common::spec;
 
+pub(crate) fn spark_integral_decimal_parts(data_type: &DataType) -> Option<(u8, i8)> {
+    match data_type {
+        DataType::Int8 => Some((3, 0)),
+        DataType::Int16 => Some((5, 0)),
+        DataType::Int32 => Some((10, 0)),
+        DataType::Int64 => Some((20, 0)),
+        _ => None,
+    }
+}
+
 // Spark 4.2 resolves case-insensitive names with Java 17 `String.equalsIgnoreCase`.
 // Its Unicode table is version 13, so preserve identity mappings for later-assigned code points.
 // TODO: centralize this in Sail's general resolver. Other resolver paths still use
@@ -104,18 +114,15 @@ pub(crate) fn spark_wider_numeric_type(
     // `findWiderTypeForDecimal` first maps Spark integral types to their decimal ranges (BYTE
     // 3, SHORT 5, INT 10, LONG 20) before applying `widerDecimalType`. DataFusion instead keeps
     // the existing decimal's scale, losing integral digits when the result caps at precision 38.
-    let integral_decimal_parts = |data_type: &DataType| match data_type {
-        DataType::Int8 => Some((3, 0)),
-        DataType::Int16 => Some((5, 0)),
-        DataType::Int32 => Some((10, 0)),
-        DataType::Int64 => Some((20, 0)),
-        _ => None,
-    };
     let left_decimal = decimal_parts(left);
     let right_decimal = decimal_parts(right);
     if let (Some((left_precision, left_scale)), Some((right_precision, right_scale))) = (
-        left_decimal.or_else(|| integral_decimal_parts(left)),
-        right_decimal.or_else(|| integral_decimal_parts(right)),
+        left_decimal.or_else(|| {
+            spark_integral_decimal_parts(left).map(|(p, s)| (i32::from(p), i32::from(s)))
+        }),
+        right_decimal.or_else(|| {
+            spark_integral_decimal_parts(right).map(|(p, s)| (i32::from(p), i32::from(s)))
+        }),
     ) && (left_decimal.is_some() || right_decimal.is_some())
     {
         let scale = left_scale.max(right_scale);

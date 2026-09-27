@@ -42,7 +42,10 @@ use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
-use crate::coercion::{SAIL_DATE_DIFFERENCE_METADATA_KEY, spark_interval_metadata_for_expression};
+use crate::coercion::{
+    SAIL_DATE_DIFFERENCE_METADATA_KEY, spark_integral_decimal_parts,
+    spark_interval_metadata_for_expression,
+};
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, is_spark_udt_field,
@@ -130,20 +133,10 @@ fn spark_decimal_division_operands(
     divisor: Expr,
     schema: &DFSchemaRef,
 ) -> PlanResult<(Expr, Expr, Option<DataType>)> {
-    fn integral_decimal_parts(data_type: &DataType) -> Option<(u8, i8)> {
-        match data_type {
-            DataType::Int8 => Some((3, 0)),
-            DataType::Int16 => Some((5, 0)),
-            DataType::Int32 => Some((10, 0)),
-            DataType::Int64 => Some((20, 0)),
-            _ => None,
-        }
-    }
-
     fn decimal_parts(data_type: &DataType) -> Option<(u8, i8)> {
         match data_type {
             DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
-            data_type => integral_decimal_parts(data_type),
+            data_type => spark_integral_decimal_parts(data_type),
         }
     }
 
@@ -2196,10 +2189,6 @@ fn rejects_resolved_calendar_null(
     right: &Expr,
     schema: &DFSchemaRef,
 ) -> Option<PlanError> {
-    fn is_untyped_null(expr: &Expr) -> bool {
-        matches!(expr, Expr::Literal(ScalarValue::Null, _))
-    }
-
     fn is_explicit_calendar_cast(expr: &Expr) -> bool {
         matches!(
             expr,
@@ -2234,24 +2223,18 @@ fn rejects_resolved_calendar_null(
         }
     }
 
-    let explicit_cast_rejected =
-        (op == "+" && is_explicit_calendar_cast(left) && is_untyped_null(right))
-            || (is_untyped_null(left) && is_explicit_calendar_cast(right));
-    if explicit_cast_rejected {
-        return Some(PlanError::analysis(
-            "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve arithmetic: cannot cast \"TIMESTAMP\" to \"VOID\". SQLSTATE: 42K09",
-        ));
-    }
-
     let (left_type, right_type) = (left.get_type(schema).ok()?, right.get_type(schema).ok()?);
     let calendar = DataType::Interval(IntervalUnit::MonthDayNano);
     let rejected = (left_type == DataType::Null
         && right_type == calendar
-        && (is_column(left) || is_resolved_calendar_interval(right)))
+        && (is_column(left)
+            || (is_resolved_calendar_interval(right)
+                && !is_explicit_calendar_cast(right))))
         || (op == "+"
             && left_type == calendar
             && right_type == DataType::Null
-            && (is_column(right) || is_resolved_calendar_interval(left)));
+            && (is_column(right)
+                || (is_resolved_calendar_interval(left) && !is_explicit_calendar_cast(left))));
     rejected.then(|| PlanError::analysis(
         "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] cannot resolve arithmetic: cannot cast \"TIMESTAMP\" to \"VOID\". SQLSTATE: 42K09"
     ))
