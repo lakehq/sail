@@ -61,6 +61,9 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    /// Whether a DataFrame column carrying a Spark Connect plan ID must resolve by that ID. When
+    /// disabled, Spark falls back to resolving the attribute by name.
+    pub strict_dataframe_column_resolution: bool,
     /// The maximum number of distinct values collected for a pivot without an explicit
     /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
     pub pivot_max_values: usize,
@@ -101,6 +104,7 @@ impl Default for PlanConfig {
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            strict_dataframe_column_resolution: true,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,

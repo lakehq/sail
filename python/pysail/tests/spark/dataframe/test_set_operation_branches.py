@@ -2695,3 +2695,20 @@ def test_set_operation_branch(configured, local_timezone, tmp_path, leaf, shape,
     assert df.schema.jsonValue()["fields"] == json.loads(expected["schema"])
     if "rows" in expected:
         assert sorted(_row(r) for r in df.collect()) == expected["rows"]
+
+
+@pytest.mark.parametrize(
+    "deduplicate",
+    [
+        lambda df: df.distinct(),
+        lambda df: df.dropDuplicates(["v"]),
+    ],
+    ids=["all-columns", "subset-key"],
+)
+def test_deduplicate_rejects_variant_keys(spark, deduplicate):
+    # `CheckAnalysis.variantColumnInSetOperation` inspects the output of `Distinct` and the keys
+    # of `Deduplicate`; both shapes must reject an orderless VARIANT before execution.
+    df = spark.sql("SELECT parse_json('{\"a\": 1}') AS v")
+
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.SET_OPERATION_ON_VARIANT_TYPE]")):
+        deduplicate(df).collect()

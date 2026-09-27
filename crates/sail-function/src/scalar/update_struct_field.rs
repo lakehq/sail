@@ -9,7 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::utils::string::equals_ignore_case;
 
-use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err};
+use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err, generic_exec_err};
 
 /// Matches a field name against the name a `withField` asked for, the way the analyzer resolver
 /// does: it folds the case unless the analysis is case sensitive.
@@ -96,6 +96,10 @@ impl UpdateStructField {
                             )?;
                             // An intermediate level is rebuilt as `WithField(name, ...)` too, so
                             // it takes the name that was asked for, like the last one.
+                            // TODO: Spark gives the rebuilt level the nullability of the
+                            // expression that reads it, `parent.nullable || field.nullable`; this
+                            // UDF currently keeps the declared field nullability. See
+                            // `test_a_rebuilt_level_takes_the_nullability_of_its_parent`.
                             new_fields.push(Arc::new(Field::new(
                                 current_field,
                                 new_data_type,
@@ -172,7 +176,10 @@ impl UpdateStructField {
         if new_arrays.len() < new_fields.len() {
             // Nothing matched, so the field was appended at the end of the return type.
             if field_names.len() != 1 {
-                return exec_err!("Field `{current_field_name}` not found");
+                return Err(generic_exec_err(
+                    "update_struct_field",
+                    &format!("field `{current_field_name}` not found"),
+                ));
             }
             new_arrays.push(Arc::clone(new_field_array));
         }

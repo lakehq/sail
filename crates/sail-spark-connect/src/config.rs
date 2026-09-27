@@ -320,6 +320,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_ANALYZER_STRICT_DATA_FRAME_COLUMN_RESOLUTION)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.strict_dataframe_column_resolution = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_PIVOT_MAX_VALUES)
             .map(|x| x.trim().parse::<usize>())
             .transpose()?

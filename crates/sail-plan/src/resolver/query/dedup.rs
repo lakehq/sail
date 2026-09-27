@@ -4,6 +4,7 @@ use datafusion_common::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{DFSchemaRef, ExprSchema};
 use datafusion_expr::{Distinct, DistinctOn, Expr, LogicalPlan};
 use sail_common::spec;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -69,8 +70,8 @@ impl PlanResolver<'_> {
 }
 
 impl PlanResolver<'_> {
-    /// A set operation compares whole rows, and a map has no order of its own, so Spark rejects a
-    /// column whose type contains one. `DISTINCT` is one of those operations.
+    /// A set operation compares whole rows, and maps and variants have no order of their own, so
+    /// Spark rejects a column whose type contains either. `DISTINCT` is one of those operations.
     pub(in crate::resolver) fn reject_map_column_in_set_operation(
         &self,
         schema: &DFSchemaRef,
@@ -88,20 +89,30 @@ impl PlanResolver<'_> {
         field: &FieldRef,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
-        if !contains_map_type(field.data_type()) {
-            return Ok(());
+        if contains_map_type(field.data_type()) {
+            // Falling back to the field id here would write the internal name (`#6`) into a message
+            // the user reads, so a missing entry is the invariant break it is.
+            let name = state.get_field_info(field.name())?.name().to_string();
+            let data_type = self.spark_type_name(field.data_type())?;
+            return Err(PlanError::AnalysisError(format!(
+                "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: \
+                 Cannot have MAP type columns in DataFrame which calls set operations (INTERSECT, \
+                 EXCEPT, etc.), but the type of column `{}` is \"{}\".",
+                name.replace('`', "``"),
+                data_type
+            )));
         }
-        // Falling back to the field id here would write the internal name (`#6`) into a message
-        // the user reads, so a missing entry is the invariant break it is.
-        let name = state.get_field_info(field.name())?.name().to_string();
-        let data_type = self.spark_type_name(field.data_type())?;
-        Err(PlanError::AnalysisError(format!(
-            "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: \
-             Cannot have MAP type columns in DataFrame which calls set operations (INTERSECT, \
-             EXCEPT, etc.), but the type of column `{}` is \"{}\".",
-            name.replace('`', "``"),
-            data_type
-        )))
+        if contains_variant_type(field.data_type()) {
+            let name = state.get_field_info(field.name())?.name().to_string();
+            return Err(PlanError::AnalysisError(format!(
+                "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_VARIANT_TYPE] The feature is not \
+                 supported: Cannot have VARIANT type columns in DataFrame which calls set \
+                 operations (INTERSECT, EXCEPT, etc.), but the type of column `{}` is \"{}\".",
+                name.replace('`', "``"),
+                self.spark_type_name(field.data_type())?
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -115,6 +126,24 @@ fn contains_map_type(data_type: &DataType) -> bool {
         | DataType::ListView(field)
         | DataType::LargeListView(field) => contains_map_type(field.data_type()),
         DataType::Struct(fields) => fields.iter().any(|x| contains_map_type(x.data_type())),
+        _ => false,
+    }
+}
+
+/// Whether a type is a variant or holds one at any depth, the way Spark's
+/// `DataType.existsRecursively` does for set-operation keys.
+fn contains_variant_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(_) if is_marked_variant_storage_type(data_type) => true,
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_variant_type(field.data_type())),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::Map(field, _) => contains_variant_type(field.data_type()),
         _ => false,
     }
 }

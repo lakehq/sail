@@ -79,6 +79,9 @@ pub(super) struct PlanResolverState {
     next_id: usize,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
+    /// Every Spark Connect plan ID that was encountered while resolving this query. A plan can be
+    /// reachable even when none of its output fields survive to the expression being resolved.
+    plan_ids: HashSet<i64>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
     /// The aggregate state for the current query.
@@ -113,6 +116,7 @@ impl PlanResolverState {
         Self {
             next_id: 0,
             fields: HashMap::new(),
+            plan_ids: HashSet::new(),
             outer_query_schema: None,
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
@@ -197,6 +201,14 @@ impl PlanResolverState {
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
         field_info.plan_ids.insert(plan_id);
         Ok(())
+    }
+
+    pub fn register_plan_id(&mut self, plan_id: i64) {
+        self.plan_ids.insert(plan_id);
+    }
+
+    pub fn has_plan_id(&self, plan_id: i64) -> bool {
+        self.plan_ids.contains(&plan_id)
     }
 
     /// Records that a field only passes `source` on, so that the two are one attribute rather

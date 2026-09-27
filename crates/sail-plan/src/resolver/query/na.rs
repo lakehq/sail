@@ -123,6 +123,10 @@ impl PlanResolver<'_> {
                             .clone()
                             .is_null()
                             .or(self.is_nan_float(column_expr.clone(), field.data_type()));
+                        // TODO: Spark reports a column filled with a non-null value as
+                        // non-nullable. `Case` inherits the nullability of `TryCast` here, so
+                        // Sail still reports it nullable. Fix this schema contract in a separate
+                        // PR with a JVM-oracle schema regression test.
                         when(is_null_or_nan, value).otherwise(column_expr)?
                     } else {
                         column_expr

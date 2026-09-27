@@ -406,17 +406,28 @@ impl PlanResolver<'_> {
         if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        // A name that carries a plan ID comes from a DataFrame column object, which Spark
-        // reports on its own error condition instead of the one for a name in a query.
-        // TODO: support Spark 4.2's non-strict name fallback after verifying that the source
-        // plan is reachable. Dropping the plan ID here would accept unrelated DataFrames.
-        // See test_with_column_non_strict_shadowed_reference.
-        if plan_id.is_some() {
-            return Err(PlanError::AnalysisError(format!(
-                "[CANNOT_RESOLVE_DATAFRAME_COLUMN] Cannot resolve dataframe column \"{}\". \
-                 It's probably because of illegal references like `df1.select(df2.col(\"a\"))`.",
-                pretty_attribute(&name)
-            )));
+        // A name that carries a plan ID comes from a DataFrame column object. Spark normally
+        // reports it on its own error condition, but with non-strict resolution it retries the
+        // ordinary name lookup after the plan-ID lookup did not match anything
+        // (`ColumnResolutionHelper.resolveExpressionByPlanOutput`).
+        if let Some(plan_id) = plan_id {
+            if !self.config.strict_dataframe_column_resolution
+                && let Some((name, expr)) =
+                    self.resolve_field_or_nested_field(&name, None, schema, state)?
+            {
+                return Ok(NamedExpr::new(vec![name], expr));
+            }
+            // A reachable plan that does not expose this column leaves the attribute unresolved
+            // in Spark. The last-resort resolver can then bind it to the surrounding query as an
+            // outer reference. Without a surrounding query there is no such last resort, so this
+            // remains the DataFrame-column error; only the correlated path may continue.
+            if !state.has_plan_id(plan_id) || state.get_outer_query_schema().is_none() {
+                return Err(PlanError::AnalysisError(format!(
+                    "[CANNOT_RESOLVE_DATAFRAME_COLUMN] Cannot resolve dataframe column \"{}\". \
+                     It's probably because of illegal references like `df1.select(df2.col(\"a\"))`.",
+                    pretty_attribute(&name)
+                )));
+            }
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(unresolved_column_error(&name, schema, state));

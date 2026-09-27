@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{Distinct, DistinctOn, Expr, Filter, LogicalPlan, Projection};
@@ -28,7 +28,10 @@ impl PlanResolver<'_> {
         // plan to reach, so a filter that sits on a join, an aggregate or a scan does not pay for
         // a copy of its condition that could never be used.
         let retry = Self::carries_columns_up(&input).then(|| condition.clone());
-        let predicate = match self.resolve_expression(condition, input.schema(), state).await {
+        let predicate = match self
+            .resolve_expression(condition, input.schema(), state)
+            .await
+        {
             Ok(predicate) => predicate,
             Err(error) => {
                 // The condition is resolved against the output AND what lies under it together,

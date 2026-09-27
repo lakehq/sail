@@ -1304,10 +1304,7 @@ impl PlanResolver<'_> {
             // (`findWiderTypeForTwo`), and the fields they span live in the metadata rather than
             // in the Arrow type, so they are merged here.
             if let Some(interval) = merged_interval_metadata(left_field, right_field) {
-                metadata.insert(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    interval,
-                );
+                metadata.insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval);
             }
             // The key is written even when the left input has none, so that the metadata of the
             // right input does not survive the merge in its place.
@@ -1416,10 +1413,7 @@ impl PlanResolver<'_> {
             let field = match merged_interval_metadata(l, r) {
                 Some(interval) => {
                     let mut metadata = field.metadata().clone();
-                    metadata.insert(
-                        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                        interval,
-                    );
+                    metadata.insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval);
                     field.with_metadata(metadata)
                 }
                 None => field,

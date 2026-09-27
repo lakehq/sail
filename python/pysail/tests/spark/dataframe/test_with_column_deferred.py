@@ -29,11 +29,6 @@ def explicit_column_settings(spark, request):
 
 
 @pytest.mark.skipif(pyspark_version() < (4, 2), reason="Non-strict column resolution requires Spark 4.2")
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail does not implement non-strict fallback for a shadowed DataFrame column",
-    strict=True,
-)
 def test_with_column_non_strict_shadowed_reference(spark, explicit_column_settings):
     spark.conf.set("spark.sql.analyzer.strictDataFrameColumnResolution", "false")
     original = spark.sql("SELECT 123 AS c")
@@ -61,6 +56,19 @@ def test_with_column_correlated_scalar_projection(spark, explicit_column_setting
         "|1  |2  |3     |\n"
         "+---+---+------+\n"
     )
+
+
+@pytest.mark.skipif(pyspark_version() < (4, 0), reason="DataFrame scalar subqueries require Spark 4")
+def test_a_plan_id_column_that_reaches_a_correlated_subquery_is_an_outer_reference(spark, explicit_column_settings):
+    # The plan ID of `outer.a` belongs to the surrounding query, not to the scalar subquery. When
+    # the subquery cannot resolve it locally, Spark keeps the attribute unresolved and resolves it
+    # as an outer reference instead of treating the DataFrame column as unrelated.
+    outer = spark.range(3).withColumnRenamed("id", "a")
+    inner = spark.range(3).withColumnRenamed("id", "b")
+    count = inner.filter(inner.b == outer.a).select(F.count("*")).scalar()
+    result = outer.select(outer.a, count.alias("c"))
+
+    assert sorted(tuple(row) for row in result.collect()) == [(0, 1), (1, 1), (2, 1)]
 
 
 

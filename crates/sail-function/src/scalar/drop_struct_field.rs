@@ -7,7 +7,7 @@ use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::utils::string::equals_ignore_case;
 
-use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err};
+use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err, generic_exec_err};
 
 /// Matches a field name against the name a `dropFields` asked for, the way the analyzer resolver
 /// does: it folds the case unless the analysis is case sensitive.
@@ -110,7 +110,7 @@ impl DropStructField {
 
                 if new_fields.is_empty() {
                     plan_err!(
-                        "[DATATYPE_MISMATCH.CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct"
+                        "[DATATYPE_MISMATCH.CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct."
                     )
                 } else {
                     Ok(DataType::Struct(new_fields.into()))
@@ -136,7 +136,10 @@ impl DropStructField {
         let new_data_type =
             Self::drop_nested_field(struct_array.data_type(), field_names, case_sensitive)?;
         let DataType::Struct(new_fields) = new_data_type else {
-            return exec_err!("drop_struct_field expected a struct type");
+            return Err(generic_exec_err(
+                "drop_struct_field",
+                "expected a struct return type",
+            ));
         };
 
         // The type above kept the input fields in order, dropping the ones that matched, so the
