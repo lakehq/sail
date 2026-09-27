@@ -24,11 +24,13 @@ use crate::spec::{DataFile, PartitionSpec, Transform};
 use crate::utils::conversions::to_scalar;
 
 /// Consumed during scan construction; defaults travel to workers in field metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct IdentityPartitionDefaults(BTreeMap<i32, String>);
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub(crate) struct IdentityPartitionDefaults(BTreeMap<i32, String>);
 
 impl IdentityPartitionDefaults {
-    pub(super) fn from_file(
+    pub(crate) fn from_file(
         file: &DataFile,
         specs: &[PartitionSpec],
         schema: &crate::spec::Schema,
@@ -93,7 +95,7 @@ impl IdentityPartitionDefaults {
     }
 }
 
-pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
+pub(crate) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();

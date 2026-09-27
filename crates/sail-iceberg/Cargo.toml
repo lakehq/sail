@@ -29,6 +29,8 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-proto = { workspace = true }
+prost = { workspace = true }
 arrow-schema = { workspace = true }
 parquet-variant = { workspace = true }
 parquet-variant-compute = { workspace = true }

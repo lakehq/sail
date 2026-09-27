@@ -36,6 +36,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_datasource::file::FileSource;
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
 use sail_common_datafusion::schema_evolution::{
@@ -271,6 +272,9 @@ pub fn build_file_scan_config(
         if let Some(stats) = action_stats {
             per_file_stats.push(Arc::clone(&stats));
             part.statistics = Some(stats);
+        } else {
+            // Dynamic partition predicates can prune without column statistics.
+            part.statistics = Some(Arc::new(Statistics::new_unknown(&file_schema)));
         }
         if let Some(descriptor) = &action.deletion_vector {
             let physical_rows = part
@@ -474,6 +478,10 @@ pub fn build_file_scan_config(
     if let Some(predicate) = params.pushdown_filter
         && config.enable_parquet_pushdown
     {
+        let predicate = datafusion_physical_expr::utils::reassign_expr_columns(
+            predicate,
+            parquet_source.table_schema().table_schema(),
+        )?;
         parquet_source = parquet_source.with_predicate(predicate);
     }
 
