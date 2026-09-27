@@ -1089,6 +1089,8 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
+  bytes file_statistics = 7;
+  optional bytes predicate = 8;
 }
 
 message IcebergRowLineage {

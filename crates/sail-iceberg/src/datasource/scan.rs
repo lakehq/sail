@@ -1058,6 +1058,12 @@ impl IcebergScan {
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let data_file_raw_path = df.file_path().to_string();
+            let file_statistics = crate::datasource::file_statistics::file_statistics(
+                &delete_scan.schema,
+                &data_scan.schema(),
+                &self.partition_specs,
+                &df,
+            );
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
@@ -1066,6 +1072,8 @@ impl IcebergScan {
                 eq_deletes,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
+                file_statistics,
+                None,
             ));
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
@@ -1285,6 +1293,12 @@ impl IcebergScan {
                     row_lineage,
                 )?);
 
+            let file_statistics = crate::datasource::file_statistics::file_statistics(
+                &delete_scan.schema,
+                &with_metadata.schema(),
+                &self.partition_specs,
+                &df,
+            );
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 with_metadata,
                 df.file_path.clone(),
@@ -1292,6 +1306,8 @@ impl IcebergScan {
                 equality_deletes,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
+                file_statistics,
+                None,
             ));
             branches.push(self.project_scan_schema(apply, &self.output_schema)?);
         }

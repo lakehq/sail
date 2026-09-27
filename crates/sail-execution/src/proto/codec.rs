@@ -1706,6 +1706,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url,
                 iceberg_schema_json,
+                file_statistics,
+                predicate,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1721,6 +1723,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg schema: {e}")
                     })?;
+                let file_statistics = self.try_decode_statistics(&file_statistics)?;
+                let predicate = predicate
+                    .map(|predicate| {
+                        try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &input.schema(),
+                        )
+                    })
+                    .transpose()?;
                 Ok(Arc::new(IcebergDeleteApplyExec::new(
                     input,
                     data_file_path,
@@ -1728,6 +1742,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     equality_deletes,
                     table_url,
                     iceberg_schema,
+                    file_statistics,
+                    predicate,
                 )))
             }
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
@@ -2853,6 +2869,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url: delete_apply.table_url().to_string(),
                 iceberg_schema_json,
+                file_statistics: self.try_encode_statistics(delete_apply.file_statistics())?,
+                predicate: delete_apply
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(self, proto_converter, predicate)
+                    })
+                    .transpose()?,
             })
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5590,6 +5613,55 @@ mod tests {
         fn encode(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
             plan_err!("nested expression encoding is not used by this test")
         }
+    }
+
+    #[tokio::test]
+    async fn iceberg_delete_pruning_survives_plan_decode_and_executes_before_io() -> Result<()> {
+        use datafusion::arrow::datatypes::Field;
+        use datafusion::common::stats::Precision;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{Column, binary, lit};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let mut statistics = Statistics::new_unknown(&schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[0].min_value = Precision::Exact(ScalarValue::Int64(Some(1)));
+        statistics.column_statistics[0].max_value = Precision::Exact(ScalarValue::Int64(Some(1)));
+        statistics.column_statistics[0].null_count = Precision::Exact(0);
+        let predicate = binary(
+            Arc::new(Column::new("key", 0)),
+            Operator::Eq,
+            lit(2i64),
+            &schema,
+        )?;
+        let plan = Arc::new(IcebergDeleteApplyExec::new(
+            Arc::new(EmptyExec::new(schema)),
+            "unregistered://table/data.parquet".into(),
+            vec![],
+            vec![],
+            "unregistered://table/".into(),
+            sail_iceberg::spec::Schema::builder()
+                .build()
+                .map_err(|error| plan_datafusion_err!("{error}"))?,
+            statistics.clone(),
+            Some(predicate.clone()),
+        ));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let context = Arc::new(TaskContext::default());
+        let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
+        let scan = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergDeleteApplyExec"))?;
+        assert_eq!(scan.file_statistics(), &statistics);
+        assert!(
+            scan.predicate()
+                .is_some_and(|decoded| decoded.eq(&predicate))
+        );
+        let batches = datafusion::physical_plan::collect(decoded, context).await?;
+        assert!(batches.is_empty());
+        Ok(())
     }
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
