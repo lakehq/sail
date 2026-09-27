@@ -69,6 +69,14 @@ impl TaskRunnerActor {
                 session_id: self.session_id.clone(),
                 handle: ctx.handle().clone(),
                 celeborn: self.extensions.celeborn_streams.is_some(),
+                dynamic_filters: match &self.placement {
+                    TaskRunnerPlacement::Driver { driver } => {
+                        crate::dynamic_filter::DynamicFilterClient::Driver(driver.clone())
+                    }
+                    TaskRunnerPlacement::Worker { driver, .. } => {
+                        crate::dynamic_filter::DynamicFilterClient::Worker(driver.core.clone())
+                    }
+                },
             }
             .stream(
                 key.clone(),

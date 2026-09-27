@@ -13,6 +13,7 @@ use crate::task::r#gen;
 
 #[derive(Debug, Clone)]
 pub struct TaskDefinition {
+    pub dynamic_filter_ids: Vec<u64>,
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
@@ -92,11 +93,13 @@ pub enum TaskOutputLocator {
 impl From<TaskDefinition> for r#gen::TaskDefinition {
     fn from(value: TaskDefinition) -> Self {
         let TaskDefinition {
+            dynamic_filter_ids,
             plan,
             inputs,
             output,
         } = value;
         r#gen::TaskDefinition {
+            dynamic_filter_ids,
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
@@ -122,6 +125,7 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
             }
         };
         Ok(TaskDefinition {
+            dynamic_filter_ids: value.dynamic_filter_ids,
             plan: Arc::from(value.plan),
             inputs,
             output,

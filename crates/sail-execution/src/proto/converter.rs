@@ -107,9 +107,24 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
             return cached.with_new_children(children);
         }
 
+        let canonical =
+            if let Some(physical_expr_node::ExprType::DynamicFilter(filter)) = &proto.expr_type {
+                let mut filter = filter.clone();
+                filter.remapped_children.clear();
+                let canonical = PhysicalExprNode {
+                    expr_id: Some(expression_id),
+                    expr_type: Some(physical_expr_node::ExprType::DynamicFilter(filter)),
+                };
+                self.default_proto_to_physical_expr(&canonical, input_schema, ctx)?
+            } else {
+                Arc::clone(&decoded)
+            };
         self.decoded_expressions
             .borrow_mut()
-            .insert(expression_id, Arc::clone(&decoded));
+            .insert(expression_id, canonical.clone());
+        if decoded.is::<datafusion::physical_expr::expressions::DynamicFilterPhysicalExpr>() {
+            return canonical.with_new_children(decoded.children().into_iter().cloned().collect());
+        }
         Ok(decoded)
     }
 
@@ -202,6 +217,26 @@ impl ScopedPhysicalProtoConverter<'_> {
 }
 
 impl RemotePhysicalProtoConverter {
+    pub(crate) fn dynamic_filters(
+        &self,
+    ) -> HashMap<u64, crate::dynamic_filter::DynamicFilterBinding> {
+        self.decoded_expressions
+            .borrow()
+            .iter()
+            .filter(|(_, expr)| {
+                expr.is::<datafusion::physical_expr::expressions::DynamicFilterPhysicalExpr>()
+            })
+            .map(|(id, expr)| {
+                (
+                    *id,
+                    crate::dynamic_filter::DynamicFilterBinding {
+                        filter: expr.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn higher_order_expr_to_proto(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

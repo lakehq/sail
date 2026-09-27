@@ -11,6 +11,7 @@ use crate::job_graph::JobGraph;
 
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
+    pub dynamic_filters: crate::dynamic_filter::DynamicFilterState,
     pub context: Arc<TaskContext>,
     pub graph: JobGraph,
     pub topology: JobTopology,
@@ -76,6 +77,7 @@ impl JobDescriptor {
             })
             .collect();
         Ok(Self {
+            dynamic_filters: Default::default(),
             context,
             graph,
             topology,

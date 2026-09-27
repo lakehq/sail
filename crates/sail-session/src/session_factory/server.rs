@@ -13,7 +13,7 @@ use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::actor::ActorHandle;
-use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
@@ -188,15 +188,6 @@ impl ServerSessionFactory {
         optimizer.join_reordering = self.config.optimizer.enable_join_swap;
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
-        // process-local state. Cluster execution uses independently decoded task plans, so keep
-        // join filters disabled while allowing task-local TopK and aggregate filters.
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            optimizer.enable_join_dynamic_filter_pushdown = false;
-        }
         Ok(())
     }
 

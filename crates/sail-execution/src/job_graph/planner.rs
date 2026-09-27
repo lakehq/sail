@@ -44,10 +44,12 @@ impl JobGraph {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
+        let plan = crate::dynamic_filter::prepare_join_filters(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
             options,
+            dynamic_filters: Default::default(),
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
@@ -59,6 +61,7 @@ impl JobGraph {
             distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
             placement: TaskPlacement::Worker,
         });
+        graph.dynamic_filters = crate::dynamic_filter::discover_routes(&graph.stages)?;
         Ok(graph)
     }
 }
@@ -1182,6 +1185,7 @@ mod tests {
             (flight_shuffle_options(), false),
         ] {
             let mut graph = JobGraph {
+                dynamic_filters: Default::default(),
                 stages: vec![],
                 schema: schema(),
                 options,

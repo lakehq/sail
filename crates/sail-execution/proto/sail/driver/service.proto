@@ -62,7 +62,32 @@ message ReportMetricsRequest {
 message ReportMetricsResponse {
 }
 
+message DynamicFilterUpdate {
+  uint64 expression_id = 1;
+  uint64 generation = 2;
+  bytes predicate = 3;
+  // Schema of positional filter inputs; empty for a constant predicate.
+  bytes schema = 4;
+  bool complete = 5;
+}
+
+message ExchangeDynamicFiltersRequest {
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+  uint64 stage = 3;
+  uint64 partition = 4;
+  uint64 attempt = 5;
+  repeated DynamicFilterUpdate updates = 6;
+  uint64 revision = 7;
+}
+
+message ExchangeDynamicFiltersResponse {
+  uint64 revision = 1;
+  repeated DynamicFilterUpdate updates = 2;
+}
+
 service DriverService {
+  rpc ExchangeDynamicFilters(ExchangeDynamicFiltersRequest) returns (ExchangeDynamicFiltersResponse) {}
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
   // Report the peers known to the worker so that the driver does not need to

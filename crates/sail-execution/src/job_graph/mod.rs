@@ -1,5 +1,6 @@
 mod planner;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::dynamic_filter::DynamicFilterRoute;
 use crate::shuffle::ShuffleBackendKind;
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,7 @@ pub struct JobGraph {
     /// The output schema of the job.
     schema: SchemaRef,
     options: JobGraphOptions,
+    pub(crate) dynamic_filters: BTreeMap<u64, DynamicFilterRoute>,
 }
 
 impl JobGraph {
