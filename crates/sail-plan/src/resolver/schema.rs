@@ -63,6 +63,16 @@ impl PlanResolver<'_> {
                 columns.len()
             )));
         }
+        // A DataFrame column that is ambiguous below the input cannot be resolved either.
+        if columns.iter().any(|column| {
+            state
+                .get_field_info(column.name())
+                .is_ok_and(|info| info.is_ambiguous_for(plan_id))
+        }) {
+            return Err(PlanError::AnalysisError(format!(
+                "[AMBIGUOUS_COLUMN_REFERENCE] Column {name} is ambiguous"
+            )));
+        }
         if columns.is_empty() {
             Ok(None)
         } else {

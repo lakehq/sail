@@ -43,9 +43,15 @@ impl PlanResolver<'_> {
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
         let output_schema = Arc::clone(input.schema());
         let plan = if is_global {
-            // The logical plan builder rewrites the sort orders in the same way.
-            let sorts = rewrite_sort_cols_by_aggs(sorts, &input)?;
-            let input = Self::add_sort_missing_inputs(input, &sorts, state)?;
+            // Visible sort orders need no recovery, so leave their rewrite to the builder.
+            // Rewriting scans the input projection for each sort order.
+            let (input, sorts) = if Self::missing_sort_columns(&input, &sorts).is_some() {
+                // The logical plan builder rewrites the sort orders in the same way.
+                let sorts = rewrite_sort_cols_by_aggs(sorts, &input)?;
+                (Self::add_sort_missing_inputs(input, &sorts, state)?, sorts)
+            } else {
+                (input, sorts)
+            };
             LogicalPlanBuilder::from(input).sort(sorts)?.build()?
         } else {
             // TODO: Use the logical plan builder to include logic such as expression rebase.
@@ -67,31 +73,44 @@ impl PlanResolver<'_> {
         sorts: &[Sort],
         state: &PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let columns = sorts
-            .iter()
-            .flat_map(|sort| sort.expr.column_refs())
-            .collect::<HashSet<_>>();
-        if columns
-            .iter()
-            .all(|column| input.schema().has_column(column))
-        {
+        let Some(columns) = Self::missing_sort_columns(&input, sorts) else {
             return Ok(input);
-        }
+        };
         // TODO: The physical optimizer pushes sorts below `MonotonicIdExec` and into limits
         //   (as a top-k sort), which changes the result, so do not recover more sort columns
         //   above them until it doesn't.
-        if input.exists(|plan| {
-            Ok(match plan {
+        // Only the operators that recovery crosses matter. A limit in another join
+        // input cannot receive the sort.
+        let mut plan = Some(&input);
+        while let Some(node) = plan {
+            let blocks = match node {
                 LogicalPlan::Limit(_) => true,
                 LogicalPlan::Extension(extension) => {
                     extension.node.as_any().is::<MonotonicIdNode>()
                 }
                 _ => false,
-            })
-        })? {
-            return Ok(input);
+            };
+            if blocks {
+                return Ok(input);
+            }
+            plan = Self::missing_input_child(node, state);
         }
         Ok(Self::add_missing_inputs(&input, &columns, state)?.unwrap_or(input))
+    }
+
+    /// Returns the columns that the sort orders reference if any is missing from the input.
+    fn missing_sort_columns<'a>(
+        input: &LogicalPlan,
+        sorts: &'a [Sort],
+    ) -> Option<HashSet<&'a Column>> {
+        let columns = sorts
+            .iter()
+            .flat_map(|sort| sort.expr.column_refs())
+            .collect::<HashSet<_>>();
+        (!columns
+            .iter()
+            .all(|column| input.schema().has_column(column)))
+        .then_some(columns)
     }
 
     /// Rebase sort expressions using aggregation expressions when the aggregate plan

@@ -163,7 +163,7 @@ impl PlanResolver<'_> {
                 self.resolve_query_join_using(left, right, join_type, join_columns, state)
             }
         }?;
-        state.discard_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
+        state.mark_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
         Ok(plan)
     }
 

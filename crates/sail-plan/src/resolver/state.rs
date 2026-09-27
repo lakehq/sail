@@ -13,6 +13,16 @@ use crate::resolver::expression::NamedExpr;
 /// A DataFrame plan ID and an attribute in its first resolved instance.
 pub(super) type PlanBinding = (i64, usize);
 
+/// Marks the origin of a binding whose DataFrame plan ID is ambiguous below the field.
+/// Spark rejects such a reference even if another input of an enclosing operator
+/// also has the plan ID, so the binding is kept rather than removed.
+const AMBIGUOUS_BINDING: usize = 1 << (usize::BITS - 1);
+
+/// Returns the binding without its ambiguity mark, identifying the original attribute.
+fn plan_attribute(binding: PlanBinding) -> PlanBinding {
+    (binding.0, binding.1 & !AMBIGUOUS_BINDING)
+}
+
 pub(super) type PlanAttributeRoots =
     datafusion_common::HashMap<String, Vec<(Option<TableReference>, usize)>>;
 
@@ -54,6 +64,24 @@ impl FieldInfo {
 
     pub fn is_hidden(&self) -> bool {
         self.hidden
+    }
+
+    fn mark_plan_id_ambiguous(&mut self, plan_id: i64) {
+        if let Ok(index) = self
+            .plan_bindings
+            .binary_search_by_key(&plan_id, |binding| binding.0)
+        {
+            self.plan_bindings[index].1 |= AMBIGUOUS_BINDING;
+        }
+    }
+
+    /// Returns whether the DataFrame plan ID matches this field only ambiguously.
+    pub fn is_ambiguous_for(&self, plan_id: Option<i64>) -> bool {
+        plan_id.is_some_and(|plan_id| {
+            self.plan_bindings
+                .binary_search_by_key(&plan_id, |binding| binding.0)
+                .is_ok_and(|index| self.plan_bindings[index].1 & AMBIGUOUS_BINDING != 0)
+        })
     }
 
     pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
@@ -579,7 +607,8 @@ impl PlanResolverState {
     /// Ancestor plan IDs found in both inputs are ambiguous above the operator,
     /// even if a later projection selects only one side. Resolve join conditions
     /// first: Spark can prefer a direct child there over a deeper ancestor.
-    pub fn discard_ambiguous_input_bindings(
+    /// An input that is already ambiguous for the attribute stays ambiguous.
+    pub fn mark_ambiguous_input_bindings(
         &mut self,
         left: &DFSchema,
         right: &DFSchema,
@@ -608,7 +637,7 @@ impl PlanResolverState {
                         if left_bindings.is_empty() {
                             left_bindings.reserve(left.fields().len());
                         }
-                        left_bindings.insert((binding, info.name.as_str()));
+                        left_bindings.insert((plan_attribute(binding), info.name.as_str()));
                     }
                 }
             }
@@ -621,8 +650,9 @@ impl PlanResolverState {
             let info = self.get_field_info(field.name())?;
             if !info.hidden {
                 for binding in info.plan_bindings() {
-                    if left_bindings.contains(&(binding, info.name.as_str())) {
-                        ambiguous.insert((binding, info.name.as_str()));
+                    let key = (plan_attribute(binding), info.name.as_str());
+                    if left_bindings.contains(&key) {
+                        ambiguous.insert(key);
                     }
                 }
             }
@@ -632,7 +662,7 @@ impl PlanResolverState {
             for field in output.fields() {
                 let info = self.get_field_info(field.name())?;
                 for binding in info.plan_bindings() {
-                    if ambiguous.contains(&(binding, info.name.as_str())) {
+                    if ambiguous.contains(&(plan_attribute(binding), info.name.as_str())) {
                         removals.push((field.name(), binding.0));
                     }
                 }
@@ -646,8 +676,7 @@ impl PlanResolverState {
             self.fields
                 .get_mut(field)
                 .ok_or_else(|| PlanError::internal(format!("unknown field: {field}")))?
-                .plan_bindings
-                .retain(|binding| binding.0 != id);
+                .mark_plan_id_ambiguous(id);
         }
         Ok(())
     }
@@ -703,11 +732,10 @@ impl PlanResolverState {
                 }
                 if !filter_outputs || output_names.contains(info.name.as_str()) {
                     for &binding in ids {
-                        let previous = origins
-                            .entry((binding, info.name.as_str()))
-                            .or_insert(info.origin);
+                        let key = (plan_attribute(binding), info.name.as_str());
+                        let previous = origins.entry(key).or_insert(info.origin);
                         if *previous != info.origin {
-                            ambiguous.insert((binding, info.name.as_str()));
+                            ambiguous.insert(key);
                         }
                     }
                 }
@@ -721,11 +749,12 @@ impl PlanResolverState {
         for field in plan.schema().fields() {
             let info = self.get_field_info(field.name())?;
             for binding in info.plan_bindings() {
+                let key = (plan_attribute(binding), info.name.as_str());
                 if origins
-                    .get(&(binding, info.name.as_str()))
+                    .get(&key)
                     .is_some_and(|origin| *origin != info.origin)
                 {
-                    ambiguous.insert((binding, info.name.as_str()));
+                    ambiguous.insert(key);
                 }
             }
         }
@@ -738,7 +767,7 @@ impl PlanResolverState {
                     .into_iter()
                     .flat_map(|ids| ids.iter().copied());
                 for binding in info.plan_bindings().chain(restored) {
-                    if ambiguous.contains(&(binding, info.name.as_str())) {
+                    if ambiguous.contains(&(plan_attribute(binding), info.name.as_str())) {
                         removals.push((field.name(), binding.0));
                     }
                 }
@@ -746,6 +775,9 @@ impl PlanResolverState {
         }
         drop(ambiguous);
         drop(origins);
+        // A CTE reference is a leaf in Spark, so ambiguity found through the
+        // reference's definition bindings in the body is replaced by the
+        // ambiguity among WithCTE's children computed above.
         for field in plan.schema().fields() {
             let info = self
                 .fields
@@ -761,8 +793,7 @@ impl PlanResolverState {
             self.fields
                 .get_mut(field)
                 .ok_or_else(|| PlanError::internal(format!("unknown field: {field}")))?
-                .plan_bindings
-                .retain(|binding| binding.0 != id);
+                .mark_plan_id_ambiguous(id);
         }
         Ok(())
     }

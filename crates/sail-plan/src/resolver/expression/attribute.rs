@@ -330,7 +330,12 @@ impl PlanResolver<'_> {
             };
             // Spark checks root ambiguity before extracting fields. An unsupported
             // extraction must not hide a second root and bind the first one instead.
-            if fields.next().is_some() {
+            // A DataFrame reference is also ambiguous if the root is ambiguous below.
+            if fields.next().is_some()
+                || state
+                    .get_field_info(field.name())
+                    .is_ok_and(|info| info.is_ambiguous_for(plan_id))
+            {
                 return Err(PlanError::AnalysisError(format!(
                     "ambiguous attribute: {name:?}"
                 )));
@@ -411,18 +416,19 @@ impl PlanResolver<'_> {
                     Some((
                         name.as_ref().to_string(),
                         expr::Expr::Column(Column::new_unqualified(field.name())),
+                        info.is_ambiguous_for(plan_id),
                     ))
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
-        if candidates.len() > 1 {
+        if candidates.len() > 1 || candidates.iter().any(|(_, _, ambiguous)| *ambiguous) {
             return Err(PlanError::AnalysisError(format!(
                 "ambiguous attribute: {name:?}"
             )));
         }
-        Ok(candidates.pop())
+        Ok(candidates.pop().map(|(name, expr, _)| (name, expr)))
     }
 
     fn resolve_outer_field(

@@ -117,17 +117,23 @@ impl PlanResolver<'_> {
         // Type inference needs all reachable columns, while name resolution must
         // prefer the nearest output for each attribute independently. In particular,
         // retrying the entire predicate on a child loses projected aliases.
-        let mut columns = HashSet::new();
-        let fields = schemas
-            .iter()
-            .flat_map(|schema| schema.iter())
-            .filter(|(qualifier, field)| columns.insert((*qualifier, field.name())))
-            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
-            .collect();
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            fields,
-            output_schema.metadata().clone(),
-        )?);
+        let schema = if let [schema] = schemas.as_slice() {
+            // Without reachable descendants (e.g. most subquery filters), the output
+            // has every column. Reuse it so that no input needs to be recovered.
+            Arc::clone(schema)
+        } else {
+            let mut columns = HashSet::new();
+            let fields = schemas
+                .iter()
+                .flat_map(|schema| schema.iter())
+                .filter(|(qualifier, field)| columns.insert((*qualifier, field.name())))
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+                .collect();
+            Arc::new(DFSchema::new_with_metadata(
+                fields,
+                output_schema.metadata().clone(),
+            )?)
+        };
         // Spark resolves each expression independently, so discarding the bindings to an
         // output for one expression does not affect the others.
         // Keep the successfully resolved prefix: one missing sort or partitioning

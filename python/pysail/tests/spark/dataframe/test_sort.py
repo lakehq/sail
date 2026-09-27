@@ -187,6 +187,21 @@ def test_sort_within_partitions_above_order_sensitive_operator(sort_source, oper
 
 
 @pytest.mark.parametrize(
+    "operation",
+    [lambda df: df.orderBy("v"), lambda df: df.coalesce(1).sortWithinPartitions("v")],
+    ids=["orderBy", "sortWithinPartitions"],
+)
+def test_sort_recovers_key_beside_order_sensitive_join_input(spark, operation):
+    source = spark.createDataFrame(
+        [(1, "a", 30), (2, "b", 10), (3, "a", 20), (4, "c", 40), (5, "b", 50)], "k int, g string, v int"
+    )
+    other = spark.createDataFrame([(1, 100), (2, 90), (3, 80), (6, 70)], "k int, w int")
+    # The limit is in the other join input, so recovering `v` does not cross it.
+    projected = source.join(other.orderBy("k").limit(3), "k").select("g", "w").select("g")
+    assert operation(projected).collect() == [Row(g="b"), Row(g="a"), Row(g="a")]
+
+
+@pytest.mark.parametrize(
     ("query", "expected"),
     [
         ("SELECT id FROM sort_user_source ORDER BY id DESC, user", [Row(id=3), Row(id=2), Row(id=1)]),

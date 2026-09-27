@@ -13,6 +13,10 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 COLUMN_SELECTOR_MARK = pytest.mark.skipif(
     pyspark_version() < (4,), reason="the Spark Connect client does not support column selectors before PySpark 4"
 )
+SQL_DATAFRAME_ARGS_MARK = pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="the Spark Connect client does not support DataFrame SQL arguments before PySpark 4",
+)
 
 
 @pytest.fixture
@@ -363,6 +367,7 @@ def test_missing_input_union_rejects_mismatched_input_widths(spark, extra_column
     ],
     ids=["union", "join", "subquery"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_union_preserves_shared_cte_bindings(spark, body, copies):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql("WITH t AS (SELECT * FROM {source}) " + body, source=source)  # noqa: S608
@@ -423,6 +428,7 @@ def test_missing_input_union_preserves_shared_cte_bindings(spark, body, copies):
         ),
     ],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql(query, source=source)
@@ -446,6 +452,7 @@ def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
     ],
     ids=["duplicate-column", "partial-definitions", "disjoint-definitions"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_preserves_distinct_column_bindings(spark, query):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     projected = spark.sql(query, source=source).select("key")
@@ -454,6 +461,7 @@ def test_missing_input_cte_preserves_distinct_column_bindings(spark, query):
     assert result.schema == projected.schema
 
 
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_preserves_aliased_dataframe_bindings(spark):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     left, right = source.alias("left"), source.alias("right")
@@ -475,6 +483,7 @@ def test_missing_input_cte_preserves_aliased_dataframe_bindings(spark):
     ],
     ids=["sql-union", "union-definition", "union-reference", "used-reference", "empty-used-reference"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_sql_union_rejects_stale_source_binding(spark, query):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql(query, source=source)
@@ -550,6 +559,7 @@ def test_missing_input_sql_cte_preserves_attribute_identity(spark, query, ambigu
 
 @pytest.mark.parametrize("source_kind", ["plain", "union", "using-join"])
 @pytest.mark.parametrize("projected_side", ["neither", "left", "right"])
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_parameter_view_join_bindings(spark, source_kind, projected_side):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     other = spark.createDataFrame([(3, 30)], "key int, value int")
@@ -600,6 +610,7 @@ def test_missing_input_parameter_view_join_bindings(spark, source_kind, projecte
         ),
     ],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_subquery_ambiguity_preserves_outer_binding(spark, query):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql(query, source=source)
@@ -619,6 +630,7 @@ def test_missing_input_subquery_ambiguity_preserves_outer_binding(spark, query):
     ],
     ids=["cte-union", "cte-join", "parameter-view-join"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_reused_relation_schema(spark, query, copies):
     schema = StructType(
         [
@@ -653,6 +665,7 @@ def test_missing_input_reused_relation_schema(spark, query, copies):
     ],
     ids=["computed", "derived-computed"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_reused_relation_schema_computed_projection(spark, query):
     schema = StructType(
         [
@@ -758,6 +771,60 @@ def test_missing_input_set_operation_rejects_ambiguous_ancestor(spark, operation
 
 
 @pytest.mark.parametrize(
+    "operation",
+    [
+        "left_semi",
+        "left_anti",
+        "intersect",
+        "subtract",
+        "exceptAll",
+        pytest.param("sql_join", marks=SQL_DATAFRAME_ARGS_MARK),
+        pytest.param("sql_ctes", marks=SQL_DATAFRAME_ARGS_MARK),
+    ],
+)
+@pytest.mark.parametrize("consumer", ["select", "where", "drop"])
+def test_ambiguous_ancestor_stays_ambiguous_next_to_another_instance(spark, operation, consumer):
+    source = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "key int, value int")
+    other = source.where("value > 15")
+    if operation.startswith("left_"):
+        nested = source.join(other, "key", operation)
+    elif operation == "sql_join":
+        nested = spark.sql("SELECT a.* FROM {s} a JOIN {s} b ON a.key = b.key", s=source)
+    elif operation == "sql_ctes":
+        nested = spark.sql("WITH t AS (SELECT * FROM {s}), u AS (SELECT * FROM {s}) TABLE t", s=source)
+    else:
+        nested = getattr(source, operation)(other)
+    # The source is in both inputs of the nested operation, so Spark rejects any reference
+    # to it through that operation, even if another input has a fresh source instance.
+    if consumer == "drop":
+        result = nested.drop(source.value)
+    else:
+        joined = nested.join(source, "key")
+        result = joined.select(source.value) if consumer == "select" else joined.where(source.value > 15)  # noqa: PLR2004
+    with pytest.raises(AnalysisException):
+        result.collect()
+
+
+@SQL_DATAFRAME_ARGS_MARK
+def test_cte_reference_join_keeps_definition_binding(spark):
+    source = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "key int, value int")
+    # A CTE reference is a leaf in Spark, so joining it with another source instance
+    # does not make the source ambiguous. Only the definition's attribute survives.
+    result = spark.sql(
+        "WITH t AS (SELECT * FROM {s}) SELECT a.key, a.value FROM t a JOIN {s} b ON a.key = b.key", s=source
+    )
+    assert sorted(result.where(source.value > 15).collect()) == [Row(key=2, value=20), Row(key=3, value=30)]  # noqa: PLR2004
+
+
+def test_union_hides_ambiguous_ancestor_from_another_instance(spark):
+    source = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "key int, value int")
+    nested = source.join(source.where("value > 15"), "key", "left_semi").union(source.where("value < 15"))
+    # A Union is a leaf for DataFrame column lookup, so only the joined instance matches.
+    result = nested.join(source, "key").select(source.value)
+    assert sorted(result.collect()) == [Row(value=10), Row(value=20), Row(value=30)]
+
+
+@pytest.mark.parametrize(
     ("query", "valid", "copies"),
     [
         ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source}", False, 1),
@@ -766,6 +833,7 @@ def test_missing_input_set_operation_rejects_ambiguous_ancestor(spark, operation
     ],
     ids=["body-conflict", "partial-definition", "union-body"],
 )
+@SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_body_binding(spark, query, valid, copies):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql(query, source=source)

@@ -228,7 +228,7 @@ impl PlanResolver<'_> {
         };
         let plan = plan?;
         if !is_union {
-            state.discard_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
+            state.mark_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
         }
         Ok(plan)
     }
