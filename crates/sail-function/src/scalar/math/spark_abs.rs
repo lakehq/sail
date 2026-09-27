@@ -20,7 +20,9 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::error::{generic_internal_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::error::{
+    generic_internal_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err,
+};
 use crate::scalar::math::spark_negative::spark_decimal128_abs;
 
 #[derive(Debug, PartialEq, Eq, Hash)]

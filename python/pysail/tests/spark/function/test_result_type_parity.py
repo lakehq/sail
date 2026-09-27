@@ -36,7 +36,7 @@ ERROR = "<error>"
 MAX_QUERY_LENGTH = 160
 # What the reference currently records; both must go DOWN, never up.
 DIVERGENT_TYPES = 29
-SAIL_REFUSES = 81
+SAIL_REFUSES = 79
 
 
 def catalogue_expressions() -> list[str]:

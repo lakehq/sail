@@ -2189,11 +2189,25 @@ fn rejects_resolved_calendar_null(
     right: &Expr,
     schema: &DFSchemaRef,
 ) -> Option<PlanError> {
+    fn is_make_interval_call(expr: &Expr) -> bool {
+        match expr {
+            Expr::Alias(alias) => is_make_interval_call(&alias.expr),
+            Expr::ScalarFunction(function) => function.func.name() == "make_interval",
+            _ => false,
+        }
+    }
+
+    // A cast of a `make_interval(...)` call to INTERVAL is redundant (the call already returns
+    // that type), so Spark's datetime resolver never sees a real `Cast` node there and skips its
+    // operator-dependent NULL-casting rule. A cast of anything else -- a string literal such as
+    // `CAST('1 day' AS INTERVAL)`, or a column -- produces a genuine `Cast` and stays subject to
+    // that rule (`-` legal, `+` refused), so only the `make_interval` case is exempt here.
     fn is_explicit_calendar_cast(expr: &Expr) -> bool {
         matches!(
             expr,
             Expr::Cast(cast) if cast.field.data_type() == &DataType::Interval(IntervalUnit::MonthDayNano)
-        ) || matches!(expr, Expr::ScalarFunction(function) if function.func.name() == "spark_calendar_interval")
+                && is_make_interval_call(&cast.expr)
+        )
     }
 
     fn is_column(expr: &Expr) -> bool {
@@ -2209,6 +2223,11 @@ fn rejects_resolved_calendar_null(
             Expr::Alias(alias) => is_resolved_calendar_interval(&alias.expr),
             Expr::Column(_) => true,
             Expr::Cast(_) | Expr::TryCast(_) => true,
+            // `CAST(<string> AS INTERVAL)` lowers here rather than to `Expr::Cast`
+            // (`resolver/expression/cast.rs`), but it is just as resolved a value as a real cast.
+            Expr::ScalarFunction(function) if function.func.name() == "spark_calendar_interval" => {
+                true
+            }
             Expr::ScalarFunction(function) if function.func.name() == "coalesce" => {
                 function.args.iter().any(is_resolved_calendar_interval)
             }
@@ -2228,8 +2247,7 @@ fn rejects_resolved_calendar_null(
     let rejected = (left_type == DataType::Null
         && right_type == calendar
         && (is_column(left)
-            || (is_resolved_calendar_interval(right)
-                && !is_explicit_calendar_cast(right))))
+            || (is_resolved_calendar_interval(right) && !is_explicit_calendar_cast(right))))
         || (op == "+"
             && left_type == calendar
             && right_type == DataType::Null

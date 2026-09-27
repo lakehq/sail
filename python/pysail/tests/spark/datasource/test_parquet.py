@@ -850,9 +850,6 @@ def test_parquet_uint32_date_offset_is_named_bigint(spark, tmp_path, op):
         spark.sql(f"SELECT DATE'2024-01-01' {op} u32 FROM uint32_offset").collect()  # noqa: S608
 
 
-# TODO: Sail reads a BINARY `overlay` input as a STRING until its string functions take a BINARY
-#   (see `binary_substring.feature`); a BINARY result broke them downstream.
-@pytest.mark.xfail(not is_jvm_spark(), strict=True, reason="a BINARY overlay is read as a STRING")
 def test_parquet_binary_overlay_stays_a_binary_cut_by_bytes(spark, tmp_path):
     # A Parquet scan reads BINARY as an Arrow `BinaryView`. `Overlay` over a BINARY is a BINARY cut by
     # bytes (`stringExpressions.scala:1000-1010`), bytes that are not valid UTF-8 included, and a

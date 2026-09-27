@@ -7,8 +7,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::functions_utils::make_scalar_function;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
+use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBinarySubstring {
@@ -77,7 +77,11 @@ impl ScalarUDFImpl for SparkBinarySubstring {
             return Err(unsupported_data_types_exec_err(
                 "spark_binary_substring",
                 "BINARY, integral position [, integral length]",
-                &args.arg_fields.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>(),
+                &args
+                    .arg_fields
+                    .iter()
+                    .map(|field| field.data_type().clone())
+                    .collect::<Vec<_>>(),
             ));
         }
         Ok(Arc::new(Field::new(
@@ -117,7 +121,11 @@ fn slice(bytes: &[u8], pos: i64, length: i64) -> Vec<u8> {
 
 fn binary_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
     let ([input, position] | [input, position, _]) = args else {
-        return Err(invalid_arg_count_exec_err("spark_binary_substring", (2, 3), args.len()));
+        return Err(invalid_arg_count_exec_err(
+            "spark_binary_substring",
+            (2, 3),
+            args.len(),
+        ));
     };
     let input = input.as_binary::<i32>();
     let position = position.as_primitive::<Int64Type>();
@@ -167,7 +175,11 @@ impl ScalarUDFImpl for SparkBinaryOverlay {
             return Err(unsupported_data_types_exec_err(
                 "spark_binary_overlay",
                 "BINARY, BINARY, integral position [, integral length]",
-                &args.arg_fields.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>(),
+                &args
+                    .arg_fields
+                    .iter()
+                    .map(|field| field.data_type().clone())
+                    .collect::<Vec<_>>(),
             ));
         }
         Ok(Arc::new(Field::new(
@@ -183,7 +195,11 @@ impl ScalarUDFImpl for SparkBinaryOverlay {
 
 fn binary_overlay(args: &[ArrayRef]) -> Result<ArrayRef> {
     let ([input, replacement, position] | [input, replacement, position, _]) = args else {
-        return Err(invalid_arg_count_exec_err("spark_binary_overlay", (3, 4), args.len()));
+        return Err(invalid_arg_count_exec_err(
+            "spark_binary_overlay",
+            (3, 4),
+            args.len(),
+        ));
     };
     let input = input.as_binary::<i32>();
     let replacement = replacement.as_binary::<i32>();

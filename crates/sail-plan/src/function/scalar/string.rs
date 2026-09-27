@@ -373,7 +373,31 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+/// Spark's `Substring`/`Left`/`Overlay` keep a BINARY input as BINARY
+/// (`stringExpressions.scala:1000-1010,2301-2313`), but `Trim`/`Replace`/`InitCap` are pure
+/// string operations that only accept STRING -- Spark inserts an implicit cast from BINARY there
+/// (`ImplicitCastInputTypes`), same as it does for any other non-string type. The bytes are
+/// already the value's own UTF-8 encoding (they came from a STRING originally), so the same plain
+/// cast `cast_to_logical_string_or_try` uses elsewhere for BINARY is exact here too.
+fn coerce_binary_argument(arg: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
+    match arg.get_type(schema)? {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => cast_to_logical_string_or_try(arg, schema, false),
+        _ => Ok(arg),
+    }
+}
+
+fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let mut args = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
     let replacement = (args.len() == 3)
         .then(|| args.pop())
         .flatten()
@@ -382,6 +406,47 @@ fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("replace requires 2 or 3 arguments"))?;
     Ok(expr_fn::replace(str, substr, replacement))
+}
+
+fn initcap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = coerce_binary_argument(input.arguments.one()?, input.function_context.schema)?;
+    Ok(expr_fn::initcap(arg))
+}
+
+fn trim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::trim)(arguments))
+}
+
+fn ltrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::ltrim)(arguments))
+}
+
+fn rtrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::rtrim)(arguments))
 }
 
 fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -521,13 +586,14 @@ fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .arguments
         .into_iter()
         .map(|arg| {
-            // Spark implicitly casts either numeric argument to string in both ANSI modes.
+            // Spark implicitly casts either a numeric or a binary argument to string in both
+            // ANSI modes.
             if arg.get_type(input.function_context.schema)?.is_numeric() {
                 // TODO: Match Spark's scientific notation for floats and non-ANSI decimals
                 //  once the shared numeric formatter supports it.
                 Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]))
             } else {
-                Ok(arg)
+                coerce_binary_argument(arg, input.function_context.schema)
             }
         })
         .collect::<PlanResult<Vec<_>>>()?;
@@ -672,7 +738,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
         ("format_string", F::custom(format_string)),
-        ("initcap", F::unary(expr_fn::initcap)),
+        ("initcap", F::custom(initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
@@ -683,7 +749,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
-        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
+        ("ltrim", F::custom(ltrim)),
         ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
@@ -700,10 +766,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::var_arg(replace)),
+        ("replace", F::custom(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
-        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
+        ("rtrim", F::custom(rtrim)),
         ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
@@ -718,7 +784,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
-        ("trim", F::var_arg(rev_args(expr_fn::trim))),
+        ("trim", F::custom(trim)),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
