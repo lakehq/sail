@@ -78,7 +78,7 @@ impl PlanResolver<'_> {
                 ));
             }
             let mut plan = cte.plan.as_ref().clone();
-            if let Some(names) = state.renew_cte_reference(&cte)? {
+            if let Some(names) = cte.renew_reference(state)? {
                 plan = rename_logical_plan_reusing_projection(plan, &names)?;
                 state.register_missing_input_boundary(&plan);
             }

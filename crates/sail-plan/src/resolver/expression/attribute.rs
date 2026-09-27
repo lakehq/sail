@@ -70,17 +70,18 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some(plan_id) = plan_id
-            && state.get_missing_input_schemas(schema).is_some()
+            && state.missing_input(schema).is_some()
         {
             self.verify_plan_attribute_root(&name, plan_id, state)?;
         }
         // Sort resolution can discard even the operator's own output when a
         // nested field or root is invalid. Filters and repartitions reject that
         // error. Keep wildcard/ordinal expansion on the original local schema.
-        let local_schema = &state.get_missing_input_schemas(schema).map_or_else(
+        let local_schema = &state.missing_input(schema).map_or_else(
             || Arc::clone(schema),
-            |schemas| {
-                schemas
+            |input| {
+                input
+                    .schemas()
                     .first()
                     .cloned()
                     .unwrap_or_else(|| Arc::new(DFSchema::empty()))
@@ -132,7 +133,10 @@ impl PlanResolver<'_> {
             };
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        let missing_input_schemas = state.get_missing_input_schemas(schema).unwrap_or(&[]);
+        let missing_input_schemas = state
+            .missing_input(schema)
+            .map(|input| input.schemas())
+            .unwrap_or_default();
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.
         if !missing_input_schemas.is_empty() && matches!(local, FieldResolution::Unsupported) {
@@ -199,7 +203,10 @@ impl PlanResolver<'_> {
         error: PlanError,
         state: &mut PlanResolverState,
     ) -> PlanError {
-        if state.discard_missing_input_schema(schema, index) {
+        if state
+            .missing_input_mut(schema)
+            .is_some_and(|input| input.discard(index))
+        {
             PlanError::analysis(format!(
                 "attribute {name:?} is missing from the schema: cannot resolve attribute"
             ))
@@ -283,39 +290,37 @@ impl PlanResolver<'_> {
         &self,
         name: &spec::ObjectName,
         plan_id: i64,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<()> {
-        let Some(roots) = state.get_plan_attribute_roots(plan_id, self.config.case_sensitive)?
-        else {
+        let Some(schema) = state.get_plan_schema(plan_id) else {
             return Ok(());
         };
         for (qualifier, root, _) in
             Self::generate_qualified_nested_field_candidates(name.parts()).rev()
         {
-            let root = if self.config.case_sensitive {
-                std::borrow::Cow::Borrowed(root.as_ref())
-            } else {
-                std::borrow::Cow::Owned(root.as_ref().to_ascii_lowercase())
-            };
-            let mut origins =
-                roots
-                    .get(root.as_ref())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|(q, origin)| {
-                        qualifier_matches(
-                            qualifier.as_ref(),
-                            q.as_ref(),
-                            self.config.case_sensitive,
-                        )
-                        .then_some(*origin)
-                    });
-            if let Some(first) = origins.next() {
-                if origins.any(|origin| origin != first) {
+            let mut first = None;
+            for (field_qualifier, field) in schema.iter() {
+                if !qualifier_matches(
+                    qualifier.as_ref(),
+                    field_qualifier,
+                    self.config.case_sensitive,
+                ) {
+                    continue;
+                }
+                let info = state.get_field_info(field.name())?;
+                if info.is_hidden()
+                    || !info.matches(root.as_ref(), None)
+                    || (self.config.case_sensitive && info.name() != root.as_ref())
+                {
+                    continue;
+                }
+                if *first.get_or_insert(info.origin()) != info.origin() {
                     return Err(PlanError::analysis(format!(
                         "ambiguous attribute: {name:?}"
                     )));
                 }
+            }
+            if first.is_some() {
                 break;
             }
         }

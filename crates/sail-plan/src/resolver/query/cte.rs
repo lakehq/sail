@@ -8,6 +8,79 @@ use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+/// A CTE definition or a parameter view, with the attribute identities of its output.
+#[derive(Debug)]
+pub(in crate::resolver) struct CteInfo {
+    pub(super) plan: Arc<LogicalPlan>,
+    /// Whether this is a CTE definition rather than a parameter view.
+    definition: bool,
+    /// The attribute identity of each output field.
+    origins: Vec<usize>,
+    /// The DataFrame plan IDs bound to the output attributes when the CTE is defined.
+    bindings: datafusion_common::HashMap<usize, datafusion_common::HashSet<i64>>,
+}
+
+impl CteInfo {
+    pub(in crate::resolver) fn try_new(
+        plan: LogicalPlan,
+        definition: bool,
+        state: &PlanResolverState,
+    ) -> PlanResult<Self> {
+        let mut origins = Vec::with_capacity(plan.schema().fields().len());
+        let mut bindings = datafusion_common::HashMap::new();
+        for field in plan.schema().fields() {
+            let info = state.get_field_info(field.name())?;
+            origins.push(info.origin());
+            let plan_ids = info.plan_ids().collect::<datafusion_common::HashSet<_>>();
+            if !plan_ids.is_empty() {
+                bindings.insert(info.origin(), plan_ids);
+            }
+        }
+        Ok(Self {
+            plan: Arc::new(plan),
+            definition,
+            origins,
+            bindings,
+        })
+    }
+
+    /// Spark renews repeated CTERelationRef and parameter-view attributes
+    /// separately. Identity projections preserve the original attribute IDs.
+    pub(super) fn renew_reference(
+        &self,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<Vec<String>>> {
+        let origins = state.cte_reference_origins_mut(self.definition);
+        if !self.origins.iter().any(|origin| origins.contains(origin)) {
+            // SQL outputs may acquire a DataFrame plan ID only after this query
+            // finishes. Their repeated CTE references already need fresh identities.
+            origins.extend(self.origins.iter().copied());
+            return Ok(None);
+        }
+        let mut renewed = datafusion_common::HashMap::with_capacity(self.origins.len());
+        let mut names = Vec::with_capacity(self.origins.len());
+        for (field, &original) in self.plan.schema().fields().iter().zip(&self.origins) {
+            let info = state.get_field_info(field.name())?;
+            let (name, hidden) = (info.name().to_string(), info.is_hidden());
+            // Spark's CTERelationRef.newInstance preserves duplicate attributes
+            // within one output while giving the reference fresh identities.
+            let origin = *renewed
+                .entry(original)
+                .or_insert_with(|| state.next_origin());
+            let plan_ids = if self.definition {
+                datafusion_common::HashSet::new()
+            } else {
+                self.bindings.get(&original).cloned().unwrap_or_default()
+            };
+            names.push(state.register_field_with_origin(name, hidden, origin, plan_ids));
+            if !self.definition {
+                state.cte_reference_origins_mut(false).insert(origin);
+            }
+        }
+        Ok(Some(names))
+    }
+}
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_with_ctes(
         &self,
@@ -45,8 +118,33 @@ impl PlanResolver<'_> {
         let plan = self.resolve_query_plan(input, state).await?;
         // Spark's `WithCTE` also has the CTE definitions as children, so
         // missing-reference recovery resolves only against the query output.
-        state.restore_cte_output_bindings(&plan)?;
+        Self::restore_cte_output_bindings(&plan, state)?;
         state.register_missing_input_boundary(&plan);
         Ok(plan)
+    }
+
+    /// A Union is a plan-ID lookup leaf, but WithCTE also exposes its definitions.
+    /// Restore only bindings whose original attributes survive in the output.
+    fn restore_cte_output_bindings(
+        plan: &LogicalPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<()> {
+        let definitions = state
+            .ctes()
+            .filter(|cte| cte.definition && !cte.bindings.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        if definitions.is_empty() {
+            return Ok(());
+        }
+        for field in plan.schema().fields() {
+            let origin = state.get_field_info(field.name())?.origin();
+            for cte in &definitions {
+                for &plan_id in cte.bindings.get(&origin).into_iter().flatten() {
+                    state.register_plan_id_for_field(field.name(), plan_id)?;
+                }
+            }
+        }
+        Ok(())
     }
 }

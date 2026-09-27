@@ -41,6 +41,9 @@ mod values;
 mod window;
 mod with_relations;
 
+pub(super) use cte::CteInfo;
+pub(super) use missing_input::MissingInputResolution;
+
 impl PlanResolver<'_> {
     /// Resolve query plan.
     /// No hidden fields are kept in the resolved plan.

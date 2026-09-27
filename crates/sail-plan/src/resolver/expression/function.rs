@@ -395,7 +395,7 @@ impl PlanResolver<'_> {
                 // - struct(alias.*) expands to all visible columns from that qualifier
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
-                    let schema = &state.get_local_schema(schema);
+                    let schema = &Self::local_schema(schema, state);
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),

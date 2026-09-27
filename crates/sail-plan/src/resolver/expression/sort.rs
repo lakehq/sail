@@ -34,7 +34,7 @@ impl PlanResolver<'_> {
             spec::Expr::Literal(literal) if resolve_literals => {
                 // Ordinals refer only to the visible output, even when other sort
                 // keys are resolved against a combined descendant schema.
-                let schema = state.get_local_schema(schema);
+                let schema = Self::local_schema(schema, state);
                 let num_fields = schema.fields().len();
                 let position = match literal {
                     spec::Literal::Int32 { value: Some(value) } => Some(*value as usize),

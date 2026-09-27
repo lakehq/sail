@@ -9,16 +9,13 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-
-pub(super) type PlanAttributeRoots =
-    datafusion_common::HashMap<String, Vec<(Option<TableReference>, usize)>>;
+use crate::resolver::query::{CteInfo, MissingInputResolution};
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
 pub(super) struct FieldInfo {
-    /// The sorted DataFrame plan IDs, if any, that reference this field.
-    /// A contiguous list keeps identity-projection clones cheap.
-    plan_ids: Vec<i64>,
+    /// The set of plan IDs, if any, that reference this field.
+    plan_ids: HashSet<i64>,
     /// Attribute identity, preserved by identity projections.
     origin: usize,
     /// The user-facing name of the field.
@@ -44,12 +41,6 @@ impl FieldInfo {
         self.plan_ids.iter().copied()
     }
 
-    fn register_plan_id(&mut self, plan_id: i64) {
-        if let Err(index) = self.plan_ids.binary_search(&plan_id) {
-            self.plan_ids.insert(index, plan_id);
-        }
-    }
-
     pub fn is_hidden(&self) -> bool {
         self.hidden
     }
@@ -57,18 +48,10 @@ impl FieldInfo {
     pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
         self.name.eq_ignore_ascii_case(name)
             && match plan_id {
-                Some(plan_id) => self.plan_ids.binary_search(&plan_id).is_ok(),
+                Some(plan_id) => self.plan_ids.contains(&plan_id),
                 None => true,
             }
     }
-}
-
-#[derive(Debug)]
-pub(super) struct CteInfo {
-    pub plan: Arc<LogicalPlan>,
-    pub definition: bool,
-    origins: Vec<usize>,
-    bindings: datafusion_common::HashMap<usize, Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,21 +77,13 @@ pub(super) enum AggregateState {
 }
 
 #[derive(Debug)]
-struct MissingInputResolution {
-    schema: DFSchemaRef,
-    local_schema: DFSchemaRef,
-    schemas: Vec<DFSchemaRef>,
-    resolve_sort_inputs: bool,
-}
-
-#[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
     next_origin: usize,
     /// A map from the generated opaque field ID to field information.
     fields: datafusion_common::HashMap<String, FieldInfo>,
-    plan_schemas: HashMap<i64, DFSchemaRef>,
-    plan_attribute_roots: HashMap<(i64, bool), PlanAttributeRoots>,
+    /// An output schema of each DataFrame plan ID, for checking references against it.
+    plan_schemas: datafusion_common::HashMap<i64, DFSchemaRef>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for expressions
@@ -121,8 +96,10 @@ pub(super) struct PlanResolverState {
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
-    ctes: HashMap<TableReference, Arc<CteInfo>>,
+    ctes: datafusion_common::HashMap<TableReference, Arc<CteInfo>>,
+    /// The attributes of the CTE references resolved so far.
     cte_reference_origins: HashSet<usize>,
+    /// The attributes of the parameter-view references resolved so far.
     parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
@@ -153,13 +130,12 @@ impl PlanResolverState {
             next_id: 0,
             next_origin: 0,
             fields: datafusion_common::HashMap::new(),
-            plan_schemas: HashMap::new(),
-            plan_attribute_roots: HashMap::new(),
+            plan_schemas: datafusion_common::HashMap::new(),
             outer_query_schema: None,
             missing_input_resolution: None,
             missing_input_boundaries: vec![],
             aggregate_state: AggregateState::default(),
-            ctes: HashMap::new(),
+            ctes: datafusion_common::HashMap::new(),
             cte_reference_origins: HashSet::new(),
             parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
@@ -177,14 +153,31 @@ impl PlanResolverState {
         format!("#{id}")
     }
 
-    fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
-        let field_id = self.next_field_id();
+    /// Returns a new attribute identity.
+    pub fn next_origin(&mut self) -> usize {
         let origin = self.next_origin;
         self.next_origin += 1;
+        origin
+    }
+
+    fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
+        let origin = self.next_origin();
+        self.register_field_with_origin(name.into(), hidden, origin, HashSet::new())
+    }
+
+    /// Registers a field of the attribute identity and returns its generated field ID.
+    pub fn register_field_with_origin(
+        &mut self,
+        name: String,
+        hidden: bool,
+        origin: usize,
+        plan_ids: HashSet<i64>,
+    ) -> String {
+        let field_id = self.next_field_id();
         let info = FieldInfo {
-            plan_ids: vec![],
+            plan_ids,
             origin,
-            name: name.into(),
+            name,
             hidden,
         };
         self.fields.insert(field_id.clone(), info);
@@ -207,18 +200,18 @@ impl PlanResolverState {
     /// Sets the display name of a materialized field, registering an internal field
     /// when it becomes referenceable (e.g. an unnested `window` grouping column).
     pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
-        let info = self.fields.entry(field_id.to_string()).or_insert_with(|| {
-            let origin = self.next_origin;
-            self.next_origin += 1;
-            FieldInfo {
-                plan_ids: vec![],
-                origin,
-                name: String::new(),
+        let name = name.into();
+        if let Some(info) = self.fields.get_mut(field_id) {
+            info.name = name;
+        } else {
+            let info = FieldInfo {
+                plan_ids: HashSet::new(),
+                origin: self.next_origin(),
+                name,
                 hidden: false,
-            }
-        });
-        info.name = name.into();
-        self.plan_attribute_roots.clear();
+            };
+            self.fields.insert(field_id.to_string(), info);
+        }
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
@@ -257,11 +250,11 @@ impl PlanResolverState {
     }
 
     pub fn register_plan_id_for_field(&mut self, field_id: &str, plan_id: i64) -> PlanResult<()> {
-        let info = self
+        let field_info = self
             .fields
             .get_mut(field_id)
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
-        info.register_plan_id(plan_id);
+        field_info.plan_ids.insert(plan_id);
         Ok(())
     }
 
@@ -276,36 +269,8 @@ impl PlanResolverState {
         Ok(())
     }
 
-    /// Index original roots only when a bound missing-input expression needs
-    /// them. Repeated validation must not rescan a wide source for every field.
-    pub fn get_plan_attribute_roots(
-        &mut self,
-        plan_id: i64,
-        case_sensitive: bool,
-    ) -> PlanResult<Option<&PlanAttributeRoots>> {
-        let key = (plan_id, case_sensitive);
-        if !self.plan_attribute_roots.contains_key(&key) {
-            let Some(schema) = self.plan_schemas.get(&plan_id) else {
-                return Ok(None);
-            };
-            let mut roots = PlanAttributeRoots::with_capacity(schema.fields().len());
-            for (qualifier, field) in schema.iter() {
-                let info = self.get_field_info(field.name())?;
-                if !info.hidden {
-                    let name = if case_sensitive {
-                        info.name.clone()
-                    } else {
-                        info.name.to_ascii_lowercase()
-                    };
-                    roots
-                        .entry(name)
-                        .or_default()
-                        .push((qualifier.cloned(), info.origin));
-                }
-            }
-            self.plan_attribute_roots.insert(key, roots);
-        }
-        Ok(self.plan_attribute_roots.get(&key))
+    pub fn get_plan_schema(&self, plan_id: i64) -> Option<&DFSchemaRef> {
+        self.plan_schemas.get(&plan_id)
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {
@@ -318,48 +283,20 @@ impl PlanResolverState {
         self.outer_query_schema.as_ref()
     }
 
-    pub fn get_missing_input_schemas(&self, schema: &DFSchemaRef) -> Option<&[DFSchemaRef]> {
+    /// Returns the missing-input resolution whose type-checking schema is `schema`.
+    pub fn missing_input(&self, schema: &DFSchemaRef) -> Option<&MissingInputResolution> {
         self.missing_input_resolution
             .as_ref()
-            .filter(|input| Arc::ptr_eq(&input.schema, schema))
-            .map(|input| input.schemas.as_slice())
+            .filter(|input| input.applies_to(schema))
     }
 
-    /// Returns the operator's own input schema when `schema` is the type-checking schema
-    /// for missing-input resolution. Expansions such as `*` only see this schema.
-    pub fn get_local_schema(&self, schema: &DFSchemaRef) -> DFSchemaRef {
+    pub fn missing_input_mut(
+        &mut self,
+        schema: &DFSchemaRef,
+    ) -> Option<&mut MissingInputResolution> {
         self.missing_input_resolution
-            .as_ref()
-            .filter(|input| Arc::ptr_eq(&input.schema, schema))
-            .map_or_else(
-                || Arc::clone(schema),
-                |input| Arc::clone(&input.local_schema),
-            )
-    }
-
-    /// Discards the bindings to one output when resolution against it fails.
-    /// Sorts can discard their own output; other operators can only discard descendants.
-    /// Returns whether the output is discarded.
-    pub fn discard_missing_input_schema(&mut self, schema: &DFSchemaRef, index: usize) -> bool {
-        if let Some(input) = &mut self.missing_input_resolution
-            && Arc::ptr_eq(&input.schema, schema)
-            && (index > 0 || input.resolve_sort_inputs)
-            && index < input.schemas.len()
-        {
-            input.schemas.remove(index);
-            return true;
-        }
-        false
-    }
-
-    /// Discards the bindings to one output and all deeper outputs.
-    pub fn discard_missing_input_schemas_from(&mut self, schema: &DFSchemaRef, index: usize) {
-        if let Some(input) = &mut self.missing_input_resolution
-            && Arc::ptr_eq(&input.schema, schema)
-            && (index > 0 || input.resolve_sort_inputs)
-        {
-            input.schemas.truncate(index);
-        }
+            .as_mut()
+            .filter(|input| input.applies_to(schema))
     }
 
     pub fn register_missing_input_boundary(&mut self, plan: &LogicalPlan) {
@@ -408,22 +345,9 @@ impl PlanResolverState {
 
     pub fn enter_missing_input_scope(
         &mut self,
-        schema: DFSchemaRef,
-        schemas: Vec<DFSchemaRef>,
-        resolve_sort_inputs: bool,
+        resolution: MissingInputResolution,
     ) -> MissingInputScope<'_> {
-        let local_schema = schemas
-            .first()
-            .cloned()
-            .unwrap_or_else(|| Arc::clone(&schema));
-        let previous = self
-            .missing_input_resolution
-            .replace(MissingInputResolution {
-                schema,
-                local_schema,
-                schemas,
-                resolve_sort_inputs,
-            });
+        let previous = self.missing_input_resolution.replace(resolution);
         MissingInputScope {
             state: self,
             previous,
@@ -473,126 +397,30 @@ impl PlanResolverState {
         plan: LogicalPlan,
         definition: bool,
     ) -> PlanResult<()> {
-        let mut origins = Vec::with_capacity(plan.schema().fields().len());
-        let mut bindings = datafusion_common::HashMap::new();
-        for field in plan.schema().fields() {
-            let info = self.get_field_info(field.name())?;
-            origins.push(info.origin);
-            if !info.plan_ids.is_empty() {
-                if bindings.is_empty() {
-                    bindings.reserve(plan.schema().fields().len());
-                }
-                bindings.insert(info.origin, info.plan_ids.clone());
-            }
-        }
-        self.ctes.insert(
-            table_ref,
-            Arc::new(CteInfo {
-                plan: Arc::new(plan),
-                definition,
-                origins,
-                bindings,
-            }),
-        );
+        let cte = CteInfo::try_new(plan, definition, self)?;
+        self.ctes.insert(table_ref, Arc::new(cte));
         Ok(())
     }
 
-    /// Spark renews repeated CTERelationRef and parameter-view attributes
-    /// separately. Identity projections preserve the original attribute IDs.
-    pub fn renew_cte_reference(&mut self, cte: &CteInfo) -> PlanResult<Option<Vec<String>>> {
-        let origins = if cte.definition {
+    pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
+        self.ctes.values()
+    }
+
+    /// Returns the attributes of the CTE references resolved so far, or those of
+    /// the parameter-view references if `definition` is false.
+    pub fn cte_reference_origins_mut(&mut self, definition: bool) -> &mut HashSet<usize> {
+        if definition {
             &mut self.cte_reference_origins
         } else {
             &mut self.parameter_view_origins
-        };
-        if !cte.origins.iter().any(|origin| origins.contains(origin)) {
-            // SQL outputs may acquire a DataFrame plan ID only after this query
-            // finishes. Their repeated CTE references already need fresh identities.
-            origins.extend(cte.origins.iter().copied());
-            return Ok(None);
         }
-        // One saved binding entry per output proves all origins are distinct.
-        // Bound CTEs and parameter views usually satisfy this without another scan.
-        let distinct = cte.bindings.len() == cte.origins.len();
-        let mut renewed =
-            datafusion_common::HashMap::with_capacity(if distinct { 0 } else { cte.origins.len() });
-        let mut names = Vec::with_capacity(cte.origins.len());
-        for (field, &original) in cte.plan.schema().fields().iter().zip(&cte.origins) {
-            let info = self.get_field_info(field.name())?;
-            let (name, hidden) = (info.name.clone(), info.hidden);
-            // Spark's CTERelationRef.newInstance preserves duplicate attributes
-            // within one output while giving the reference fresh identities.
-            let origin = if distinct {
-                let origin = self.next_origin;
-                self.next_origin += 1;
-                origin
-            } else {
-                *renewed.entry(original).or_insert_with(|| {
-                    let origin = self.next_origin;
-                    self.next_origin += 1;
-                    origin
-                })
-            };
-            let plan_ids = if cte.definition {
-                vec![]
-            } else {
-                cte.bindings.get(&original).cloned().unwrap_or_default()
-            };
-            let field_id = self.next_field_id();
-            self.fields.insert(
-                field_id.clone(),
-                FieldInfo {
-                    name,
-                    hidden,
-                    origin,
-                    plan_ids,
-                },
-            );
-            if !cte.definition {
-                self.parameter_view_origins.insert(origin);
-            }
-            names.push(field_id);
-        }
-        Ok(Some(names))
     }
 
-    /// A Union is a plan-ID lookup leaf, but WithCTE also exposes its definitions.
-    /// Restore only bindings whose original attributes survive in the output.
-    pub fn restore_cte_output_bindings(&mut self, plan: &LogicalPlan) -> PlanResult<()> {
-        let definitions = self
-            .ctes
-            .values()
-            .filter(|cte| cte.definition && !cte.bindings.is_empty())
-            .cloned()
-            .collect::<Vec<_>>();
-        if definitions.is_empty() {
-            return Ok(());
-        }
-        for field in plan.schema().fields() {
-            let info = self
-                .fields
-                .get_mut(field.name())
-                .ok_or_else(|| PlanError::internal(format!("unknown field: {}", field.name())))?;
-            for cte in &definitions {
-                for &plan_id in cte.bindings.get(&info.origin).into_iter().flatten() {
-                    info.register_plan_id(plan_id);
-                }
-            }
-        }
-        Ok(())
-    }
-
+    /// Registers a field of the same attribute as the source field.
     pub fn register_identity_field(&mut self, name: String, source: &str) -> PlanResult<String> {
         let source = self.get_field_info(source)?;
-        let info = FieldInfo {
-            name,
-            plan_ids: source.plan_ids.clone(),
-            origin: source.origin,
-            hidden: false,
-        };
-        let field_id = self.next_field_id();
-        self.fields.insert(field_id.clone(), info);
-        Ok(field_id)
+        let (origin, plan_ids) = (source.origin, source.plan_ids.clone());
+        Ok(self.register_field_with_origin(name, false, origin, plan_ids))
     }
 
     /// Returns a subquery reference plan from state by plan_id.
@@ -754,7 +582,7 @@ impl<'a> QueryScope<'a> {
         // Subqueries cannot recover missing local inputs solely for correlation.
         // TODO: Resolve the filter's local references before its subqueries so that
         // directly recovered inputs become visible to correlation in either order.
-        let schema = state.get_local_schema(&schema);
+        let schema = PlanResolver::local_schema(&schema, state);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
         Self {
             state,
@@ -801,7 +629,7 @@ impl Drop for AggregateScope<'_> {
 
 pub(crate) struct CteScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_ctes: HashMap<TableReference, Arc<CteInfo>>,
+    previous_ctes: datafusion_common::HashMap<TableReference, Arc<CteInfo>>,
 }
 
 impl<'a> CteScope<'a> {

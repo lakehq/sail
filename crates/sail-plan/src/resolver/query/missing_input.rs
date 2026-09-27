@@ -14,6 +14,61 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+/// The resolution context of expressions that can recover missing inputs.
+#[derive(Debug)]
+pub(in crate::resolver) struct MissingInputResolution {
+    /// The combined schema that the expressions are type-checked against.
+    schema: DFSchemaRef,
+    /// The operator's own input schema.
+    local_schema: DFSchemaRef,
+    /// The outputs that names resolve against, nearest first.
+    schemas: Vec<DFSchemaRef>,
+    /// Whether the expressions are sort keys. Sorts can discard even their own output.
+    resolve_sort_inputs: bool,
+}
+
+impl MissingInputResolution {
+    fn new(schema: DFSchemaRef, schemas: Vec<DFSchemaRef>, resolve_sort_inputs: bool) -> Self {
+        let local_schema = schemas
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&schema));
+        Self {
+            schema,
+            local_schema,
+            schemas,
+            resolve_sort_inputs,
+        }
+    }
+
+    /// Returns whether `schema` is the type-checking schema of this resolution.
+    pub(in crate::resolver) fn applies_to(&self, schema: &DFSchemaRef) -> bool {
+        Arc::ptr_eq(&self.schema, schema)
+    }
+
+    pub(in crate::resolver) fn schemas(&self) -> &[DFSchemaRef] {
+        &self.schemas
+    }
+
+    /// Discards the bindings to one output when resolution against it fails.
+    /// Sorts can discard their own output; other operators can only discard descendants.
+    /// Returns whether the output is discarded.
+    pub(in crate::resolver) fn discard(&mut self, index: usize) -> bool {
+        if (index > 0 || self.resolve_sort_inputs) && index < self.schemas.len() {
+            self.schemas.remove(index);
+            return true;
+        }
+        false
+    }
+
+    /// Discards the bindings to one output and all deeper outputs.
+    pub(in crate::resolver) fn discard_from(&mut self, index: usize) {
+        if index > 0 || self.resolve_sort_inputs {
+            self.schemas.truncate(index);
+        }
+    }
+}
+
 impl PlanResolver<'_> {
     /// Resolves expressions against the input, recovering attributes that the input
     /// removed but one of its descendants outputs, like Spark's `resolveExprsAndAddMissingAttrs`.
@@ -161,11 +216,11 @@ impl PlanResolver<'_> {
         for expression in expressions.into_iter().skip(resolved.len()) {
             let mut schema_count = schemas.len();
             let mut first_error = None;
-            let mut scope = state.enter_missing_input_scope(
+            let mut scope = state.enter_missing_input_scope(MissingInputResolution::new(
                 Arc::clone(&schema),
                 schemas.clone(),
                 resolve_sort_inputs,
-            );
+            ));
             // TODO: Resolve ordinary references before lambda bodies, as Spark does, so
             // retrying a failed lambda body retains higher-order arguments and references
             // recovered elsewhere in the predicate.
@@ -178,8 +233,8 @@ impl PlanResolver<'_> {
                     Err(error) => {
                         let remaining = scope
                             .state()
-                            .get_missing_input_schemas(&schema)
-                            .map_or(0, |schemas| schemas.len());
+                            .missing_input(&schema)
+                            .map_or(0, |input| input.schemas().len());
                         if remaining >= schema_count {
                             return Err(first_error.unwrap_or(error));
                         }
@@ -194,6 +249,18 @@ impl PlanResolver<'_> {
             resolved.push(expr);
         }
         Ok((resolved, schema))
+    }
+
+    /// Returns the operator's own input schema when `schema` is the type-checking schema
+    /// for missing-input resolution. Expansions such as `*` only see this schema.
+    pub(in crate::resolver) fn local_schema(
+        schema: &DFSchemaRef,
+        state: &PlanResolverState,
+    ) -> DFSchemaRef {
+        state.missing_input(schema).map_or_else(
+            || Arc::clone(schema),
+            |input| Arc::clone(&input.local_schema),
+        )
     }
 
     /// Returns the input attributes that the projection outputs without renaming them,
