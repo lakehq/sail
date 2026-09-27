@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::Schema;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use sail_common::spec;
@@ -44,7 +45,22 @@ impl PlanResolver<'_> {
         let alias = TableReference::Bare {
             table: Arc::from(String::from(name)),
         };
+        // An uncorrelated derived table uses a plain `SubqueryAlias`, like Spark. It
+        // requalifies the output and stops missing-reference resolution without adding
+        // an operator to the physical plan.
+        let mut correlated = false;
         if alias.table() == AUTO_GENERATED_SUBQUERY_NAME {
+            // Include nested subqueries: their outer references can reach past this table.
+            input.apply_with_subqueries(|plan| {
+                correlated = plan.contains_outer_reference();
+                Ok(if correlated {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })?;
+        }
+        if correlated {
             // Spark removes subquery aliases before decorrelation, and correlated predicates
             // cannot be pulled up through `SubqueryAlias` here. So the generated alias only
             // requalifies the output and, like Spark, stops missing-reference resolution.
