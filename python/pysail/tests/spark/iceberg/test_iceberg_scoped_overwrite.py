@@ -40,7 +40,7 @@ def _rows(spark, table_name: str) -> list[tuple[int, str, int]]:
 
 def _live_data_file_paths(location: Path) -> set[str]:
     table = StaticTable.from_metadata(
-        str(location),
+        location.as_uri(),
         properties=pyiceberg_file_io_properties(),
     )
     return {str(task.file.file_path) for task in table.scan().plan_files()}
@@ -172,7 +172,7 @@ def test_iceberg_scoped_overwrite_rejects_active_delete_files(spark, tmp_path, m
     try:
         schema = "id BIGINT, category STRING, value BIGINT"
         spark.createDataFrame([(1, "A", 10), (2, "B", 20), (3, "A", 30)], schema=schema).writeTo(table_name).append()
-        table = StaticTable.from_metadata(str(location), properties=pyiceberg_file_io_properties())
+        table = StaticTable.from_metadata(location.as_uri(), properties=pyiceberg_file_io_properties())
         _append_equality_delete_snapshot(
             table,
             pa.table({"id": [1]}),
@@ -340,7 +340,7 @@ def test_iceberg_v1_dynamic_overwrite_writes_v1_metadata_shapes(spark, tmp_path)
         assert metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
 
         external_table = StaticTable.from_metadata(
-            str(location),
+            location.as_uri(),
             properties=pyiceberg_file_io_properties(),
         )
         current_snapshot = external_table.current_snapshot()

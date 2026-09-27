@@ -19,7 +19,7 @@ use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStoreExt};
 use super::decoder::decode_utf8_lossy_stream;
 use super::source::CsvSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{infer_listing_compression, list_all_files};
+use crate::listing::utils::{infer_listing_compression, list_all_files, try_merge_normalized};
 use crate::options::r#gen::CsvReadOptions;
 use crate::url::PathGlobFilter;
 
@@ -101,7 +101,7 @@ impl ReadFormat for CsvReadFormat {
             }
         }
 
-        let mut schema = Schema::try_merge(schemas)?;
+        let mut schema = try_merge_normalized(schemas)?;
         if !self.options.infer_schema {
             schema = super::convert_string_columns(schema);
         } else {

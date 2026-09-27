@@ -2,7 +2,8 @@ import contextlib
 import datetime
 import struct
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -31,7 +32,7 @@ def unavailable_iceberg_files(locations):
     moved = []
     try:
         for location in locations:
-            path = Path(unquote(urlparse(location).path))
+            path = Path(url2pathname(urlparse(location).path))
             backup = path.with_name(path.name + ".unavailable")
             assert path.is_file()
             assert not backup.exists()
@@ -575,7 +576,7 @@ def test_predicates_prune_before_opening_files(spark, tmp_path, lazy, partitione
             table.append(pa.table({"id": pa.array([identifier_value], pa.int64()), "p": pa.array([value], pa.int64())}))
         excluded = []
         for task in table.scan().plan_files():
-            path = Path(unquote(urlparse(task.file.file_path).path))
+            path = Path(url2pathname(urlparse(task.file.file_path).path))
             if pq.ParquetFile(path).read(columns=["id"])["id"][0].as_py() not in expected:
                 excluded.append(task.file.file_path)
         with unavailable_iceberg_files(excluded):
@@ -732,7 +733,7 @@ def test_disjoint_equality_delete_does_not_open_delete_file(spark, tmp_path, laz
                 "upper_bounds": {1: value.to_bytes(8, "little", signed=True)},
             },
         )
-        paths = list(Path(unquote(urlparse(table.location()).path)).rglob("equality-delete-*.parquet"))
+        paths = list(Path(url2pathname(urlparse(table.location()).path)).rglob("equality-delete-*.parquet"))
         with unavailable_iceberg_files([path.as_uri() for path in paths]):
             frame = spark.read.format("iceberg").option("metadataAsDataRead", lazy).load(table.location())
             assert sorted(row.id for row in frame.collect()) == [1, 2]
