@@ -119,6 +119,26 @@ def test_projected_in_alias_filter_keeps_null_aware_anti_join(spark, condition):
     assert result.collect() == [Row(matches=1000)]
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="checks Sail physical join operators")
+def test_unused_projected_in_beside_correlated_subquery_is_pruned(spark):
+    spark.sql("CREATE OR REPLACE TEMPORARY VIEW pruned_in_outer AS SELECT * FROM VALUES (1), (2) AS t(a)")
+    try:
+        result = spark.sql(
+            """
+            SELECT a, m FROM (
+              SELECT a, a IN (SELECT id FROM range(1000)) AS present,
+                (SELECT max(v) FROM VALUES (1, 'x') w(k, v) WHERE w.k = pruned_in_outer.a) AS m
+              FROM pruned_in_outer
+            )
+            """
+        )
+        # Spark prunes the unused IN before creating its existence join.
+        assert "LeftMark" not in result._explain_string()  # noqa: SLF001
+        assert sorted(result.collect()) == [Row(a=1, m="x"), Row(a=2, m=None)]
+    finally:
+        spark.catalog.dropTempView("pruned_in_outer")
+
+
 @pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table input requires PySpark 4.0+")
 @pytest.mark.parametrize(
     ("shape", "comparison"),

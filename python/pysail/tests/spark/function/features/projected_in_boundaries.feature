@@ -342,3 +342,89 @@ Feature: Projected IN subquery optimizer boundaries
       | operator | found | missing |
       | IN       | true  | false   |
       | NOT IN   | false | true    |
+
+  Scenario: projected IN keeps outer references of correlated subqueries in a view projection
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW projected_in_correlated AS
+      SELECT * FROM VALUES (1), (2), (NULL) AS projected_in_correlated(a)
+      """
+    # The unused IN is pruned. Projection merging before decorrelation must not
+    # leave the scalar subquery with an outer reference to a removed view column.
+    When query
+      """
+      SELECT a, m FROM (
+        SELECT a, a IN (SELECT x FROM VALUES (1), (3) s(x)) AS present,
+          (SELECT max(v) FROM VALUES (1, 'x'), (3, 'y') w(k, v)
+            WHERE w.k = projected_in_correlated.a) AS m
+        FROM projected_in_correlated
+      )
+      ORDER BY a NULLS LAST
+      """
+    Then query result ordered
+      | a    | m    |
+      | 1    | x    |
+      | 2    | NULL |
+      | NULL | NULL |
+    When query
+      """
+      SELECT a, a IN (SELECT x FROM VALUES (1), (3) s(x)) AS present,
+        (SELECT max(v) FROM VALUES (1, 'x'), (3, 'y') w(k, v)
+          WHERE w.k = projected_in_correlated.a) AS m
+      FROM projected_in_correlated
+      ORDER BY a NULLS LAST
+      """
+    Then query result ordered
+      | a    | present | m    |
+      | 1    | true    | x    |
+      | 2    | false   | NULL |
+      | NULL | false   | NULL |
+
+  Scenario: projected IN keeps a correlated filter above its alias
+    When query
+      """
+      SELECT a, present FROM (
+        SELECT a, a IN (SELECT x FROM VALUES (1), (3) s(x)) AS present
+        FROM VALUES (1), (2), (3) t(a)
+      ) q
+      WHERE present AND (SELECT count(*) FROM VALUES (1), (1), (3) w(k) WHERE w.k = q.a) = 2
+      """
+    Then query result
+      | a | present |
+      | 1 | true    |
+
+  Scenario Outline: projected IN over an empty local input does not evaluate local candidates
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT a, a IN (
+        SELECT x FROM (SELECT x, CAST(y AS INT) AS unused FROM VALUES (1, 'invalid') s(x, y))
+      ) AS present
+      FROM VALUES (1) t(a)
+      <condition>
+      """
+    Then query result
+      | a | present |
+
+    Examples:
+      | condition   |
+      | WHERE 1 = 0 |
+      | WHERE a < 0 |
+
+  Scenario Outline: projected IN over an input emptied by optimization does not run its subquery
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT id, id NOT IN (
+        SELECT nullif(CAST(concat(CAST(id AS STRING), 'x') AS BIGINT), 0) FROM range(5)
+      ) AS result
+      FROM <input>
+      """
+    Then query result
+      | id | result |
+
+    Examples:
+      | input                                |
+      | range(10) WHERE 1 = 0                |
+      | range(10) WHERE false                |
+      | (SELECT * FROM range(10) LIMIT 0)    |

@@ -45,7 +45,7 @@ use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
-use crate::datasource::predicate::Predicate;
+use crate::datasource::predicate::{Predicate, has_field_access};
 use crate::datasource::type_converter::{iceberg_field_id, iceberg_schema_to_arrow};
 use crate::io::StoreContext;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
@@ -1485,7 +1485,9 @@ impl IcebergScan {
     }
 
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
-        if Predicate::new(&self.schema, expr).supported() {
+        // A struct field filter still prunes data files. Keep it in the plan so the scan
+        // reads only the accessed leaves; an exact scan filter reads the whole struct.
+        if Predicate::new(&self.schema, expr).supported() && !has_field_access(expr) {
             TableProviderFilterPushDown::Exact
         } else {
             TableProviderFilterPushDown::Inexact

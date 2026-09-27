@@ -958,6 +958,36 @@ def test_parquet_nested_projection_preserves_schema_evolution(spark, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("schema", [None, "id BIGINT, s STRUCT<a:BIGINT>"], ids=["merged-schema", "explicit-schema"])
+def test_parquet_struct_field_reads_file_without_the_struct(spark, tmp_path, schema):
+    # File statistics prove the absent struct NULL, so the scan may replace it with a literal.
+    path = tmp_path / "struct_missing_from_file"
+    path.mkdir()
+    pq.write_table(pa.table({"id": [1, 2]}), path / "a.parquet")
+    payload = pa.array([{"a": 3}, {"a": None}], type=pa.struct([("a", pa.int64())]))
+    pq.write_table(pa.table({"id": [3, 4], "s": payload}), path / "b.parquet")
+    reader = spark.read.schema(schema) if schema else spark.read.option("mergeSchema", "true")
+    data = reader.parquet(str(path))
+    assert data.selectExpr("id", "s.a").orderBy("id").collect() == [
+        Row(id=1, a=None),
+        Row(id=2, a=None),
+        Row(id=3, a=3),
+        Row(id=4, a=None),
+    ]
+    assert data.where("s.a = 3").select("id").collect() == [Row(id=3)]
+    assert data.where("s.a IS NULL").select("id").orderBy("id").collect() == [Row(id=1), Row(id=2), Row(id=4)]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_parquet_nested_field_name_resolution_is_case_insensitive(spark, tmp_path):
+    # TODO: Sail matches nested Parquet field names case-sensitively and reads `A` as missing.
+    path = str(tmp_path / "nested_field_case.parquet")
+    payload = pa.array([{"A": 1, "b": 5}, {"A": 2, "b": 6}], type=pa.struct([("A", pa.int64()), ("b", pa.int64())]))
+    pq.write_table(pa.table({"id": [1, 2], "s": payload}), path)
+    data = spark.read.schema("id BIGINT, s STRUCT<a:BIGINT, b:BIGINT>").parquet(path)
+    assert data.selectExpr("id", "s.a").orderBy("id").collect() == [Row(id=1, a=1), Row(id=2, a=2)]
+
+
 @pytest.mark.parametrize("nested", [False, True], ids=["struct", "nested-struct"])
 @pytest.mark.parametrize("nullable", [True, False], ids=["optional-leaves", "required-leaves"])
 def test_parquet_struct_predicate_pushdown_preserves_primitive_nulls(spark, tmp_path, nested, nullable):

@@ -85,11 +85,29 @@ impl PlanResolver<'_> {
                 }
                 // When the join type is not an explicit cross join and no join criteria are given,
                 // we need to check whether implicit cartesian products are allowed.
-                if join_type.is_some() && !self.config.cross_join_enabled {
+                // Like Spark's `CheckCartesianProducts`, semi and anti joins are exempt.
+                if matches!(
+                    join_type,
+                    Some(JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full)
+                ) && !self.config.cross_join_enabled
+                {
                     return Err(PlanError::AnalysisError(
                         IMPLICIT_CARTESIAN_PRODUCT_MSG.to_string(),
                     ));
                 }
+                // Like Spark's `LimitPushDown`, a conditionless semi/anti join only needs
+                // to know whether the filtering side is empty, so one row is enough.
+                let (left, right) = match join_type {
+                    Some(JoinType::LeftSemi | JoinType::LeftAnti) => (
+                        left,
+                        LogicalPlanBuilder::from(right).limit(0, Some(1))?.build()?,
+                    ),
+                    Some(JoinType::RightSemi | JoinType::RightAnti) => (
+                        LogicalPlanBuilder::from(left).limit(0, Some(1))?.build()?,
+                        right,
+                    ),
+                    _ => (left, right),
+                };
                 Ok(LogicalPlan::Join(Join::try_new(
                     Arc::new(left),
                     Arc::new(right),

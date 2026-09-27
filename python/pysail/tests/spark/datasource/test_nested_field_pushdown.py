@@ -4,6 +4,7 @@ import pytest
 from pyspark.sql import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.mark.parametrize("file_format", ["delta", "iceberg"])
@@ -77,3 +78,48 @@ def test_metadata_delta_predicate_respects_requested_field_order(tmp_path):
             .collect()
         )
         assert rows == [Row(value=1), Row(value=3)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan")
+def test_struct_field_filter_on_single_partition_scan_reads_only_the_leaf(spark, tmp_path):
+    path = tmp_path / "single_partition"
+    (
+        spark.createDataFrame(
+            [Row(id=i, s=Row(a=i, b=str(i))) for i in range(10)],
+            "id INT, s STRUCT<a: INT, b: STRING>",
+        )
+        .coalesce(1)
+        .write.parquet(path.as_uri())
+    )
+    spark.read.parquet(path.as_uri()).createOrReplaceTempView("single_partition")
+    query = "SELECT id FROM single_partition WHERE s.a > 5 ORDER BY id"
+    assert spark.sql(query).collect() == [Row(id=6), Row(id=7), Row(id=8), Row(id=9)]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    scan = next(line for line in plan.splitlines() if "DataSourceExec" in line)
+    projection = scan.split("projection=", 1)[1].split("file_type=", 1)[0]
+    # A tiny file is read by one partition. The field access must still reach the scan
+    # so only the leaf is decoded, instead of the whole struct beneath a repartition.
+    assert "__sail_struct_field_dependency(s@1, a)" in projection, plan
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan")
+@pytest.mark.parametrize("field", ["s.a", "s.inner.x"])
+def test_iceberg_struct_field_filter_reads_only_the_leaf(spark, tmp_path, field):
+    path = tmp_path / "iceberg_struct_filter"
+    (
+        spark.createDataFrame(
+            [Row(id=i, s=Row(a=i, inner=Row(x=i, y=str(i)))) for i in range(10)],
+            "id INT, s STRUCT<a: INT, inner: STRUCT<x: INT, y: STRING>>",
+        )
+        .coalesce(1)
+        .write.format("iceberg")
+        .save(path.as_uri())
+    )
+    spark.read.format("iceberg").load(path.as_uri()).createOrReplaceTempView("iceberg_struct_filter")
+    query = f"SELECT id FROM iceberg_struct_filter WHERE {field} > 5 ORDER BY id"  # noqa: S608
+    assert spark.sql(query).collect() == [Row(id=6), Row(id=7), Row(id=8), Row(id=9)]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    scan = next(line for line in plan.splitlines() if "DataSourceExec" in line)
+    projection = scan.split("projection=", 1)[1].split("file_type=", 1)[0]
+    # The filter still prunes Iceberg data files, but the scan must decode only its leaf.
+    assert f"(s@1, {field[2:].replace('.', ', ')})" in projection, plan

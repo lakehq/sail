@@ -123,6 +123,37 @@ Feature: IN subquery support
         | age | name |
         | 5   | Bob  |
 
+    @sail-bug
+    Scenario: multi-column NOT IN subquery drops rows that match only through null comparisons
+      # TODO: Sail uses NOT EXISTS with plain equality, but Spark's null-aware
+      #  anti join treats a NULL comparison as a match.
+      When query
+        """
+        SELECT a, b FROM VALUES (1, 10), (2, 20), (3, 30), (NULL, 40) AS t(a, b)
+        WHERE (a, b) NOT IN (SELECT x, y FROM VALUES (1, NULL), (2, 20) AS s(x, y))
+        ORDER BY a
+        """
+      Then query result ordered
+        | a | b  |
+        | 3 | 30 |
+
+    @sail-bug
+    Scenario: projected multi-column NOT IN subquery is false for rows that match only through null comparisons
+      # TODO: Sail uses NOT EXISTS with plain equality, but Spark negates a
+      #  null-aware existence join, so the result is false rather than true.
+      When query
+        """
+        SELECT a, b, (a, b) NOT IN (SELECT x, y FROM VALUES (1, NULL), (2, 20) AS s(x, y)) AS absent
+        FROM VALUES (1, 10), (2, 20), (3, 30), (NULL, 40) AS t(a, b)
+        ORDER BY a
+        """
+      Then query result ordered
+        | a    | b  | absent |
+        | NULL | 40 | false  |
+        | 1    | 10 | false  |
+        | 2    | 20 | false  |
+        | 3    | 30 | true   |
+
   Rule: Projected uncorrelated IN subquery
 
     Scenario: projected IN preserves input rows and ignores duplicate matches

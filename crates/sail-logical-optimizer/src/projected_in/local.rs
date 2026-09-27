@@ -170,11 +170,15 @@ pub(super) fn materialize(plan: LogicalPlan, config: &dyn OptimizerConfig) -> Re
     .data()
 }
 
-fn empty(plan: &LogicalPlan) -> LogicalPlan {
+pub(super) fn empty(plan: &LogicalPlan) -> LogicalPlan {
     LogicalPlan::EmptyRelation(EmptyRelation {
         produce_one_row: false,
         schema: Arc::clone(plan.schema()),
     })
+}
+
+pub(super) fn is_empty(plan: &LogicalPlan) -> bool {
+    matches!(plan, LogicalPlan::EmptyRelation(empty) if !empty.produce_one_row)
 }
 
 /// Spark runs empty propagation alongside its early local evaluation. Reuse

@@ -45,6 +45,38 @@ Feature: struct fields and output schema
         | x |
         | 0 |
 
+    # `CASE WHEN ... THEN s END` sets `s` to NULL but keeps its children,
+    # and these functions ignore the NULL map or array read from the NULL struct.
+    @sail-bug
+    Scenario: looking up a map field of a null struct returns NULL
+      When query
+        """
+        SELECT id, (CASE WHEN id = 0 THEN s END).m['k'] AS value
+        FROM VALUES
+          (0, named_struct('m', map('k', 1))),
+          (1, named_struct('m', map('k', 2))) AS t(id, s)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 1     |
+        | 1  | NULL  |
+
+    @sail-bug
+    Scenario: array_max over an array field of a null struct returns NULL
+      When query
+        """
+        SELECT id, array_max((CASE WHEN id = 0 THEN s END).items) AS value
+        FROM VALUES
+          (0, named_struct('items', array(1))),
+          (1, named_struct('items', array(2))) AS t(id, s)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 0  | 1     |
+        | 1  | NULL  |
+
   @function(nullability)
   Rule: Output schema
 

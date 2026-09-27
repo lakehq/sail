@@ -10,7 +10,7 @@ use datafusion::functions::core::get_field;
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExpressionPlacement};
 
 use super::{SparkGetField, extract_struct_field};
 use crate::schema_evolution::FIELD_DEFAULT_METADATA_KEY;
@@ -126,6 +126,12 @@ impl PhysicalExpr for SparkGetFieldExpr {
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         Display::fmt(self, f)
+    }
+
+    fn placement(&self) -> ExpressionPlacement {
+        // Keep the cost class of the native access. A `KeepInPlace` projection
+        // asks for round-robin input, which stops it from reaching the scan.
+        self.access.placement()
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

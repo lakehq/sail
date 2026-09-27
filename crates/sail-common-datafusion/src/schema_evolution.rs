@@ -386,16 +386,24 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         expression: &SparkGetFieldExpr,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let access = expression.access()?;
-        let column = access.args()[0].downcast_ref::<Column>().ok_or_else(|| {
-            exec_datafusion_err!("Parquet field dependency must be rooted in a column")
-        })?;
-        let logical_index = self.logical_file_schema.index_of(column.name())?;
-        let logical_root = self.logical_file_schema.field(logical_index);
         let null = || -> Result<Arc<dyn PhysicalExpr>> {
             Ok(Arc::new(Literal::new(
                 ScalarValue::Null.cast_to(expression.field().data_type())?,
             )))
         };
+        // The Parquet opener replaces a root column that file statistics prove
+        // all-NULL (including one missing from this file) before adaptation.
+        if access.args()[0]
+            .downcast_ref::<Literal>()
+            .is_some_and(|literal| literal.value().is_null())
+        {
+            return null();
+        }
+        let column = access.args()[0].downcast_ref::<Column>().ok_or_else(|| {
+            exec_datafusion_err!("Parquet field dependency must be rooted in a column")
+        })?;
+        let logical_index = self.logical_file_schema.index_of(column.name())?;
+        let logical_root = self.logical_file_schema.field(logical_index);
         let Some(physical_index) = self.column_mapping.get(logical_index).copied().flatten() else {
             // Preserve required-column validation and existing missing-column rules.
             self.rewrite_column(access.args()[0].clone(), column)?;
@@ -432,6 +440,9 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                     physical_field.data_type()
                 );
             };
+            // TODO: Match nested names case-insensitively unless Spark's case-sensitive
+            //  analysis is enabled, as Spark's Parquet schema clipping does. A nested field
+            //  that differs only by case is currently read as missing (NULL).
             let Some((_, matched)) =
                 find_matching_struct_field(physical_fields, logical_field, self.matching)?
             else {

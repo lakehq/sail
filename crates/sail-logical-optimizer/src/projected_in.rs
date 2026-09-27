@@ -31,6 +31,9 @@ use sail_python_udf::udf::expr_contains_python_udf;
 mod conditional;
 mod local;
 
+/// Alias prefix of the existence joins created by this rule.
+const IN_ALIAS: &str = "__sail_in";
+
 /// Spark folds expressions before replacing projected IN with an existence join.
 /// Fold affected expressions and literal NULL operands first, then push their
 /// alias filters before materializing the remaining existence joins. Restrict
@@ -56,13 +59,33 @@ impl OptimizerRule for RewriteProjectedIn {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        // Spark removes a projection over an empty relation before rewriting its IN
+        // subqueries. Existence joins created in an earlier pass hide that empty
+        // input from DataFusion's empty relation propagation, so the subquery would run.
+        let emptied = plan.transform_up_with_subqueries(|plan| {
+            if let LogicalPlan::Join(join) = &plan
+                && join.join_type == JoinType::LeftMark
+                && local::is_empty(&join.left)
+                && matches!(join.right.as_ref(), LogicalPlan::SubqueryAlias(alias)
+                    if alias.alias.table().starts_with(IN_ALIAS))
+            {
+                return Ok(Transformed::yes(local::empty(&plan)));
+            }
+            Ok(Transformed::no(plan))
+        })?;
         let mut prepared_marks = HashSet::new();
-        let prepared = plan.transform_up_with_subqueries(|plan| {
+        let prepared = emptied.data.transform_up_with_subqueries(|plan| {
             rewrite_projection(plan, config, true, &mut prepared_marks)
         })?;
         if !prepared.transformed {
-            return Ok(prepared);
+            return Ok(Transformed::new_transformed(
+                prepared.data,
+                emptied.transformed,
+            ));
         }
+        // DataFusion's filter pushdown and projection merging do not rewrite outer
+        // references inside subqueries: they normally run after decorrelation.
+        let correlated = has_outer_reference(&prepared.data)?;
         let pushed = prepared.data.transform_down_with_subqueries(|plan| {
             let LogicalPlan::Filter(filter) = &plan else {
                 return Ok(Transformed::no(plan));
@@ -73,7 +96,7 @@ impl OptimizerRule for RewriteProjectedIn {
                 .into_iter()
                 .cloned()
                 .collect();
-            if references_projected_in(&filter.input, &needed)? {
+            if !correlated && references_projected_in(&filter.input, &needed)? {
                 PushDownFilter::new()
                     .rewrite(plan, config)?
                     .transform_data(|plan| {
@@ -127,9 +150,13 @@ impl OptimizerRule for RewriteProjectedIn {
             })
         })?;
         let original = (!remaining).then(|| pushed.data.clone());
-        let pruned = OptimizeProjections::new()
-            .rewrite(pushed.data, config)?
-            .data;
+        let pruned = if correlated {
+            neutralize_unused(pushed.data, config, &prepared_marks)?
+        } else {
+            OptimizeProjections::new()
+                .rewrite(pushed.data, config)?
+                .data
+        };
         // Literal NULL operands already became existence joins during preparation.
         // Remove only joins created here whose mark disappeared during pruning.
         let mut referenced = HashSet::new();
@@ -211,6 +238,103 @@ fn rewrite_pushed_filter(
             .project(columns.into_iter().map(Expr::Column))?
             .build()?,
     ))
+}
+
+/// Projection merging leaves stale outer references in correlated subqueries, so
+/// prune a tagged copy instead. Unused IN expressions and prepared marks in the
+/// plan itself become constants, which later pruning removes without a join.
+fn neutralize_unused(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+    prepared_marks: &HashSet<Column>,
+) -> Result<LogicalPlan> {
+    // Both traversals visit projected IN expressions in the same order.
+    fn map_projections(
+        plan: LogicalPlan,
+        mut f: impl FnMut(Expr) -> Result<Transformed<Expr>>,
+    ) -> Result<LogicalPlan> {
+        plan.transform_up_with_subqueries(|plan| {
+            if !matches!(plan, LogicalPlan::Projection(_)) {
+                return Ok(Transformed::no(plan));
+            }
+            let names = NamePreserver::new_for_projection();
+            plan.map_expressions(|expr| {
+                let name = names.save(&expr);
+                Ok(expr
+                    .transform_up(&mut f)?
+                    .update_data(|expr| name.restore(expr)))
+            })
+        })
+        .data()
+    }
+    const PROBE: &str = "__sail_in_probe_";
+    let mut count = 0;
+    let tagged = map_projections(plan.clone(), |expr| match expr {
+        Expr::InSubquery(mut subquery) if subquery.subquery.outer_ref_columns.is_empty() => {
+            subquery.subquery.subquery =
+                Arc::new(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                    Arc::clone(&subquery.subquery.subquery),
+                    format!("{PROBE}{count}"),
+                )?));
+            count += 1;
+            Ok(Transformed::yes(Expr::InSubquery(subquery)))
+        }
+        expr => Ok(Transformed::no(expr)),
+    })?;
+    let pruned = OptimizeProjections::new().rewrite(tagged, config)?.data;
+    let mut kept = vec![false; count];
+    let mut referenced = pruned
+        .schema()
+        .columns()
+        .into_iter()
+        .collect::<HashSet<_>>();
+    pruned.apply_with_subqueries(|plan| {
+        if let LogicalPlan::SubqueryAlias(alias) = plan
+            && let Some(Ok(index)) = alias
+                .alias
+                .table()
+                .strip_prefix(PROBE)
+                .map(str::parse::<usize>)
+            && let Some(kept) = kept.get_mut(index)
+        {
+            *kept = true;
+        }
+        for expr in plan.expressions() {
+            referenced.extend(expr.column_refs().into_iter().cloned());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let mut index = 0;
+    map_projections(plan, |expr| match expr {
+        Expr::InSubquery(ref subquery) if subquery.subquery.outer_ref_columns.is_empty() => {
+            let keep = kept.get(index).copied().unwrap_or(true);
+            index += 1;
+            Ok(if keep {
+                Transformed::no(expr)
+            } else {
+                Transformed::yes(lit(false))
+            })
+        }
+        Expr::Column(ref column)
+            if prepared_marks.contains(column) && !referenced.contains(column) =>
+        {
+            Ok(Transformed::yes(lit(false)))
+        }
+        expr => Ok(Transformed::no(expr)),
+    })
+}
+
+fn has_outer_reference(plan: &LogicalPlan) -> Result<bool> {
+    let mut found = false;
+    plan.apply_with_subqueries(|plan| {
+        found = plan.contains_outer_reference();
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(found)
 }
 
 fn has_uncorrelated_in(expr: &Expr) -> Result<bool> {
@@ -526,7 +650,35 @@ fn producer_constants(
         .iter()
         .flat_map(|(expr, _)| expr.column_refs().into_iter().cloned())
         .collect();
-    let constants = producer_constants(input, config, &input_needed)?;
+    // Windows only append their results to the input columns. Visit the plan
+    // below a window chain once: it provides both the propagated constants and
+    // whether expressions evaluated above the windows are local. Visiting it
+    // again for that check made each nested window layer double the work.
+    let mut before_window = input.as_ref();
+    let mut window_columns = HashSet::new();
+    let mut evaluable = true;
+    while let LogicalPlan::Window(window) = before_window {
+        window_columns.extend(
+            window
+                .schema
+                .columns()
+                .into_iter()
+                .skip(window.input.schema().fields().len()),
+        );
+        for expr in &window.window_expr {
+            expr.apply_children(|child| {
+                evaluable &= locally_evaluable(child)?;
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        before_window = &window.input;
+    }
+    let mut constants = producer_constants(before_window, config, &input_needed)?;
+    let local_before_window = constants.local_relation;
+    if !std::ptr::eq(before_window, input.as_ref()) {
+        // A window is a local-evaluation boundary (see the Window case above).
+        constants.local_relation = false;
+    }
     if constants.local_relation && matches!(plan, LogicalPlan::Projection(_)) {
         let mut local_relation = true;
         for expr in &expressions {
@@ -543,42 +695,22 @@ fn producer_constants(
     // Sail keeps them in this projection, but their local evaluation still
     // determines whether a NULL operand is a stored value or a foldable literal.
     let mut local_window_outputs = HashSet::new();
-    if matches!(plan, LogicalPlan::Projection(_)) {
-        let mut before_window = input.as_ref();
-        let mut window_columns = HashSet::new();
-        let mut evaluable = true;
-        while let LogicalPlan::Window(window) = before_window {
-            window_columns.extend(
-                window
-                    .schema
-                    .columns()
-                    .into_iter()
-                    .skip(window.input.schema().fields().len()),
-            );
-            for expr in &window.window_expr {
-                expr.apply_children(|child| {
-                    evaluable &= locally_evaluable(child)?;
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
+    if matches!(plan, LogicalPlan::Projection(_))
+        && !window_columns.is_empty()
+        && local_before_window
+    {
+        for (expr, column) in expressions.iter().zip(plan.schema().columns()) {
+            if expr
+                .column_refs()
+                .into_iter()
+                .all(|column| !window_columns.contains(column))
+            {
+                evaluable &= locally_evaluable(expr)?;
+                local_window_outputs.insert(column);
             }
-            before_window = &window.input;
         }
-        if !window_columns.is_empty()
-            && producer_constants(before_window, config, &HashSet::new())?.local_relation
-        {
-            for (expr, column) in expressions.iter().zip(plan.schema().columns()) {
-                if expr
-                    .column_refs()
-                    .into_iter()
-                    .all(|column| !window_columns.contains(column))
-                {
-                    evaluable &= locally_evaluable(expr)?;
-                    local_window_outputs.insert(column);
-                }
-            }
-            if !evaluable {
-                local_window_outputs.clear();
-            }
+        if !evaluable {
+            local_window_outputs.clear();
         }
     }
     let mut output = ProducerConstants::default();
@@ -748,6 +880,13 @@ fn rewrite_projection(
             Arc::unwrap_or_clone(projection.input),
             config,
         )?);
+        // Spark's early local batch also replaces a projection over an empty
+        // local relation before it optimizes (and evaluates) its subqueries.
+        if local::is_empty(&projection.input) {
+            return Ok(Transformed::yes(local::empty(&LogicalPlan::Projection(
+                projection,
+            ))));
+        }
     }
     let needed = projection
         .expr
@@ -1017,7 +1156,7 @@ impl TreeNodeRewriter for InRewriter<'_> {
             || subquery.subquery.schema().field(0).is_nullable();
         let existence_only =
             null_literal && can_prune_null_in_rhs(&subquery.subquery, self.config)?;
-        let alias = self.config.alias_generator().next("__sail_in");
+        let alias = self.config.alias_generator().next(IN_ALIAS);
         let predicate = (*expr).eq(Expr::Column(Column::new(Some(alias.clone()), &column.name)));
         let predicate = if existence_only {
             lit(true)
@@ -1105,6 +1244,32 @@ mod tests {
         };
         assert_eq!(join.join_type, JoinType::LeftMark);
         assert_eq!(join.left.as_ref(), &input);
+        Ok(())
+    }
+
+    #[test]
+    fn projected_in_visits_nested_windows_once() -> Result<()> {
+        use datafusion::functions_window::expr_fn::row_number;
+
+        // Every layer used to analyze its whole input twice, so this plan
+        // would take 2^32 steps instead of completing immediately.
+        let mut builder =
+            LogicalPlanBuilder::empty(true).project(vec![lit(1_i64).alias("value")])?;
+        for layer in 0..32 {
+            builder = builder
+                .window(vec![row_number().alias(format!("w{layer}"))])?
+                .project(vec![col("value")])?;
+        }
+        let subquery = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1_i64).alias("candidate")])?
+            .build()?;
+        let plan = builder
+            .project(vec![
+                in_subquery(col("value"), Arc::new(subquery)).alias("present"),
+            ])?
+            .build()?;
+        let rewritten = RewriteProjectedIn.rewrite(plan, &OptimizerContext::new())?;
+        assert!(rewritten.transformed);
         Ok(())
     }
 }

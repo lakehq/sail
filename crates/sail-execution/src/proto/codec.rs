@@ -3282,7 +3282,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
             "spark_get_field" => Ok(Arc::new(ScalarUDF::from(SparkGetField::new()))),
-            STRUCT_FIELD_DEPENDENCY_NAME => Ok(datafusion::functions::core::get_field()),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {

@@ -222,6 +222,9 @@ pub(super) fn finish_field(
             // Spark's GetStructField returns NULL whenever the parent is NULL.
             // The child is already valid Arrow data; replace only its null mask
             // without revalidating variable-width payloads.
+            // TODO: Consumers such as `map_extract` and `array_max` ignore the validity
+            //  of their map or list input, so a masked map or list can still expose
+            //  the entries hidden underneath a NULL struct.
             let parent_is_null = BooleanArray::new(!parent_nulls.inner(), None);
             Ok(ColumnarValue::Array(nullif(
                 array.as_ref(),
