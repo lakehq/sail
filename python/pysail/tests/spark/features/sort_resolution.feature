@@ -50,3 +50,30 @@ Feature: Sort reference resolution
       | sort     |
       | ORDER BY |
       | SORT BY  |
+
+  Scenario Outline: Failed sort output resolution discards bindings only within that sort key
+    When query
+      """
+      SELECT -k * 100 AS k, named_struct('y', 9) AS s
+      FROM VALUES (1, named_struct('x', 1)), (2, named_struct('x', 2)) AS t(k, s)
+      ORDER BY <keys>
+      """
+    Then query result ordered
+      | k        | s   |
+      | <first>  | {9} |
+      | <second> | {9} |
+
+    Examples:
+      | keys        | first | second |
+      | k + s.x     | -100  | -200   |
+      | k, s.x      | -200  | -100   |
+      | s.x DESC, 1 | -200  | -100   |
+
+  Scenario: Failed sort output resolution does not cross distinct
+    When query
+      """
+      SELECT DISTINCT k, named_struct('y', 9) AS s
+      FROM VALUES (1, named_struct('x', 1)), (2, named_struct('x', 2)) AS t(k, s)
+      ORDER BY s.x
+      """
+    Then query error (?i)(UNRESOLVED_COLUMN|cannot resolve attribute)

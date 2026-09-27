@@ -2,6 +2,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -209,3 +210,23 @@ def test_sql_sort_by_attribute_removed_by_projection(spark, sort_source):
         assert result.collect() == [Row(a=3), Row(a=2), Row(a=1)]
     finally:
         spark.catalog.dropTempView("sort_by_source")
+
+
+@pytest.mark.parametrize("operation", ["orderBy", "sortWithinPartitions"])
+@pytest.mark.parametrize("replacement", ["missing-field", "ambiguous-root", "scalar"])
+@pytest.mark.parametrize("selector", ["dotted", "literal"])
+def test_sort_recovers_key_after_failed_output_resolution(spark, operation, replacement, selector):
+    source = spark.createDataFrame([(1, (20,)), (2, (10,))], "key int, payload struct<x:int>").coalesce(1)
+    value = F.lit(9) if replacement == "scalar" else F.struct(F.lit(9).alias("y"))
+    projected = source.select("key", value.alias("payload"))
+    if replacement == "ambiguous-root":
+        projected = source.select("key", "payload", F.struct(F.lit(9).alias("x")).alias("payload"))
+    key = F.col("payload.x") if selector == "dotted" else F.col("payload")["x"]
+    result = getattr(projected, operation)(key)
+    assert [row.key for row in result.collect()] == [2, 1]
+    assert result.schema == projected.schema
+    # Spark's filter and repartition initial resolution throws on the same
+    # invalid output instead of recovering a descendant, unlike sort resolution.
+    for invalid in (projected.where(key > 0), projected.repartition(1, key), projected.alias("t").orderBy(key)):
+        with pytest.raises(AnalysisException):
+            invalid.collect()

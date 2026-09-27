@@ -70,7 +70,7 @@ impl PlanResolver<'_> {
         &self,
         expressions: Vec<spec::Expr>,
         input: &LogicalPlan,
-        resolve_aggregate_inputs: bool,
+        resolve_sort_inputs: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<Expr>, DFSchemaRef)> {
         let output_schema = Arc::clone(input.schema());
@@ -107,7 +107,7 @@ impl PlanResolver<'_> {
         }
         // Sorts can contain grouping expressions and aggregate arguments that are
         // not in the aggregate output. Rebase them before recovering inputs.
-        if resolve_aggregate_inputs
+        if resolve_sort_inputs
             && !state.is_missing_input_boundary(plan)
             && let LogicalPlan::Aggregate(aggregate) = plan
         {
@@ -136,7 +136,11 @@ impl PlanResolver<'_> {
         for expression in expressions.into_iter().skip(resolved.len()) {
             let mut schema_count = schemas.len();
             let mut first_error = None;
-            let mut scope = state.enter_missing_input_scope(Arc::clone(&schema), schemas.clone());
+            let mut scope = state.enter_missing_input_scope(
+                Arc::clone(&schema),
+                schemas.clone(),
+                resolve_sort_inputs,
+            );
             // TODO: Resolve ordinary references before lambda bodies, as Spark does, so
             // retrying a failed lambda body retains higher-order arguments and references
             // recovered elsewhere in the predicate.

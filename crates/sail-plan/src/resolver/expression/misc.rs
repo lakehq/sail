@@ -291,24 +291,20 @@ impl PlanResolver<'_> {
             schema: &DFSchemaRef,
             state: &mut PlanResolverState,
         ) {
-            let Some(index) = state
-                .get_missing_input_schemas(schema)
-                .and_then(|schemas| {
-                    expr.column_refs()
-                        .into_iter()
-                        .filter_map(|column| {
-                            schemas.iter().position(|schema| schema.has_column(column))
-                        })
-                        .max()
-                })
-                .filter(|index| *index > 0)
-            else {
+            let Some(index) = state.get_missing_input_schemas(schema).and_then(|schemas| {
+                expr.column_refs()
+                    .into_iter()
+                    .filter_map(|column| {
+                        schemas.iter().position(|schema| schema.has_column(column))
+                    })
+                    .max()
+            }) else {
                 return;
             };
             if child_is_attribute_path {
                 // Spark discards tentative descendant bindings when extracting a
                 // struct field fails, then retries deeper outputs and outer references.
-                state.discard_missing_input_schema(index);
+                state.discard_missing_input_schema(schema, index);
             } else {
                 // Spark binds the arguments of a function before resolving the function, so it
                 // keeps those bindings and fails. Retry only earlier outputs and outer references,
@@ -317,7 +313,7 @@ impl PlanResolver<'_> {
                 //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
                 // TODO: Preserve analyzer staging for native `UpdateFields`: unlike an
                 //   unresolved function, it can fail and discard bindings in this pass.
-                state.discard_missing_input_schemas_from(index);
+                state.discard_missing_input_schemas_from(schema, index);
             }
         }
 

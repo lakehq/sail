@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
@@ -74,8 +74,21 @@ impl PlanResolver<'_> {
         {
             self.verify_plan_attribute_root(&name, plan_id, state)?;
         }
-        let local_schema = &state.get_local_schema(schema);
-        let local = self.resolve_field_or_nested_field(&name, plan_id, local_schema, state)?;
+        // Sort resolution can discard even the operator's own output when a
+        // nested field or root is invalid. Filters and repartitions reject that
+        // error. Keep wildcard/ordinal expansion on the original local schema.
+        let local_schema = &state.get_missing_input_schemas(schema).map_or_else(
+            || Arc::clone(schema),
+            |schemas| {
+                schemas
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(DFSchema::empty()))
+            },
+        );
+        let local = self
+            .resolve_field_or_nested_field(&name, plan_id, local_schema, state)
+            .inspect_err(|_| state.discard_missing_input_schema(schema, 0))?;
         if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -84,8 +97,9 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_hidden_field(&name, plan_id, local_schema, state)?
+        if let Some((name, expr)) = self
+            .resolve_hidden_field(&name, plan_id, local_schema, state)
+            .inspect_err(|_| state.discard_missing_input_schema(schema, 0))?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -118,10 +132,7 @@ impl PlanResolver<'_> {
             };
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        let missing_input_schemas = state
-            .get_missing_input_schemas(schema)
-            .unwrap_or(&[])
-            .to_vec();
+        let missing_input_schemas = state.get_missing_input_schemas(schema).unwrap_or(&[]);
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.
         if !missing_input_schemas.is_empty() && matches!(local, FieldResolution::Unsupported) {
@@ -134,16 +145,13 @@ impl PlanResolver<'_> {
         // TODO: Spark resolves again in later analyzer iterations, so a name bound only by
         // a discarded output can still bind there once the failing name resolves deeper.
         // DataFrame column references (plan IDs) are never discarded in Spark either.
-        for (index, schema) in missing_input_schemas.iter().enumerate().skip(1) {
-            match self
-                .resolve_field_or_nested_field(&name, plan_id, schema, state)
-                .inspect_err(|_| state.discard_missing_input_schema(index))?
-            {
-                FieldResolution::Resolved(name, expr) => {
+        for (index, input_schema) in missing_input_schemas.iter().enumerate().skip(1) {
+            match self.resolve_field_or_nested_field(&name, plan_id, input_schema, state) {
+                Ok(FieldResolution::Resolved(name, expr)) => {
                     return Ok(NamedExpr::new(vec![name], expr));
                 }
-                FieldResolution::Missing => {}
-                FieldResolution::Unsupported => {
+                Ok(FieldResolution::Missing) => {}
+                Ok(FieldResolution::Unsupported) => {
                     // A map value or array item that Spark can extract keeps this
                     // output's bindings. Do not fall back to an older attribute.
                     // TODO: Extract map values and array items by dotted names.
@@ -151,12 +159,18 @@ impl PlanResolver<'_> {
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )));
                 }
+                Err(error) => {
+                    state.discard_missing_input_schema(schema, index);
+                    return Err(error);
+                }
             }
-            if let Some((name, expr)) = self
-                .resolve_hidden_field(&name, plan_id, schema, state)
-                .inspect_err(|_| state.discard_missing_input_schema(index))?
-            {
-                return Ok(NamedExpr::new(vec![name], expr));
+            match self.resolve_hidden_field(&name, plan_id, input_schema, state) {
+                Ok(Some((name, expr))) => return Ok(NamedExpr::new(vec![name], expr)),
+                Ok(None) => {}
+                Err(error) => {
+                    state.discard_missing_input_schema(schema, index);
+                    return Err(error);
+                }
             }
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
@@ -376,7 +390,7 @@ impl PlanResolver<'_> {
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let [name] = name.parts() else {
             return Ok(None);

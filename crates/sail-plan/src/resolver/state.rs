@@ -99,6 +99,14 @@ pub(super) enum AggregateState {
 }
 
 #[derive(Debug)]
+struct MissingInputResolution {
+    schema: DFSchemaRef,
+    local_schema: DFSchemaRef,
+    schemas: Vec<DFSchemaRef>,
+    resolve_sort_inputs: bool,
+}
+
+#[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
     next_origin: usize,
@@ -110,7 +118,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for expressions
     /// that can recover missing inputs (e.g. a filter predicate).
-    missing_input_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
+    missing_input_resolution: Option<MissingInputResolution>,
     /// Outputs whose descendants cannot participate in missing-reference resolution.
     /// Each output is paired with its input so that a pass-through projection that
     /// reproduces the output over a wider input (e.g. a join) is not a boundary.
@@ -336,33 +344,41 @@ impl PlanResolverState {
     pub fn get_missing_input_schemas(&self, schema: &DFSchemaRef) -> Option<&[DFSchemaRef]> {
         self.missing_input_resolution
             .as_ref()
-            .filter(|(input, _)| Arc::ptr_eq(input, schema))
-            .map(|(_, schemas)| schemas.as_slice())
+            .filter(|input| Arc::ptr_eq(&input.schema, schema))
+            .map(|input| input.schemas.as_slice())
     }
 
     /// Returns the operator's own input schema when `schema` is the type-checking schema
     /// for missing-input resolution. Expansions such as `*` only see this schema.
     pub fn get_local_schema(&self, schema: &DFSchemaRef) -> DFSchemaRef {
-        self.get_missing_input_schemas(schema)
-            .and_then(|schemas| schemas.first())
-            .unwrap_or(schema)
-            .clone()
+        self.missing_input_resolution
+            .as_ref()
+            .filter(|input| Arc::ptr_eq(&input.schema, schema))
+            .map_or_else(
+                || Arc::clone(schema),
+                |input| Arc::clone(&input.local_schema),
+            )
     }
 
-    /// Discards the bindings to one descendant output, as Spark does when resolving
-    /// against that output fails. Deeper outputs remain available.
-    pub fn discard_missing_input_schema(&mut self, index: usize) {
-        if let Some((_, schemas)) = &mut self.missing_input_resolution
-            && index < schemas.len()
+    /// Discards the bindings to one output when resolution against it fails.
+    /// Sorts can discard their own output; other operators can only discard descendants.
+    pub fn discard_missing_input_schema(&mut self, schema: &DFSchemaRef, index: usize) {
+        if let Some(input) = &mut self.missing_input_resolution
+            && Arc::ptr_eq(&input.schema, schema)
+            && (index > 0 || input.resolve_sort_inputs)
+            && index < input.schemas.len()
         {
-            schemas.remove(index);
+            input.schemas.remove(index);
         }
     }
 
-    /// Discards the bindings to one descendant output and all deeper outputs.
-    pub fn discard_missing_input_schemas_from(&mut self, index: usize) {
-        if let Some((_, schemas)) = &mut self.missing_input_resolution {
-            schemas.truncate(index);
+    /// Discards the bindings to one output and all deeper outputs.
+    pub fn discard_missing_input_schemas_from(&mut self, schema: &DFSchemaRef, index: usize) {
+        if let Some(input) = &mut self.missing_input_resolution
+            && Arc::ptr_eq(&input.schema, schema)
+            && (index > 0 || input.resolve_sort_inputs)
+        {
+            input.schemas.truncate(index);
         }
     }
 
@@ -414,8 +430,20 @@ impl PlanResolverState {
         &mut self,
         schema: DFSchemaRef,
         schemas: Vec<DFSchemaRef>,
+        resolve_sort_inputs: bool,
     ) -> MissingInputScope<'_> {
-        let previous = self.missing_input_resolution.replace((schema, schemas));
+        let local_schema = schemas
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&schema));
+        let previous = self
+            .missing_input_resolution
+            .replace(MissingInputResolution {
+                schema,
+                local_schema,
+                schemas,
+                resolve_sort_inputs,
+            });
         MissingInputScope {
             state: self,
             previous,
@@ -886,7 +914,7 @@ impl Drop for ParamValuesScope<'_> {
 
 pub(crate) struct MissingInputScope<'a> {
     state: &'a mut PlanResolverState,
-    previous: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
+    previous: Option<MissingInputResolution>,
 }
 
 impl MissingInputScope<'_> {
