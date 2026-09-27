@@ -312,3 +312,33 @@ Feature: Projected IN subquery optimizer boundaries
       | operand | expression                                                                                              | result |
       | FALSE   | NOT (CASE WHEN id = 2 THEN id IN (SELECT x FROM VALUES (1), (NULL) t(x)) ELSE FALSE END)                  | false  |
       | TRUE    | NOT COALESCE(id IN (SELECT x FROM VALUES (1), (NULL) t(x)), FALSE)                                        | true   |
+
+  @sail-bug
+  Scenario Outline: projected IN preserves a nonlocal volatile operand producer
+    # TODO: Preserve volatile producer boundaries during projection pruning.
+    # DataFusion merges the single-use random alias into IN, then moves the
+    # column-free operand to the candidate side. Spark's CollapseProject keeps
+    # nondeterministic producers separate, evaluating the operand per input row.
+    When query
+      """
+      SELECT id, value <operator> (
+        SELECT NULLIF(id, -1L) FROM range(2)
+      ) AS present
+      FROM (
+        SELECT id, CAST(rand(0) * 3 AS BIGINT) AS value
+        FROM range(0, 5, 1, 1)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | present   |
+      | 0  | <missing> |
+      | 1  | <found>   |
+      | 2  | <found>   |
+      | 3  | <found>   |
+      | 4  | <missing> |
+
+    Examples:
+      | operator | found | missing |
+      | IN       | true  | false   |
+      | NOT IN   | false | true    |

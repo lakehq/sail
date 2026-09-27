@@ -426,14 +426,20 @@ fn source_field<'a>(
             if function.func.inner().is::<GetFieldFunc>()
                 || function.func.inner().is::<SparkGetField>() =>
         {
-            let [parent, Expr::Literal(value, _)] = function.args.as_slice() else {
+            let [parent, fields @ ..] = function.args.as_slice() else {
                 return None;
             };
-            let parent = source_field(schema, parent)?;
-            let Type::Struct(children) = parent.field_type.as_ref() else {
-                return None;
-            };
-            children.field_by_name(scalar_string(value)?)
+            let mut parent = source_field(schema, parent)?;
+            for field in fields {
+                let Expr::Literal(value, _) = field else {
+                    return None;
+                };
+                let Type::Struct(children) = parent.field_type.as_ref() else {
+                    return None;
+                };
+                parent = children.field_by_name(scalar_string(value)?)?;
+            }
+            Some(parent)
         }
         Expr::Cast(cast) => {
             use datafusion::arrow::datatypes::DataType;

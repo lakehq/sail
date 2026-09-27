@@ -487,17 +487,19 @@ fn extract_column_path(expr: &Expr) -> Option<Vec<String>> {
             if function.func.inner().is::<GetFieldFunc>()
                 || function.func.inner().is::<SparkGetField>() =>
         {
-            let [base, field] = function.args.as_slice() else {
+            let [base, fields @ ..] = function.args.as_slice() else {
                 return None;
             };
-            let field = match field {
-                Expr::Literal(ScalarValue::Utf8(Some(field)), _)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(field)), _)
-                | Expr::Literal(ScalarValue::Utf8View(Some(field)), _) => field,
-                _ => return None,
-            };
             let mut path = extract_column_path(base)?;
-            path.push(field.clone());
+            for field in fields {
+                let field = match field {
+                    Expr::Literal(ScalarValue::Utf8(Some(field)), _)
+                    | Expr::Literal(ScalarValue::LargeUtf8(Some(field)), _)
+                    | Expr::Literal(ScalarValue::Utf8View(Some(field)), _) => field,
+                    _ => return None,
+                };
+                path.push(field.clone());
+            }
             Some(path)
         }
         _ => None,

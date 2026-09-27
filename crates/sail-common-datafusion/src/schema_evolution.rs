@@ -511,6 +511,11 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 None => return Ok(None),
             };
 
+        // The missing-child shortcut below handles one step. A longer path
+        // must retain the structural cast so its final type/defaults survive.
+        if get_field_expr.args().len() != 2 {
+            return Ok(None);
+        }
         let source_expr = match get_field_expr.args().first() {
             Some(expr) => expr,
             None => return Ok(None),

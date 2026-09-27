@@ -1,8 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::Array;
-use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -14,7 +12,7 @@ use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_expr::ColumnarValue;
 
-use super::{SparkGetField, finish_field};
+use super::{SparkGetField, extract_struct_field};
 use crate::schema_evolution::FIELD_DEFAULT_METADATA_KEY;
 
 // Keep the dependency distinct from an ordinary, unmasked native field access.
@@ -117,36 +115,13 @@ impl PhysicalExpr for SparkGetFieldExpr {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(value) => value.to_array()?,
         };
-        let mut value = &array;
-        let mut ancestors = Vec::with_capacity(access.args().len() - 1);
-        for argument in &access.args()[1..] {
-            let name = argument
+        let path = access.args()[1..].iter().map(|argument| {
+            argument
                 .downcast_ref::<Literal>()
                 .and_then(|literal| literal.value().try_as_str().flatten())
-                .ok_or_else(|| {
-                    datafusion::common::internal_datafusion_err!("invalid field name")
-                })?;
-            let parent = datafusion_common::cast::as_struct_array(value.as_ref())?;
-            if let Some(nulls) = parent.nulls().filter(|nulls| nulls.null_count() > 0) {
-                ancestors.push(nulls);
-            }
-            value = parent.column_by_name(name).ok_or_else(|| {
-                datafusion::common::internal_datafusion_err!("field {name} is missing")
-            })?;
-        }
-        // Intermediate structs are dependencies, not results. Rebuilding and
-        // masking each one copies their array descriptors and scans validity
-        // repeatedly. Combine ancestor masks and only mask the selected leaf.
-        let nulls = match ancestors.as_slice() {
-            [] => None,
-            [nulls] => Some((*nulls).clone()),
-            _ => NullBuffer::union_many(ancestors.into_iter().map(Some)),
-        };
-        finish_field(
-            ColumnarValue::Array(Arc::clone(value)),
-            self.field.data_type(),
-            nulls,
-        )
+                .ok_or_else(|| datafusion::common::internal_datafusion_err!("invalid field name"))
+        });
+        extract_struct_field(array, path, self.field.data_type())
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -235,15 +210,17 @@ pub fn struct_field_path(expression: &Arc<dyn PhysicalExpr>) -> Option<(usize, V
     while let Some(access) =
         ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expression.as_ref())
     {
-        let [parent, field] = access.args() else {
+        let [parent, fields @ ..] = access.args() else {
             return None;
         };
-        let field = field
-            .downcast_ref::<Literal>()?
-            .value()
-            .try_as_str()
-            .flatten()?;
-        path.push(field.to_string());
+        for field in fields.iter().rev() {
+            let field = field
+                .downcast_ref::<Literal>()?
+                .value()
+                .try_as_str()
+                .flatten()?;
+            path.push(field.to_string());
+        }
         expression = parent;
     }
     if path.is_empty() {

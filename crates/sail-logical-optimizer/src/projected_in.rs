@@ -986,8 +986,10 @@ impl TreeNodeRewriter for InRewriter<'_> {
         let predicate = (*expr).eq(Expr::Column(Column::new(Some(alias.clone()), &column.name)));
         let predicate = if existence_only {
             lit(true)
-        } else if negated || null_literal {
-            predicate.clone().or(predicate.is_null())
+        } else if (negated || null_literal) && nullable {
+            // Equivalent to equality OR equality IS NULL, evaluating the key
+            // comparison only once. Keep non-nullable equality as a hash key.
+            predicate.is_not_false()
         } else {
             predicate
         };

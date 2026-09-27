@@ -182,6 +182,15 @@ fn push_literal_comparison(
     let Expr::BinaryExpr(binary) = &expr else {
         return Ok(expr);
     };
+    // Catalyst represents <> as NOT(=). Keep that NOT outside a conditional
+    // while pushing the equality into its branches, so it cannot become NOT IN.
+    if binary.op == Operator::NotEq && has_uncorrelated_in(&expr)? {
+        return Ok(!datafusion_expr::expr_fn::binary_expr(
+            *binary.left.clone(),
+            Operator::Eq,
+            *binary.right.clone(),
+        ));
+    }
     // NULLIF comparisons must stay intact until alias substitution. Their
     // conditional simplifier already visits the operands; revisiting them here
     // would double the work at every level of a nested comparison chain.
@@ -215,6 +224,7 @@ fn push_literal_comparison(
     // before DataFusion can turn that comparison into a NOT.
     let conditional = simplify(conditional.clone(), Arc::clone(schema), config)?;
     let conditional = lower_nvl2(conditional)?;
+    let data_type = conditional.get_type(schema.as_ref())?;
     let Expr::Case(mut case) = conditional else {
         return Ok(if conditional_left {
             datafusion_expr::expr_fn::binary_expr(conditional, binary.op, literal.clone())
@@ -251,9 +261,10 @@ fn push_literal_comparison(
     for (_, then) in &mut case.when_then_expr {
         **then = compare(*then.clone());
     }
-    case.else_expr = Some(Box::new(compare(
-        case.else_expr.map_or(lit(ScalarValue::Null), |expr| *expr),
-    )));
+    case.else_expr = Some(Box::new(compare(case.else_expr.map_or_else(
+        || ScalarValue::try_new_null(&data_type).map(lit),
+        |expr| Ok(*expr),
+    )?)));
     Ok(Expr::Case(case))
 }
 

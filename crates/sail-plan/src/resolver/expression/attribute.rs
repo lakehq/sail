@@ -250,14 +250,24 @@ impl PlanResolver<'_> {
         match inner {
             [] => Some(expr),
             [name, remaining @ ..] => match data_type {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                    .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr = ScalarUDF::from(SparkGetField::new()).call(args);
-                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
-                    }),
+                DataType::Struct(_) => {
+                    // Resolve consecutive struct fields together so analysis
+                    // does not repeatedly traverse a nested function chain.
+                    let mut data_type = data_type;
+                    let mut remaining = inner;
+                    let mut args = vec![expr];
+                    while let (DataType::Struct(fields), [name, rest @ ..]) = (data_type, remaining)
+                    {
+                        let field = fields
+                            .iter()
+                            .find(|field| field.name().eq_ignore_ascii_case(name.as_ref()))?;
+                        args.push(lit(field.name().to_string()));
+                        data_type = field.data_type();
+                        remaining = rest;
+                    }
+                    let expr = ScalarUDF::from(SparkGetField::new()).call(args);
+                    Self::resolve_potentially_nested_field(expr, data_type, remaining)
+                }
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => {

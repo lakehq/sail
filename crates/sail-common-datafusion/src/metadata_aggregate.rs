@@ -234,30 +234,31 @@ fn resolve_expression(
             if function.func.inner().is::<GetFieldFunc>()
                 || function.func.inner().is::<SparkGetField>() =>
         {
-            let [base, field] = function.args.as_slice() else {
-                return None;
-            };
-            let field_name = match field {
-                Expr::Literal(ScalarValue::Utf8(Some(value)), _)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(value)), _)
-                | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => value,
-                _ => return None,
-            };
+            let (base, path) = function.args.split_first()?;
             let SourceExpression::Column {
                 mut logical_path,
-                data_type,
+                mut data_type,
             } = resolve_expression(base, resolve_column)?
             else {
                 return None;
             };
-            let DataType::Struct(fields) = data_type else {
-                return None;
-            };
-            let field = fields.iter().find(|field| field.name() == field_name)?;
-            logical_path.push(field.name().clone());
+            for field in path {
+                let field_name = match field {
+                    Expr::Literal(ScalarValue::Utf8(Some(value)), _)
+                    | Expr::Literal(ScalarValue::LargeUtf8(Some(value)), _)
+                    | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => value,
+                    _ => return None,
+                };
+                let DataType::Struct(fields) = data_type else {
+                    return None;
+                };
+                let field = fields.iter().find(|field| field.name() == field_name)?;
+                logical_path.push(field.name().clone());
+                data_type = field.data_type().clone();
+            }
             Some(SourceExpression::Column {
                 logical_path,
-                data_type: field.data_type().clone(),
+                data_type,
             })
         }
         _ => None,

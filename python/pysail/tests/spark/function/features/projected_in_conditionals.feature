@@ -486,3 +486,95 @@ Feature: Conditional boundaries around projected IN
       | ARRAY<DOUBLE> | array(CAST('NaN' AS DOUBLE)) | array(-CAST('NaN' AS DOUBLE)) |
       | STRUCT<x:DOUBLE> | named_struct('x', CAST('0.0' AS DOUBLE)) | named_struct('x', -CAST('0.0' AS DOUBLE)) |
       | STRUCT<x:DOUBLE> | named_struct('x', CAST('NaN' AS DOUBLE)) | named_struct('x', -CAST('NaN' AS DOUBLE)) |
+
+
+  Scenario Outline: null-safe comparisons retain the typed null fallback of conditional IN
+    When query
+      """
+      SELECT id, (<expression>) <=> false AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, value)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p     |
+      | 0  | true  |
+      | 1  | false |
+      | 2  | false |
+
+    Examples:
+      | expression |
+      | CASE WHEN id = 0 THEN value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x)) END |
+      | CASE WHEN id = 0 THEN value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x)) ELSE NULL END |
+      | IF(id = 0, value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x)), NULL) |
+
+  Scenario Outline: inequality keeps negation outside a conditional IN result
+    When query
+      """
+      SELECT id, (CASE WHEN id = 0 THEN
+        value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x))
+      END) <comparison> AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, value)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p    |
+      | 0  | true |
+      | 1  | NULL |
+      | 2  | NULL |
+
+    Examples:
+      | comparison |
+      | <> true    |
+      | <> false   |
+      | != true    |
+      | != false   |
+
+
+  Scenario Outline: filtering null-safe conditional IN comparisons retains the typed fallback
+    When query
+      """
+      SELECT id FROM (
+        SELECT id, (CASE WHEN id = 0 THEN
+          value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x))
+        END) <=> false AS p
+        FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, value)
+      ) WHERE <predicate>
+      ORDER BY id
+      """
+    Then query result ordered
+      | id   |
+      | <id> |
+
+    Examples:
+      | predicate      | id |
+      | p              | 0  |
+      | NOT p AND id=1 | 1  |
+      | NOT p AND id=2 | 2  |
+
+  Scenario: filtering a negated inequality preserves conditional IN negation
+    When query
+      """
+      SELECT id FROM (
+        SELECT id, (CASE WHEN id = 0 THEN
+          value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x))
+        END) <> true AS p
+        FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, value)
+      ) WHERE NOT p
+      """
+    Then query result
+      | id |
+
+  Scenario: null-safe comparisons preserve the type of a numeric conditional IN result
+    When query
+      """
+      SELECT id, (CASE WHEN id = 0 THEN
+        IF(value IN (SELECT x FROM VALUES (1), (CAST(NULL AS INT)) r(x)), 1, 2)
+      END) <=> 2 AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, value)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p     |
+      | 0  | true  |
+      | 1  | false |
+      | 2  | false |

@@ -1,4 +1,6 @@
-use datafusion::arrow::array::{Array, BooleanArray};
+use std::sync::Arc;
+
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::nullif;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
@@ -16,7 +18,7 @@ use crate::array::record_batch::cast_array_positionally_recursively;
 
 pub mod physical;
 
-/// Extract one field while preserving the validity of its enclosing struct.
+/// Extract a struct field path while preserving every ancestor's validity.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkGetField {
     signature: Signature,
@@ -31,7 +33,7 @@ impl Default for SparkGetField {
 impl SparkGetField {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -57,11 +59,27 @@ impl ScalarUDFImpl for SparkGetField {
         get_field().return_type(arg_types)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        get_field().inner().coerce_types(arg_types)
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         get_field().return_field_from_args(args)
     }
 
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+    fn simplify(&self, mut args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        // Keep maps and dictionaries at their native access boundaries.
+        let mut flattened = false;
+        while let Some(Expr::ScalarFunction(parent)) = args.first()
+            && parent.func.inner().is::<Self>()
+            && matches!(info.get_data_type(&args[0])?, DataType::Struct(_))
+            && matches!(info.get_data_type(&parent.args[0])?, DataType::Struct(_))
+        {
+            let mut path = parent.args.clone();
+            path.extend(args.into_iter().skip(1));
+            args = path;
+            flattened = true;
+        }
         match get_field().inner().simplify(args, info)? {
             ExprSimplifyResult::Simplified(expr) => {
                 // Keep constructor-field pruning without letting nested accesses
@@ -71,13 +89,7 @@ impl ScalarUDFImpl for SparkGetField {
                         if let Expr::ScalarFunction(function) = &expr
                             && function.func.inner().is::<GetFieldFunc>()
                         {
-                            let mut args = function.args.iter().cloned();
-                            let base = args.next().ok_or_else(|| {
-                                internal_datafusion_err!("missing get_field input")
-                            })?;
-                            let expr = args.fold(base, |base, field| {
-                                ScalarUDF::from(Self::new()).call(vec![base, field])
-                            });
+                            let expr = ScalarUDF::from(Self::new()).call(function.args.clone());
                             return Ok(Transformed::yes(expr));
                         }
                         Ok(Transformed::no(expr))
@@ -85,26 +97,91 @@ impl ScalarUDFImpl for SparkGetField {
                     .data()?;
                 Ok(ExprSimplifyResult::Simplified(expr))
             }
+            ExprSimplifyResult::Original(args) if flattened => Ok(ExprSimplifyResult::Simplified(
+                ScalarUDF::from(Self::new()).call(args),
+            )),
             result => Ok(result),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let parent_nulls = match args.args.first() {
+        let struct_array = match args.args.first() {
             Some(ColumnarValue::Array(array))
                 if matches!(array.data_type(), DataType::Struct(_)) =>
             {
-                array.nulls()
+                Some(Arc::clone(array))
             }
-            Some(ColumnarValue::Scalar(ScalarValue::Struct(array))) => array.nulls(),
+            Some(ColumnarValue::Scalar(ScalarValue::Struct(array))) => {
+                Some(Arc::clone(array) as ArrayRef)
+            }
             _ => None,
+        };
+        if let Some(array) = struct_array {
+            let path = args.args[1..].iter().map(|name| match name {
+                ColumnarValue::Scalar(name) => name
+                    .try_as_str()
+                    .flatten()
+                    .ok_or_else(|| internal_datafusion_err!("invalid struct field name")),
+                _ => Err(internal_datafusion_err!("struct field name must be scalar")),
+            });
+            return extract_struct_field(array, path, args.return_type());
         }
-        .filter(|nulls| nulls.null_count() > 0)
-        .cloned();
         let return_field = args.return_field.clone();
         let value = get_field().inner().invoke_with_args(args)?;
-        finish_field(value, return_field.data_type(), parent_nulls)
+        finish_field(value, return_field.data_type(), None)
     }
+}
+
+/// Walk a struct path without rebuilding intermediate arrays, then mask its leaf once.
+pub(super) fn extract_struct_field<'a>(
+    array: ArrayRef,
+    names: impl Iterator<Item = Result<&'a str>>,
+    return_type: &DataType,
+) -> Result<ColumnarValue> {
+    let mut value = &array;
+    let mut ancestors = Vec::with_capacity(names.size_hint().0);
+    for name in names {
+        let name = name?;
+        let parent = datafusion_common::cast::as_struct_array(value.as_ref())?;
+        if let Some(nulls) = parent.nulls().filter(|nulls| nulls.null_count() > 0) {
+            ancestors.push(nulls);
+        }
+        value = parent
+            .column_by_name(name)
+            .ok_or_else(|| internal_datafusion_err!("field {name} is missing"))?;
+    }
+    if let Some(nulls) = value.nulls() {
+        ancestors.retain(|parent| !same_null_buffer(nulls, parent));
+    }
+    // Equal masks are common in nested data. Avoid allocating and recounting
+    // their union, including when the leaf has additional or different nulls.
+    ancestors.dedup_by(|left, right| same_null_buffer(left, right));
+    let nulls = match ancestors.as_slice() {
+        [] => None,
+        [nulls] => Some((*nulls).clone()),
+        _ => NullBuffer::union_many(ancestors.into_iter().map(Some)),
+    };
+    finish_field(ColumnarValue::Array(Arc::clone(value)), return_type, nulls)
+}
+
+/// A fast sufficient equality check. Matching byte spans imply equal logical
+/// slices only when their offsets and lengths agree. Different unused bits may
+/// miss this shortcut, in which case callers still use Arrow's logical kernels.
+fn same_null_buffer(left: &NullBuffer, right: &NullBuffer) -> bool {
+    if left.inner().ptr_eq(right.inner()) {
+        return true;
+    }
+    if left.null_count() != right.null_count()
+        || left.len() != right.len()
+        || left.offset() != right.offset()
+    {
+        return false;
+    }
+    // Slices can retain a much larger allocation. Compare only the bytes
+    // containing this slice, rather than scanning the entire backing buffer.
+    let start = left.offset() / 8;
+    let end = (left.offset() + left.len()).div_ceil(8);
+    left.validity()[start..end] == right.validity()[start..end]
 }
 
 /// Normalize the selected field and apply its ancestors' validity once.
@@ -127,10 +204,14 @@ pub(super) fn finish_field(
     match (value, parent_nulls) {
         (ColumnarValue::Array(array), Some(parent_nulls)) if !array.data_type().is_null() => {
             if array.null_count() == array.len()
-                || array
-                    .nulls()
-                    .is_some_and(|nulls| nulls.inner().ptr_eq(parent_nulls.inner()))
+                || array.nulls().is_some_and(|nulls| {
+                    same_null_buffer(nulls, &parent_nulls)
+                        || (nulls.null_count() >= parent_nulls.null_count()
+                            && nulls.contains(&parent_nulls))
+                })
             {
+                // Readers can produce separate buffers for the same validity,
+                // or a child mask that already covers all parent nulls.
                 return Ok(ColumnarValue::Array(array));
             }
             // Arrow children may contain valid values underneath a null struct.
@@ -186,9 +267,33 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use datafusion::arrow::buffer::{BooleanBuffer, Buffer};
     use datafusion::arrow::datatypes::{Field, UnionFields, UnionMode};
 
     use super::*;
+
+    #[test]
+    fn mask_shortcut_respects_bit_slice_boundaries() {
+        let mask = |offset, len| {
+            NullBuffer::new(BooleanBuffer::new(
+                Buffer::from(vec![0b0101_u8]),
+                offset,
+                len,
+            ))
+        };
+        let original = mask(0, 2);
+        let shifted = mask(1, 2);
+        // Equal bytes and null counts do not imply equal logical positions.
+        assert_eq!(original.validity(), shifted.validity());
+        assert_eq!(original.null_count(), shifted.null_count());
+        assert_ne!(original, shifted);
+        assert!(!same_null_buffer(&original, &shifted));
+        assert!(same_null_buffer(&original, &mask(0, 2)));
+        assert!(!same_null_buffer(&original, &mask(0, 3)));
+        let with_unused_bytes =
+            NullBuffer::new(BooleanBuffer::new(Buffer::from(vec![0b0101_u8, 0]), 0, 2));
+        assert!(same_null_buffer(&original, &with_unused_bytes));
+    }
 
     #[test]
     fn metadata_normalization_requires_matching_names_and_union_order() -> Result<()> {
