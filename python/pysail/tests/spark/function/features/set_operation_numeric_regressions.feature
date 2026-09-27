@@ -227,3 +227,90 @@ Feature: Numeric UNION types used by conditional expressions
       | ansi  | count | maximum  | type   |
       | true  | 2     | 16777217 | double |
       | false | 1     | 16777216 | float  |
+
+  @spark-4.0
+  Scenario Outline: Wide DECIMAL UNION exposes Spark's type before column pruning: retain <retain>, ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = <retain>
+    When query
+      """
+      SELECT typeof(v) AS value_type
+      FROM (
+        SELECT CAST(0 AS DECIMAL(38,0)) AS v
+        UNION ALL
+        SELECT CAST(0.1234 AS DECIMAL(38,38)) AS v
+      )
+      """
+    Then query result
+      | value_type   |
+      | <value_type> |
+      | <value_type> |
+
+    Examples:
+      | retain | ansi  | value_type     |
+      | false  | true  | decimal(38,0)  |
+      | false  | false | decimal(38,0)  |
+      | true   | true  | decimal(38,38) |
+      | true   | false | decimal(38,38) |
+
+  @spark-4.0
+  Scenario Outline: Wide DECIMAL UNION values and conditional consumers use the exposed scale: retain <retain>, ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = <retain>
+    When query
+      """
+      SELECT id, v, typeof(v) AS value_type,
+        IF(id = 0, CAST(0 AS DECIMAL(38,2)), v) AS if_value,
+        NVL2(NULLIF(id, 0), v, CAST(0 AS DECIMAL(38,2))) AS nvl2_value
+      FROM (
+        SELECT 0 AS id, CAST(1.25 AS DECIMAL(38,2)) AS v
+        UNION ALL
+        SELECT 1 AS id, CAST(0.125 AS DECIMAL(38,20)) AS v
+        UNION ALL
+        SELECT 2 AS id, CAST(-0.125 AS DECIMAL(38,20)) AS v
+        UNION ALL
+        SELECT 3 AS id, CAST(NULL AS DECIMAL(38,2)) AS v
+      )
+      ORDER BY id
+      """
+    Then query result collected ordered
+      | id | v          | value_type   | if_value   | nvl2_value |
+      | 0  | <first>    | <value_type> | <zero>     | <zero>     |
+      | 1  | <positive> | <value_type> | <positive> | <positive> |
+      | 2  | <negative> | <value_type> | <negative> | <negative> |
+      | 3  | NULL       | <value_type> | NULL       | NULL       |
+
+    Examples:
+      | retain | ansi  | value_type     | first                  | zero  | positive               | negative                |
+      | false  | true  | decimal(38,2)  | 1.25                   | 0.00  | 0.13                   | -0.13                   |
+      | false  | false | decimal(38,2)  | 1.25                   | 0.00  | 0.13                   | -0.13                   |
+      | true   | true  | decimal(38,20) | 1.25000000000000000000 | 0E-20 | 0.12500000000000000000 | -0.12500000000000000000 |
+      | true   | false | decimal(38,20) | 1.25000000000000000000 | 0E-20 | 0.12500000000000000000 | -0.12500000000000000000 |
+
+  @spark-4.0
+  Scenario Outline: Nested DECIMAL UNION preserves integral digits in <container>: ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+    When query
+      """
+      SELECT id, <leaf> AS value, typeof(v) AS value_type
+      FROM (
+        SELECT 0 AS id, <left> AS v
+        UNION ALL
+        SELECT 1 AS id, <right> AS v
+      )
+      ORDER BY id
+      """
+    Then query result collected ordered
+      | id | value | value_type   |
+      | 0  | 1.25  | <value_type> |
+      | 1  | 0.13  | <value_type> |
+
+    Examples:
+      | container | ansi  | left                                           | right                                            | leaf   | value_type                |
+      | array     | true  | array(CAST(1.25 AS DECIMAL(38,2)))             | array(CAST(0.125 AS DECIMAL(38,20)))             | v[0]   | array<decimal(38,2)>      |
+      | array     | false | array(CAST(1.25 AS DECIMAL(38,2)))             | array(CAST(0.125 AS DECIMAL(38,20)))             | v[0]   | array<decimal(38,2)>      |
+      | struct    | true  | named_struct('x', CAST(1.25 AS DECIMAL(38,2))) | named_struct('x', CAST(0.125 AS DECIMAL(38,20))) | v.x    | struct<x:decimal(38,2)>   |
+      | struct    | false | named_struct('x', CAST(1.25 AS DECIMAL(38,2))) | named_struct('x', CAST(0.125 AS DECIMAL(38,20))) | v.x    | struct<x:decimal(38,2)>   |
+      | map       | true  | map('x', CAST(1.25 AS DECIMAL(38,2)))          | map('x', CAST(0.125 AS DECIMAL(38,20)))          | v['x'] | map<string,decimal(38,2)> |
+      | map       | false | map('x', CAST(1.25 AS DECIMAL(38,2)))          | map('x', CAST(0.125 AS DECIMAL(38,20)))          | v['x'] | map<string,decimal(38,2)> |

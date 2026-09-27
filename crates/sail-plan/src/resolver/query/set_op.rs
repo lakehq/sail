@@ -371,15 +371,17 @@ fn promote_union_numeric_type(
             config,
         );
     }
-    if wider_numeric_type(
+    if let Some(common_type) = wider_numeric_type(
         data_type,
         other_type,
         ansi_mode,
         config.legacy_decimal_retain_fraction_digits,
-    ) == Some(DataType::Float64)
-        && type_union_coercion(data_type, other_type) != Some(DataType::Float64)
+    ) && type_union_coercion(data_type, other_type).as_ref() != Some(&common_type)
     {
-        return DataType::Float64;
+        // Spark may reduce DECIMAL scale to retain the integral range. Promote
+        // both inputs before exposing that schema, so consumers and execution
+        // agree on the type and rounding, including inside nested values.
+        return common_type;
     }
     let promote_field = |field: &FieldRef, other: &FieldRef, by_name, allow_string_numeric| {
         let data_type = promote_union_numeric_type(

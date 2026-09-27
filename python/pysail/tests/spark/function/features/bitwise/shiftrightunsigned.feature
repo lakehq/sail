@@ -188,6 +188,32 @@ Feature: shiftrightunsigned output schema
 
   Rule: Shift counts
 
+    Scenario: Literal shift counts preserve nullable values and signed bit patterns
+      When query
+        """
+        SELECT id, shiftrightunsigned(v, 0) AS unchanged,
+          shiftrightunsigned(v, 1) AS shifted,
+          shiftrightunsigned(v, 32) AS wrapped,
+          shiftrightunsigned(v, -1) AS sign_bit
+        FROM VALUES (0, CAST(NULL AS INT)), (1, CAST(-2147483648 AS INT)), (2, -8), (3, 8) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | unchanged   | shifted    | wrapped     | sign_bit |
+        | 0  | NULL        | NULL       | NULL        | NULL     |
+        | 1  | -2147483648 | 1073741824 | -2147483648 | 1        |
+        | 2  | -8          | 2147483644 | -8          | 1        |
+        | 3  | 8           | 4          | 8           | 0        |
+      And query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- unchanged: integer (nullable = true)
+         |-- shifted: integer (nullable = true)
+         |-- wrapped: integer (nullable = true)
+         |-- sign_bit: integer (nullable = true)
+        """
+
     Scenario Outline: shiftrightunsigned masks the shift count for <kind> inputs
       Given config spark.sql.ansi.enabled = false
       When query

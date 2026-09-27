@@ -15,11 +15,18 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let (value, shift) = arguments.two()?;
+    let shift_type = shift.get_type(function_context.schema)?;
     // Spark evaluates the left operand first and skips the count cast for NULL.
     // A scalar UDF evaluates both arguments eagerly, so retain that boundary for
     // nullable inputs before introducing a fallible INT cast of the count.
-    let null_value = value
-        .nullable(function_context.schema)?
+    // An INT (or smaller) literal cannot fail. Keep the boundary for columns:
+    // projection pushdown can replace them with fallible expressions later.
+    let infallible_count = matches!(shift, expr::Expr::Literal(..))
+        && matches!(
+            shift_type,
+            DataType::Int8 | DataType::Int16 | DataType::Int32
+        );
+    let null_value = (!infallible_count && value.nullable(function_context.schema)?)
         .then(|| value.clone().is_null());
 
     let ansi_mode = function_context
@@ -43,7 +50,9 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         _ => value,
     };
-    let shift = if !ansi_mode && shift.get_type(function_context.schema)? == DataType::Int64 {
+    let shift = if shift_type == DataType::Int32 {
+        shift
+    } else if !ansi_mode && shift_type == DataType::Int64 {
         (shift & lit(63_i64)).cast_to(&DataType::Int32, function_context.schema)?
     } else {
         // TODO: Match non-ANSI fractional count saturation and DECIMAL wrapping;

@@ -1,7 +1,10 @@
 import pyarrow as pa
 import pytest
 
+from pysail.testing.spark.utils.common import pyspark_version
 
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="createDataFrame with pyarrow.Table requires PySpark 4.0+")
 @pytest.mark.parametrize("operation", ["IF(id = 9, {numeric}, v)", "NVL2(NULLIF(id, 9), v, {numeric})", "union"])
 @pytest.mark.parametrize("sliced", [False, True])
 @pytest.mark.parametrize("container", ["struct", "array", "map", "array_struct", "struct_array"])
@@ -70,6 +73,7 @@ def test_conditional_nested_cast_still_rejects_present_invalid_values(spark, con
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="createDataFrame with pyarrow.Table requires PySpark 4.0+")
 def test_conditional_cast_of_an_all_null_struct(spark):
     array = pa.StructArray.from_arrays(
         [pa.array(["bad", "bad"])],
@@ -87,6 +91,7 @@ def test_conditional_cast_of_an_all_null_struct(spark):
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="createDataFrame with pyarrow.Table requires PySpark 4.0+")
 @pytest.mark.parametrize("operation", ["IF(id = 9, {numeric}, v)", "NVL2(NULLIF(id, 9), v, {numeric})", "union"])
 @pytest.mark.parametrize("container", ["array", "map", "struct"])
 def test_conditional_cast_preserves_unchanged_nested_siblings(spark, operation, container):
