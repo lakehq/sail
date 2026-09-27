@@ -71,15 +71,21 @@ pub fn resolve_object_store_location(
     runtime_env: &RuntimeEnv,
     path: &str,
 ) -> Result<ResolvedObjectStorePath> {
+    let file_url = |path: &std::path::Path| -> Result<Url> {
+        let url = Url::from_file_path(path)
+            .map_err(|()| DataFusionError::Plan("invalid file path".into()))?;
+        // File-path conversion preserves parent segments. Reparse just as native
+        // listing does, so filesystem paths and their file URLs resolve identically.
+        Url::parse(url.as_str()).map_err(|error| DataFusionError::External(Box::new(error)))
+    };
     // Exact paths: never interpret filesystem metacharacters as listing globs.
     let parsed = if std::path::Path::new(path).is_absolute() {
-        Url::from_file_path(path).map_err(|()| DataFusionError::Plan("invalid file path".into()))?
+        file_url(std::path::Path::new(path))?
     } else {
         match Url::parse(path) {
             Ok(url) => url,
             Err(url::ParseError::RelativeUrlWithoutBase) => {
-                Url::from_file_path(std::env::current_dir()?.join(path))
-                    .map_err(|()| DataFusionError::Plan("invalid file path".into()))?
+                file_url(&std::env::current_dir()?.join(path))?
             }
             Err(error) => return Err(DataFusionError::External(Box::new(error))),
         }

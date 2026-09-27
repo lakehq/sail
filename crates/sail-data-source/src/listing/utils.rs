@@ -211,7 +211,8 @@ pub async fn list_all_files<'a>(
             Some(cache) => {
                 let key = TableScopedPath {
                     table: None,
-                    path: url.prefix().clone(),
+                    // One callback can discover identical prefixes in different stores.
+                    path: Path::from(url.as_str()),
                 };
                 if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");

@@ -15,8 +15,8 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStoreExt};
 use pyo3::exceptions::{
-    PyFileNotFoundError, PyInterruptedError, PyOSError, PyPermissionError, PyRuntimeError,
-    PyValueError,
+    PyFileNotFoundError, PyInterruptedError, PyModuleNotFoundError, PyOSError, PyPermissionError,
+    PyRuntimeError, PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -463,7 +463,25 @@ pub(crate) fn install_object_store_context(
     let Some(context) = context else {
         return Ok(PythonObjectStoreGuard { previous: None });
     };
-    let module = py.import(PYTHON_OBJECT_STORE_MODULE).map_err(py_err)?;
+    let module = match py.import(PYTHON_OBJECT_STORE_MODULE) {
+        Ok(module) => module,
+        // Standalone binaries can run ordinary PySpark data sources without the
+        // optional pysail Python package. Only storage users require this module.
+        Err(error)
+            if error.is_instance_of::<PyModuleNotFoundError>(py)
+                && error
+                    .value(py)
+                    .getattr("name")
+                    .and_then(|name| name.extract::<String>())
+                    .is_ok_and(|name| {
+                        name == PYTHON_OBJECT_STORE_MODULE
+                            || PYTHON_OBJECT_STORE_MODULE.starts_with(&format!("{name}."))
+                    }) =>
+        {
+            return Ok(PythonObjectStoreGuard { previous: None });
+        }
+        Err(error) => return Err(py_err(error)),
+    };
     let store = Py::new(
         py,
         PySailObjectStore {

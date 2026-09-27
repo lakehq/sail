@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pyarrow as pa
 import pytest
 
 from pysail.spark.datasource.object_store import get_object_store
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.common import is_jvm_spark
+
+pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail object-store API extension")
 
 try:
     from pyspark.sql.datasource import DataSource, DataSourceReader, DataSourceWriter, InputPartition
@@ -278,7 +284,8 @@ class _ParquetStorageDataSource(DataSource):
 def test_object_store_real_parquet_consumer(spark, tmp_path):
     import pyarrow.parquet as pq
 
-    path = tmp_path / "special#?%20[1].parquet"
+    name = "special#%20[1].parquet" if os.name == "nt" else "special#?%20[1].parquet"
+    path = tmp_path / name
     pq.write_table(pa.table({"id": [1, 2, 3, 4]}), path, row_group_size=2)
     spark.dataSource.register(_ParquetStorageDataSource)
     rows = spark.read.format("sail_object_store_parquet_test").load(str(path)).collect()
@@ -326,3 +333,97 @@ def test_object_store_glob_plans_file_partitions(spark, tmp_path, as_url):
     spark.dataSource.register(_GlobDataSource)
     rows = spark.read.format("sail_object_store_glob_test").load(pattern).collect()
     assert sorted(row.id for row in rows) == [1, 2]
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_object_store_filesystem_parent_segments(spark, tmp_path, relative):
+    (tmp_path / "child").mkdir()
+    prefix = os.path.relpath(tmp_path) if relative else str(tmp_path)
+    path = f"{prefix}/child/../literal[1]#%.txt"
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return "parent_segments"
+
+        def schema(self):
+            store = get_object_store()
+            store.write(path, b"value")
+            assert store.read(path) == b"value"
+            assert store.read_range(path, 1, 3) == b"al"
+            assert store.read_ranges(path, [(0, 1), (1, 3)]) == [b"v", b"al"]
+            assert b"".join(store.iter_bytes(path, chunk_size=2)) == b"value"
+            meta = store.head(path)
+            assert store.read(meta.location) == b"value"
+            assert [m.location for m in store.list(f"{prefix}/child/../")] == [meta.location]
+            store.delete(path)
+            with pytest.raises(FileNotFoundError):
+                store.read(path)
+            return "id BIGINT"
+
+    spark.dataSource.register(Source)
+    assert spark.read.format(Source.name()).load().schema.simpleString() == "struct<id:bigint>"
+
+
+def test_object_store_negative_ranges_and_limits(spark, tmp_path):
+    path = str(tmp_path / "data")
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return "negative_storage_arguments"
+
+        def schema(self):
+            store = get_object_store()
+            store.write(path, b"value")
+            for action in [
+                lambda: store.read(path, max_bytes=-1),
+                lambda: store.read_range(path, -1, 2),
+                lambda: store.read_range(path, 0, -1),
+                lambda: store.read_range(path, 0, 1, max_bytes=-1),
+                lambda: store.read_ranges(path, [(-1, 2)]),
+                lambda: store.read_ranges(path, [(0, -1)]),
+                lambda: store.read_ranges(path, [(0, 1)], max_bytes=-1),
+                lambda: store.read_ranges(path, [], max_ranges=-1),
+                lambda: store.iter_bytes(path, chunk_size=-1),
+                lambda: store.iter_objects(path, batch_size=-1),
+            ]:
+                with pytest.raises(ValueError, match=r"non-negative|too many byte ranges"):
+                    action()
+            return "id BIGINT"
+
+    spark.dataSource.register(Source)
+    assert spark.read.format(Source.name()).load().schema.simpleString() == "struct<id:bigint>"
+
+
+def test_object_store_glob_cache_isolates_stores(tmp_path):
+    """Identical key prefixes in two stores must not share cached metadata."""
+    prefix = (tmp_path / "objects").as_uri()
+    memory_prefix = f"memory://{urlsplit(prefix).path}"
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return "glob_cache_isolation"
+
+        def schema(self):
+            store = get_object_store()
+            store.write(f"{prefix}/local.txt", b"local")
+            store.write(f"{memory_prefix}/memory.txt", b"memory")
+            local = store.glob(f"{prefix}/*")
+            memory = store.glob(f"{memory_prefix}/*")
+            assert [m.location for m in local] == [f"{prefix}/local.txt"]
+            assert [m.location for m in memory] == [f"{memory_prefix}/memory.txt"]
+            assert store.read(memory[0].location) == b"memory"
+            # Repeating discovery must retain the correct results on cache hits.
+            assert store.glob(f"{prefix}/*.txt") == local
+            assert store.glob(f"{memory_prefix}/*.txt") == memory
+            return "id BIGINT"
+
+    with (
+        spark_connect_server({"SAIL_EXECUTION__FILE_LISTING_CACHE__TYPE": "session"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        session = sessions.create()
+        session.dataSource.register(Source)
+        assert session.read.format(Source.name()).load().schema.simpleString() == "struct<id:bigint>"

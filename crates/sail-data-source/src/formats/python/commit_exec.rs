@@ -200,7 +200,7 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             }
 
             if let Some(err) = first_error {
-                abort_with_timeout(executor.as_ref(), &pickled_writer, commit_messages).await;
+                let _ = executor.abort_write(&pickled_writer, commit_messages).await;
                 return exec_err!("{err}");
             }
 
@@ -212,7 +212,8 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
                 Ok(()) => {}
                 Err(commit_err) => {
                     log::error!("Commit failed, attempting abort: {}", commit_err);
-                    abort_with_timeout(executor.as_ref(), &pickled_writer, messages_for_abort)
+                    let _ = executor
+                        .abort_write(&pickled_writer, messages_for_abort)
                         .await;
                     return Err(commit_err);
                 }
@@ -225,23 +226,6 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             Arc::new(Schema::empty()),
             stream,
         )))
-    }
-}
-
-/// Cleanup has its own scope but cannot indefinitely delay the original error.
-async fn abort_with_timeout(
-    executor: &dyn PythonExecutor,
-    writer: &[u8],
-    messages: Vec<Option<Vec<u8>>>,
-) {
-    if tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.abort_write(writer, messages),
-    )
-    .await
-    .is_err()
-    {
-        log::warn!("Python datasource abort exceeded 30 seconds; canceling cleanup I/O");
     }
 }
 

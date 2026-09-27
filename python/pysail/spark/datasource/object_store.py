@@ -108,14 +108,22 @@ class ObjectStore:
 
         max_bytes is a per-call byte budget, defaulting to 64 MiB; it can be raised.
         """
-        return self._check().read(location, max_bytes)
+        native = self._check()
+        if max_bytes < 0:
+            message = "max_bytes must be non-negative"
+            raise ValueError(message)
+        return native.read(location, max_bytes)
 
     def read_range(self, location: str, start: int, end: int, *, max_bytes: int = DEFAULT_MAX_BYTES) -> bytes:
         """Read the half-open byte range [start, end).
 
         max_bytes defaults to 64 MiB per call and can be raised.
         """
-        return self._check().read_range(location, start, end, max_bytes)
+        native = self._check()
+        if start < 0 or end < 0 or max_bytes < 0:
+            message = "byte offsets and max_bytes must be non-negative"
+            raise ValueError(message)
+        return native.read_range(location, start, end, max_bytes)
 
     def read_ranges(
         self,
@@ -134,6 +142,9 @@ class ObjectStore:
         if len(ranges) > max_ranges:
             message = "too many byte ranges"
             raise ValueError(message)
+        if max_bytes < 0 or any(start < 0 or end < 0 for start, end in ranges):
+            message = "byte offsets and max_bytes must be non-negative"
+            raise ValueError(message)
         return native.read_ranges(location, ranges, max_bytes, max_ranges)
 
     def iter_bytes(self, location: str, *, chunk_size: int = 1024 * 1024):
@@ -145,7 +156,11 @@ class ObjectStore:
         Rust can also retain the current provider chunk and provider-side buffers.
         Retaining yielded chunks in Python will still accumulate memory.
         """
-        return _StorageIterator(self, self._check().iter_bytes(location, chunk_size), metadata=False)
+        native = self._check()
+        if chunk_size < 0:
+            message = "chunk_size must be non-negative"
+            raise ValueError(message)
+        return _StorageIterator(self, native.iter_bytes(location, chunk_size), metadata=False)
 
     def iter_objects(self, location: str, *, batch_size: int = 128):
         """List a literal prefix, transferring at most batch_size entries per call.
@@ -153,7 +168,11 @@ class ObjectStore:
         The default is 128 entries; the native implementation accepts 1 to 4,096.
         This bounds each transfer, not the total number of listed objects.
         """
-        return _StorageIterator(self, self._check().iter_objects(location, batch_size), metadata=True)
+        native = self._check()
+        if batch_size < 0:
+            message = "batch_size must be non-negative"
+            raise ValueError(message)
+        return _StorageIterator(self, native.iter_objects(location, batch_size), metadata=True)
 
     def glob(self, pattern: str, *, max_entries: int = DEFAULT_MAX_ENTRIES) -> list[ObjectMeta]:
         """Discover files using Sail's Rust globbing and hidden-file filtering.

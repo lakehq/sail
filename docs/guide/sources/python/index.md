@@ -31,6 +31,10 @@ native readers and writers. This keeps credentials, endpoint configuration, and
 custom object-store registrations in one place rather than configuring a second
 Python storage client.
 
+This API is a Sail extension. Install the matching `pysail` Python package in
+each process that uses it, including standalone server and worker environments.
+Ordinary PySpark data sources do not require this storage module.
+
 ```python
 from pysail.spark.datasource.object_store import get_object_store
 
@@ -163,8 +167,9 @@ stream also cancels its bridge I/O, and closing an iterator drops its storage
 stream. Sail's runtime wrapper propagates cancellation to spawned I/O tasks.
 Canceled bridge calls raise `InterruptedError`; this cannot forcibly stop arbitrary
 Python code or guarantee rollback of a remote write that has already completed.
-Writer abort runs in a fresh callback scope with a 30-second wait limit, so cleanup
-can use storage even after the failing write scope has ended.
+Writer abort runs in a fresh callback scope, so cleanup can use storage even after
+the failing write scope has ended. Sail waits for abort cleanup before reporting
+the original write or commit failure.
 
 The bridge is validated with a Parquet reader using a small file-like adapter in
 the tests. It is not yet wired into the Vortex data source: Vortex's Python API
