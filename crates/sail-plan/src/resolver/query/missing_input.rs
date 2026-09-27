@@ -79,21 +79,24 @@ impl PlanResolver<'_> {
         // Subquery filters need descendant resolution before outer references. Avoid
         // resolving them speculatively: nested correlated filters would otherwise
         // resolve the entire subquery tree twice at each level.
+        // A predicate without subqueries costs at most one more cheap pass.
+        let in_subquery = state.get_outer_query_schema().is_some();
         let mut local = Vec::with_capacity(expressions.len());
-        if state.get_outer_query_schema().is_none() {
-            for expression in &expressions {
-                match self
-                    .resolve_expression(expression.clone(), &output_schema, state)
-                    .await
-                {
-                    Ok(expr) if !Self::has_outer_reference(std::slice::from_ref(&expr))? => {
-                        local.push(expr);
-                    }
-                    // Stop at the first missing input rather than speculatively
-                    // resolving every remaining expression against a schema that
-                    // may be missing most of their references.
-                    _ => break,
+        for expression in &expressions {
+            if in_subquery && !Self::is_subquery_free(expression) {
+                break;
+            }
+            match self
+                .resolve_expression(expression.clone(), &output_schema, state)
+                .await
+            {
+                Ok(expr) if !Self::has_outer_reference(std::slice::from_ref(&expr))? => {
+                    local.push(expr);
                 }
+                // Stop at the first missing input rather than speculatively
+                // resolving every remaining expression against a schema that
+                // may be missing most of their references.
+                _ => break,
             }
         }
         if local.len() == expressions.len() {
@@ -175,6 +178,49 @@ impl PlanResolver<'_> {
             resolved.push(expr);
         }
         Ok((resolved, schema))
+    }
+
+    /// Returns whether the expression cannot contain a subquery. Expressions that
+    /// are not listed here are conservatively assumed to contain one.
+    fn is_subquery_free(expr: &spec::Expr) -> bool {
+        match expr {
+            spec::Expr::Literal(_) | spec::Expr::UnresolvedAttribute { .. } => true,
+            spec::Expr::UnresolvedFunction(function) => {
+                function.filter.is_none()
+                    && function.order_by.is_none()
+                    && function.named_arguments.is_empty()
+                    && function.arguments.iter().all(Self::is_subquery_free)
+            }
+            spec::Expr::Alias { expr, .. }
+            | spec::Expr::Cast { expr, .. }
+            | spec::Expr::IsFalse(expr)
+            | spec::Expr::IsNotFalse(expr)
+            | spec::Expr::IsTrue(expr)
+            | spec::Expr::IsNotTrue(expr)
+            | spec::Expr::IsNull(expr)
+            | spec::Expr::IsNotNull(expr)
+            | spec::Expr::IsUnknown(expr)
+            | spec::Expr::IsNotUnknown(expr) => Self::is_subquery_free(expr),
+            spec::Expr::SortOrder(sort) => Self::is_subquery_free(&sort.child),
+            spec::Expr::UnresolvedExtractValue { child, extraction } => {
+                Self::is_subquery_free(child) && Self::is_subquery_free(extraction)
+            }
+            spec::Expr::IsDistinctFrom { left, right }
+            | spec::Expr::IsNotDistinctFrom { left, right } => {
+                Self::is_subquery_free(left) && Self::is_subquery_free(right)
+            }
+            spec::Expr::Between {
+                expr, low, high, ..
+            } => {
+                Self::is_subquery_free(expr)
+                    && Self::is_subquery_free(low)
+                    && Self::is_subquery_free(high)
+            }
+            spec::Expr::InList { expr, list, .. } => {
+                Self::is_subquery_free(expr) && list.iter().all(Self::is_subquery_free)
+            }
+            _ => false,
+        }
     }
 
     fn has_outer_reference(expressions: &[Expr]) -> PlanResult<bool> {

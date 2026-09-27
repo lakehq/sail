@@ -47,43 +47,8 @@ fn rename_logical_plan_impl(
     // A reference alias does not evaluate expressions. Rename its projection
     // in place so renewed CTE attributes do not add another projection layer.
     let plan = match plan {
-        LogicalPlan::SubqueryAlias(mut alias) => {
-            let LogicalPlan::Projection(projection) = alias.input.as_ref() else {
-                return rename_projection(
-                    Arc::clone(&alias.schema),
-                    Arc::new(LogicalPlan::SubqueryAlias(alias)),
-                    std::iter::empty(),
-                    names,
-                    unique_names,
-                );
-            };
-            // CTE references share this projection. Borrow its expressions so
-            // renaming does not clone the expression vector and obsolete aliases.
-            let input = rename_projection(
-                Arc::clone(&projection.schema),
-                Arc::clone(&projection.input),
-                projection.expr.iter().map(Cow::Borrowed),
-                names,
-                unique_names,
-            )?;
-            // Fresh internal names are unique. Requalification changes no field
-            // types or dependencies, so reuse the validated schema. Preserve the
-            // constructor's duplicate-name handling for other rename callers.
-            if unique_names {
-                alias.schema = Arc::new(
-                    input
-                        .schema()
-                        .as_ref()
-                        .clone()
-                        .replace_qualifier(alias.alias.clone()),
-                );
-                alias.input = Arc::new(input);
-                return Ok(LogicalPlan::SubqueryAlias(alias));
-            }
-            return Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                Arc::new(input),
-                alias.alias,
-            )?));
+        LogicalPlan::SubqueryAlias(alias) => {
+            return rename_subquery_alias(alias, names, unique_names);
         }
         plan => plan,
     };
@@ -104,6 +69,56 @@ fn rename_logical_plan_impl(
             unique_names,
         ),
     }
+}
+
+/// Renames the projection below a subquery alias, looking through nested aliases
+/// (e.g. a SQL CTE aliased by both its definition and its reference name).
+fn rename_subquery_alias(
+    mut alias: SubqueryAlias,
+    names: &[String],
+    unique_names: bool,
+) -> datafusion_common::Result<LogicalPlan> {
+    let input = match alias.input.as_ref() {
+        // CTE references share this projection. Borrow its expressions so
+        // renaming does not clone the expression vector and obsolete aliases.
+        LogicalPlan::Projection(projection) => rename_projection(
+            Arc::clone(&projection.schema),
+            Arc::clone(&projection.input),
+            projection.expr.iter().map(Cow::Borrowed),
+            names,
+            unique_names,
+        )?,
+        LogicalPlan::SubqueryAlias(inner) => {
+            rename_subquery_alias(inner.clone(), names, unique_names)?
+        }
+        _ => {
+            return rename_projection(
+                Arc::clone(&alias.schema),
+                Arc::new(LogicalPlan::SubqueryAlias(alias)),
+                std::iter::empty(),
+                names,
+                unique_names,
+            );
+        }
+    };
+    // Fresh internal names are unique. Requalification changes no field
+    // types or dependencies, so reuse the validated schema. Preserve the
+    // constructor's duplicate-name handling for other rename callers.
+    if unique_names {
+        alias.schema = Arc::new(
+            input
+                .schema()
+                .as_ref()
+                .clone()
+                .replace_qualifier(alias.alias.clone()),
+        );
+        alias.input = Arc::new(input);
+        return Ok(LogicalPlan::SubqueryAlias(alias));
+    }
+    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        Arc::new(input),
+        alias.alias,
+    )?))
 }
 
 fn rename_projection<'a>(

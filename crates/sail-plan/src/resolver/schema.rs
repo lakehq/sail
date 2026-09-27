@@ -56,21 +56,12 @@ impl PlanResolver<'_> {
         plan_id: Option<i64>,
         state: &PlanResolverState,
     ) -> PlanResult<Option<Column>> {
+        // TODO: Deduplicate candidates of the same attribute (e.g. `SELECT a, a`) as Spark does.
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
                 "[AMBIGUOUS_REFERENCE] Reference {name} is ambiguous, found: {} matches",
                 columns.len()
-            )));
-        }
-        // A DataFrame column that is ambiguous below the input cannot be resolved either.
-        if columns.iter().any(|column| {
-            state
-                .get_field_info(column.name())
-                .is_ok_and(|info| info.is_ambiguous_for(plan_id))
-        }) {
-            return Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_COLUMN_REFERENCE] Column {name} is ambiguous"
             )));
         }
         if columns.is_empty() {

@@ -38,6 +38,13 @@ Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.AnalysisException: ...
 
+A relation without a name has no qualifier, even for the columns that are kept.
+
+>>> df.withColumn("d", F.lit(1)).select("`?table?`.a").collect()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+
 A new column replaces an existing column whose name matches case-insensitively,
 and the replacement takes the name of the new column.
 

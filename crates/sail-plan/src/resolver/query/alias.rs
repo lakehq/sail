@@ -36,24 +36,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
         let input = if columns.is_empty() {
             input
         } else {
-            if columns.len() != schema.fields().len() {
-                return Err(PlanError::invalid(format!(
-                    "number of column names ({}) does not match number of columns ({})",
-                    columns.len(),
-                    schema.fields().len()
-                )));
-            }
-            let expr: Vec<Expr> = schema
-                .columns()
-                .into_iter()
-                .zip(columns)
-                .map(|(col, name)| Expr::Column(col.clone()).alias(state.register_field_name(name)))
-                .collect();
-            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
+            Self::rename_query_output(input, columns, state)?
         };
         let alias = TableReference::Bare {
             table: Arc::from(String::from(name)),
@@ -120,6 +106,33 @@ impl PlanResolver<'_> {
         Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             Arc::new(input),
             alias,
+        )?))
+    }
+
+    /// Renames every output column as a new attribute, like Spark's
+    /// `UnresolvedSubqueryColumnAliases` for `toDF` and table alias column lists.
+    pub(super) fn rename_query_output(
+        input: LogicalPlan,
+        columns: Vec<spec::Identifier>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = input.schema();
+        if columns.len() != schema.fields().len() {
+            return Err(PlanError::invalid(format!(
+                "number of column names ({}) does not match number of columns ({})",
+                columns.len(),
+                schema.fields().len()
+            )));
+        }
+        let expr = schema
+            .columns()
+            .into_iter()
+            .zip(columns)
+            .map(|(col, name)| Expr::Column(col).alias(state.register_field_name(name)))
+            .collect();
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expr,
+            Arc::new(input),
         )?))
     }
 }

@@ -179,6 +179,31 @@ def test_coalesce_hint_rejects_zero_partitions(spark):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 
+def test_repartition_hint(spark):
+    """Apply an integer REPARTITION hint without changing the rows."""
+    df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
+
+    actual = df.hint("REPARTITION", 6).orderBy("id").toPandas()
+    expected = df.orderBy("id").toPandas()
+
+    assert partition_count(df.hint("REPARTITION", 2)) == 2  # noqa: PLR2004
+    assert partition_count(df.hint("REPARTITION", 6)) == 6  # noqa: PLR2004
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        ("id+1",),
+        ("id", 3),
+    ],
+)
+def test_repartition_hint_rejects_invalid_parameters(spark, parameters):
+    """Reject invalid REPARTITION hint parameter values and combinations."""
+    with pytest.raises(AnalysisException):
+        spark.range(0, 10, 1, 2).hint("REPARTITION", *parameters).collect()
+
+
 def test_explicit_coalesce_preserves_rows(spark):
     row_count = 12
     partition_count_before = 4

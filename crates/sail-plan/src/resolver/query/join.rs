@@ -61,8 +61,6 @@ impl PlanResolver<'_> {
         } = join;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
-        let left_schema = Arc::clone(left.schema());
-        let right_schema = Arc::clone(right.schema());
         let join_type = match join_type {
             spec::JoinType::Inner => Some(JoinType::Inner),
             spec::JoinType::LeftOuter => Some(JoinType::Left),
@@ -75,7 +73,7 @@ impl PlanResolver<'_> {
             spec::JoinType::Cross => None,
         };
 
-        let plan = match (join_type, join_criteria) {
+        match (join_type, join_criteria) {
             (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
             // When the join criteria are not specified, any join type has the semantics of a cross join.
             (Some(_), None) | (None, None) => {
@@ -101,6 +99,8 @@ impl PlanResolver<'_> {
                     right.schema(),
                     &JoinType::Inner,
                 )?);
+                // TODO: Like Spark, prefer a DataFrame column of a direct join child over
+                //   another instance of the DataFrame deeper in the other child.
                 let condition = self
                     .resolve_expression(condition, &join_schema, state)
                     .await?
@@ -162,9 +162,7 @@ impl PlanResolver<'_> {
                     self.resolve_query_join_using_columns(&left, &right, using, state)?;
                 self.resolve_query_join_using(left, right, join_type, join_columns, state)
             }
-        }?;
-        state.mark_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
-        Ok(plan)
+        }
     }
 
     fn resolve_query_join_using_columns(
@@ -206,6 +204,9 @@ impl PlanResolver<'_> {
         )?;
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.
+        // TODO: Spark keeps the left key (the right key for right joins) as the visible
+        //   key attribute, which DataFrame columns prefer over hidden keys, and it keeps
+        //   hidden keys available to later joins.
         let hidden_columns = builder
             .schema()
             .columns()
@@ -216,8 +217,8 @@ impl PlanResolver<'_> {
                 {
                     let info = state.get_field_info(col.name())?.clone();
                     let field_id = state.register_hidden_field_name(info.name());
-                    for binding in info.plan_bindings() {
-                        state.register_plan_binding(&field_id, binding)?;
+                    for plan_id in info.plan_ids() {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
                     }
                     Ok(Expr::Column(col).alias(field_id))
                 } else {

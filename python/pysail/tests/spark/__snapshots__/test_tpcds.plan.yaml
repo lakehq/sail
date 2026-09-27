@@ -3195,8 +3195,8 @@ data:
                                                   FilterExec: _6@1 = 2001 OR _6@1 = 2000 AND _8@2 = 12 OR _6@1 = 2002 AND _8@2 = 1
                                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#104@0 as #113, #105@1 as #114, #106@2 as #115, #107@3 as #116, #110@4 as #119, #112@5 as #121, #112@5 + 1 as v1_lag.#121 + Int32(1)]
-                    ProjectionExec: expr=[#12@0 as #104, #8@1 as #105, #78@2 as #106, #90@3 as #107, sum(store_sales.#35)@6 as #110, CAST(rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 AS Int32) as #112]
+                  ProjectionExec: expr=[#113@0 as #113, #114@1 as #114, #115@2 as #115, #116@3 as #116, #119@4 as #119, #121@5 as #121, #121@5 + 1 as v1_lag.#121 + Int32(1)]
+                    ProjectionExec: expr=[#12@0 as #113, #8@1 as #114, #78@2 as #115, #90@3 as #116, sum(store_sales.#35)@6 as #119, CAST(rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 AS Int32) as #121]
                       BoundedWindowAggExec: wdw=[rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                         SortExec: expr=[#12@0 ASC NULLS LAST, #8@1 ASC NULLS LAST, #78@2 ASC NULLS LAST, #90@3 ASC NULLS LAST, #51@4 ASC, #53@5 ASC], preserve_partitioning=[true]
                           RepartitionExec: partitioning=Hash([#12@0, #8@1, #78@2, #90@3], 4), input_partitions=4
@@ -3218,8 +3218,8 @@ data:
                                         FilterExec: _6@1 = 2001 OR _6@1 = 2000 AND _8@2 = 12 OR _6@1 = 2002 AND _8@2 = 1
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[#104@0 as #122, #105@1 as #123, #106@2 as #124, #107@3 as #125, #110@4 as #128, #112@5 as #130, #112@5 - 1 as v1_lead.#130 - Int32(1)]
-                ProjectionExec: expr=[#12@0 as #104, #8@1 as #105, #78@2 as #106, #90@3 as #107, sum(store_sales.#35)@6 as #110, CAST(rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 AS Int32) as #112]
+              ProjectionExec: expr=[#122@0 as #122, #123@1 as #123, #124@2 as #124, #125@3 as #125, #128@4 as #128, #130@5 as #130, #130@5 - 1 as v1_lead.#130 - Int32(1)]
+                ProjectionExec: expr=[#12@0 as #122, #8@1 as #123, #78@2 as #124, #90@3 as #125, sum(store_sales.#35)@6 as #128, CAST(rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 AS Int32) as #130]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [item.#12, item.#8, store.#78, store.#90] ORDER BY [date_dim.#51 ASC NULLS FIRST, date_dim.#53 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     SortExec: expr=[#12@0 ASC NULLS LAST, #8@1 ASC NULLS LAST, #78@2 ASC NULLS LAST, #90@3 ASC NULLS LAST, #51@4 ASC, #53@5 ASC], preserve_partitioning=[true]
                       RepartitionExec: partitioning=Hash([#12@0, #8@1, #78@2, #90@3], 4), input_partitions=4
@@ -3748,8 +3748,8 @@ data:
                                                   FilterExec: _6@1 = 2000 OR _6@1 = 1999 AND _8@2 = 12 OR _6@1 = 2001 AND _8@2 = 1
                                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#117@0 as #125, #118@1 as #126, #119@2 as #127, #122@3 as #130, #124@4 as #132, #124@4 + 1 as v1_lag.#132 + Int32(1)]
-                    ProjectionExec: expr=[#12@0 as #117, #8@1 as #118, #90@2 as #119, sum(catalog_sales.#43)@5 as #122, CAST(rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 AS Int32) as #124]
+                  ProjectionExec: expr=[#125@0 as #125, #126@1 as #126, #127@2 as #127, #130@3 as #130, #132@4 as #132, #132@4 + 1 as v1_lag.#132 + Int32(1)]
+                    ProjectionExec: expr=[#12@0 as #125, #8@1 as #126, #90@2 as #127, sum(catalog_sales.#43)@5 as #130, CAST(rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 AS Int32) as #132]
                       BoundedWindowAggExec: wdw=[rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                         SortExec: expr=[#12@0 ASC NULLS LAST, #8@1 ASC NULLS LAST, #90@2 ASC NULLS LAST, #62@3 ASC, #64@4 ASC], preserve_partitioning=[true]
                           RepartitionExec: partitioning=Hash([#12@0, #8@1, #90@2], 4), input_partitions=4
@@ -3771,8 +3771,8 @@ data:
                                         FilterExec: _6@1 = 2000 OR _6@1 = 1999 AND _8@2 = 12 OR _6@1 = 2001 AND _8@2 = 1
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[#117@0 as #133, #118@1 as #134, #119@2 as #135, #122@3 as #138, #124@4 as #140, #124@4 - 1 as v1_lead.#140 - Int32(1)]
-                ProjectionExec: expr=[#12@0 as #117, #8@1 as #118, #90@2 as #119, sum(catalog_sales.#43)@5 as #122, CAST(rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 AS Int32) as #124]
+              ProjectionExec: expr=[#133@0 as #133, #134@1 as #134, #135@2 as #135, #138@3 as #138, #140@4 as #140, #140@4 - 1 as v1_lead.#140 - Int32(1)]
+                ProjectionExec: expr=[#12@0 as #133, #8@1 as #134, #90@2 as #135, sum(catalog_sales.#43)@5 as #138, CAST(rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 AS Int32) as #140]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [item.#12, item.#8, call_center.#90] ORDER BY [date_dim.#62 ASC NULLS FIRST, date_dim.#64 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     SortExec: expr=[#12@0 ASC NULLS LAST, #8@1 ASC NULLS LAST, #90@2 ASC NULLS LAST, #62@3 ASC, #64@4 ASC], preserve_partitioning=[true]
                       RepartitionExec: partitioning=Hash([#12@0, #8@1, #90@2], 4), input_partitions=4

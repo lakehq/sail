@@ -208,3 +208,51 @@ def test_recovered_null_map_preserves_spark_42_null_propagation(spark):
     source = spark.createDataFrame([(((1,),), 7)], "s struct<a:struct<x:int>>, marker int")
     projected = source.select(F.create_map(F.lit("a"), F.lit(None)).alias("s"), "marker").select("marker")
     assert projected.where("s.a.x = 1").collect() == []
+
+
+def _sail_bug(reason):
+    return pytest.mark.xfail(not is_jvm_spark(), reason=reason, strict=True)
+
+
+SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
+    pyspark_version() < (4, 2), reason="Spark 4.2 filters DataFrame column candidates by the output before merging"
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        pytest.param(
+            "visible-using-key",
+            [Row(a=2), Row(a=3)],
+            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("The visible USING key is not the left key attribute")],
+        ),
+        pytest.param(
+            "nested-hidden-using-key",
+            [Row(a=1, e=7)],
+            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("Hidden USING keys do not survive another join")],
+        ),
+        pytest.param(
+            "direct-join-child",
+            [Row(x=1, a=1), Row(x=1, a=2), Row(x=1, a=3)],
+            marks=_sail_bug("Join conditions do not prefer a direct child over a deeper instance"),
+        ),
+        pytest.param(
+            "drop-duplicate-attribute",
+            [Row(b=10), Row(b=20), Row(b=30)],
+            marks=_sail_bug("Column candidates for drop are not deduplicated by attribute"),
+        ),
+    ],
+)
+def test_dataframe_column_candidate_resolution(spark, case, expected):
+    df = spark.createDataFrame([(1, 10, "x"), (2, 20, "y"), (3, 30, "z")], "a int, b int, c string")
+    other = spark.createDataFrame([(1, 100), (2, 200), (4, 400)], "a int, d int")
+    third = spark.createDataFrame([(1, 7), (3, 9)], "a int, e int")
+    right = df.withColumn("x", F.lit(1))
+    results = {
+        "visible-using-key": lambda: df.join(df.filter("a > 1"), "a").select(df.a),
+        "nested-hidden-using-key": lambda: df.join(other, "a").join(third, "a").select(other.a, third.e),
+        "direct-join-child": lambda: df.join(right, df.a == right.a).select(right.x, right.a),
+        "drop-duplicate-attribute": lambda: df.select("a", "a", "b").drop(df.a),
+    }
+    assert sorted(results[case]().collect()) == expected

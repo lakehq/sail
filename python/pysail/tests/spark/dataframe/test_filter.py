@@ -382,12 +382,6 @@ def test_missing_input_union_preserves_shared_cte_bindings(spark, body, copies):
         pytest.param("WITH t AS (SELECT * FROM {source}), unused AS (SELECT * FROM t) TABLE t", 1, id="unused"),
         pytest.param("WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM t) TABLE u", 1, id="chain"),
         pytest.param("WITH t AS (SELECT * FROM {source}), u AS (TABLE t) TABLE u", 1, id="chain_table"),
-        pytest.param("WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) TABLE u", 1, id="two_defs"),
-        pytest.param(
-            "WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) SELECT u.* FROM t JOIN u ON t.key=u.key",
-            1,
-            id="two_defs_join",
-        ),
         pytest.param(
             "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT key FROM t) u JOIN t a ON u.key=a.key",
             1,
@@ -449,8 +443,10 @@ def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
         "WITH t AS (SELECT key,key,value FROM {source}) SELECT 1 AS key,value FROM t",
         "WITH t AS (SELECT key FROM {source}), u AS (SELECT value,key FROM {source}) TABLE u",
         "WITH t AS (SELECT key FROM {source}), u AS (SELECT value FROM {source}) SELECT 1 AS key,value FROM u",
+        "WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) TABLE u",
+        "WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) SELECT u.* FROM t JOIN u ON t.key=u.key",
     ],
-    ids=["duplicate-column", "partial-definitions", "disjoint-definitions"],
+    ids=["duplicate-column", "partial-definitions", "disjoint-definitions", "two-definitions", "two-definitions-join"],
 )
 @SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_preserves_distinct_column_bindings(spark, query):
@@ -574,12 +570,8 @@ def test_missing_input_parameter_view_join_bindings(spark, source_kind, projecte
     result = spark.sql(query, source=source)
     projected = result.select("key")
     expected = sorted(result.where("value > 15").select("key").collect())
-    if projected_side == "neither":
-        with pytest.raises(AnalysisException):
-            projected.where(source.value > 15).collect()  # noqa: PLR2004
-    else:
-        assert sorted(projected.where(source.value > 15).collect()) == expected  # noqa: PLR2004
-    for reference in (result.value, F.col("value")):
+    # Only the selected instance survives the projection, so Spark binds the source to it.
+    for reference in (source.value, result.value, F.col("value")):
         recovered = projected.where(reference > 15)  # noqa: PLR2004
         assert sorted(recovered.collect()) == expected
         assert recovered.schema == projected.schema
@@ -686,17 +678,17 @@ def test_missing_input_reused_relation_schema_computed_projection(spark, query):
     [(kind, side) for kind in ("inner", "left", "right", "full", "cross") for side in ("a", "b")]
     + [("left_semi", "a"), ("left_anti", "a")],
 )
-def test_missing_input_self_join_rejects_ambiguous_ancestor(spark, kind, side):
+def test_missing_input_self_join_resolves_selected_ancestor(spark, kind, side):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     left, right = source.alias("a"), source.alias("b")
     joined = left.crossJoin(right) if kind == "cross" else left.join(right, F.col("a.key") == F.col("b.key"), kind)
     result = joined.select(f"{side}.key", f"{side}.value")
     projected = result.select("key")
-    with pytest.raises(AnalysisException):
-        projected.where(source.value > 15).collect()  # noqa: PLR2004
     selected = left if side == "a" else right
     copies = 0 if kind == "left_anti" else (2 if kind == "cross" else 1)
-    for reference in (selected.value, result.value, F.col("value")):
+    # Spark only considers the source attributes that survive to the filter input,
+    # so the source binds to the selected side of the self join.
+    for reference in (source.value, selected.value, result.value, F.col("value")):
         recovered = projected.where(reference > 15)  # noqa: PLR2004
         assert recovered.collect() == [Row(key=1)] * copies
         assert recovered.schema == projected.schema
@@ -728,7 +720,7 @@ def test_missing_input_source_attribute_identity(spark, operation, side, referen
         else F.col("value")
     )
     filtered = projected.where(value > 15)  # noqa: PLR2004
-    if reference == "unqualified" or (reference == "qualified" and operation == "overlap" and side == "a"):
+    if reference == "unqualified":
         with pytest.raises(AnalysisException):
             filtered.collect()
     else:
@@ -756,15 +748,14 @@ def test_missing_input_source_root_uses_case_sensitive_resolver(spark, case_sens
 
 
 @pytest.mark.parametrize("operation", ["intersect", "intersectAll", "subtract", "exceptAll"])
-def test_missing_input_set_operation_rejects_ambiguous_ancestor(spark, operation):
+def test_missing_input_set_operation_resolves_left_ancestor(spark, operation):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     left, right = source.alias("a"), source.alias("b")
     result = getattr(left, operation)(right)
     projected = result.select("key")
-    with pytest.raises(AnalysisException):
-        projected.where(source.value > 15).collect()  # noqa: PLR2004
     expected = [Row(key=1)] if operation.startswith("intersect") else []
-    for reference in (left.value, result.value, F.col("value")):
+    # The set operation outputs only its left input, so the source binds to it.
+    for reference in (source.value, left.value, result.value, F.col("value")):
         recovered = projected.where(reference > 15)  # noqa: PLR2004
         assert recovered.collect() == expected
         assert recovered.schema == projected.schema
@@ -794,15 +785,63 @@ def test_ambiguous_ancestor_stays_ambiguous_next_to_another_instance(spark, oper
         nested = spark.sql("WITH t AS (SELECT * FROM {s}), u AS (SELECT * FROM {s}) TABLE t", s=source)
     else:
         nested = getattr(source, operation)(other)
-    # The source is in both inputs of the nested operation, so Spark rejects any reference
-    # to it through that operation, even if another input has a fresh source instance.
+    # Only the left input of the nested operation survives, so the source resolves to it,
+    # but another source instance next to the nested operation makes it ambiguous again.
     if consumer == "drop":
-        result = nested.drop(source.value)
-    else:
-        joined = nested.join(source, "key")
-        result = joined.select(source.value) if consumer == "select" else joined.where(source.value > 15)  # noqa: PLR2004
+        assert nested.drop(source.value).columns == ["key"]
+        return
+    joined = nested.join(source, "key")
+    result = joined.select(source.value) if consumer == "select" else joined.where(source.value > 15)  # noqa: PLR2004
     with pytest.raises(AnalysisException):
         result.collect()
+
+
+@pytest.mark.parametrize(
+    ("operation", "values"),
+    [("left_semi", [20, 30]), ("left_anti", [10]), ("intersect", [20, 30]), ("subtract", [10])],
+)
+@pytest.mark.parametrize(
+    "rename",
+    [lambda df: df.toDF("key", "value"), lambda df: df.withColumnRenamed("value", "value")],
+    ids=["toDF", "withColumnRenamed"],
+)
+@pytest.mark.parametrize("consumer", ["select", "where", "drop"])
+def test_renamed_copy_does_not_make_ancestor_ambiguous(spark, operation, values, rename, consumer):
+    source = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "key int, value int")
+    other = rename(source).where("value > 15")
+    nested = (
+        source.join(other, "key", operation) if operation.startswith("left_") else getattr(source, operation)(other)
+    )
+    # Spark aliases renamed columns, even to their own names, so the copy's columns are
+    # new attributes and a reference to the source matches only the left input.
+    if consumer == "select":
+        assert sorted(nested.select(source.value).collect()) == [Row(value=v) for v in values]
+    elif consumer == "where":
+        keys = [v // 10 for v in values if v > 15]  # noqa: PLR2004
+        assert sorted(nested.where(source.value > 15).select("key").collect()) == [Row(key=k) for k in keys]  # noqa: PLR2004
+    else:
+        assert sorted(nested.drop(source.value).collect()) == [Row(key=v // 10) for v in values]
+
+
+def test_renamed_copy_outputs_new_attributes(spark):
+    source = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "key int, value int")
+    with pytest.raises(AnalysisException):
+        source.toDF("key", "value").select(source.value).collect()
+    with pytest.raises(AnalysisException):
+        source.withColumnRenamed("value", "value").select(source.value).collect()
+    renamed = source.toDF("k", "value")
+    assert sorted(source.join(renamed, F.col("key") == F.col("k")).select(source.value).collect()) == [
+        Row(value=10),
+        Row(value=20),
+        Row(value=30),
+    ]
+    # Columns that are not renamed remain the same attributes as in the source,
+    # but the semi join outputs only the left input.
+    other = source.withColumnRenamed("key", "k").where("value > 15")
+    semi = source.join(other, F.col("key") == F.col("k"), "left_semi")
+    assert sorted(semi.select(source.key, source.value).collect()) == [Row(key=2, value=20), Row(key=3, value=30)]
+    with pytest.raises(AnalysisException):
+        source.join(other, F.col("key") == F.col("k")).select(source.value).collect()
 
 
 @SQL_DATAFRAME_ARGS_MARK
@@ -827,11 +866,11 @@ def test_union_hides_ambiguous_ancestor_from_another_instance(spark):
 @pytest.mark.parametrize(
     ("query", "valid", "copies"),
     [
-        ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source}", False, 1),
+        ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source}", True, 1),
         ("WITH t AS (SELECT key FROM {source}) SELECT * FROM {source}", True, 1),
         ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source} UNION ALL SELECT * FROM {source}", False, 2),
     ],
-    ids=["body-conflict", "partial-definition", "union-body"],
+    ids=["unused-definition", "partial-definition", "union-body"],
 )
 @SQL_DATAFRAME_ARGS_MARK
 def test_missing_input_cte_body_binding(spark, query, valid, copies):
