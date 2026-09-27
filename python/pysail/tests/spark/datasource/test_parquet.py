@@ -1,3 +1,4 @@
+import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -16,6 +17,41 @@ def safe_sort_key(row):
     if isinstance(row, Mapping):
         return tuple((v is not None, v) for _, v in sorted(row.items()))
     return tuple((v is not None, v) for v in row)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_merges_mixed_timestamp_units_with_different_arrow_timezones(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "mixed_timestamp_units_and_timezones"
+    path.mkdir()
+    files = [
+        ("a_us_new_york.parquet", "us", "America/New_York", datetime(2024, 1, 2, 3, 4, 6, 123456, tzinfo=UTC)),
+        ("b_ms_utc.parquet", "ms", "UTC", datetime(2024, 1, 2, 3, 4, 5, 123000, tzinfo=UTC)),
+    ]
+    for name, unit, timezone, value in files:
+        pq.write_table(
+            pa.table({"ts": pa.array([value], type=pa.timestamp(unit, tz=timezone))}),
+            path / name,
+        )
+
+    df = spark.read.parquet(str(path))
+    rows = df.selectExpr("CAST(ts AS STRING) AS value").orderBy("value").collect()
+
+    assert df.schema.simpleString() == "struct<ts:timestamp>"
+    assert rows == [
+        Row(value="2024-01-01 19:04:05.123"),
+        Row(value="2024-01-01 19:04:06.123456"),
+    ]
+
+
+def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
+    # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
+    # column read as BinaryView must still reach the client as Spark binary.
+    path = str(tmp_path / "parquet_binary_collect.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\x00\x01", None], type=pa.binary())}), path)
+    df = spark.read.parquet(path)
+    assert df.schema.simpleString() == "struct<b:binary>"
+    assert {bytes(r.b) if r.b is not None else None for r in df.collect()} == {b"\x00\x01", None}
 
 
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
@@ -168,6 +204,28 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
 
     assert rows == [Row(id=1, missing=None)]
+
+
+def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
+    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
+    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
+    # and reads the column as long, so Sail must too.
+    path = tmp_path / "arrow_second_timestamp.parquet"
+    encoded_arrow_schema = base64.b64encode(
+        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+    ).decode()
+    table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": encoded_arrow_schema})
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+
+    assert df.schema.simpleString() == "struct<ts:bigint>"
+    assert df.orderBy("ts").collect() == [
+        Row(ts=-1),
+        Row(ts=1704164645),
+    ]
 
 
 @pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
