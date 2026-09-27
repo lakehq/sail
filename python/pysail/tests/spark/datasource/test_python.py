@@ -93,14 +93,14 @@ def test_python_write_waits_for_abort_cleanup(spark, tmp_path, failure):
     assert path.with_suffix(".aborted").read_text() == "done"
 
 
-@pytest.mark.parametrize("missing", ["pysail", "pysail.spark.datasource.object_store", "unrelated_dependency"])
+@pytest.mark.parametrize("missing", ["pysail", "pysail.spark.datasource._object_store", "unrelated_dependency"])
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail in-process storage binding")
 def test_python_datasource_without_storage_module(spark, monkeypatch, missing):
     """Standalone servers only need the Python storage module when using its API."""
     import importlib.abc
     import sys
 
-    module = "pysail.spark.datasource.object_store"
+    module = "pysail.spark.datasource._object_store"
 
     class MissingModule(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, _path, _target=None):

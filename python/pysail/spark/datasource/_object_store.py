@@ -1,4 +1,6 @@
-"""Callback-scoped access to the current process's Sail object-store registry.
+"""Private bridge to the current process's Sail object-store registry.
+
+For Sail adapter development only; this module has no public compatibility contract.
 
 Storage paths are literal; use glob() explicitly for file discovery.
 URL keys must be percent-encoded;
@@ -12,12 +14,14 @@ from threading import local
 from typing import NamedTuple
 from weakref import WeakSet
 
-DEFAULT_MAX_BYTES = 64 * 1024 * 1024
-DEFAULT_MAX_RANGES = 1024
-DEFAULT_MAX_ENTRIES = 10000
+__all__: list[str] = []
+
+_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
+_DEFAULT_MAX_RANGES = 1024
+_DEFAULT_MAX_ENTRIES = 10000
 
 
-class ObjectMeta(NamedTuple):
+class _ObjectMeta(NamedTuple):
     """Object metadata with a fully qualified, percent-encoded location."""
 
     location: str
@@ -49,7 +53,7 @@ class _StorageIterator:
                 if not self._buffer:
                     self._buffer.extend(self._native.next_batch())
                 if self._buffer:
-                    return ObjectMeta(*self._buffer.popleft())
+                    return _ObjectMeta(*self._buffer.popleft())
             else:
                 chunk = self._native.next_chunk()
                 if chunk is not None:
@@ -78,7 +82,7 @@ class _StorageIterator:
         self.close()
 
 
-class ObjectStore:
+class _ObjectStore:
     """Synchronous storage facade valid only during its originating callback.
 
     Missing objects raise FileNotFoundError, denied access raises PermissionError,
@@ -103,7 +107,7 @@ class ObjectStore:
         for iterator in list(self._iterators):
             iterator.close()
 
-    def read(self, location: str, *, max_bytes: int = DEFAULT_MAX_BYTES) -> bytes:
+    def read(self, location: str, *, max_bytes: int = _DEFAULT_MAX_BYTES) -> bytes:
         """Read a whole object, rejecting results larger than max_bytes.
 
         max_bytes is a per-call byte budget, defaulting to 64 MiB; it can be raised.
@@ -114,7 +118,7 @@ class ObjectStore:
             raise ValueError(message)
         return native.read(location, max_bytes)
 
-    def read_range(self, location: str, start: int, end: int, *, max_bytes: int = DEFAULT_MAX_BYTES) -> bytes:
+    def read_range(self, location: str, start: int, end: int, *, max_bytes: int = _DEFAULT_MAX_BYTES) -> bytes:
         """Read the half-open byte range [start, end).
 
         max_bytes defaults to 64 MiB per call and can be raised.
@@ -130,8 +134,8 @@ class ObjectStore:
         location: str,
         ranges: list[tuple[int, int]],
         *,
-        max_bytes: int = DEFAULT_MAX_BYTES,
-        max_ranges: int = DEFAULT_MAX_RANGES,
+        max_bytes: int = _DEFAULT_MAX_BYTES,
+        max_ranges: int = _DEFAULT_MAX_RANGES,
     ) -> list[bytes]:
         """Read half-open byte ranges in one native call.
 
@@ -174,7 +178,7 @@ class ObjectStore:
             raise ValueError(message)
         return _StorageIterator(self, native.iter_objects(location, batch_size), metadata=True)
 
-    def glob(self, pattern: str, *, max_entries: int = DEFAULT_MAX_ENTRIES) -> list[ObjectMeta]:
+    def glob(self, pattern: str, *, max_entries: int = _DEFAULT_MAX_ENTRIES) -> list[_ObjectMeta]:
         """Discover files using Sail's Rust globbing and hidden-file filtering.
 
         Supports Hadoop-style *, ?, character classes, and brace alternatives.
@@ -188,9 +192,9 @@ class ObjectStore:
         if max_entries < 0:
             message = "max_entries must be non-negative"
             raise ValueError(message)
-        return [ObjectMeta(*item) for item in native.glob(pattern, max_entries)]
+        return [_ObjectMeta(*item) for item in native.glob(pattern, max_entries)]
 
-    def list(self, location: str, *, max_entries: int = DEFAULT_MAX_ENTRIES) -> list[ObjectMeta]:
+    def list(self, location: str, *, max_entries: int = _DEFAULT_MAX_ENTRIES) -> list[_ObjectMeta]:
         """Collect a literal prefix listing; use iter_objects for larger listings.
 
         max_entries defaults to 10,000 objects per call and can be overridden.
@@ -216,15 +220,15 @@ class ObjectStore:
         """Delete an object."""
         self._check().delete(location)
 
-    def head(self, location: str) -> ObjectMeta:
+    def head(self, location: str) -> _ObjectMeta:
         """Return object metadata."""
-        return ObjectMeta(*self._check().head(location))
+        return _ObjectMeta(*self._check().head(location))
 
 
 _STATE = local()
 
 
-def get_object_store() -> ObjectStore:
+def _get_object_store() -> _ObjectStore:
     """Get storage during a Sail datasource callback, including construction.
 
     Driver and worker registries are independent. Custom stores must be configured
@@ -238,13 +242,13 @@ def get_object_store() -> ObjectStore:
     return store
 
 
-def _set_current(native) -> ObjectStore | None:
+def _set_current(native) -> _ObjectStore | None:
     previous = getattr(_STATE, "store", None)
-    _STATE.store = ObjectStore(native)
+    _STATE.store = _ObjectStore(native)
     return previous
 
 
-def _reset_current(previous: ObjectStore | None) -> None:
+def _reset_current(previous: _ObjectStore | None) -> None:
     current = getattr(_STATE, "store", None)
     if current is not None:
         current._close()  # noqa: SLF001 - only callback teardown may invalidate a proxy

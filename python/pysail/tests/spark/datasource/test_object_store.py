@@ -1,4 +1,4 @@
-"""Integration tests for RuntimeEnv-backed Python DataSource object-store access."""
+"""Internal integration tests for the RuntimeEnv-backed Python storage bridge."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from urllib.parse import urlsplit
 import pyarrow as pa
 import pytest
 
-from pysail.spark.datasource.object_store import get_object_store
+from pysail.spark.datasource._object_store import _get_object_store
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail object-store API extension")
+pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail internal object-store bridge")
 
 try:
     from pyspark.sql.datasource import DataSource, DataSourceReader, DataSourceWriter, InputPartition
@@ -34,7 +34,7 @@ class _ObjectStoreReader(DataSourceReader):
         self.output_path = output_path
 
     def partitions(self) -> list[InputPartition]:
-        store = get_object_store()
+        store = _get_object_store()
 
         # Planning runs on the driver. This verifies that the same RuntimeEnv-backed
         # capability is available before the reader is serialized for workers.
@@ -53,7 +53,7 @@ class _ObjectStoreReader(DataSourceReader):
 
     def read(self, partition: InputPartition):
         assert isinstance(partition, _ObjectStorePartition)
-        store = get_object_store()
+        store = _get_object_store()
 
         data = store.read(partition.path)
         prefix = store.read_range(partition.path, 0, 5)
@@ -98,11 +98,11 @@ class _ObjectStoreDataSource(DataSource):
 
     def __init__(self, options):
         super().__init__(options)
-        assert get_object_store().head(self.options["path"]).size > 0
+        assert _get_object_store().head(self.options["path"]).size > 0
 
     def schema(self) -> str:
         path, _ = self._paths()
-        store = get_object_store()
+        store = _get_object_store()
 
         # Schema inference is a control-plane callback and must see the session
         # registry too. Returning DDL also protects the existing schema contract.
@@ -120,7 +120,7 @@ class _ObjectStoreWriter(DataSourceWriter):
         self.planning_marker = planning_marker
 
     def write(self, iterator):
-        store = get_object_store()
+        store = _get_object_store()
         assert store.read(self.planning_marker) == b"planned"
 
         count = sum(1 for _ in iterator)
@@ -128,7 +128,7 @@ class _ObjectStoreWriter(DataSourceWriter):
         return {"count": count}
 
     def commit(self, messages):
-        store = get_object_store()
+        store = _get_object_store()
         assert messages
         payload = store.read(self.output_path)
         store.write(f"{self.output_path}.committed", payload)
@@ -147,13 +147,13 @@ class _ObjectStoreWriteDataSource(DataSource):
         planning_marker = f"{output_path}.planned"
 
         # writer() executes during planning on the driver.
-        get_object_store().write(planning_marker, b"planned")
+        _get_object_store().write(planning_marker, b"planned")
         return _ObjectStoreWriter(output_path, planning_marker)
 
 
 def test_object_store_is_callback_scoped():
     with pytest.raises(RuntimeError, match="only available while executing"):
-        get_object_store()
+        _get_object_store()
 
 
 def test_python_datasource_uses_session_object_store(spark, tmp_path):
@@ -193,12 +193,12 @@ def test_python_datasource_writer_uses_session_object_store(spark, tmp_path):
 
 class _FailingObjectStoreWriter(_ObjectStoreWriter):
     def write(self, _iterator):
-        get_object_store().write(self.output_path, b"partial")
+        _get_object_store().write(self.output_path, b"partial")
         message = "intentional storage writer failure"
         raise RuntimeError(message)
 
     def abort(self, _messages):
-        store = get_object_store()
+        store = _get_object_store()
         store.delete(self.output_path)
         store.write(f"{self.output_path}.aborted", b"cleaned")
 
@@ -233,7 +233,7 @@ class _ParquetStorageReader(DataSourceReader):
 
         import pyarrow.parquet as pq
 
-        store = get_object_store()
+        store = _get_object_store()
 
         class StorageFile(io.RawIOBase):
             def __init__(self):
@@ -297,10 +297,10 @@ class _GlobReader(DataSourceReader):
         self.pattern = pattern
 
     def partitions(self):
-        return [_ObjectStorePartition(meta.location, "") for meta in get_object_store().glob(self.pattern)]
+        return [_ObjectStorePartition(meta.location, "") for meta in _get_object_store().glob(self.pattern)]
 
     def read(self, partition):
-        value = int(get_object_store().read(partition.path))
+        value = int(_get_object_store().read(partition.path))
         yield pa.record_batch([pa.array([value], type=pa.int64())], names=["id"])
 
 
@@ -347,7 +347,7 @@ def test_object_store_filesystem_parent_segments(spark, tmp_path, relative):
             return "parent_segments"
 
         def schema(self):
-            store = get_object_store()
+            store = _get_object_store()
             store.write(path, b"value")
             assert store.read(path) == b"value"
             assert store.read_range(path, 1, 3) == b"al"
@@ -374,7 +374,7 @@ def test_object_store_negative_ranges_and_limits(spark, tmp_path):
             return "negative_storage_arguments"
 
         def schema(self):
-            store = get_object_store()
+            store = _get_object_store()
             store.write(path, b"value")
             for action in [
                 lambda: store.read(path, max_bytes=-1),
@@ -407,7 +407,7 @@ def test_object_store_glob_cache_isolates_stores(tmp_path):
             return "glob_cache_isolation"
 
         def schema(self):
-            store = get_object_store()
+            store = _get_object_store()
             store.write(f"{prefix}/local.txt", b"local")
             store.write(f"{memory_prefix}/memory.txt", b"memory")
             local = store.glob(f"{prefix}/*")

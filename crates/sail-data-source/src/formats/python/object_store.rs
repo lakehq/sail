@@ -27,7 +27,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use super::error::py_err;
 use crate::listing::utils::list_all_files;
 use crate::url::resolve_listing_urls;
-const PYTHON_OBJECT_STORE_MODULE: &str = "pysail.spark.datasource.object_store";
+const PYTHON_OBJECT_STORE_MODULE: &str = "pysail.spark.datasource._object_store";
 type PythonObjectMeta = (String, u64, String, Option<String>, Option<String>);
 
 #[derive(Clone, Debug)]

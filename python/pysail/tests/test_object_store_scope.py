@@ -4,7 +4,7 @@ from collections import deque
 
 import pytest
 
-from pysail.spark.datasource.object_store import _reset_current, _set_current, get_object_store
+from pysail.spark.datasource._object_store import _get_object_store, _reset_current, _set_current
 
 
 class _Cursor:
@@ -39,18 +39,18 @@ class _Native:
 def test_nested_scopes_restore_outer_and_invalidate_saved_inner():
     a = _Native(b"a")
     previous = _set_current(a)
-    outer = get_object_store()
+    outer = _get_object_store()
     try:
         b = _Native(b"b")
         saved = _set_current(b)
-        inner = get_object_store()
+        inner = _get_object_store()
         iterator = inner.iter_objects("memory:///")
         assert next(iterator).location == "memory:///item-0"
         _reset_current(saved)
         assert b.closed
         assert b.cursor.closed
         assert not a.closed
-        assert get_object_store() is outer
+        assert _get_object_store() is outer
         assert outer.read("memory:///data") == b"a"
         with pytest.raises(RuntimeError, match="ended"):
             inner.read("memory:///data")
@@ -68,7 +68,7 @@ def test_listing_fetches_batches_on_demand_and_closes_early():
     native = _Native(b"")
     previous = _set_current(native)
     try:
-        with get_object_store().iter_objects("memory:///") as items:
+        with _get_object_store().iter_objects("memory:///") as items:
             assert native.cursor.calls == 0
             assert next(items).size == 1
             assert next(items).size == 1
@@ -84,7 +84,7 @@ def test_eager_listing_limit_closes_cursor():
     previous = _set_current(native)
     try:
         with pytest.raises(ValueError, match="max_entries"):
-            get_object_store().list("memory:///", max_entries=2)
+            _get_object_store().list("memory:///", max_entries=2)
         assert native.cursor.closed
     finally:
         _reset_current(previous)
@@ -104,7 +104,7 @@ def test_byte_iterator_closes_after_error():
     native.cursor = FailingCursor()
     previous = _set_current(native)
     try:
-        chunks = get_object_store().iter_bytes("memory:///data")
+        chunks = _get_object_store().iter_bytes("memory:///data")
         with pytest.raises(PermissionError):
             next(chunks)
         assert native.cursor.closed
@@ -131,7 +131,7 @@ def test_byte_iterator_yields_without_collecting():
     native.cursor = Cursor()
     previous = _set_current(native)
     try:
-        chunks = get_object_store().iter_bytes("memory:///data")
+        chunks = _get_object_store().iter_bytes("memory:///data")
         assert native.cursor.calls == 0
         assert next(chunks) == b"abc"
         assert native.cursor.calls == 1
@@ -152,7 +152,7 @@ def test_glob_returns_metadata_and_rejects_expired_scope():
             return [("memory:///part-1.txt", expected_size, "", None, None)]
 
     previous = _set_current(Native(b""))
-    store = get_object_store()
+    store = _get_object_store()
     try:
         assert store.glob("memory:///part-*.txt", max_entries=requested_limit)[0].size == expected_size
         with pytest.raises(ValueError, match="max_entries"):
