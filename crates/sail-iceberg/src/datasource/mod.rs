@@ -12,9 +12,11 @@
 
 pub(crate) mod copy_on_write;
 pub mod expressions;
-mod partition_defaults;
-pub mod provider;
+pub(crate) mod parquet;
+pub(crate) mod partition_defaults;
+pub(crate) mod predicate;
 pub mod pruning;
+pub mod scan;
 pub mod type_converter;
 
-pub use provider::*;
+pub use scan::*;

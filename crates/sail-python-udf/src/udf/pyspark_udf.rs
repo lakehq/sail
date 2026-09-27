@@ -11,7 +11,7 @@ use pyo3::{Py, PyAny, Python};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
-use crate::error::PyUdfResult;
+use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
@@ -20,6 +20,7 @@ pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
     ScalarPandas,
+    // Extracted into partition stream execution during analysis.
     ScalarPandasIter,
     // Spark 4.0 Arrow-native scalar UDF types
     ScalarArrow,
@@ -102,7 +103,9 @@ impl PySparkUDF {
                 PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandasIter => {
-                    PySpark::scalar_pandas_iter_udf(py, udf, &self.config)?
+                    return Err(PyUdfError::internal(
+                        "scalar iterator UDF requires partition stream execution",
+                    ));
                 }
                 // Arrow-native: no Pandas conversion, pass Arrow arrays directly
                 PySparkUdfKind::ScalarArrow => PySpark::scalar_arrow_udf(py, udf, &self.config)?,

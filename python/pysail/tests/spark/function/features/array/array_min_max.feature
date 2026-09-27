@@ -79,15 +79,14 @@ Feature: array_min and array_max functions
         | array_min and array_max with float NaN                  | array(CAST('NaN' AS FLOAT), CAST(1.0 AS FLOAT))                | 1.0       | NaN      |
         | array_min and array_max with positive and negative zero | array(CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE))               | 0.0       | 0.0      |
 
-    @sail-only
-    Scenario: array_min and array_max with extreme double values (display format differs from Spark)
+    Scenario: array_min and array_max with extreme double values
       When query
         """
         SELECT array_min(array(1.7976931348623157E308, -1.7976931348623157E308, 0.0)) AS min_val, array_max(array(1.7976931348623157E308, -1.7976931348623157E308, 0.0)) AS max_val
         """
       Then query result
         | min_val                 | max_val                |
-        | -1.7976931348623157e308 | 1.7976931348623157e308 |
+        | -1.7976931348623157E308 | 1.7976931348623157E308 |
 
   Rule: Boolean arrays
 

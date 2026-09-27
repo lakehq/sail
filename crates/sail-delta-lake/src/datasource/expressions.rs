@@ -25,8 +25,11 @@ use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::simplify::SimplifyContextBuilder;
-use datafusion::logical_expr::{BinaryExpr, Expr, Operator, TableProviderFilterPushDown};
+use datafusion::logical_expr::{
+    BinaryExpr, Expr, ExprSchemable, Operator, TableProviderFilterPushDown,
+};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     Column as PhysicalColumn, Literal as PhysicalLiteral,
@@ -114,6 +117,110 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
         }
     });
     is_applicable
+}
+
+/// Returns whether a predicate uses a value of a nested type containing struct fields as a
+/// whole (for example, a struct column compared with a struct literal), rather than only
+/// accessing its fields.
+///
+/// In column-mapped tables, struct fields in the data files use physical names, so such a
+/// value cannot be evaluated against the data files. Field accesses are rewritten to physical
+/// names by [`rewrite_predicate_for_column_mapping`], but whole struct values are not.
+/// Predicates whose types cannot be resolved are treated as using nested values.
+pub fn predicate_uses_struct_value(expr: &Expr, schema: &DFSchema) -> bool {
+    let mut uses_struct_value = false;
+    let _ = expr.apply(|expr| {
+        if let Expr::IsNull(value) | Expr::IsNotNull(value) = expr
+            && matches!(value.as_ref(), Expr::Column(_))
+            && value
+                .get_type(schema)
+                .is_ok_and(|data_type| is_collection_type(&data_type))
+        {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        let is_value = match expr {
+            Expr::Column(_) => true,
+            Expr::ScalarFunction(function) => function.func.inner().is::<GetFieldFunc>(),
+            _ => false,
+        };
+        if !is_value {
+            return Ok(TreeNodeRecursion::Continue);
+        }
+        match expr.get_type(schema) {
+            Ok(data_type) if !data_type_contains_struct(&data_type) => Ok(TreeNodeRecursion::Jump),
+            _ => {
+                uses_struct_value = true;
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+    });
+    uses_struct_value
+}
+
+/// The physical counterpart of [`predicate_uses_struct_value`].
+pub fn physical_predicate_uses_struct_value(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &ArrowSchema,
+) -> bool {
+    let mut uses_struct_value = false;
+    let _ = expr.apply(|expr| {
+        let null_checked_column = expr
+            .downcast_ref::<IsNullExpr>()
+            .map(IsNullExpr::arg)
+            .or_else(|| expr.downcast_ref::<IsNotNullExpr>().map(IsNotNullExpr::arg));
+        if null_checked_column.is_some_and(|value| {
+            value.downcast_ref::<PhysicalColumn>().is_some()
+                && value
+                    .data_type(schema)
+                    .is_ok_and(|data_type| is_collection_type(&data_type))
+        }) {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        let is_value = expr.downcast_ref::<PhysicalColumn>().is_some()
+            || ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some();
+        if !is_value {
+            return Ok(TreeNodeRecursion::Continue);
+        }
+        match expr.data_type(schema) {
+            Ok(data_type) if !data_type_contains_struct(&data_type) => Ok(TreeNodeRecursion::Jump),
+            _ => {
+                uses_struct_value = true;
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+    });
+    uses_struct_value
+}
+
+fn is_collection_type(data_type: &ArrowDataType) -> bool {
+    matches!(
+        data_type,
+        ArrowDataType::List(_)
+            | ArrowDataType::LargeList(_)
+            | ArrowDataType::ListView(_)
+            | ArrowDataType::LargeListView(_)
+            | ArrowDataType::FixedSizeList(_, _)
+            | ArrowDataType::Map(_, _)
+    )
+}
+
+fn data_type_contains_struct(data_type: &ArrowDataType) -> bool {
+    match data_type {
+        ArrowDataType::Struct(_) => true,
+        ArrowDataType::List(field)
+        | ArrowDataType::LargeList(field)
+        | ArrowDataType::ListView(field)
+        | ArrowDataType::LargeListView(field)
+        | ArrowDataType::FixedSizeList(field, _) => data_type_contains_struct(field.data_type()),
+        ArrowDataType::Map(entries, _) => match entries.data_type() {
+            ArrowDataType::Struct(fields) => fields
+                .iter()
+                .any(|field| data_type_contains_struct(field.data_type())),
+            other => data_type_contains_struct(other),
+        },
+        ArrowDataType::Dictionary(_, value) => data_type_contains_struct(value),
+        _ => false,
+    }
 }
 
 /// Rewrite column references in a parquet pushdown predicate from logical names to the
@@ -331,5 +438,141 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(path, ["col-outer", "col-inner"]);
         Ok(())
+    }
+
+    fn struct_value_test_schema() -> DFSchema {
+        let inner = ArrowDataType::Struct(
+            vec![datafusion::arrow::datatypes::Field::new(
+                "c",
+                ArrowDataType::Int32,
+                true,
+            )]
+            .into(),
+        );
+        let s = ArrowDataType::Struct(
+            vec![
+                datafusion::arrow::datatypes::Field::new("a", ArrowDataType::Int32, true),
+                datafusion::arrow::datatypes::Field::new("inner", inner, true),
+            ]
+            .into(),
+        );
+        let arr = ArrowDataType::List(Arc::new(datafusion::arrow::datatypes::Field::new(
+            "element",
+            ArrowDataType::Int32,
+            true,
+        )));
+        let arr_s = ArrowDataType::List(Arc::new(datafusion::arrow::datatypes::Field::new(
+            "element",
+            s.clone(),
+            true,
+        )));
+        let m_s = ArrowDataType::Map(
+            Arc::new(datafusion::arrow::datatypes::Field::new(
+                "key_value",
+                ArrowDataType::Struct(
+                    vec![
+                        datafusion::arrow::datatypes::Field::new("key", ArrowDataType::Utf8, false),
+                        datafusion::arrow::datatypes::Field::new("value", s.clone(), true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let schema = ArrowSchema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", ArrowDataType::Int32, true),
+            datafusion::arrow::datatypes::Field::new("s", s, true),
+            datafusion::arrow::datatypes::Field::new("arr", arr, true),
+            datafusion::arrow::datatypes::Field::new("arr_s", arr_s, true),
+            datafusion::arrow::datatypes::Field::new("m_s", m_s, true),
+        ]);
+        DFSchema::try_from(schema).expect("schema")
+    }
+
+    fn get_field_expr(source: Expr, name: &str) -> Expr {
+        datafusion::functions::core::get_field().call(vec![
+            source,
+            Expr::Literal(ScalarValue::Utf8(Some(name.to_string())), None),
+        ])
+    }
+
+    #[test]
+    fn detects_predicates_using_struct_values() {
+        use datafusion::logical_expr::{col, lit};
+
+        let schema = struct_value_test_schema();
+        let struct_literal = Expr::Literal(
+            ScalarValue::try_from(
+                schema
+                    .field_with_unqualified_name("s")
+                    .expect("field")
+                    .data_type(),
+            )
+            .expect("null struct"),
+            None,
+        );
+
+        assert!(!predicate_uses_struct_value(&col("id").eq(lit(1)), &schema));
+        assert!(!predicate_uses_struct_value(
+            &get_field_expr(col("s"), "a").eq(lit(1)),
+            &schema
+        ));
+        assert!(!predicate_uses_struct_value(
+            &get_field_expr(get_field_expr(col("s"), "inner"), "c").gt(lit(1)),
+            &schema
+        ));
+        assert!(!predicate_uses_struct_value(
+            &col("arr").is_not_null(),
+            &schema
+        ));
+        assert!(predicate_uses_struct_value(
+            &col("s").eq(struct_literal),
+            &schema
+        ));
+        assert!(predicate_uses_struct_value(
+            &get_field_expr(col("s"), "inner").is_null(),
+            &schema
+        ));
+        assert!(predicate_uses_struct_value(
+            &col("missing").eq(lit(1)),
+            &schema
+        ));
+    }
+
+    #[test]
+    fn preserves_null_checks_on_struct_collections() {
+        use datafusion::logical_expr::col;
+
+        let schema = struct_value_test_schema();
+        for (name, index) in [("arr_s", 3), ("m_s", 4)] {
+            assert!(!predicate_uses_struct_value(&col(name).is_null(), &schema));
+            assert!(!predicate_uses_struct_value(
+                &col(name).is_not_null(),
+                &schema
+            ));
+            assert!(predicate_uses_struct_value(
+                &col(name).eq(col(name)),
+                &schema
+            ));
+
+            let column = Arc::new(PhysicalColumn::new(name, index)) as Arc<dyn PhysicalExpr>;
+            let null = Arc::new(IsNullExpr::new(Arc::clone(&column))) as Arc<dyn PhysicalExpr>;
+            let not_null = Arc::new(IsNotNullExpr::new(column)) as Arc<dyn PhysicalExpr>;
+            assert!(!physical_predicate_uses_struct_value(
+                &null,
+                schema.as_arrow()
+            ));
+            assert!(!physical_predicate_uses_struct_value(
+                &not_null,
+                schema.as_arrow()
+            ));
+        }
+        let struct_column = Arc::new(PhysicalColumn::new("s", 1)) as Arc<dyn PhysicalExpr>;
+        let null = Arc::new(IsNullExpr::new(struct_column)) as Arc<dyn PhysicalExpr>;
+        assert!(physical_predicate_uses_struct_value(
+            &null,
+            schema.as_arrow()
+        ));
     }
 }

@@ -14,6 +14,42 @@ def test_sql_positional_parameters(spark):
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
 
 
+def test_sql_timestamp_string_parameters(spark):
+    timestamp = "2024-05-01 12:00:00.123456789"
+    result = spark.sql(
+        """
+        SELECT
+          TIMESTAMP '2024-05-01 12:00:00.123456' = ? AS comparison,
+          TIMESTAMP '2024-05-01 12:00:00.123456' IN (?) AS in_list,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            BETWEEN ? AND ? AS bounded,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            IS NOT DISTINCT FROM ? AS distinctness
+        """,
+        args=[timestamp] * 5,
+    ).collect()
+    assert result == [(True, True, True, True)]
+
+    assert spark.sql(
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456' = :candidate
+        """,
+        args={"candidate": timestamp},
+    ).collect() == [(True,)]
+
+
+@pytest.mark.parametrize(
+    ("query", "args"),
+    [
+        ("SELECT round(:p, 1) AS r", {"p": "1.25"}),
+        ("SELECT round(?, 1) AS r", ["1.25"]),
+    ],
+    ids=["named", "positional"],
+)
+def test_round_of_string_parameter(spark, query, args):
+    assert spark.sql(query, args=args).collect() == [(1.3,)]
+
+
 def test_keyword_as_explicit_column_alias(spark):
     # Keywords are not reserved in Spark and can be used as column aliases
     # when the `AS` keyword is explicit.

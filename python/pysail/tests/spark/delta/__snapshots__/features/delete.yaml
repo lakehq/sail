@@ -19,6 +19,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -95,6 +98,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:

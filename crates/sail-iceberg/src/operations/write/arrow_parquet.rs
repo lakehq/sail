@@ -32,7 +32,7 @@ use sail_common_datafusion::schema_evolution::{
 };
 use tokio::io::AsyncWriteExt;
 
-use crate::datasource::type_converter::iceberg_field_id;
+use crate::datasource::type_converter::{iceberg_field_id, is_uuid_arrow_field};
 
 /// Abort uploads abandoned before completion starts.
 pub(crate) struct ParquetObjectSink {
@@ -190,6 +190,7 @@ fn parquet_schema(
     properties: &WriterProperties,
 ) -> Result<SchemaDescriptor, String> {
     let mut variant_ids = HashSet::new();
+    let mut uuid_ids = HashSet::new();
     for field in schema.flattened_fields() {
         if field.has_valid_extension_type::<VariantType>() {
             let field_id = iceberg_field_id(field)
@@ -199,29 +200,47 @@ fn parquet_schema(
                 })?;
             variant_ids.insert(field_id);
         }
+        if is_uuid_arrow_field(field) {
+            let field_id = iceberg_field_id(field)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("Missing Iceberg field ID for UUID '{}'", field.name()))?;
+            uuid_ids.insert(field_id);
+        }
     }
     let parquet_schema = ArrowSchemaConverter::new()
         .with_coerce_types(properties.coerce_types())
         .convert(schema)
         .map_err(|error| error.to_string())?;
-    if variant_ids.is_empty() {
+    if variant_ids.is_empty() && uuid_ids.is_empty() {
         return Ok(parquet_schema);
     }
-    // Field IDs identify Variant groups through Parquet's list/map wrapper groups.
-    Ok(SchemaDescriptor::new(annotate_variant_groups(
+    // Field IDs identify logical types through Parquet's list/map wrapper groups.
+    Ok(SchemaDescriptor::new(annotate_iceberg_types(
         &parquet_schema.root_schema_ptr(),
         &variant_ids,
+        &uuid_ids,
     )?))
 }
 
-fn annotate_variant_groups(
+fn annotate_iceberg_types(
     parquet_type: &TypePtr,
     variant_ids: &HashSet<i32>,
+    uuid_ids: &HashSet<i32>,
 ) -> Result<TypePtr, String> {
+    let info = parquet_type.get_basic_info();
     if parquet_type.is_primitive() {
+        if info.has_id() && uuid_ids.contains(&info.id()) {
+            return Type::primitive_type_builder(info.name(), parquet_type.get_physical_type())
+                .with_length(16)
+                .with_repetition(info.repetition())
+                .with_logical_type(Some(LogicalType::Uuid))
+                .with_id(Some(info.id()))
+                .build()
+                .map(Arc::new)
+                .map_err(|error| error.to_string());
+        }
         return Ok(parquet_type.clone());
     }
-    let info = parquet_type.get_basic_info();
     let logical_type = if info.has_id() && variant_ids.contains(&info.id()) {
         Some(LogicalType::variant(None))
     } else {
@@ -230,7 +249,7 @@ fn annotate_variant_groups(
     let fields = parquet_type
         .get_fields()
         .iter()
-        .map(|field| annotate_variant_groups(field, variant_ids))
+        .map(|field| annotate_iceberg_types(field, variant_ids, uuid_ids))
         .collect::<Result<Vec<_>, _>>()?;
     let mut builder = Type::group_type_builder(info.name())
         .with_fields(fields)
@@ -294,6 +313,53 @@ mod tests {
     use parquet::basic::Repetition;
 
     use super::*;
+
+    #[test]
+    fn uuid_annotations_distinguish_fixed_fields_and_round_trip_nested_schemas()
+    -> Result<(), String> {
+        use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_to_arrow};
+        use crate::spec::{NestedField, PrimitiveType, Type as IcebergType};
+        let iceberg = crate::spec::Schema::builder()
+            .with_fields(vec![
+                Arc::new(NestedField::optional(
+                    1,
+                    "uuid",
+                    IcebergType::Primitive(PrimitiveType::Uuid),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "fixed",
+                    IcebergType::Primitive(PrimitiveType::Fixed(16)),
+                )),
+                Arc::new(NestedField::optional(
+                    3,
+                    "items",
+                    IcebergType::List(crate::spec::ListType::new(Arc::new(NestedField::optional(
+                        4,
+                        "element",
+                        IcebergType::Primitive(PrimitiveType::Uuid),
+                    )))),
+                )),
+            ])
+            .build()?;
+        let arrow = iceberg_schema_to_arrow(&iceberg).map_err(|error| error.to_string())?;
+        let round_trip = arrow_schema_to_iceberg(&arrow).map_err(|error| error.to_string())?;
+        assert_eq!(round_trip, iceberg);
+        let parquet = parquet_schema(&arrow, &WriterProperties::builder().build())?;
+        let fields = parquet.root_schema().get_fields();
+        assert_eq!(
+            fields[0].get_basic_info().logical_type_ref(),
+            Some(&LogicalType::Uuid)
+        );
+        assert_eq!(fields[1].get_basic_info().logical_type_ref(), None);
+        assert_eq!(
+            fields[2].get_fields()[0].get_fields()[0]
+                .get_basic_info()
+                .logical_type_ref(),
+            Some(&LogicalType::Uuid)
+        );
+        Ok(())
+    }
 
     #[test]
     fn variant_annotations_follow_field_ids_through_nested_types() -> Result<(), String> {

@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_filter"
+        "success": "ok"
       }
     },
     {

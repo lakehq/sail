@@ -5,3 +5,6 @@ pub mod table_source;
 pub(crate) mod update;
 
 pub use table_source::IcebergTableSource;
+
+mod metadata_aggregate;
+pub use metadata_aggregate::IcebergMetadataAggregateRewriter;

@@ -29,6 +29,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -136,6 +139,9 @@ data:
             Filter: delta_update_basic.id = Int32(2)
               TableScan: delta_update_basic projection=[id, __sail_file_path], partial_filters=[delta_update_basic.id = Int32(2)]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -212,6 +218,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
