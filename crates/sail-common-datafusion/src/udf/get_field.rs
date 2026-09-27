@@ -139,11 +139,15 @@ pub(super) fn extract_struct_field<'a>(
     return_type: &DataType,
 ) -> Result<ColumnarValue> {
     let mut value = &array;
-    let mut ancestors = Vec::with_capacity(names.size_hint().0);
+    let capacity = names.size_hint().0;
+    let mut ancestors = Vec::new();
     for name in names {
         let name = name?;
         let parent = datafusion_common::cast::as_struct_array(value.as_ref())?;
         if let Some(nulls) = parent.nulls().filter(|nulls| nulls.null_count() > 0) {
+            if ancestors.is_empty() {
+                ancestors.reserve_exact(capacity);
+            }
             ancestors.push(nulls);
         }
         value = parent

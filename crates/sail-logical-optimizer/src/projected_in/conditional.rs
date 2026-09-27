@@ -25,7 +25,11 @@ pub(super) fn simplify(
     let mut qualifier = None;
     let protected = expr
         .transform_down(|expr| {
-            let expr = simplify_complements(push_literal_comparison(expr, &schema, config)?)?;
+            let expr = simplify_complements(push_literal_comparison(
+                simplify_null_test(expr)?,
+                &schema,
+                config,
+            )?)?;
             if !is_conditional(&expr) || !has_uncorrelated_in(&expr)? {
                 return Ok(Transformed::no(expr));
             }
@@ -111,6 +115,48 @@ fn is_conditional(expr: &Expr) -> bool {
                 && [binary.left.as_ref(), binary.right.as_ref()].iter().any(|expr|
                 matches!(expr, Expr::ScalarFunction(function) if function.func.name() == "nullif")
                     || matches!(expr, Expr::BinaryExpr(_)) && is_conditional(expr)))
+}
+
+// Catalyst removes a Boolean negation below a null test before De Morgan's
+// rewrite can turn a positive IN into a null-aware NOT IN.
+fn simplify_null_test(expr: Expr) -> Result<Expr> {
+    let (mut child, not_null) = match expr {
+        Expr::IsNull(child) | Expr::IsUnknown(child) => (child, false),
+        Expr::IsNotNull(child) | Expr::IsNotUnknown(child) => (child, true),
+        expr => return Ok(expr),
+    };
+    if has_uncorrelated_in(&child)? {
+        loop {
+            child = match *child {
+                Expr::Not(inner) => inner,
+                Expr::BinaryExpr(binary) if matches!(binary.op, Operator::Eq | Operator::NotEq) => {
+                    if matches!(
+                        binary.right.as_ref(),
+                        Expr::Literal(ScalarValue::Boolean(Some(_)), _)
+                    ) {
+                        binary.left
+                    } else if matches!(
+                        binary.left.as_ref(),
+                        Expr::Literal(ScalarValue::Boolean(Some(_)), _)
+                    ) {
+                        binary.right
+                    } else {
+                        child = Box::new(Expr::BinaryExpr(binary));
+                        break;
+                    }
+                }
+                expr => {
+                    child = Box::new(expr);
+                    break;
+                }
+            };
+        }
+    }
+    Ok(if not_null {
+        Expr::IsNotNull(child)
+    } else {
+        Expr::IsNull(child)
+    })
 }
 
 fn simplify_complements(expr: Expr) -> Result<Expr> {
@@ -252,6 +298,15 @@ fn push_literal_comparison(
         return Ok(expr);
     }
     let compare = |branch: Expr| {
+        // Catalyst pushes a comparison through one conditional level per
+        // optimizer pass, then folds Boolean equality. Do that fold before
+        // visiting the new branches, so nested CASE results retain their NOT
+        // boundary rather than distributing the comparison a second time.
+        if binary.op == Operator::Eq
+            && let Expr::Literal(ScalarValue::Boolean(Some(value)), _) = literal
+        {
+            return if *value { branch } else { !branch };
+        }
         if conditional_left {
             datafusion_expr::expr_fn::binary_expr(branch, binary.op, literal.clone())
         } else {

@@ -488,12 +488,15 @@ fn map_batches(
     parallelism: usize,
     evaluate: impl Fn(&RecordBatch) -> Result<RecordBatch> + Send + Sync + 'static,
 ) -> Result<Vec<RecordBatch>> {
+    let rows = input.iter().map(RecordBatch::num_rows).sum::<usize>();
+    if parallelism <= 1 || rows <= batch_size {
+        return input.iter().map(evaluate).collect();
+    }
     let parallelism = parallelism.min(
         std::thread::available_parallelism()
             .map(usize::from)
             .unwrap_or(1),
     );
-    let rows = input.iter().map(RecordBatch::num_rows).sum::<usize>();
     if parallelism <= 1 || rows <= batch_size.saturating_mul(parallelism) {
         return input.iter().map(evaluate).collect();
     }

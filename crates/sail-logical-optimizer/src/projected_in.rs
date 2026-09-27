@@ -85,6 +85,31 @@ impl OptimizerRule for RewriteProjectedIn {
                 Ok(Transformed::no(plan))
             }
         })?;
+        // Normalize projections only after alias substitution. Include prepared
+        // NULL operands so dead branches lose their marks before join pruning.
+        let pushed = pushed.data.transform_up_with_subqueries(|plan| {
+            let LogicalPlan::Projection(projection) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let schema = Arc::clone(projection.input.schema());
+            let names = NamePreserver::new_for_projection();
+            plan.map_expressions(|expr| {
+                if !has_uncorrelated_in(&expr)?
+                    && !expr
+                        .column_refs()
+                        .iter()
+                        .any(|column| prepared_marks.contains(*column))
+                {
+                    return Ok(Transformed::no(expr));
+                }
+                let name = names.save(&expr);
+                Ok(Transformed::yes(name.restore(conditional::simplify(
+                    expr,
+                    Arc::clone(&schema),
+                    config,
+                )?)))
+            })
+        })?;
         // Prune unused IN expressions before they become joins, including those
         // referenced only by a filter that was just pushed down. NULL producers
         // were classified before projection merging can inline their operands.
@@ -834,7 +859,14 @@ fn rewrite_projection(
                     expr => Ok(Transformed::no(expr)),
                 })
                 .data()?;
-            let expr = conditional::simplify(expr, Arc::clone(&schema), config)?;
+            // Alias filters need the original Boolean structure: Spark pushes
+            // them before normalizing the projection (for example, IS NULL can
+            // remove NOT before it distributes over AND/OR).
+            let expr = if prepare {
+                expr
+            } else {
+                conditional::simplify(expr, Arc::clone(&schema), config)?
+            };
             Ok(name.restore(expr.rewrite(&mut rewriter)?.data))
         })
         .collect::<Result<Vec<_>>>()?;
