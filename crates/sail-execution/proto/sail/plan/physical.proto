@@ -154,6 +154,7 @@ message HigherOrderUdf {
     ConvertTzUdf convert_tz_lazy = 8;
     SparkMapFilterUdf map_filter = 9;
     SparkRegexpInstrUdf regexp_instr = 10;
+    SparkZipWithUdf zip_with = 11;
   }
 }
 
@@ -170,6 +171,13 @@ message SparkRegexpInstrUdf {
 message SparkArrayForallUdf {}
 
 message SparkMapFilterUdf {}
+
+message SparkZipWithUdf {
+  bool map = 1;
+  bool ansi_mode = 2;
+  bool case_sensitive = 3;
+  bool legacy_map_key_equality = 4;
+}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only

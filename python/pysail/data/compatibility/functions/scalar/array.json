@@ -126,8 +126,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "shuffle",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/220"
+    "status": "partially supported",
+    "note": "Supports the single-argument SQL form. The seed argument and PySpark versions that send a seed are not yet supported."
   },
   {
     "module": "pyspark.sql.functions",

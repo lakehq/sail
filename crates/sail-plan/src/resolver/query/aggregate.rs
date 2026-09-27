@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::functions_aggregate::grouping::Grouping;
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
@@ -16,6 +17,7 @@ use datafusion_expr::{
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -776,18 +778,20 @@ impl PlanResolver<'_> {
         Ok(expr
             .transform_down(|expr| {
                 if let Expr::AggregateFunction(function) = expr {
-                    match function.func.name() {
-                        "grouping" => Ok(Transformed::yes(Self::grouping_on_grouping_id(
+                    if function.func.inner().is::<Grouping>() {
+                        Ok(Transformed::yes(Self::grouping_on_grouping_id(
                             function,
                             grouping_exprs,
                             has_grouping_set,
-                        )?)),
-                        "grouping_id" => Ok(Transformed::yes(Self::grouping_id_on_grouping_id(
+                        )?))
+                    } else if function.func.inner().is::<GroupingIdFunction>() {
+                        Ok(Transformed::yes(Self::grouping_id_on_grouping_id(
                             function,
                             grouping_exprs,
                             has_grouping_set,
-                        )?)),
-                        _ => Ok(Transformed::no(Expr::AggregateFunction(function))),
+                        )?))
+                    } else {
+                        Ok(Transformed::no(Expr::AggregateFunction(function)))
                     }
                 } else {
                     Ok(Transformed::no(expr))

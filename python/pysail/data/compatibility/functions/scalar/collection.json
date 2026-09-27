@@ -42,14 +42,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "map_filter",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "map_zip_with",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -91,7 +89,6 @@
   {
     "module": "pyspark.sql.functions",
     "function": "zip_with",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   }
 ]

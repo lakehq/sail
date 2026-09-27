@@ -35,11 +35,17 @@ impl PlanResolver<'_> {
                 .resolve_lambda_parameter(first.as_ref())
                 .map(|(param, field)| (param.to_string(), field.cloned()))
         {
-            let display = rest
-                .last()
-                .map(|x| x.as_ref())
-                .unwrap_or(declared.as_str())
-                .to_string();
+            let display = if state.config().anonymous_lambda_display {
+                std::iter::once("namedlambdavariable()")
+                    .chain(rest.iter().map(|part| part.as_ref()))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            } else {
+                rest.last()
+                    .map(|x| x.as_ref())
+                    .unwrap_or(declared.as_str())
+                    .to_string()
+            };
             let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
             for part in rest {
                 expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(

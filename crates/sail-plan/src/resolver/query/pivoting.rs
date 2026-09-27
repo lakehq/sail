@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::functions_aggregate::count::count_udaf;
+use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, NullTreatment};
@@ -563,7 +564,7 @@ fn inject_pivot_filter(
                 };
                 func.params.filter = Some(Box::new(filter));
                 if force_first_last_ignore_nulls
-                    && matches!(func.func.name(), "first_value" | "last_value")
+                    && (func.func.inner().is::<FirstValue>() || func.func.inner().is::<LastValue>())
                 {
                     func.params.null_treatment = Some(NullTreatment::IgnoreNulls);
                 }

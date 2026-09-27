@@ -19,6 +19,7 @@ use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
+use sail_function::scalar::array::spark_zip_with::SparkZipWith;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
@@ -269,6 +270,38 @@ impl RemotePhysicalProtoConverter {
 
         let param_sets = match fun.lambda_parameters(0, &value_or_lambda)? {
             LambdaParametersProgress::Complete(params) => params,
+            LambdaParametersProgress::Partial(partial)
+                if (fun.inner().as_ref() as &dyn std::any::Any).is::<SparkZipWith>() =>
+            {
+                // Zip's hidden collection lambdas have no element parameters.
+                // Decode those first so their result fields can bind the merge
+                // lambda, matching logical lambda resolution's second step.
+                for (index, fields) in partial.iter().enumerate().take(2) {
+                    let fields = fields.as_ref().ok_or_else(|| {
+                        plan_datafusion_err!("missing zip collection lambda parameters")
+                    })?;
+                    let input = inputs
+                        .get(index)
+                        .ok_or_else(|| plan_datafusion_err!("missing zip collection lambda"))?;
+                    let (params, body) = lambda_proto_parts(input)?
+                        .ok_or_else(|| plan_datafusion_err!("expected zip collection lambda"))?;
+                    let schema = extend_lambda_schema(input_schema, &params, fields);
+                    let body = self.proto_to_physical_expr(body, &schema, ctx)?;
+                    value_or_lambda[index] =
+                        ValueOrLambda::Lambda(Some(body.return_field(&schema)?));
+                    decoded_values[index] =
+                        Some(Arc::new(LambdaExpr::try_new(params, body)?) as Arc<dyn PhysicalExpr>);
+                }
+                match fun.lambda_parameters(1, &value_or_lambda)? {
+                    LambdaParametersProgress::Complete(params) => params,
+                    LambdaParametersProgress::Partial(_) => {
+                        return plan_err!(
+                            "`{}` returned unresolved zip lambda parameters",
+                            fun.name()
+                        );
+                    }
+                }
+            }
             LambdaParametersProgress::Partial(_) => {
                 return plan_err!("`{}` returned partial lambda parameters", fun.name());
             }
@@ -284,6 +317,9 @@ impl RemotePhysicalProtoConverter {
                         plan_datafusion_err!("missing lambda parameter fields for `{}`", fun.name())
                     })?;
                     lambda_index += 1;
+                    if let Some(decoded) = &decoded_values[index] {
+                        return Ok(Arc::clone(decoded));
+                    }
 
                     let schema = extend_lambda_schema(input_schema, &params, fields);
                     let body = self.proto_to_physical_expr(body, &schema, ctx)?;

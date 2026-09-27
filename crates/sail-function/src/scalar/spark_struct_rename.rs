@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
-use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Spark-compatible "rename struct fields by position".
 ///
@@ -46,6 +48,17 @@ impl ScalarUDFImpl for SparkStructRename {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.target_type.clone())
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [field] = args.arg_fields else {
+            return exec_err!("spark_struct_rename expects exactly one argument");
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.target_type.clone(),
+            field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -26,14 +26,17 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
+use datafusion::functions::datetime::date_part::DatePartFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
-use datafusion::functions_window::cume_dist::cume_dist_udwf;
-use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
-use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
-use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
-use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::functions_window::cume_dist::{CumeDist, cume_dist_udwf};
+use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf, lead_udwf};
+use datafusion::functions_window::nth_value::{
+    NthValue, first_value_udwf, last_value_udwf, nth_value_udwf,
+};
+use datafusion::functions_window::rank::{Rank, dense_rank_udwf, percent_rank_udwf, rank_udwf};
+use datafusion::functions_window::row_number::{RowNumber, row_number_udwf};
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
@@ -76,6 +79,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
+use datafusion_spark::function::json::json_tuple::JsonTuple;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
@@ -125,6 +129,7 @@ use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
 };
+use sail_function::aggregate::approx_percentile::ApproxPercentile;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -188,7 +193,9 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{
+    JsonAsText, JsonLength, JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson,
+};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -3352,6 +3359,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
@@ -3600,10 +3608,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
-            || matches!(node.name(), "date_part" | "datepart" | "extract")
-            || node.name() == "json_as_text"
-            || node.name() == "json_len"
-            || node.name() == "json_length"
+            || node_inner.is::<DatePartFunc>()
+            || node_inner.is::<JsonAsText>()
+            || node_inner.is::<JsonLength>()
+            || node_inner.is::<JsonObjectKeys>()
+            || node_inner.is::<JsonTuple>()
         {
             UdfKind::Standard(r#gen::StandardUdf {})
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
@@ -3821,6 +3830,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
+                "percentile_approx" => {
+                    Ok(Arc::new(AggregateUDF::from(ApproxPercentile::default())))
+                }
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
@@ -3985,6 +3997,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<MaxByFunction>()
             || node.inner().is::<MinByFunction>()
             || node.inner().is::<ModeFunction>()
+            || node.inner().is::<ApproxPercentile>()
             || node.inner().is::<PercentileFunction>()
             || node.inner().is::<ProductFunction>()
             || node.inner().is::<Regr>()
@@ -4100,29 +4113,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udwf_kind = if node.inner().is::<SparkNtile>() {
+        let udwf_kind = if node.inner().is::<SparkNtile>()
+            || node.inner().is::<CumeDist>()
+            // Rank implements rank, dense_rank, and percent_rank.
+            || node.inner().is::<Rank>()
+            // NthValue implements first_value, last_value, and nth_value.
+            || node.inner().is::<NthValue>()
+            // WindowShift implements lag and lead.
+            || node.inner().is::<WindowShift>()
+            || node.inner().is::<RowNumber>()
+        {
             UdwfKind::Standard(r#gen::StandardUdwf {})
         } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
             UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
                 first: matches!(func.kind(), SparkFirstLastValueKind::First),
                 ignore_nulls: func.ignore_nulls(),
             })
-        } else if matches!(
-            node.name(),
-            "cume_dist"
-                | "dense_rank"
-                | "first"
-                | "first_value"
-                | "lag"
-                | "last"
-                | "last_value"
-                | "lead"
-                | "nth_value"
-                | "rank"
-                | "row_number"
-                | "percent_rank"
-        ) {
-            UdwfKind::Standard(r#gen::StandardUdwf {})
         } else {
             return Ok(());
         };
@@ -6590,10 +6596,56 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_date_part_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+        for udf in [
+            ScalarUDF::from(SparkDatePart::new()),
+            ScalarUDF::from(DatePartFunc::new()),
+        ] {
+            let decoded = round_trip_udf(udf)?;
 
-        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "date_part");
+            assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+            assert_eq!(decoded.name(), "date_part");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_json_standard_udfs() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(JsonAsText::new()))?;
+        assert!(decoded.inner().is::<JsonAsText>());
+        assert_eq!(decoded.name(), "json_as_text");
+
+        let decoded = round_trip_udf(ScalarUDF::from(JsonLength::new()))?;
+        assert!(decoded.inner().is::<JsonLength>());
+        assert_eq!(decoded.name(), "json_length");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_pyspark_udfs_with_standard_function_names() -> Result<()> {
+        for name in [
+            "date_part",
+            "datepart",
+            "extract",
+            "json_as_text",
+            "json_len",
+            "json_length",
+        ] {
+            let udf = PySparkUDF::new(
+                PySparkUdfKind::Batch,
+                name.to_string(),
+                vec![1, 2, 3],
+                true,
+                vec![DataType::Int32],
+                DataType::Int32,
+                Arc::new(PySparkUdfConfig::default()),
+            );
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+            let decoded_udf = downcast_udf::<PySparkUDF>(&decoded, "PySparkUDF")?;
+            assert_eq!(decoded.name(), name);
+            assert_eq!(decoded_udf.payload(), &[1, 2, 3]);
+        }
 
         Ok(())
     }

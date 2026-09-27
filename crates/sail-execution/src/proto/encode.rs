@@ -20,6 +20,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
+use sail_function::scalar::array::spark_zip_with::SparkZipWith;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
@@ -160,6 +161,13 @@ pub(super) fn try_encode_higher_order_udf(
     let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
+        })
+    } else if let Some(zip) = udf_inner.downcast_ref::<SparkZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkZipWithUdf {
+            map: zip.is_map(),
+            ansi_mode: zip.ansi_mode(),
+            case_sensitive: zip.case_sensitive(),
+            legacy_map_key_equality: zip.legacy_map_key_equality(),
         })
     } else if udf_inner.is::<SparkMapFilter>() {
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})

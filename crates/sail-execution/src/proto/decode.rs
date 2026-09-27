@@ -23,6 +23,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::array::spark_zip_with::SparkZipWith;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
@@ -181,6 +182,17 @@ pub(super) fn try_decode_higher_order_udf(
         .cloned()
         .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
     Ok(match udf_kind {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkZipWithUdf {
+            map,
+            ansi_mode,
+            case_sensitive,
+            legacy_map_key_equality,
+        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkZipWith::new(
+            map,
+            ansi_mode,
+            case_sensitive,
+            legacy_map_key_equality,
+        ))),
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))
         }

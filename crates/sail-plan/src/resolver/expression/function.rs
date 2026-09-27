@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+
 use datafusion_common::DFSchemaRef;
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::arrow::datatypes::DataType;
+use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::utils::quote_name_if_needed;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -19,7 +23,9 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
-use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
+use crate::resolver::expression::predicate::{
+    coerce_timestamp_string_predicate, spark_interval_metadata_for_expression,
+};
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
@@ -38,7 +44,7 @@ impl PlanResolver<'_> {
             named_arguments,
             is_distinct,
             is_user_defined_function: _,
-            is_internal: _,
+            is_internal,
             ignore_nulls,
             filter,
             order_by,
@@ -75,6 +81,100 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        // TYPEOF is foldable regardless of its child's foldability. Resolve the
+        // child normally; nested percentile calls establish their own scopes.
+        if canonical_function_name == "typeof"
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            state.config_mut().approx_percentile_parameter = None;
+        }
+        // Spark checks the source expression before RuntimeReplaceable wrappers
+        // disappear. Check names here, since lowered helpers also implement valid
+        // foldable expressions (e.g. implicit array casts and ordinary division).
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && (is_higher_order_function(&canonical_function_name)
+                || (!self.config.legacy_percentile_parameter_foldability
+                    && matches!(canonical_function_name.as_str(), "encode" | "array_append"))
+                || matches!(
+                    canonical_function_name.as_str(),
+                    "aes_decrypt"
+                        | "array_compact"
+                        | "array_prepend"
+                        | "array_size"
+                        | "arrays_zip"
+                        | "assert_true"
+                        | "btrim"
+                        | "current_catalog"
+                        | "current_database"
+                        | "current_schema"
+                        | "current_timezone"
+                        | "current_user"
+                        | "date_part"
+                        | "datepart"
+                        | "decode"
+                        | "elt"
+                        | "equal_null"
+                        | "extract"
+                        | "ifnull"
+                        | "ilike"
+                        | "is_valid_utf8"
+                        | "left"
+                        | "luhn_check"
+                        | "make_time"
+                        | "make_valid_utf8"
+                        | "map_concat"
+                        | "map_contains_key"
+                        | "nullif"
+                        | "nullifzero"
+                        | "nvl"
+                        | "nvl2"
+                        | "parse_url"
+                        | "raise_error"
+                        | "regexp_count"
+                        | "regexp_substr"
+                        | "right"
+                        | "session_user"
+                        | "split_part"
+                        | "st_asbinary"
+                        | "st_geogfromwkb"
+                        | "st_geomfromwkb"
+                        | "to_binary"
+                        | "to_date"
+                        | "to_time"
+                        | "to_timestamp"
+                        | "to_timestamp_ltz"
+                        | "to_timestamp_ntz"
+                        | "try_add"
+                        | "try_aes_decrypt"
+                        | "try_divide"
+                        | "try_element_at"
+                        | "try_make_timestamp"
+                        | "try_mod"
+                        | "try_multiply"
+                        | "try_parse_url"
+                        | "try_subtract"
+                        | "try_to_binary"
+                        | "try_to_time"
+                        | "try_to_timestamp"
+                        | "try_url_decode"
+                        | "try_validate_utf8"
+                        | "url_decode"
+                        | "url_encode"
+                        | "user"
+                        | "validate_utf8"
+                        | "version"
+                        | "zeroifnull"
+                ))
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            return Err(PlanError::invalid(format!(
+                "{parameter} must be a foldable expression"
+            )));
+        }
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
@@ -95,7 +195,30 @@ impl PlanResolver<'_> {
 
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
-        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
+        if matches!(
+            canonical_function_name.as_str(),
+            "zip_with" | "map_zip_with"
+        ) && catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_none()
+        {
+            state.config_mut().reject_zip_subqueries |=
+                !self.config.allow_subquery_expressions_in_lambdas;
+            if !has_spec_lambda_argument {
+                state.config_mut().anonymous_lambda_display = true;
+            }
+        }
+
+        let (mut argument_display_names, arguments) = if matches!(
+            canonical_function_name.as_str(),
+            "approx_percentile" | "percentile_approx"
+        ) && catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_none()
+        {
+            self.resolve_approx_percentile_expressions_and_names(arguments, schema, state)
+                .await?
+        } else if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
         } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
@@ -110,6 +233,90 @@ impl PlanResolver<'_> {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        // Some Catalyst runtime wrappers are selected by argument type or arity.
+        // Validate their source foldability before the shared implementations erase it.
+        if let Some(parameter) = state.config().approx_percentile_parameter
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            let non_foldable = match (canonical_function_name.as_str(), arguments.as_slice()) {
+                ("hour" | "minute" | "second", [argument]) => matches!(
+                    argument.get_type(schema)?,
+                    DataType::Time32(_) | DataType::Time64(_)
+                ),
+                ("contains" | "startswith" | "endswith", [left, right]) => {
+                    left.get_type(schema)?.is_binary() && right.get_type(schema)?.is_binary()
+                }
+                ("lpad" | "rpad", [value, _]) => {
+                    !self.config.legacy_lpad_rpad_always_return_string
+                        && value.get_type(schema)?.is_binary()
+                }
+                ("lpad" | "rpad", [value, _, padding]) => {
+                    !self.config.legacy_lpad_rpad_always_return_string
+                        && value.get_type(schema)?.is_binary()
+                        && padding.get_type(schema)?.is_binary()
+                }
+                ("make_timestamp", args) => (1..=3).contains(&args.len()),
+                ("make_timestamp_ltz" | "try_make_timestamp_ltz", args) => {
+                    matches!(args.len(), 2 | 3)
+                }
+                ("-", [left, right]) => {
+                    let left_type = left.get_type(schema)?;
+                    let right_type = right.get_type(schema)?;
+                    let datetime = matches!(
+                        left_type,
+                        DataType::Date32
+                            | DataType::Date64
+                            | DataType::Timestamp(_, _)
+                            | DataType::Time32(_)
+                            | DataType::Time64(_)
+                    ) || left_type.is_string();
+                    let interval =
+                        matches!(right_type, DataType::Interval(_) | DataType::Duration(_));
+                    // DATE minus DAY-only intervals lowers to foldable DateAdd;
+                    // other datetime subtraction retains non-foldable DatetimeSub.
+                    let date_minus_days = matches!(left_type, DataType::Date32 | DataType::Date64)
+                        && matches!(
+                            spark_interval_metadata_for_expression(right, schema)?,
+                            Some(spec::SparkIntervalMetadata::DayTime {
+                                start_field: spec::DayTimeIntervalField::Day,
+                                end_field: spec::DayTimeIntervalField::Day,
+                            })
+                        );
+                    datetime && interval && !date_minus_days
+                }
+                _ => false,
+            };
+            if non_foldable {
+                return Err(PlanError::invalid(format!(
+                    "{parameter} must be a foldable expression"
+                )));
+            }
+        }
+
+        if !has_spec_lambda_argument
+            && matches!(
+                canonical_function_name.as_str(),
+                "zip_with" | "map_zip_with"
+            )
+            && argument_display_names.len() == 3
+            && catalog_manager
+                .get_function(&canonical_function_name)?
+                .is_none()
+        {
+            let arity = if canonical_function_name == "map_zip_with" {
+                3
+            } else {
+                2
+            };
+            argument_display_names[2] = format!(
+                "lambdafunction({}, {})",
+                argument_display_names[2],
+                vec!["namedlambdavariable()"; arity].join(", ")
+            );
+        }
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
@@ -275,11 +482,28 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            &function_name,
-            argument_display_names.iter().map(|x| x.as_str()).collect(),
-            is_distinct,
-        )?;
+        let name = if canonical_function_name == "struct"
+            && is_internal == Some(true)
+            && state.config().anonymous_lambda_display
+        {
+            let DataType::Struct(fields) = func.get_type(schema)? else {
+                return Err(PlanError::internal("struct function has a non-struct type"));
+            };
+            let arguments = fields
+                .iter()
+                .zip(&argument_display_names)
+                .flat_map(|(field, value)| [field.name().as_str(), value.as_str()])
+                .collect();
+            service
+                .plan_formatter()
+                .function_to_string("named_struct", arguments, false)?
+        } else {
+            service.plan_formatter().function_to_string(
+                &function_name,
+                argument_display_names.iter().map(|x| x.as_str()).collect(),
+                is_distinct,
+            )?
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
@@ -296,6 +520,32 @@ impl PlanResolver<'_> {
         } else {
             Ok(NamedExpr::new(vec![name], func))
         }
+    }
+
+    pub(super) async fn resolve_approx_percentile_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut names = Vec::with_capacity(expressions.len());
+        let mut exprs = Vec::with_capacity(expressions.len());
+        for (index, expression) in expressions.into_iter().enumerate() {
+            let mut scope = state.enter_config_scope();
+            if matches!(index, 1 | 2) {
+                scope.state().config_mut().approx_percentile_parameter =
+                    Some(if index == 1 { "percentage" } else { "accuracy" });
+            }
+            // TODO: Shared expression resolution rejects literal zero divisors even in
+            // unreachable branches. Once it preserves short-circuiting, accept those
+            // foldable percentile parameters (see the Sail-only BDD regression).
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, scope.state())
+                .await?;
+            names.push(name.one()?);
+            exprs.push(expr);
+        }
+        Ok((names, exprs))
     }
 
     pub(super) async fn resolve_expression_call_function(
@@ -364,9 +614,38 @@ impl PlanResolver<'_> {
                 }
                 _ => None,
             };
-            let NamedExpr { name, expr, .. } = self
+            // Zip display names retain aliased expressions while struct fields
+            // continue to use their declared aliases.
+            let mut aliases = Vec::new();
+            let mut expression = expression;
+            let expression = loop {
+                match expression {
+                    spec::Expr::Alias {
+                        expr,
+                        name,
+                        metadata,
+                    } if state.config().anonymous_lambda_display && name.len() == 1 => {
+                        let alias: String = name.one()?.into();
+                        aliases.push((alias, metadata));
+                        expression = *expr;
+                    }
+                    other => break other,
+                }
+            };
+            let mut named = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
+            for (alias, metadata) in aliases.into_iter().rev() {
+                let display = format!("{} AS {}", named.name.one()?, quote_name_if_needed(&alias));
+                let metadata = metadata.unwrap_or(named.metadata);
+                let metadata = (!metadata.is_empty())
+                    .then(|| FieldMetadata::from(metadata.into_iter().collect::<HashMap<_, _>>()));
+                named = NamedExpr::new(
+                    vec![display],
+                    named.expr.alias_with_metadata(alias, metadata),
+                );
+            }
+            let NamedExpr { name, expr, .. } = named;
             // A string map key is not a struct field name in the Column API.
             let field_name = if is_named_reference
                 || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())
