@@ -185,6 +185,10 @@ impl PlanResolver<'_> {
             .reduce(Expr::and)
             .ok_or_else(|| PlanError::invalid("empty IN subquery values"))?;
         let filtered = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(subquery_plan))?);
+        // TODO: Match Spark's null-aware multi-column NOT IN. Spark's `RewritePredicateSubquery`
+        //  matches on `(c1 = e1 OR isnull(c1 = e1)) AND ...`, so a NULL comparison counts as a
+        //  match: a filter drops the row and a projection yields false. `NOT EXISTS` with plain
+        //  equality treats it as a mismatch instead.
         let exists_expr = if !negated {
             expr_fn::exists(Arc::new(filtered))
         } else {

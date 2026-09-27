@@ -5,7 +5,6 @@ use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
-use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
@@ -25,7 +24,7 @@ use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::filter_pushdown::PostFilterPushdown;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
-use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::projection_pushdown::{LambdaSafeProjectionPushdown, ParquetFieldFilterPushdown};
 
 mod barrier;
 mod collect_left;
@@ -54,7 +53,7 @@ pub fn get_physical_optimizers(
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
-    rules.push(Arc::new(FilterPushdown::new()));
+    rules.push(Arc::new(ParquetFieldFilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.

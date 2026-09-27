@@ -34,6 +34,8 @@ use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     Column as PhysicalColumn, Literal as PhysicalLiteral,
 };
+use sail_common_datafusion::udf::get_field::SparkGetField;
+use sail_common_datafusion::udf::get_field::physical::rewrite_parquet_field_access;
 
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{ColumnMappingMode, DeltaResult};
@@ -140,7 +142,10 @@ pub fn predicate_uses_struct_value(expr: &Expr, schema: &DFSchema) -> bool {
         }
         let is_value = match expr {
             Expr::Column(_) => true,
-            Expr::ScalarFunction(function) => function.func.inner().is::<GetFieldFunc>(),
+            Expr::ScalarFunction(function) => {
+                function.func.inner().is::<GetFieldFunc>()
+                    || function.func.inner().is::<SparkGetField>()
+            }
             _ => false,
         };
         if !is_value {
@@ -177,7 +182,8 @@ pub fn physical_predicate_uses_struct_value(
             return Ok(TreeNodeRecursion::Jump);
         }
         let is_value = expr.downcast_ref::<PhysicalColumn>().is_some()
-            || ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some();
+            || ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some()
+            || ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expr.as_ref()).is_some();
         if !is_value {
             return Ok(TreeNodeRecursion::Continue);
         }
@@ -233,7 +239,8 @@ pub fn rewrite_predicate_for_column_mapping(
     mode: ColumnMappingMode,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     if mode == ColumnMappingMode::None {
-        return Ok(expr);
+        // Runtime scans build their Parquet readers after physical optimization.
+        return Ok(rewrite_parquet_field_access(expr, logical_schema)?.data);
     }
     Ok(rewrite_expr_for_column_mapping(expr, logical_schema, mode)?.0)
 }
@@ -260,7 +267,9 @@ fn rewrite_expr_for_column_mapping(
         return Ok((rewritten, Some(Arc::clone(field))));
     }
 
-    if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() {
+    if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some()
+        || ScalarFunctionExpr::try_downcast_func::<SparkGetField>(expr.as_ref()).is_some()
+    {
         let children = expr.children();
         let Some((source_expr, path_exprs)) = children.split_first() else {
             return Ok((expr, None));
@@ -538,6 +547,38 @@ mod tests {
             &col("missing").eq(lit(1)),
             &schema
         ));
+    }
+
+    #[test]
+    fn detects_spark_field_predicate_consumption() -> Result<()> {
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::{ScalarUDF, col, lit};
+        use datafusion::physical_expr::create_physical_expr;
+
+        let schema = struct_value_test_schema();
+        let get_field =
+            |base, name| ScalarUDF::from(SparkGetField::new()).call(vec![base, lit(name)]);
+        for (predicate, expected) in [
+            (get_field(col("s"), "a").eq(lit(1)), false),
+            (
+                get_field(get_field(col("s"), "inner"), "c").gt(lit(1)),
+                false,
+            ),
+            (get_field(col("s"), "inner").is_null(), true),
+        ] {
+            assert_eq!(predicate_uses_struct_value(&predicate, &schema), expected);
+            let physical = create_physical_expr(
+                &predicate,
+                &schema,
+                &ExecutionProps::new(),
+                &datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext::default(),
+            )?;
+            assert_eq!(
+                physical_predicate_uses_struct_value(&physical, schema.as_arrow()),
+                expected
+            );
+        }
+        Ok(())
     }
 
     #[test]

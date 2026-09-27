@@ -13,12 +13,7 @@ use datafusion_expr::{
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
-use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
-use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+pub use sail_python_udf::udf::expr_contains_python_udf;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -485,31 +480,6 @@ pub(crate) fn theta_args_with_default_lg(
             "{function_name} requires 1 or 2 arguments, got {count}"
         ))),
     }
-}
-
-pub fn expr_contains_python_udf(body: &expr::Expr) -> PlanResult<bool> {
-    Ok(body.exists(|expression| {
-        Ok(match expression {
-            expr::Expr::ScalarFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkUDF>()
-                    || f.is::<PySparkUnresolvedUDF>()
-                    || f.is::<PySparkCoGroupMapUDF>()
-            }
-            expr::Expr::AggregateFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkGroupAggregateUDF>()
-                    || f.is::<PySparkGroupMapUDF>()
-                    || f.is::<PySparkBatchCollectorUDF>()
-            }
-            expr::Expr::WindowFunction(window) => matches!(
-                &window.fun,
-                WindowFunctionDefinition::AggregateUDF(udf)
-                    if udf.inner().is::<PySparkGroupAggregateUDF>()
-            ),
-            _ => false,
-        })
-    })?)
 }
 
 // TODO: Match Catalyst constant folding and NullPropagation before extracting opaque

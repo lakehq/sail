@@ -387,9 +387,26 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             })
         }
         Expr::InSubquery(expr, not, _, _, query, _) => {
-            let expr = from_ast_expression(*expr)?;
+            let mut expr = *expr;
+            while let Expr::Atom(AtomExpr::Nested(_, inner, _)) = expr {
+                expr = *inner;
+            }
+            // Spark expands SQL STRUCT syntax into IN values before resolving
+            // functions. A quoted `struct` call remains a single struct value.
+            let values = match expr {
+                Expr::Atom(AtomExpr::Struct(_, _, arguments, _)) => arguments
+                    .into_iter()
+                    .flat_map(|arguments| arguments.into_items())
+                    .map(from_ast_named_expression)
+                    .collect::<SqlResult<Vec<_>>>()?,
+                Expr::Atom(AtomExpr::Tuple(_, arguments, _)) => arguments
+                    .into_items()
+                    .map(from_ast_named_expression)
+                    .collect::<SqlResult<Vec<_>>>()?,
+                expr => vec![from_ast_expression(expr)?],
+            };
             Ok(spec::Expr::InSubquery {
-                expr: Box::new(expr),
+                values,
                 subquery: Box::new(from_ast_query(query)?),
                 negated: not.is_some(),
             })
@@ -642,11 +659,14 @@ pub(crate) fn expr_with_default_column_values(expr: spec::Expr) -> spec::Expr {
                 .collect(),
         ),
         spec::Expr::InSubquery {
-            expr,
+            values,
             subquery,
             negated,
         } => spec::Expr::InSubquery {
-            expr: Box::new(expr_with_default_column_values(*expr)),
+            values: values
+                .into_iter()
+                .map(expr_with_default_column_values)
+                .collect(),
             subquery,
             negated,
         },
@@ -734,7 +754,8 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::Struct(_, _, expressions, _) => {
             let arguments = expressions
-                .into_items()
+                .into_iter()
+                .flat_map(|expressions| expressions.into_items())
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {

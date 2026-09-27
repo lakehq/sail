@@ -1550,17 +1550,22 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 .collect(),
         ),
         Expr::InSubquery {
-            expr,
+            values,
             subquery,
             negated,
         } => Expr::InSubquery {
-            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
-                *expr,
-                state,
-                target_schema,
-                source_schema,
-                case_sensitive,
-            )),
+            values: values
+                .into_iter()
+                .map(|value| {
+                    merge_disambiguate_unqualified_plan_ids(
+                        value,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
+                })
+                .collect(),
             subquery,
             negated,
         },

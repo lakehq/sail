@@ -25,6 +25,7 @@ use object_store::ObjectMeta;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
+use sail_common_datafusion::udf::get_field::physical::rewrite_parquet_field_access;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -288,6 +289,13 @@ impl IcebergScanByDataFilesExec {
         predicate: Option<Arc<dyn PhysicalExpr>>,
         limit: Option<usize>,
     ) -> Result<Self> {
+        // These Parquet readers are created at execution time, after physical optimization.
+        let predicate = predicate
+            .map(|predicate| {
+                rewrite_parquet_field_access(predicate, file_schema.as_ref())
+                    .map(|rewritten| rewritten.data)
+            })
+            .transpose()?;
         let output_schema = match &projection {
             Some(projection) => Arc::new(file_schema.project(projection)?),
             None => file_schema.clone(),

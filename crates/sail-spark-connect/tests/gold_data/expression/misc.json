@@ -156,15 +156,17 @@
       "output": {
         "success": {
           "inSubquery": {
-            "expr": {
-              "unresolvedAttribute": {
-                "name": [
-                  "a"
-                ],
-                "planId": null,
-                "isMetadataColumn": false
+            "values": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
               }
-            },
+            ],
             "subquery": {
               "project": {
                 "input": {
@@ -244,40 +246,26 @@
       "output": {
         "success": {
           "inSubquery": {
-            "expr": {
-              "unresolvedFunction": {
-                "functionName": [
-                  "struct"
-                ],
-                "arguments": [
-                  {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "a"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "b"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  }
-                ],
-                "namedArguments": [],
-                "isDistinct": false,
-                "isUserDefinedFunction": false,
-                "isInternal": null,
-                "ignoreNulls": null,
-                "filter": null,
-                "orderBy": null
+            "values": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
               }
-            },
+            ],
             "subquery": {
               "project": {
                 "input": {
@@ -366,49 +354,35 @@
       "output": {
         "success": {
           "inSubquery": {
-            "expr": {
-              "unresolvedFunction": {
-                "functionName": [
-                  "struct"
-                ],
-                "arguments": [
-                  {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "a"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "b"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "c"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  }
-                ],
-                "namedArguments": [],
-                "isDistinct": false,
-                "isUserDefinedFunction": false,
-                "isInternal": null,
-                "ignoreNulls": null,
-                "filter": null,
-                "orderBy": null
+            "values": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
               }
-            },
+            ],
             "subquery": {
               "project": {
                 "input": {
@@ -2616,15 +2590,17 @@
       "output": {
         "success": {
           "inSubquery": {
-            "expr": {
-              "unresolvedAttribute": {
-                "name": [
-                  "a"
-                ],
-                "planId": null,
-                "isMetadataColumn": false
+            "values": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
               }
-            },
+            ],
             "subquery": {
               "project": {
                 "input": {

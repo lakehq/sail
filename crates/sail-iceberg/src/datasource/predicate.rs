@@ -4,7 +4,9 @@ use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions::math::nans::IsNanFunc;
 use datafusion::functions::string::starts_with::StartsWithFunc;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::manifest_list::FieldSummary;
@@ -421,15 +423,21 @@ fn source_field<'a>(
         Expr::Column(column) => schema
             .field_by_name(&column.name)
             .filter(|field| schema.field_path_by_id(field.id).is_some()),
-        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
-            let [parent, Expr::Literal(value, _)] = function.args.as_slice() else {
+        Expr::ScalarFunction(function) if is_field_access(expr) => {
+            let [parent, fields @ ..] = function.args.as_slice() else {
                 return None;
             };
-            let parent = source_field(schema, parent)?;
-            let Type::Struct(children) = parent.field_type.as_ref() else {
-                return None;
-            };
-            children.field_by_name(scalar_string(value)?)
+            let mut parent = source_field(schema, parent)?;
+            for field in fields {
+                let Expr::Literal(value, _) = field else {
+                    return None;
+                };
+                let Type::Struct(children) = parent.field_type.as_ref() else {
+                    return None;
+                };
+                parent = children.field_by_name(scalar_string(value)?)?;
+            }
+            Some(parent)
         }
         Expr::Cast(cast) => {
             use datafusion::arrow::datatypes::DataType;
@@ -453,6 +461,19 @@ fn source_field<'a>(
         }
         _ => None,
     }
+}
+
+fn is_field_access(expr: &Expr) -> bool {
+    let Expr::ScalarFunction(function) = expr else {
+        return false;
+    };
+    function.func.inner().is::<GetFieldFunc>() || function.func.inner().is::<SparkGetField>()
+}
+
+/// Whether the expression reads a struct field.
+pub(crate) fn has_field_access(expr: &Expr) -> bool {
+    expr.exists(|expr| Ok(is_field_access(expr)))
+        .unwrap_or(false)
 }
 
 fn scalar_string(value: &ScalarValue) -> Option<&str> {

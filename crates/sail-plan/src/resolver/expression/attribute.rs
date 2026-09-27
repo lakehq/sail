@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
+use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::{ScalarUDF, col, expr, lit};
-use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
@@ -42,10 +42,8 @@ impl PlanResolver<'_> {
                 .to_string();
             let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
             for part in rest {
-                expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
-                    get_field(),
-                    vec![expr, lit(part.as_ref().to_string())],
-                ));
+                expr = ScalarUDF::from(SparkGetField::new())
+                    .call(vec![expr, lit(part.as_ref().to_string())]);
             }
             return Ok(NamedExpr::new(vec![display], expr));
         }
@@ -252,15 +250,24 @@ impl PlanResolver<'_> {
         match inner {
             [] => Some(expr),
             [name, remaining @ ..] => match data_type {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                    .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
-                    }),
+                DataType::Struct(_) => {
+                    // Resolve consecutive struct fields together so analysis
+                    // does not repeatedly traverse a nested function chain.
+                    let mut data_type = data_type;
+                    let mut remaining = inner;
+                    let mut args = vec![expr];
+                    while let (DataType::Struct(fields), [name, rest @ ..]) = (data_type, remaining)
+                    {
+                        let field = fields
+                            .iter()
+                            .find(|field| field.name().eq_ignore_ascii_case(name.as_ref()))?;
+                        args.push(lit(field.name().to_string()));
+                        data_type = field.data_type();
+                        remaining = rest;
+                    }
+                    let expr = ScalarUDF::from(SparkGetField::new()).call(args);
+                    Self::resolve_potentially_nested_field(expr, data_type, remaining)
+                }
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => {

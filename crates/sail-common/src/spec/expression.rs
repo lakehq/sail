@@ -77,7 +77,7 @@ pub enum Expr {
     Cube(Vec<Expr>),
     GroupingSets(Vec<Vec<Expr>>),
     InSubquery {
-        expr: Box<Expr>,
+        values: Vec<Expr>,
         subquery: Box<QueryPlan>,
         negated: bool,
     },

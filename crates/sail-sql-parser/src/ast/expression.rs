@@ -135,8 +135,8 @@ pub enum AtomExpr {
     Struct(
         Struct,
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)))]
-        Sequence<NamedExpr, Comma>,
+        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)).or_not())]
+        Option<Sequence<NamedExpr, Comma>>,
         RightParenthesis,
     ),
     Case {

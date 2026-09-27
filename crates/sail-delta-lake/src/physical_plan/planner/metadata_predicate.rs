@@ -14,6 +14,7 @@ use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunctio
 use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 
 use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
@@ -482,18 +483,23 @@ impl ExprTemplate {
 fn extract_column_path(expr: &Expr) -> Option<Vec<String>> {
     match expr {
         Expr::Column(column) => Some(vec![column.name.clone()]),
-        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
-            let [base, field] = function.args.as_slice() else {
+        Expr::ScalarFunction(function)
+            if function.func.inner().is::<GetFieldFunc>()
+                || function.func.inner().is::<SparkGetField>() =>
+        {
+            let [base, fields @ ..] = function.args.as_slice() else {
                 return None;
             };
-            let field = match field {
-                Expr::Literal(ScalarValue::Utf8(Some(field)), _)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(field)), _)
-                | Expr::Literal(ScalarValue::Utf8View(Some(field)), _) => field,
-                _ => return None,
-            };
             let mut path = extract_column_path(base)?;
-            path.push(field.clone());
+            for field in fields {
+                let field = match field {
+                    Expr::Literal(ScalarValue::Utf8(Some(field)), _)
+                    | Expr::Literal(ScalarValue::LargeUtf8(Some(field)), _)
+                    | Expr::Literal(ScalarValue::Utf8View(Some(field)), _) => field,
+                    _ => return None,
+                };
+                path.push(field.clone());
+            }
             Some(path)
         }
         _ => None,

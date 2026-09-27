@@ -7,6 +7,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -369,7 +370,7 @@ impl PlanResolver<'_> {
                 .await?;
             // A string map key is not a struct field name in the Column API.
             let field_name = if is_named_reference
-                || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())
+                || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>() || f.func.inner().is::<SparkGetField>())
             {
                 field_name
             } else {

@@ -6,13 +6,13 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
-use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn as datafusion_fn;
 use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::udf::get_field::SparkGetField;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -367,7 +367,7 @@ impl PlanResolver<'_> {
                         "missing or ambiguous field: {name}"
                     )));
                 };
-                expr.field(name)
+                ScalarUDF::from(SparkGetField::new()).call(vec![expr, lit(name)])
             }
             _ => {
                 return Err(PlanError::AnalysisError(format!(

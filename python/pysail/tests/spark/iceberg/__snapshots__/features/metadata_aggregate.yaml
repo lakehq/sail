@@ -164,7 +164,7 @@ data:
     ProjectionExec: expr=[#6@0 as x, #7@1 as y, #8@2 as z]
       ProjectionExec: expr=[3 as #6, __sail_residual_aggregate_1@0 as #7, __sail_residual_aggregate_2@1 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[min(__datafusion_extracted_1) as __sail_residual_aggregate_1, max(__datafusion_extracted_1) as __sail_residual_aggregate_2]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[get_field(payload@5, value) as __datafusion_extracted_1], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[spark_get_field(__sail_struct_field_dependency(payload@5, value)) as __datafusion_extracted_1], file_type=parquet
 ---
 name: "test_nonmonotonic_casts_preserve_lexical_extrema"
 data:
