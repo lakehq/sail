@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, StructArray, UInt64Array, make_array, new_empty_array,
+    Array, ArrayRef, AsArray, BooleanArray, OffsetSizeTrait, StructArray, UInt64Array, make_array,
+    new_empty_array,
 };
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::{CastOptions, cast_with_options, nullif, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::{Result, ScalarValue, internal_err, plan_datafusion_err};
@@ -284,7 +286,19 @@ fn visible_nested_values(array: &ArrayRef, target: Option<&DataType>) -> Result<
         _ => false,
     };
     let mask_struct = matches!(array.data_type(), DataType::Struct(_)) && array.null_count() > 0;
-    let array = if (array.null_count() > 0 && !mask_struct) || sliced_values {
+    // A NULL list/map entry hides child values only when its offsets span child slots.
+    // Conditional outputs usually encode NULL entries as empty ranges.
+    let hidden_values = match array.data_type() {
+        DataType::List(_) => {
+            has_hidden_values(array.as_list::<i32>().value_offsets(), array.nulls())
+        }
+        DataType::LargeList(_) => {
+            has_hidden_values(array.as_list::<i64>().value_offsets(), array.nulls())
+        }
+        DataType::Map(_, _) => has_hidden_values(array.as_map().value_offsets(), array.nulls()),
+        _ => array.null_count() > 0 && !mask_struct,
+    };
+    let array = if hidden_values || sliced_values {
         // List/map take drops entries belonging to null parents and unused
         // prefixes/suffixes without introducing NULLs into non-nullable entries.
         let indices =
@@ -363,6 +377,16 @@ fn visible_nested_values(array: &ArrayRef, target: Option<&DataType>) -> Result<
     } else {
         Ok(array)
     }
+}
+
+fn has_hidden_values<O: OffsetSizeTrait>(offsets: &[O], nulls: Option<&NullBuffer>) -> bool {
+    nulls.is_some_and(|nulls| {
+        nulls.null_count() > 0
+            && nulls
+                .iter()
+                .zip(offsets.windows(2))
+                .any(|(valid, range)| !valid && range[0] != range[1])
+    })
 }
 
 pub fn preserve_nested_metadata(source: &DataType, target: &DataType) -> DataType {

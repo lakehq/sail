@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
@@ -5,7 +6,9 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
-use datafusion_expr::{Expr, ExprSchemable, Limit, LogicalPlan, Projection, SubqueryAlias, Union};
+use datafusion_expr::{
+    Aggregate, Expr, ExprSchemable, Limit, LogicalPlan, Projection, SubqueryAlias, Union, Window,
+};
 
 /// Keep UNION's fallible numeric casts inside their selecting conditional before
 /// constant folding, common-expression extraction, and physical lambda binding.
@@ -26,8 +29,20 @@ impl OptimizerRule for PushUnionConditional {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let LogicalPlan::Projection(projection) = &plan else {
-            return Ok(Transformed::no(plan));
+        let projection = match &plan {
+            LogicalPlan::Projection(projection) => {
+                if matches!(projection.input.as_ref(), LogicalPlan::Window(_)) {
+                    return extract_window_conditionals(plan, config);
+                }
+                // Most projections are not above a UNION. Check that before scanning
+                // expressions, which is otherwise repeated for every projection in a chain.
+                if !has_strict_union(&plan)? {
+                    return Ok(Transformed::no(plan));
+                }
+                projection
+            }
+            LogicalPlan::Aggregate(_) => return pull_out_grouping_conditionals(plan, config),
+            _ => return Ok(Transformed::no(plan)),
         };
         let mut conditional = false;
         for expression in &projection.expr {
@@ -57,7 +72,9 @@ impl OptimizerRule for PushUnionConditional {
                 _ => break,
             }
         }
-        if !has_strict_union(input)? {
+        // Moving a conditional only changes evaluation when it selects a strictly cast
+        // UNION column. Other columns are evaluated in the inputs either way.
+        if !selects_strict_column(&wrappers, input)? {
             return Ok(Transformed::no(plan));
         }
         if let LogicalPlan::Limit(limit) = input {
@@ -93,6 +110,218 @@ impl OptimizerRule for PushUnionConditional {
     }
 }
 
+/// Like Spark's `ExtractWindowExpressions`, evaluates conditional select-list items and
+/// window inputs below the windows, where the projection can then move through the UNION.
+fn extract_window_conditionals(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Projection(projection) = &plan else {
+        return Ok(Transformed::no(plan));
+    };
+    let mut windows = Vec::new();
+    let mut input = &projection.input;
+    while let LogicalPlan::Window(window) = input.as_ref() {
+        windows.push(window);
+        input = &window.input;
+    }
+    if !has_strict_union(input)? {
+        return Ok(Transformed::no(plan));
+    }
+    let Some(mut extractor) = ConditionalExtractor::try_new(input, config)? else {
+        return Ok(Transformed::no(plan));
+    };
+    let window_exprs = windows
+        .iter()
+        .map(|window| {
+            window
+                .window_expr
+                .iter()
+                .map(|expr| {
+                    with_name(expr, |expr| {
+                        expr.transform_down(|expr| {
+                            let Expr::WindowFunction(mut function) = expr else {
+                                return Ok(Transformed::no(expr));
+                            };
+                            let params = &mut function.params;
+                            for exprs in [&mut params.args, &mut params.partition_by] {
+                                *exprs = std::mem::take(exprs)
+                                    .into_iter()
+                                    .map(|expr| extractor.extract(expr))
+                                    .collect::<Result<_>>()?;
+                            }
+                            for sort in &mut params.order_by {
+                                sort.expr = extractor.extract(sort.expr.clone())?;
+                            }
+                            params.filter = params
+                                .filter
+                                .take()
+                                .map(|filter| extractor.extract(*filter).map(Box::new))
+                                .transpose()?;
+                            Ok(Transformed::yes(Expr::WindowFunction(function)))
+                        })
+                        .and_then(|result| extractor.unqualify(result.data))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let exprs = projection
+        .expr
+        .iter()
+        .map(|expr| with_name(expr, |expr| extractor.rewrite(expr)))
+        .collect::<Result<Vec<_>>>()?;
+    let Some(mut input) = extractor.project(input)? else {
+        return Ok(Transformed::no(plan));
+    };
+    for window_exprs in window_exprs.into_iter().rev() {
+        input = Arc::new(LogicalPlan::Window(Window::try_new(window_exprs, input)?));
+    }
+    Ok(Transformed::yes(LogicalPlan::Projection(
+        Projection::try_new_with_schema(exprs, input, Arc::clone(&projection.schema))?,
+    )))
+}
+
+/// Like Spark's `PullOutGroupingExpressions`, evaluates conditional grouping expressions
+/// below the aggregate, where the projection can then move through the UNION.
+fn pull_out_grouping_conditionals(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Aggregate(aggregate) = &plan else {
+        return Ok(Transformed::no(plan));
+    };
+    if aggregate
+        .group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+        || !has_strict_union(&aggregate.input)?
+    {
+        return Ok(Transformed::no(plan));
+    }
+    let Some(mut extractor) = ConditionalExtractor::try_new(&aggregate.input, config)? else {
+        return Ok(Transformed::no(plan));
+    };
+    let group_expr = aggregate
+        .group_expr
+        .iter()
+        .map(|expr| with_name(expr, |expr| extractor.rewrite(expr)))
+        .collect::<Result<Vec<_>>>()?;
+    let aggr_expr = aggregate
+        .aggr_expr
+        .iter()
+        .map(|expr| with_name(expr, |expr| extractor.unqualify(expr)))
+        .collect::<Result<Vec<_>>>()?;
+    let Some(input) = extractor.project(&aggregate.input)? else {
+        return Ok(Transformed::no(plan));
+    };
+    Ok(Transformed::yes(LogicalPlan::Aggregate(
+        Aggregate::try_new(input, group_expr, aggr_expr)?,
+    )))
+}
+
+/// Rewrites an expression and keeps its output name.
+fn with_name(expr: &Expr, rewrite: impl FnOnce(Expr) -> Result<Expr>) -> Result<Expr> {
+    let name = NamePreserver::new_for_projection().save(expr);
+    Ok(name.restore(rewrite(expr.clone().unalias_nested().data)?))
+}
+
+/// Collects conditional expressions to evaluate in a projection above an input.
+/// The projection exposes the input columns unqualified: DataFusion derives
+/// unqualified UNION fields once the projection moves through the UNION.
+struct ConditionalExtractor<'a> {
+    schema: &'a DFSchema,
+    config: &'a dyn OptimizerConfig,
+    strict: Vec<bool>,
+    extracted: Vec<Expr>,
+}
+
+impl<'a> ConditionalExtractor<'a> {
+    fn try_new(input: &'a LogicalPlan, config: &'a dyn OptimizerConfig) -> Result<Option<Self>> {
+        let schema = input.schema();
+        let strict = strict_columns(input)?;
+        let mut names = HashSet::new();
+        Ok((strict.contains(&true)
+            && schema
+                .fields()
+                .iter()
+                .all(|field| names.insert(field.name())))
+        .then_some(Self {
+            schema,
+            config,
+            strict,
+            extracted: vec![],
+        }))
+    }
+
+    fn rewrite(&mut self, expr: Expr) -> Result<Expr> {
+        let expr = self.extract(expr)?;
+        self.unqualify(expr)
+    }
+
+    /// Replaces a conditional expression over the input columns with a column reference.
+    fn extract(&mut self, expr: Expr) -> Result<Expr> {
+        if matches!(expr, Expr::Column(_))
+            || !expr.exists(|expr| Ok(expr.short_circuits()))?
+            || expr.is_volatile()
+            || has_correlated_subquery(std::slice::from_ref(&expr))?
+            || !expr
+                .column_refs()
+                .iter()
+                .all(|column| self.schema.has_column(column))
+            // Like `PushUnionConditional`, move only conditionals that select a strictly
+            // cast UNION column; other columns are evaluated in the inputs either way.
+            || !expr.column_refs().iter().any(|column| {
+                self.schema
+                    .index_of_column(column)
+                    .is_ok_and(|index| self.strict[index])
+            })
+        {
+            return Ok(expr);
+        }
+        let name = self.config.alias_generator().next("__union_conditional");
+        self.extracted.push(expr.alias(&name));
+        Ok(Expr::Column(Column::new_unqualified(name)))
+    }
+
+    /// Refers to input columns by their projected names.
+    fn unqualify(&self, expr: Expr) -> Result<Expr> {
+        expr.transform_up(|expr| match expr {
+            Expr::Column(column)
+                if column.relation.is_some() && self.schema.has_column(&column) =>
+            {
+                Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+                    column.name,
+                ))))
+            }
+            _ => Ok(Transformed::no(expr)),
+        })
+        .map(|result| result.data)
+    }
+
+    fn project(self, input: &Arc<LogicalPlan>) -> Result<Option<Arc<LogicalPlan>>> {
+        if self.extracted.is_empty() {
+            return Ok(None);
+        }
+        let expressions = self
+            .schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let column = Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                if qualifier.is_some() {
+                    column.alias(field.name())
+                } else {
+                    column
+                }
+            })
+            .chain(self.extracted)
+            .collect();
+        Ok(Some(Arc::new(LogicalPlan::Projection(
+            Projection::try_new(expressions, Arc::clone(input))?,
+        ))))
+    }
+}
+
 fn has_strict_union(mut input: &LogicalPlan) -> Result<bool> {
     loop {
         input = match input {
@@ -115,17 +344,7 @@ fn has_strict_union(mut input: &LogicalPlan) -> Result<bool> {
         }
         if let LogicalPlan::Projection(projection) = input {
             for expr in &projection.expr {
-                if expr.exists(|expr| {
-                    let Expr::ScalarFunction(function) = expr else {
-                        return Ok(false);
-                    };
-                    let [argument] = function.args.as_slice() else {
-                        return Ok(false);
-                    };
-                    Ok(function.func.name() == "spark_conditional_cast"
-                        && argument.get_type(projection.input.schema())?
-                            != expr.get_type(projection.input.schema())?)
-                })? {
+                if has_strict_cast(expr, projection.input.schema())? {
                     found = true;
                     return Ok(TreeNodeRecursion::Stop);
                 }
@@ -134,6 +353,93 @@ fn has_strict_union(mut input: &LogicalPlan) -> Result<bool> {
         Ok(TreeNodeRecursion::Continue)
     })?;
     Ok(found)
+}
+
+/// Whether the expression contains a type-changing `spark_conditional_cast`.
+fn has_strict_cast(expr: &Expr, schema: &DFSchema) -> Result<bool> {
+    expr.exists(|expr| {
+        let Expr::ScalarFunction(function) = expr else {
+            return Ok(false);
+        };
+        let [argument] = function.args.as_slice() else {
+            return Ok(false);
+        };
+        Ok(function.func.name() == "spark_conditional_cast"
+            && argument.get_type(schema)? != expr.get_type(schema)?)
+    })
+}
+
+/// For each output column, whether the nodes that `has_strict_union` inspects
+/// produce it with a type-changing `spark_conditional_cast`.
+fn strict_columns(plan: &LogicalPlan) -> Result<Vec<bool>> {
+    match plan {
+        LogicalPlan::Union(union) => {
+            let mut strict = vec![false; plan.schema().fields().len()];
+            for input in &union.inputs {
+                for (column, input) in strict.iter_mut().zip(strict_columns(input)?) {
+                    *column |= input;
+                }
+            }
+            Ok(strict)
+        }
+        LogicalPlan::SubqueryAlias(alias) => strict_columns(&alias.input),
+        LogicalPlan::Limit(limit) => strict_columns(&limit.input),
+        LogicalPlan::Projection(projection) => {
+            let schema = projection.input.schema();
+            let input = strict_columns(&projection.input)?;
+            projection
+                .expr
+                .iter()
+                .map(|expr| {
+                    if has_strict_cast(expr, schema)? {
+                        return Ok(true);
+                    }
+                    for column in expr.column_refs() {
+                        if input[schema.index_of_column(column)?] {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                })
+                .collect()
+        }
+        _ => Ok(vec![false; plan.schema().fields().len()]),
+    }
+}
+
+/// Whether a short-circuiting expression of the top projection depends on a
+/// strictly cast column of the UNION below the wrappers.
+fn selects_strict_column(wrappers: &[&LogicalPlan], input: &LogicalPlan) -> Result<bool> {
+    let Some((LogicalPlan::Projection(top), wrappers)) = wrappers.split_first() else {
+        return Ok(true);
+    };
+    let schema = top.input.schema();
+    let mut columns = HashSet::new();
+    for expr in &top.expr {
+        expr.apply(|expr| {
+            if !expr.short_circuits() {
+                return Ok(TreeNodeRecursion::Continue);
+            }
+            for column in expr.column_refs() {
+                columns.insert(schema.index_of_column(column)?);
+            }
+            Ok(TreeNodeRecursion::Jump)
+        })?;
+    }
+    for wrapper in wrappers {
+        if let LogicalPlan::Projection(projection) = wrapper {
+            let schema = projection.input.schema();
+            let mut inputs = HashSet::new();
+            for index in columns {
+                for column in projection.expr[index].column_refs() {
+                    inputs.insert(schema.index_of_column(column)?);
+                }
+            }
+            columns = inputs;
+        }
+    }
+    let strict = strict_columns(input)?;
+    Ok(columns.into_iter().any(|index| strict[index]))
 }
 
 fn project_input(

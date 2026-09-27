@@ -50,9 +50,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_union_conditional:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -63,6 +60,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -145,9 +145,6 @@ data:
     logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_union_conditional:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -158,6 +155,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:

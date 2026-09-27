@@ -82,7 +82,10 @@ fn signed_shift(op: Operator) -> ScalarFunction {
             function_context,
         } = input;
         let (value, shift) = arguments.two()?;
-        let shift = if shift.get_type(function_context.schema)? == DataType::Int64 {
+        // A BIGINT value already shifts by the count's low six bits, so it keeps a BIGINT count.
+        let shift = if value.get_type(function_context.schema)? != DataType::Int64
+            && shift.get_type(function_context.schema)? == DataType::Int64
+        {
             // Only the low six bits select the shift, so masking first keeps the result
             // and avoids casting a count outside the INT range.
             // TODO: Check BIGINT-to-INT overflow before masking in ANSI mode;

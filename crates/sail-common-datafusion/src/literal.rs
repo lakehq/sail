@@ -45,12 +45,17 @@ impl LiteralEvaluator {
         }
         // Logical functions such as NVL2 must lower to executable expressions
         // before physical planning, including in constant-only resolver paths.
+        // Time-dependent functions (e.g. `timestamp_now`) fold to the query start
+        // time, which Spark reads as the current time when evaluating constants.
         let context = SimplifyContext::builder()
             .with_schema(Arc::new(self.schema.clone()))
+            .with_current_time()
             .build();
         let expr = ExprSimplifier::new(context.clone()).coerce(expr.clone(), &self.schema)?;
         // Lower logical UDFs without constant-folding their children: invalid
         // casts in unselected CASE branches must remain unevaluated.
+        // TODO: Reject arguments that Spark does not treat as foldable, such as
+        //  `range(nvl2(1, 2, 3))`, once the resolver tracks foldability.
         let expr = expr
             .transform_up(|expr| {
                 let Expr::ScalarFunction(mut function) = expr else {

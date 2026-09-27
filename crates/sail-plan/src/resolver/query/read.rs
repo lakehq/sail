@@ -6,7 +6,8 @@ use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{
-    Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
+    Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, TableScanBuilder, TableSource,
+    UNNAMED_TABLE,
 };
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
@@ -229,20 +230,26 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
-        let mut config = self.config.as_ref().clone();
-        config.preserve_view_conditional_float_type = true;
-        // Older views lack the creation-time setting; retain their existing coercion.
-        config.view_conditional_ansi_mode = properties
-            .iter()
-            .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
-            .and_then(|(_, value)| value.parse::<bool>().ok());
-        // Older views retain the existing nonlegacy decimal rule.
-        config.legacy_decimal_retain_fraction_digits = properties
-            .iter()
-            .find(|(key, _)| key == VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY)
-            .and_then(|(_, value)| value.parse::<bool>().ok())
-            .unwrap_or(false);
-        let resolver = Self::new(self.ctx, Arc::new(config));
+        // Like Spark, the legacy flag resolves the view with the reader's configuration.
+        let config = if self.config.legacy_use_current_configs_for_view {
+            Arc::clone(&self.config)
+        } else {
+            let mut config = self.config.as_ref().clone();
+            config.preserve_view_conditional_float_type = true;
+            // Older views lack the creation-time setting; retain their existing coercion.
+            config.view_conditional_ansi_mode = properties
+                .iter()
+                .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
+                .and_then(|(_, value)| value.parse::<bool>().ok());
+            // Older views retain the existing nonlegacy decimal rule.
+            config.legacy_decimal_retain_fraction_digits = properties
+                .iter()
+                .find(|(key, _)| key == VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY)
+                .and_then(|(_, value)| value.parse::<bool>().ok())
+                .unwrap_or(false);
+            Arc::new(config)
+        };
+        let resolver = Self::new(self.ctx, config);
         let plan = match spec_plan {
             spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
@@ -252,11 +259,31 @@ impl PlanResolver<'_> {
         let plan =
             LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
         if columns.is_empty() {
-            Ok(plan)
-        } else {
-            let names = state.register_field_names(columns.iter().map(|c| &c.name));
-            Ok(rename_logical_plan(plan, &names)?)
+            return Ok(plan);
         }
+        let names = state.register_field_names(columns.iter().map(|c| &c.name));
+        let plan = rename_logical_plan(plan, &names)?;
+        if !self.config.legacy_use_current_configs_for_view {
+            return Ok(plan);
+        }
+        // Like Spark's `castColToType`, cast the view output to its stored schema,
+        // since the reader's configuration can change the resolved types.
+        let schema = Arc::clone(plan.schema());
+        let expressions = schema
+            .columns()
+            .into_iter()
+            .zip(&columns)
+            .map(|(column, status)| {
+                let (relation, name) = (column.relation.clone(), column.name.clone());
+                Ok(Expr::Column(column)
+                    .cast_to(&status.data_type, &schema)?
+                    .alias_qualified(relation, name))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expressions,
+            Arc::new(plan),
+        )?))
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan

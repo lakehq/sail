@@ -7912,9 +7912,11 @@ dependencies = [
 name = "sail-logical-optimizer"
 version = "0.7.1"
 dependencies = [
+ "async-trait",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "sail-common-datafusion",
  "sail-function",
  "sail-logical-plan",
  "sail-python-udf",

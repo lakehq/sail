@@ -50,6 +50,9 @@ pub struct PlanConfig {
     pub preserve_view_conditional_float_type: bool,
     /// Creation-time ANSI mode for conditional coercion in persistent views.
     pub view_conditional_ansi_mode: Option<bool>,
+    /// Whether persistent views are resolved with the current configuration
+    /// instead of the captured creation-time configuration.
+    pub legacy_use_current_configs_for_view: bool,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
@@ -99,6 +102,7 @@ impl Default for PlanConfig {
             legacy_decimal_retain_fraction_digits: false,
             preserve_view_conditional_float_type: false,
             view_conditional_ansi_mode: None,
+            legacy_use_current_configs_for_view: false,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,

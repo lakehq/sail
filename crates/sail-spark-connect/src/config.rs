@@ -279,6 +279,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_USE_CURRENT_CONFIGS_FOR_VIEW)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_use_current_configs_for_view = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
             .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?

@@ -36,6 +36,22 @@ Feature: nvl2 output schema
         | CASE then  | CASE WHEN TRUE THEN 'id' ELSE CAST(CAST('invalid' AS INT) AS STRING) END              |
         | CASE else  | CASE WHEN FALSE THEN CAST(CAST('invalid' AS INT) AS STRING) ELSE 'id' END             |
 
+    # TODO: Reject table function arguments that Spark does not treat as foldable.
+    #  Lowering NVL2, NVL and IFNULL to CASE lets constant evaluation accept them.
+    @sail-bug
+    Scenario Outline: range rejects a non-foldable <function> argument
+      When query
+        """
+        SELECT count(*) AS n FROM range(<expression>)
+        """
+      Then query error NON_FOLDABLE_ARGUMENT
+
+      Examples:
+        | function | expression        |
+        | nvl2     | nvl2(1, 2, 3)     |
+        | nvl      | nvl(NULL, 2)      |
+        | ifnull   | ifnull(NULL, 2)   |
+
   @function(nullability)
   Rule: Output schema
 
@@ -168,6 +184,24 @@ Feature: nvl2 output schema
         | TIMESTAMP_NTZ and LTZ  | false | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | TIMESTAMP_NTZ and LTZ  | true  | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | STRING and BINARY     | true  | 'a'                                | X'62'                              | binary        |
+
+    # TODO: Reject NVL2 result branches without a Spark wider common type.
+    #  NVL2 shares the permissive CASE coercion that IF and CASE already use.
+    @sail-bug
+    Scenario Outline: nvl2 rejects result branches without a common type: <case>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT nvl2(nullif(id, 0), <first_branch>, <second_branch>) AS result FROM range(2)
+        """
+      Then query error DATATYPE_MISMATCH
+
+      Examples:
+        | case                              | ansi  | first_branch              | second_branch    |
+        | INT and STRING map keys           | true  | map(CAST(id AS INT), 'v') | map('k', 'w')    |
+        | BIGINT and STRING map keys        | true  | map(id, 'v')              | map('k', 'w')    |
+        | BINARY and STRING                 | false | X'61'                     | 'b'              |
+        | year-month and day-time intervals | true  | INTERVAL '1' YEAR         | INTERVAL '1' DAY |
 
     Scenario: nvl2 returns a DATE branch as TIMESTAMP_NTZ
       When query
@@ -322,3 +356,59 @@ Feature: nvl2 output schema
         | id | v          | v_type |
         | 0  | 2024-02-03 | date   |
         | 1  | 2024-01-01 | date   |
+
+  # Spark folds NVL2's `If(IsNotNull(expr1), expr2, expr3)` replacement when the
+  # tested argument is constant or non-nullable (NullPropagation and SimplifyConditionals).
+  Rule: Constant tested argument
+
+    Scenario: nvl2 with a constant or non-nullable tested argument selects a branch
+      When query
+        """
+        SELECT id, nvl2(id, a, b) AS r1, nvl2(1, a, b) AS r2, nvl2(NULL, a, b) AS r3
+        FROM VALUES (1, 10, 20), (2, 30, 40) AS t(id, a, b)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | r1 | r2 | r3 |
+        | 1  | 10 | 10 | 20 |
+        | 2  | 30 | 30 | 40 |
+      And query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- r1: integer (nullable = false)
+         |-- r2: integer (nullable = false)
+         |-- r3: integer (nullable = false)
+        """
+
+    Scenario Outline: nvl2 with a constant tested argument filters on the selected branch: <case>
+      When query
+        """
+        SELECT id FROM VALUES (1, 10, 20), (2, 30, 40) AS t(id, a, b)
+        WHERE <predicate>
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 2  |
+
+      Examples:
+        | case              | predicate                 |
+        | non-null constant | nvl2(1, a, b) > 15        |
+        | null constant     | nvl2(NULL, a, b) > 25     |
+
+    @sail-only
+    Scenario: EXPLAIN nvl2 with a non-null constant tested argument projects the selected column
+      When query
+        """
+        EXPLAIN SELECT nvl2(1, a, b) AS r FROM VALUES (1, 10, 20) AS t(id, a, b)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN nvl2 with a non-null constant tested argument filters on the selected column
+      When query
+        """
+        EXPLAIN SELECT id FROM VALUES (1, 10, 20) AS t(id, a, b) WHERE nvl2(1, a, b) > 15
+        """
+      Then query plan matches snapshot

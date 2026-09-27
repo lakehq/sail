@@ -10,12 +10,13 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::type_coercion::binary::type_union_coercion;
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, Union, WindowFrame,
-    WindowFunctionDefinition, expr,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF, Union,
+    WindowFrame, WindowFunctionDefinition, expr,
 };
 use regex::Regex;
 use sail_common::spec;
 use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
@@ -115,71 +116,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let ansi_mode = self
-                    .config
-                    .view_conditional_ansi_mode
-                    .unwrap_or(self.config.ansi_mode);
-                // Cast Spark's numeric common types, including ANSI STRING/numeric pairs,
-                // before exposing the UNION type:
-                // conditional consumers must not cache a narrower type than its actual values.
-                let left_schema = Arc::clone(left.schema());
-                let left = promote_union_numeric_input(
-                    left,
-                    right.schema(),
-                    ansi_mode,
-                    &self.config,
-                    by_name,
-                )?;
-                let right = promote_union_numeric_input(
-                    right,
-                    &left_schema,
-                    ansi_mode,
-                    &self.config,
-                    by_name,
-                )?;
-                let mut union =
-                    Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
-                // Conditional coercion needs the common UNION schema.
-                let coerced = coerce_union_schema(&union.inputs)?;
-                // Take only types and nullability from the coerced schema, since DataFusion lets
-                // the last input's field metadata (such as a Spark interval qualifier) win.
-                // TODO: Preserve the first input's top-level metadata when inputs disagree;
-                // the loose UNION constructor currently drops conflicting entries.
-                // Columns keep the loose type where DataFusion's common type differs from Spark:
-                // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP.
-                // TODO: Widen these columns and interval qualifiers like Spark.
-                // TODO: Coerce TIMESTAMP/STRING UNION columns to microseconds; raw UNION
-                //  output currently retains unsupported nanosecond units, and STRING-first
-                //  inputs also break UTC conversion consumers.
-                let fields = union
-                    .schema
-                    .iter()
-                    .zip(coerced.fields())
-                    .map(|((qualifier, field), coerced_field)| {
-                        let field = Arc::new(
-                            field
-                                .as_ref()
-                                .clone()
-                                .with_data_type(repair_union_type(
-                                    field.data_type(),
-                                    coerced_field.data_type(),
-                                    ansi_mode,
-                                ))
-                                .with_nullable(coerced_field.is_nullable()),
-                        );
-                        (qualifier.cloned(), field)
-                    })
-                    .collect();
-                union.schema = Arc::new(DFSchema::new_with_metadata(
-                    fields,
-                    union.schema.metadata().clone(),
-                )?);
-                let plan = LogicalPlan::Union(union);
-                if is_all {
-                    Ok(plan)
-                } else {
-                    Ok(LogicalPlanBuilder::new(plan).distinct()?.build()?)
-                }
+                self.resolve_union(left, right, is_all, by_name)
             }
             SetOpType::Except => {
                 let left_len = left.schema().fields().len();
@@ -285,6 +222,84 @@ impl PlanResolver<'_> {
             }
         }
     }
+
+    /// Builds a UNION from resolved inputs. This is not part of the recursive
+    /// `resolve_query_set_operation` future, so its locals are not on the stack
+    /// for every nested set operation during resolution.
+    #[inline(never)]
+    fn resolve_union(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        is_all: bool,
+        by_name: bool,
+    ) -> PlanResult<LogicalPlan> {
+        let ansi_mode = self
+            .config
+            .view_conditional_ansi_mode
+            .unwrap_or(self.config.ansi_mode);
+        // Cast Spark's numeric common types, including ANSI STRING/numeric pairs,
+        // before exposing the UNION type:
+        // conditional consumers must not cache a narrower type than its actual values.
+        let left_schema = Arc::clone(left.schema());
+        let left =
+            promote_union_numeric_input(left, right.schema(), ansi_mode, &self.config, by_name)?;
+        let right =
+            promote_union_numeric_input(right, &left_schema, ansi_mode, &self.config, by_name)?;
+        let mut union = Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
+        // Conditional coercion needs the common UNION schema. DataFusion rejects some
+        // pairs that Spark accepts, such as ANSI STRING/BOOLEAN; keep the loose schema
+        // for those, so that only executing the UNION reports incompatible inputs.
+        // Other incompatible pairs fail here, like Spark's analysis.
+        // TODO: Coerce STRING with BOOLEAN (ANSI) and INTERVAL (non-ANSI) like Spark.
+        let coerced = match coerce_union_schema(&union.inputs) {
+            Ok(coerced) => Some(coerced),
+            Err(_) if has_only_spark_union_types(&union.inputs, ansi_mode) => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(coerced) = coerced {
+            // Take only types and nullability from the coerced schema, since DataFusion
+            // lets the last input's field metadata (such as a Spark interval qualifier)
+            // win.
+            // TODO: Preserve the first input's top-level metadata when inputs disagree;
+            // the loose UNION constructor currently drops conflicting entries.
+            // Columns keep the loose type where DataFusion's common type differs from
+            // Spark: DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP.
+            // TODO: Widen these columns and interval qualifiers like Spark.
+            // TODO: Coerce TIMESTAMP/STRING UNION columns to microseconds; raw UNION
+            //  output currently retains unsupported nanosecond units, and STRING-first
+            //  inputs also break UTC conversion consumers.
+            let fields = union
+                .schema
+                .iter()
+                .zip(coerced.fields())
+                .map(|((qualifier, field), coerced_field)| {
+                    let field = Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(repair_union_type(
+                                field.data_type(),
+                                coerced_field.data_type(),
+                                ansi_mode,
+                            ))
+                            .with_nullable(coerced_field.is_nullable()),
+                    );
+                    (qualifier.cloned(), field)
+                })
+                .collect();
+            union.schema = Arc::new(DFSchema::new_with_metadata(
+                fields,
+                union.schema.metadata().clone(),
+            )?);
+        }
+        let plan = LogicalPlan::Union(union);
+        if is_all {
+            Ok(plan)
+        } else {
+            Ok(LogicalPlanBuilder::new(plan).distinct()?.build()?)
+        }
+    }
 }
 
 fn promote_union_numeric_input(
@@ -306,14 +321,23 @@ fn promote_union_numeric_input(
         .zip(other_schema.fields())
         .enumerate()
     {
-        let data_type = promote_union_numeric_type(
-            field.data_type(),
-            other.data_type(),
-            ansi_mode,
-            config,
-            by_name,
-            true,
-        );
+        let data_type = match (field.data_type(), other.data_type()) {
+            // Spark's non-ANSI string promotion widens STRING with DATE or TIMESTAMP to
+            // STRING, while DataFusion chooses the temporal type.
+            (string, temporal) | (temporal, string)
+                if !ansi_mode && string.is_string() && is_date_or_timestamp(temporal) =>
+            {
+                string.clone()
+            }
+            _ => promote_union_numeric_type(
+                field.data_type(),
+                other.data_type(),
+                ansi_mode,
+                config,
+                by_name,
+                true,
+            ),
+        };
         let unchanged = data_type == *field.data_type();
         if unchanged && expressions.is_none() {
             continue;
@@ -332,6 +356,14 @@ fn promote_union_numeric_input(
         } else {
             let column = if has_string_numeric_coercion(field.data_type(), &data_type) {
                 ScalarUDF::from(SparkConditionalCast::new(data_type)).call(vec![column])
+            } else if is_date_or_timestamp(field.data_type()) && data_type.is_string() {
+                // Format DATE and TIMESTAMP values like Spark's CAST to STRING.
+                match data_type {
+                    DataType::LargeUtf8 => ScalarUDF::from(SparkToLargeUtf8::new()),
+                    DataType::Utf8View => ScalarUDF::from(SparkToUtf8View::new()),
+                    _ => ScalarUDF::from(SparkToUtf8::new()),
+                }
+                .call(vec![column])
             } else {
                 column.cast_to(&data_type, input.schema())?
             };
@@ -340,7 +372,12 @@ fn promote_union_numeric_input(
         expressions.push(column);
     }
     if let Some(expressions) = expressions {
-        Ok(project(input, expressions)?)
+        // The expressions are already resolved columns of `input`. Skip the builder's
+        // per-expression normalization, which walks the whole input plan each time.
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expressions,
+            Arc::new(input),
+        )?))
     } else {
         Ok(input)
     }
@@ -583,6 +620,41 @@ fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: b
         }
         _ => coerced_type.clone(),
     }
+}
+
+// Spark widens these pairs, but DataFusion's UNION coercion rejects them.
+fn is_spark_only_union_pair(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
+    let other = match (left.is_string(), right.is_string()) {
+        (true, false) => right,
+        (false, true) => left,
+        _ => return false,
+    };
+    if ansi_mode {
+        matches!(other, DataType::Boolean)
+    } else {
+        matches!(other, DataType::Duration(_) | DataType::Interval(_))
+    }
+}
+
+fn has_only_spark_union_types(inputs: &[Arc<LogicalPlan>], ansi_mode: bool) -> bool {
+    let [left, right] = inputs else {
+        return false;
+    };
+    left.schema()
+        .fields()
+        .iter()
+        .zip(right.schema().fields())
+        .all(|(left, right)| {
+            type_union_coercion(left.data_type(), right.data_type()).is_some()
+                || is_spark_only_union_pair(left.data_type(), right.data_type(), ansi_mode)
+        })
+}
+
+fn is_date_or_timestamp(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+    )
 }
 
 fn has_string_numeric_coercion(source: &DataType, target: &DataType) -> bool {
