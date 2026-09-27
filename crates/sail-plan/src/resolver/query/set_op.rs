@@ -143,6 +143,8 @@ impl PlanResolver<'_> {
                 let coerced = coerce_union_schema(&union.inputs)?;
                 // Take only types and nullability from the coerced schema, since DataFusion lets
                 // the last input's field metadata (such as a Spark interval qualifier) win.
+                // TODO: Preserve the first input's top-level metadata when inputs disagree;
+                // the loose UNION constructor currently drops conflicting entries.
                 // Columns keep the loose type where DataFusion's common type differs from Spark:
                 // DATE or STRING with TIMESTAMP becomes a nanosecond TIMESTAMP.
                 // TODO: Widen these columns and interval qualifiers like Spark.
@@ -296,37 +298,48 @@ fn promote_union_numeric_input(
     if input.schema().fields().len() != other_schema.fields().len() {
         return Ok(input);
     }
-    let mut changed = false;
-    let expressions = input
+    let mut expressions = None;
+    for (index, (field, other)) in input
         .schema()
         .fields()
         .iter()
         .zip(other_schema.fields())
         .enumerate()
-        .map(|(index, (field, other))| {
-            let data_type = promote_union_numeric_type(
-                field.data_type(),
-                other.data_type(),
-                ansi_mode,
-                config,
-                by_name,
-                true,
-            );
-            let column = Expr::Column(Column::from(input.schema().qualified_field(index)));
-            if data_type == *field.data_type() {
-                Ok(column)
+    {
+        let data_type = promote_union_numeric_type(
+            field.data_type(),
+            other.data_type(),
+            ansi_mode,
+            config,
+            by_name,
+            true,
+        );
+        let unchanged = data_type == *field.data_type();
+        if unchanged && expressions.is_none() {
+            continue;
+        }
+        // Allocate only after the first promoted column, keeping the preceding
+        // columns unchanged. This avoids discarded projections without an extra
+        // type-comparison pass over heterogeneous or deeply nested schemas.
+        let expressions = expressions.get_or_insert_with(|| {
+            (0..index)
+                .map(|index| Expr::Column(Column::from(input.schema().qualified_field(index))))
+                .collect::<Vec<_>>()
+        });
+        let column = Expr::Column(Column::from(input.schema().qualified_field(index)));
+        let column = if unchanged {
+            column
+        } else {
+            let column = if has_string_numeric_coercion(field.data_type(), &data_type) {
+                ScalarUDF::from(SparkConditionalCast::new(data_type)).call(vec![column])
             } else {
-                changed = true;
-                let column = if has_string_numeric_coercion(field.data_type(), &data_type) {
-                    ScalarUDF::from(SparkConditionalCast::new(data_type)).call(vec![column])
-                } else {
-                    column.cast_to(&data_type, input.schema())?
-                };
-                Ok(column.alias_with_metadata(field.name(), Some(field.metadata().clone().into())))
-            }
-        })
-        .collect::<PlanResult<Vec<_>>>()?;
-    if changed {
+                column.cast_to(&data_type, input.schema())?
+            };
+            column.alias_with_metadata(field.name(), Some(field.metadata().clone().into()))
+        };
+        expressions.push(column);
+    }
+    if let Some(expressions) = expressions {
         Ok(project(input, expressions)?)
     } else {
         Ok(input)

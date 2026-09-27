@@ -3,6 +3,8 @@ from decimal import Decimal
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 @pytest.mark.parametrize("ansi", ["true", "false"])
 @pytest.mark.parametrize("allow_missing", [False, True])
@@ -200,3 +202,19 @@ def test_union_conditional_preserves_repeated_constant_producers(spark):
         assert result.collect() == [(0, 0.0), (1, 10240.0)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+
+
+def test_union_equal_numeric_types_preserves_nullable_rows(spark):
+    left = spark.sql("SELECT 7L AS v")
+    right = spark.sql("SELECT CAST(NULL AS BIGINT) AS v")
+    union = left.union(right)
+    assert union.schema["v"].nullable is True
+    result = union.selectExpr("v", "IF(v IS NULL, -1L, v) AS conditional").orderBy(F.col("v").asc_nulls_last())
+    assert result.collect() == [(7, 7), (None, -1)]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug: UNION drops conflicting field metadata", strict=True)
+def test_union_equal_numeric_types_preserves_left_metadata(spark):
+    left = spark.sql("SELECT 7L AS v").select(F.col("v").alias("v", metadata={"source": "left"}))
+    right = spark.sql("SELECT CAST(NULL AS BIGINT) AS v").select(F.col("v").alias("v", metadata={"source": "right"}))
+    assert left.union(right).schema["v"].metadata == {"source": "left"}

@@ -144,7 +144,7 @@ impl ScalarUDFImpl for SparkNvl2 {
     }
 }
 
-/// Strict casts introduced by ANSI conditional branch coercion. Keeping the cast
+/// Strict casts introduced by conditional branch and numeric argument coercion. Keeping the cast
 /// in a UDF lets DataFusion defer invalid literals in unselected CASE branches.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkConditionalCast {
@@ -190,7 +190,11 @@ impl ScalarUDFImpl for SparkConditionalCast {
             return Ok(Arc::new(source.as_ref().clone().with_name(self.name())));
         }
         let nullable = source.is_nullable()
-            || (source.data_type().is_string() && self.target_type.is_numeric());
+            || (source.data_type().is_string() && self.target_type.is_numeric())
+            // Spark Cast.forceNullable includes fractional-to-integral casts,
+            // including in ANSI mode where an invalid value raises an error.
+            || ((source.data_type().is_floating() || source.data_type().is_decimal())
+                && self.target_type.is_integer());
         Ok(Arc::new(Field::new(
             self.name(),
             self.target_type.clone(),

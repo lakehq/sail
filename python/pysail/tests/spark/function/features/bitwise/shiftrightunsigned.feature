@@ -3,7 +3,6 @@ Feature: shiftrightunsigned output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to shiftrightunsigned yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: shiftrightunsigned output schema
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to shiftrightunsigned yields the schema Spark declares
       When query
         """
@@ -173,7 +171,6 @@ Feature: shiftrightunsigned output schema
         | DOUBLE  | false     | CAST(-2147483648 AS DOUBLE)            |
         | DOUBLE  | true      | CAST(-2147483648 AS DOUBLE)            |
 
-    @sail-bug
     Scenario: shiftrightunsigned wraps decimals beyond the supported unsigned range
       Given config spark.sql.ansi.enabled = false
       When query
@@ -191,7 +188,6 @@ Feature: shiftrightunsigned output schema
 
   Rule: Shift counts
 
-    @sail-bug
     Scenario Outline: shiftrightunsigned masks the shift count for <kind> inputs
       Given config spark.sql.ansi.enabled = false
       When query
@@ -207,7 +203,6 @@ Feature: shiftrightunsigned output schema
         | INT    | 8     | 32    | 8      |
         | BIGINT | -1    | -1    | 1      |
 
-    @sail-bug
     Scenario Outline: shiftrightunsigned preserves the sign bit when shifting <kind> by zero
       Given config spark.sql.ansi.enabled = false
       When query
@@ -223,7 +218,6 @@ Feature: shiftrightunsigned output schema
         | INT    |
         | BIGINT |
 
-    @sail-bug
     Scenario Outline: shiftrightunsigned implicitly casts <kind> inputs to INT
       When query
         """
@@ -239,7 +233,6 @@ Feature: shiftrightunsigned output schema
         | TINYINT  |
         | SMALLINT |
 
-    @sail-bug
     Scenario: shiftrightunsigned shifts the BIGINT minimum
       When query
         """
@@ -301,3 +294,139 @@ Feature: shiftrightunsigned output schema
         SELECT id, result FROM unsigned_decimal_ansi_view ORDER BY id
         """
       Then query error (CAST_OVERFLOW|out of range Int32)
+
+  Rule: Implicit cast schemas
+
+    Scenario Outline: Unsigned shifts retain fractional value cast nullability with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT shiftrightunsigned(IF(id = 0, 8, CAST(-2.5 AS <kind>)), 1) AS result
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | result     |
+        | 4          |
+        | 2147483647 |
+      And query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+      Examples:
+        | kind          | ansi  |
+        | FLOAT         | true  |
+        | FLOAT         | false |
+        | DECIMAL(12,2) | true  |
+        | DECIMAL(12,2) | false |
+
+    Scenario Outline: Unsigned shifts retain fractional count cast nullability with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT shiftrightunsigned(8, CAST(id + 1 AS <kind>)) AS result
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | result |
+        | 4      |
+        | 2      |
+      And query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+      Examples:
+        | kind          | ansi  |
+        | DOUBLE        | true  |
+        | DOUBLE        | false |
+        | DECIMAL(12,2) | true  |
+        | DECIMAL(12,2) | false |
+
+    Scenario: An ANSI unsigned shift rejects an overflowing BIGINT count
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT shiftrightunsigned(8, 2147483648L) AS result
+        """
+      Then query error (CAST_OVERFLOW|Can't cast value 2147483648 to type Int32)
+
+    Scenario: A legacy unsigned shift wraps an overflowing BIGINT count
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT shiftrightunsigned(8, 2147483648L) AS result
+        """
+      Then query result
+        | result |
+        | 8      |
+
+  Scenario Outline: A NULL unsigned-shift value suppresses an overflowing count in ANSI mode <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT shiftrightunsigned(CAST(NULL AS <value_type>), CAST(2147483648 AS <count_type>)) AS result
+      FROM range(2)
+      """
+    Then query result
+      | result |
+      | NULL   |
+      | NULL   |
+    And query schema
+      """
+      root
+       |-- result: <result_type> (nullable = true)
+      """
+
+    Examples:
+      | ansi  | value_type | count_type | result_type |
+      | true  | INT        | BIGINT     | integer     |
+      | true  | INT        | DOUBLE     | integer     |
+      | true  | BIGINT     | BIGINT     | long        |
+      | true  | SMALLINT   | BIGINT     | integer     |
+      | false | INT        | DOUBLE     | integer     |
+
+  Scenario: Row-dependent NULL unsigned-shift values skip invalid counts
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT id, shiftrightunsigned(
+        IF(id = 0, CAST(NULL AS INT), 8),
+        IF(id = 0, 2147483648L, 1L)) AS result
+      FROM range(2) ORDER BY id
+      """
+    Then query result ordered
+      | id | result |
+      | 0  | NULL   |
+      | 1  | 4      |
+
+  @sail-bug
+  Scenario Outline: Non-ANSI unsigned shifts convert out-of-range fractional counts using <conversion>
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT shiftrightunsigned(CAST(-8 AS INT), <count>) AS result
+      """
+    Then query result
+      | result |
+      | 1      |
+
+    # Shared checked casts reject both counts; Spark saturates floating values
+    # and retains the low 32 bits of decimal values before masking the count.
+    Examples:
+      | conversion | count                                    |
+      | saturation | CAST(2147483648 AS DOUBLE)                |
+      | wrapping   | CAST(-2147483649 AS DECIMAL(12,1))        |
+
+  @sail-bug
+  Scenario: Non-ANSI unsigned shifts wrap decimal values outside the BIGINT range
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT shiftrightunsigned(CAST('9223372036854775809' AS DECIMAL(38,0)), 1) AS result
+      """
+    Then query result
+      | result |
+      | 0      |
