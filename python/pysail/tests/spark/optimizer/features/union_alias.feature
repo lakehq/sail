@@ -1,6 +1,6 @@
-Feature: Anonymous Union alias optimization
+Feature: Anonymous Union alias resolution
 
-  Scenario: Anonymous Union aliases reuse branch projections
+  Scenario: Anonymous Union aliases preserve column values
     When query
       """
       SELECT sum(x) AS n

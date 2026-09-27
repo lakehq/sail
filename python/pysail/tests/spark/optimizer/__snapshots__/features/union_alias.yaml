@@ -1,6 +1,6 @@
 # serializer version: 1
 ---
-name: "test_anonymous_union_aliases_reuse_branch_projections"
+name: "test_anonymous_union_aliases_preserve_column_values"
 data:
   |-
     == Physical Plan ==
@@ -9,8 +9,9 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[sum(__auto_generated_subquery_name.#4)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(__auto_generated_subquery_name.#4)]
-              UnionExec
-                ProjectionExec: expr=[id@0 as #4]
-                  RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
-                ProjectionExec: expr=[id@0 as #4]
-                  RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
+              ProjectionExec: expr=[#1@0 as #4]
+                UnionExec
+                  ProjectionExec: expr=[id@0 as #1]
+                    RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
+                  ProjectionExec: expr=[id@0 as #1]
+                    RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
