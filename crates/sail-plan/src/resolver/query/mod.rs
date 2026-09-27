@@ -41,8 +41,8 @@ mod values;
 mod window;
 mod with_relations;
 
-pub(super) use cte::CteInfo;
-pub(super) use missing_input::MissingInputResolution;
+pub(super) use cte::{CteInfo, CteKind};
+pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
 
 impl PlanResolver<'_> {
     /// Resolve query plan.

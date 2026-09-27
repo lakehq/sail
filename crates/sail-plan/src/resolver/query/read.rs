@@ -80,7 +80,7 @@ impl PlanResolver<'_> {
             let mut plan = cte.plan.as_ref().clone();
             if let Some(names) = cte.renew_reference(state)? {
                 plan = rename_logical_plan_reusing_projection(plan, &names)?;
-                state.register_missing_input_boundary(&plan);
+                state.missing_input_boundaries_mut().register(&plan);
             }
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
@@ -177,7 +177,7 @@ impl PlanResolver<'_> {
                 let plan = rename_logical_plan(plan.as_ref().clone(), &names)?;
                 // The stored plan's internal field IDs belong to another resolver
                 // state. Missing-reference recovery must see only the fresh output.
-                state.register_missing_input_boundary(&plan);
+                state.missing_input_boundaries_mut().register(&plan);
                 plan
             }
         };
@@ -242,7 +242,7 @@ impl PlanResolver<'_> {
             let plan = rename_logical_plan(plan, &names)?;
             // Spark renames view columns below the view's alias, so missing-reference
             // recovery must not see the definition's column names under this output.
-            state.register_missing_input_boundary(&plan);
+            state.missing_input_boundaries_mut().register(&plan);
             Ok(plan)
         }
     }
@@ -573,7 +573,7 @@ impl PlanResolver<'_> {
             let plan = rename_logical_plan(table_scan, &names)?;
             // Physical column names (including names such as "#0") are not
             // resolver field IDs. Only the renamed output is a resolution input.
-            state.register_missing_input_boundary(&plan);
+            state.missing_input_boundaries_mut().register(&plan);
             Ok(plan)
         } else {
             Ok(table_scan)

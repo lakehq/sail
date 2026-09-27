@@ -274,7 +274,7 @@ impl PlanResolver<'_> {
             )?
             .build()?;
         // Spark's grouped-map output has only the function output columns.
-        state.register_missing_input_boundary(&plan);
+        state.missing_input_boundaries_mut().register(&plan);
         Ok(plan)
     }
 
@@ -405,7 +405,7 @@ impl PlanResolver<'_> {
             )?
             .build()?;
         // Spark's co-grouped map output has only the function output columns.
-        state.register_missing_input_boundary(&plan);
+        state.missing_input_boundaries_mut().register(&plan);
         Ok(plan)
     }
 

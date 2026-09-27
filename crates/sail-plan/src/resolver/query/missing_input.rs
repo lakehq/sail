@@ -69,6 +69,105 @@ impl MissingInputResolution {
     }
 }
 
+/// An output whose descendants cannot participate in missing-reference resolution.
+/// The output is paired with its input so that a pass-through projection that
+/// reproduces the output over a wider input (e.g. a join) is not a boundary.
+#[derive(Debug)]
+struct MissingInputBoundary {
+    output: DFSchemaRef,
+    input: Option<DFSchemaRef>,
+}
+
+/// The outputs whose descendants cannot participate in missing-reference resolution.
+#[derive(Debug, Default)]
+pub(in crate::resolver) struct MissingInputBoundaries {
+    boundaries: Vec<MissingInputBoundary>,
+}
+
+impl MissingInputBoundaries {
+    /// Registers the plan as a missing-input boundary.
+    pub(super) fn register(&mut self, plan: &LogicalPlan) {
+        let mut plan = plan;
+        // Empty outputs can share a schema with unrelated plans. Stop recovery at
+        // the first nonempty input instead, whose field IDs distinguish the boundary.
+        while plan.schema().fields().is_empty() {
+            let Some(child) = self.child(plan) else {
+                return;
+            };
+            if !child.schema().fields().is_empty() {
+                break;
+            }
+            plan = child;
+        }
+        self.boundaries.push(MissingInputBoundary {
+            output: Arc::clone(plan.schema()),
+            input: plan
+                .inputs()
+                .first()
+                .map(|input| Arc::clone(input.schema())),
+        });
+    }
+
+    /// Returns whether the plan is a registered boundary.
+    fn contains(&self, plan: &LogicalPlan) -> bool {
+        // Rewriters can rebuild schemas with different types or nullability.
+        // Retain the original schemas cheaply, but compare only column identities.
+        let matches = |left: &DFSchemaRef, right: &DFSchemaRef| {
+            Arc::ptr_eq(left, right)
+                || (left.fields().len() == right.fields().len()
+                    && left
+                        .iter()
+                        .map(|(qualifier, field)| (qualifier, field.name()))
+                        .eq(right
+                            .iter()
+                            .map(|(qualifier, field)| (qualifier, field.name()))))
+        };
+        self.boundaries.iter().any(|boundary| {
+            matches(&boundary.output, plan.schema())
+                && match (&boundary.input, plan.inputs().first()) {
+                    (Some(schema), Some(child)) => matches(schema, child.schema()),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
+    }
+
+    /// Only cross operators that can carry additional columns without changing
+    /// their semantics. Spark also stops at aliases and multi-input operators.
+    fn child<'a>(&self, plan: &'a LogicalPlan) -> Option<&'a LogicalPlan> {
+        if self.contains(plan) {
+            return None;
+        }
+        let transparent = match plan {
+            LogicalPlan::Projection(_)
+            | LogicalPlan::Filter(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Unnest(_) => true,
+            LogicalPlan::Extension(extension) => {
+                let node = extension.node.as_any();
+                node.is::<ExplicitRepartitionNode>()
+                    || node.is::<SortWithinPartitionsNode>()
+                    || node.is::<RequiredSortNode>()
+                    || node.is::<MonotonicIdNode>()
+                    || node.is::<SparkPartitionIdNode>()
+            }
+            // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing
+            // attributes. Sail's Distinct lowering cannot do so without
+            // changing its deduplication keys; preserve those keys before supporting it.
+            // The same applies to dropDuplicates with a subset, which Sail lowers to DistinctOn.
+            // TODO: Spark's LateralJoin is a unary node over its left input, so a filter can
+            // recover attributes removed from that input. Sail lowers it to a Join instead.
+            _ => false,
+        };
+        transparent
+            .then(|| plan.inputs().first().copied())
+            .flatten()
+    }
+}
+
 impl PlanResolver<'_> {
     /// Resolves expressions against the input, recovering attributes that the input
     /// removed but one of its descendants outputs, like Spark's `resolveExprsAndAddMissingAttrs`.
@@ -163,7 +262,7 @@ impl PlanResolver<'_> {
             schemas.push(Arc::clone(child.schema()));
             plan = child;
         }
-        if resolve_sort_inputs && !state.is_missing_input_boundary(plan) {
+        if resolve_sort_inputs && !state.missing_input_boundaries().contains(plan) {
             match plan {
                 // Sorts can contain grouping expressions and aggregate arguments that are
                 // not in the aggregate output. Rebase them before recovering inputs.
@@ -177,7 +276,7 @@ impl PlanResolver<'_> {
                 // distinct rows unchanged since they duplicate projected columns.
                 LogicalPlan::Distinct(Distinct::All(input)) => {
                     if let LogicalPlan::Projection(projection) = input.as_ref()
-                        && !state.is_missing_input_boundary(input)
+                        && !state.missing_input_boundaries().contains(input)
                     {
                         schemas.push(Self::projected_attributes(projection, state)?);
                     }
@@ -367,42 +466,12 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    /// Only cross operators that can carry additional columns without changing
-    /// their semantics. Spark also stops at aliases and multi-input operators.
-    pub(in crate::resolver) fn missing_input_child<'a>(
+    /// Returns the input that missing-reference resolution can cross into from the plan.
+    pub(super) fn missing_input_child<'a>(
         plan: &'a LogicalPlan,
         state: &PlanResolverState,
     ) -> Option<&'a LogicalPlan> {
-        if state.is_missing_input_boundary(plan) {
-            return None;
-        }
-        let transparent = match plan {
-            LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Unnest(_) => true,
-            LogicalPlan::Extension(extension) => {
-                let node = extension.node.as_any();
-                node.is::<ExplicitRepartitionNode>()
-                    || node.is::<SortWithinPartitionsNode>()
-                    || node.is::<RequiredSortNode>()
-                    || node.is::<MonotonicIdNode>()
-                    || node.is::<SparkPartitionIdNode>()
-            }
-            // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing
-            // attributes. Sail's Distinct lowering cannot do so without
-            // changing its deduplication keys; preserve those keys before supporting it.
-            // The same applies to dropDuplicates with a subset, which Sail lowers to DistinctOn.
-            // TODO: Spark's LateralJoin is a unary node over its left input, so a filter can
-            // recover attributes removed from that input. Sail lowers it to a Join instead.
-            _ => false,
-        };
-        transparent
-            .then(|| plan.inputs().first().copied())
-            .flatten()
+        state.missing_input_boundaries().child(plan)
     }
 
     /// Adds the columns to every operator between the plan's output and the descendant that

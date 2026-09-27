@@ -8,12 +8,21 @@ use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+/// Whether a named relation is a CTE definition or a parameter view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::resolver) enum CteKind {
+    /// A CTE defined by a `WITH` clause.
+    Definition,
+    /// A DataFrame argument of `spark.sql`, referenced by its view name.
+    ParameterView,
+}
+
 /// A CTE definition or a parameter view, with the attribute identities of its output.
 #[derive(Debug)]
 pub(in crate::resolver) struct CteInfo {
     pub(super) plan: Arc<LogicalPlan>,
-    /// Whether this is a CTE definition rather than a parameter view.
-    definition: bool,
+    /// Whether this is a CTE definition or a parameter view.
+    kind: CteKind,
     /// The attribute identity of each output field.
     origins: Vec<usize>,
     /// The DataFrame plan IDs bound to the output attributes when the CTE is defined.
@@ -23,7 +32,7 @@ pub(in crate::resolver) struct CteInfo {
 impl CteInfo {
     pub(in crate::resolver) fn try_new(
         plan: LogicalPlan,
-        definition: bool,
+        kind: CteKind,
         state: &PlanResolverState,
     ) -> PlanResult<Self> {
         let mut origins = Vec::with_capacity(plan.schema().fields().len());
@@ -38,7 +47,7 @@ impl CteInfo {
         }
         Ok(Self {
             plan: Arc::new(plan),
-            definition,
+            kind,
             origins,
             bindings,
         })
@@ -50,7 +59,10 @@ impl CteInfo {
         &self,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<Vec<String>>> {
-        let origins = state.cte_reference_origins_mut(self.definition);
+        let origins = match self.kind {
+            CteKind::Definition => state.cte_reference_origins_mut(),
+            CteKind::ParameterView => state.parameter_view_origins_mut(),
+        };
         if !self.origins.iter().any(|origin| origins.contains(origin)) {
             // SQL outputs may acquire a DataFrame plan ID only after this query
             // finishes. Their repeated CTE references already need fresh identities.
@@ -67,14 +79,13 @@ impl CteInfo {
             let origin = *renewed
                 .entry(original)
                 .or_insert_with(|| state.next_origin());
-            let plan_ids = if self.definition {
-                datafusion_common::HashSet::new()
-            } else {
-                self.bindings.get(&original).cloned().unwrap_or_default()
+            let plan_ids = match self.kind {
+                CteKind::Definition => datafusion_common::HashSet::new(),
+                CteKind::ParameterView => self.bindings.get(&original).cloned().unwrap_or_default(),
             };
             names.push(state.register_field_with_origin(name, hidden, origin, plan_ids));
-            if !self.definition {
-                state.cte_reference_origins_mut(false).insert(origin);
+            if self.kind == CteKind::ParameterView {
+                state.parameter_view_origins_mut().insert(origin);
             }
         }
         Ok(Some(names))
@@ -113,13 +124,13 @@ impl PlanResolver<'_> {
                 Arc::new(plan),
                 reference.clone(),
             )?);
-            state.insert_cte(reference, plan, true)?;
+            state.insert_cte(reference, plan, CteKind::Definition)?;
         }
         let plan = self.resolve_query_plan(input, state).await?;
         // Spark's `WithCTE` also has the CTE definitions as children, so
         // missing-reference recovery resolves only against the query output.
         Self::restore_cte_output_bindings(&plan, state)?;
-        state.register_missing_input_boundary(&plan);
+        state.missing_input_boundaries_mut().register(&plan);
         Ok(plan)
     }
 
@@ -131,7 +142,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<()> {
         let definitions = state
             .ctes()
-            .filter(|cte| cte.definition && !cte.bindings.is_empty())
+            .filter(|cte| cte.kind == CteKind::Definition && !cte.bindings.is_empty())
             .cloned()
             .collect::<Vec<_>>();
         if definitions.is_empty() {

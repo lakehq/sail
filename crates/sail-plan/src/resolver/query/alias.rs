@@ -122,7 +122,7 @@ impl PlanResolver<'_> {
             };
             let plan =
                 LogicalPlan::Projection(Projection::try_new_with_schema(expr, input, schema)?);
-            state.register_missing_input_boundary(&plan);
+            state.missing_input_boundaries_mut().register(&plan);
             return Ok(plan);
         }
         Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(

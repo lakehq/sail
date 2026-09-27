@@ -13,7 +13,7 @@ use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{FieldInfo, PlanResolverState};
 
 /// Distinguish an absent root from a matching root whose extraction is not yet
 /// supported. The latter must still shadow deeper attributes.
@@ -298,33 +298,42 @@ impl PlanResolver<'_> {
         for (qualifier, root, _) in
             Self::generate_qualified_nested_field_candidates(name.parts()).rev()
         {
-            let mut first = None;
-            for (field_qualifier, field) in schema.iter() {
-                if !qualifier_matches(
-                    qualifier.as_ref(),
-                    field_qualifier,
-                    self.config.case_sensitive,
-                ) {
-                    continue;
-                }
-                let info = state.get_field_info(field.name())?;
-                if info.is_hidden()
-                    || !info.matches(root.as_ref(), None)
-                    || (self.config.case_sensitive && info.name() != root.as_ref())
-                {
-                    continue;
-                }
-                if *first.get_or_insert(info.origin()) != info.origin() {
-                    return Err(PlanError::analysis(format!(
-                        "ambiguous attribute: {name:?}"
-                    )));
-                }
+            let mut origins = self
+                .matching_root_fields(schema, qualifier.as_ref(), root.as_ref(), None, state)
+                .map(|(_, _, info)| info.origin());
+            let Some(first) = origins.next() else {
+                continue;
+            };
+            if origins.any(|origin| origin != first) {
+                return Err(PlanError::analysis(format!(
+                    "ambiguous attribute: {name:?}"
+                )));
             }
-            if first.is_some() {
-                break;
-            }
+            break;
         }
         Ok(())
+    }
+
+    /// Returns the visible fields of the schema that match the qualifier and root name,
+    /// along with their field information.
+    fn matching_root_fields<'a>(
+        &'a self,
+        schema: &'a DFSchema,
+        qualifier: Option<&'a TableReference>,
+        root: &'a str,
+        plan_id: Option<i64>,
+        state: &'a PlanResolverState,
+    ) -> impl Iterator<Item = (Option<&'a TableReference>, &'a FieldRef, &'a FieldInfo)> {
+        schema.iter().filter_map(move |(field_qualifier, field)| {
+            if !qualifier_matches(qualifier, field_qualifier, self.config.case_sensitive) {
+                return None;
+            }
+            let info = state.get_field_info(field.name()).ok()?;
+            (!info.is_hidden()
+                && info.matches(root, plan_id)
+                && (!self.config.case_sensitive || info.name() == root))
+                .then_some((field_qualifier, field, info))
+        })
     }
 
     fn resolve_field_or_nested_field(
@@ -342,26 +351,16 @@ impl PlanResolver<'_> {
             // Reuse the matching fields for extraction rather than scanning the
             // schema again after choosing a qualifier. Stop even if extraction is
             // unsupported: a matching root still shadows less-qualified roots.
-            let mut fields = schema.iter().filter(|(qualifier, field)| {
-                qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
-                    && state.get_field_info(field.name()).is_ok_and(|info| {
-                        !info.is_hidden()
-                            && info.matches(root.as_ref(), plan_id)
-                            && (!self.config.case_sensitive || info.name() == root.as_ref())
-                    })
-            });
-            let Some((qualifier, field)) = fields.next() else {
+            let mut fields =
+                self.matching_root_fields(schema, q.as_ref(), root.as_ref(), plan_id, state);
+            let Some((qualifier, field, info)) = fields.next() else {
                 continue;
             };
             // Spark checks root ambiguity before extracting fields. An unsupported
             // extraction must not hide a second root and bind the first one instead.
             // Spark deduplicates matches of the same attribute (e.g. `SELECT a, a`).
-            let origin = state.get_field_info(field.name())?.origin();
-            if fields.any(|(other_qualifier, other)| {
-                other_qualifier != qualifier
-                    || state
-                        .get_field_info(other.name())
-                        .is_ok_and(|other| other.origin() != origin)
+            if fields.any(|(other_qualifier, _, other)| {
+                other_qualifier != qualifier || other.origin() != info.origin()
             }) {
                 return Err(PlanError::AnalysisError(format!(
                     "ambiguous attribute: {name:?}"

@@ -1,15 +1,14 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{DFSchemaRef, HashSet, ScalarValue, TableReference};
+use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::query::{CteInfo, MissingInputResolution};
+use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
@@ -81,32 +80,30 @@ pub(super) struct PlanResolverState {
     next_id: usize,
     next_origin: usize,
     /// A map from the generated opaque field ID to field information.
-    fields: datafusion_common::HashMap<String, FieldInfo>,
+    fields: HashMap<String, FieldInfo>,
     /// An output schema of each DataFrame plan ID, for checking references against it.
-    plan_schemas: datafusion_common::HashMap<i64, DFSchemaRef>,
+    plan_schemas: HashMap<i64, DFSchemaRef>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for expressions
     /// that can recover missing inputs (e.g. a filter predicate).
     missing_input_resolution: Option<MissingInputResolution>,
     /// Outputs whose descendants cannot participate in missing-reference resolution.
-    /// Each output is paired with its input so that a pass-through projection that
-    /// reproduces the output over a wider input (e.g. a join) is not a boundary.
-    missing_input_boundaries: Vec<(DFSchemaRef, Option<DFSchemaRef>)>,
+    missing_input_boundaries: MissingInputBoundaries,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
-    ctes: datafusion_common::HashMap<TableReference, Arc<CteInfo>>,
-    /// The attributes of the CTE references resolved so far.
+    ctes: HashMap<TableReference, Arc<CteInfo>>,
+    /// Output attributes of the CTE definitions referenced so far; later references renew them.
     cte_reference_origins: HashSet<usize>,
-    /// The attributes of the parameter-view references resolved so far.
+    /// Output attributes of the parameter views referenced so far, including renewed ones.
     parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
     /// Named parameter values available while resolving a `WithParameters` query node.
     /// These provide placeholder types and support early `IDENTIFIER` evaluation.
-    param_values: HashMap<String, ScalarValue>,
+    param_values: std::collections::HashMap<String, ScalarValue>,
     /// Positional parameter values available alongside `param_values`.
     positional_param_values: Vec<ScalarValue>,
     /// Stack of in-scope lambda parameter frames (innermost last).
@@ -115,7 +112,7 @@ pub(super) struct PlanResolverState {
     /// higher-order function provides it.
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
-    windows: HashMap<String, spec::Window>,
+    windows: std::collections::HashMap<String, spec::Window>,
 }
 
 impl Default for PlanResolverState {
@@ -129,21 +126,21 @@ impl PlanResolverState {
         Self {
             next_id: 0,
             next_origin: 0,
-            fields: datafusion_common::HashMap::new(),
-            plan_schemas: datafusion_common::HashMap::new(),
+            fields: HashMap::new(),
+            plan_schemas: HashMap::new(),
             outer_query_schema: None,
             missing_input_resolution: None,
-            missing_input_boundaries: vec![],
+            missing_input_boundaries: MissingInputBoundaries::default(),
             aggregate_state: AggregateState::default(),
-            ctes: datafusion_common::HashMap::new(),
+            ctes: HashMap::new(),
             cte_reference_origins: HashSet::new(),
             parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
-            param_values: HashMap::new(),
+            param_values: std::collections::HashMap::new(),
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
-            windows: HashMap::new(),
+            windows: std::collections::HashMap::new(),
         }
     }
 
@@ -299,48 +296,14 @@ impl PlanResolverState {
             .filter(|input| input.applies_to(schema))
     }
 
-    pub fn register_missing_input_boundary(&mut self, plan: &LogicalPlan) {
-        let mut plan = plan;
-        // Empty outputs can share a schema with unrelated plans. Stop recovery at
-        // the first nonempty input instead, whose field IDs distinguish the boundary.
-        while plan.schema().fields().is_empty() {
-            let Some(child) = PlanResolver::missing_input_child(plan, self) else {
-                return;
-            };
-            if !child.schema().fields().is_empty() {
-                break;
-            }
-            plan = child;
-        }
-        self.missing_input_boundaries.push((
-            Arc::clone(plan.schema()),
-            plan.inputs()
-                .first()
-                .map(|input| Arc::clone(input.schema())),
-        ));
+    /// Returns the registered missing-input boundaries.
+    pub fn missing_input_boundaries(&self) -> &MissingInputBoundaries {
+        &self.missing_input_boundaries
     }
 
-    pub fn is_missing_input_boundary(&self, plan: &LogicalPlan) -> bool {
-        // Rewriters can rebuild schemas with different types or nullability.
-        // Retain the original schemas cheaply, but compare only column identities.
-        let matches = |left: &DFSchemaRef, right: &DFSchemaRef| {
-            Arc::ptr_eq(left, right)
-                || (left.fields().len() == right.fields().len()
-                    && left
-                        .iter()
-                        .map(|(qualifier, field)| (qualifier, field.name()))
-                        .eq(right
-                            .iter()
-                            .map(|(qualifier, field)| (qualifier, field.name()))))
-        };
-        self.missing_input_boundaries.iter().any(|(output, input)| {
-            matches(output, plan.schema())
-                && match (input, plan.inputs().first()) {
-                    (Some(schema), Some(child)) => matches(schema, child.schema()),
-                    (None, None) => true,
-                    _ => false,
-                }
-        })
+    /// Returns the registered missing-input boundaries for registering more.
+    pub fn missing_input_boundaries_mut(&mut self) -> &mut MissingInputBoundaries {
+        &mut self.missing_input_boundaries
     }
 
     pub fn enter_missing_input_scope(
@@ -395,9 +358,9 @@ impl PlanResolverState {
         &mut self,
         table_ref: TableReference,
         plan: LogicalPlan,
-        definition: bool,
+        kind: CteKind,
     ) -> PlanResult<()> {
-        let cte = CteInfo::try_new(plan, definition, self)?;
+        let cte = CteInfo::try_new(plan, kind, self)?;
         self.ctes.insert(table_ref, Arc::new(cte));
         Ok(())
     }
@@ -406,14 +369,15 @@ impl PlanResolverState {
         self.ctes.values()
     }
 
-    /// Returns the attributes of the CTE references resolved so far, or those of
-    /// the parameter-view references if `definition` is false.
-    pub fn cte_reference_origins_mut(&mut self, definition: bool) -> &mut HashSet<usize> {
-        if definition {
-            &mut self.cte_reference_origins
-        } else {
-            &mut self.parameter_view_origins
-        }
+    /// Returns the output attributes of the CTE definitions referenced so far.
+    pub fn cte_reference_origins_mut(&mut self) -> &mut HashSet<usize> {
+        &mut self.cte_reference_origins
+    }
+
+    /// Returns the output attributes of the parameter views referenced so far,
+    /// including renewed ones.
+    pub fn parameter_view_origins_mut(&mut self) -> &mut HashSet<usize> {
+        &mut self.parameter_view_origins
     }
 
     /// Registers a field of the same attribute as the source field.
@@ -447,8 +411,8 @@ impl PlanResolverState {
 
     pub fn set_windows(
         &mut self,
-        windows: HashMap<String, spec::Window>,
-    ) -> HashMap<String, spec::Window> {
+        windows: std::collections::HashMap<String, spec::Window>,
+    ) -> std::collections::HashMap<String, spec::Window> {
         std::mem::replace(&mut self.windows, windows)
     }
 
@@ -512,7 +476,7 @@ impl PlanResolverState {
     /// The previous parameter values are restored when the scope is dropped.
     pub fn enter_param_values_scope(
         &mut self,
-        named: HashMap<String, ScalarValue>,
+        named: std::collections::HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> ParamValuesScope<'_> {
         ParamValuesScope::new(self, named, positional)
@@ -522,14 +486,14 @@ impl PlanResolverState {
 /// Scope for parameter values used by IDENTIFIER clause evaluation.
 pub(crate) struct ParamValuesScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_param_values: HashMap<String, ScalarValue>,
+    previous_param_values: std::collections::HashMap<String, ScalarValue>,
     previous_positional_param_values: Vec<ScalarValue>,
 }
 
 impl<'a> ParamValuesScope<'a> {
     fn new(
         state: &'a mut PlanResolverState,
-        named: HashMap<String, ScalarValue>,
+        named: std::collections::HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> Self {
         let previous_param_values = std::mem::replace(&mut state.param_values, named);
@@ -629,7 +593,7 @@ impl Drop for AggregateScope<'_> {
 
 pub(crate) struct CteScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_ctes: datafusion_common::HashMap<TableReference, Arc<CteInfo>>,
+    previous_ctes: HashMap<TableReference, Arc<CteInfo>>,
 }
 
 impl<'a> CteScope<'a> {
