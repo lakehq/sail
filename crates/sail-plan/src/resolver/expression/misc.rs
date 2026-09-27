@@ -22,6 +22,7 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::find_struct_field;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -205,8 +206,18 @@ impl PlanResolver<'_> {
 
         let schema = &state.get_local_schema(schema);
 
-        // Remove backticks from the pattern if present
-        let pattern_str = col_name.trim_matches('`');
+        // Spark expands a quoted regex over the current output without the
+        // originating DataFrame's plan ID (SparkConnectPlanner.transformUnresolvedRegex).
+        let quoted_pattern = col_name
+            .strip_prefix('`')
+            .and_then(|name| name.strip_suffix('`'))
+            .filter(|name| !name.is_empty());
+        let pattern_str = quoted_pattern.unwrap_or_else(|| col_name.trim_matches('`'));
+        let plan_id = if quoted_pattern.is_some() {
+            None
+        } else {
+            plan_id
+        };
 
         // Add anchors to match the entire column name (like Spark does)
         let anchored_pattern = format!("^{}$", pattern_str);
@@ -425,19 +436,14 @@ impl PlanResolver<'_> {
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
-                let Ok(name) = fields
-                    .iter()
-                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
-                    .map(|x| x.name().to_string())
-                    .collect::<Vec<_>>()
-                    .one()
+                let Ok(Some(field)) = find_struct_field(&fields, &name, self.config.case_sensitive)
                 else {
                     discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "missing or ambiguous field: {name}"
                     )));
                 };
-                expr.field(name)
+                expr.field(field.name().to_string())
             }
             _ => {
                 discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);

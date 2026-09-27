@@ -1,11 +1,12 @@
 import datetime
+from decimal import Decimal
 
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException, SparkRuntimeException
 from pyspark.sql import Row, Window
-from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from pyspark.sql.types import DecimalType, IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
@@ -285,6 +286,538 @@ def test_filter_missing_attribute_rejects_resolution_boundaries(spark, filter_so
         projected.where(F.col("regionality") != "DOMESTIC").collect()
 
 
+@pytest.mark.parametrize("by_name", [False, True])
+@pytest.mark.parametrize("nested", ["none", "empty", "nonempty"])
+@pytest.mark.parametrize("operation", ["filter", "orderBy", "sortWithinPartitions", "repartition"])
+def test_missing_input_union_rejects_input_dataframe_references(spark, by_name, nested, operation):
+    left = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int").alias("left")
+    right = spark.createDataFrame([(3, 30)], "key int, value int").alias("right")
+    union = left.unionByName(right) if by_name else left.union(right)
+    invalid = [left.value, right.value]
+    if nested != "none":
+        invalid.append(union.value)
+        union = union.union(right.where("false") if nested == "empty" else right)
+    projected = union.select("key")
+
+    def apply(reference):
+        if operation == "filter":
+            return projected.where(reference > 15)  # noqa: PLR2004
+        if operation == "repartition":
+            return projected.repartition(1, reference)
+        return getattr(projected.coalesce(1), operation)(reference)
+
+    for reference in invalid:
+        with pytest.raises(AnalysisException):
+            apply(reference).collect()
+
+    # The Union's own plan ID and its visible names remain valid recovery inputs.
+    for reference in (union.value, F.col("value")):
+        result = apply(reference)
+        assert result.schema == projected.schema
+        expected = [Row(key=1), Row(key=3)] if operation == "filter" else [Row(key=1), Row(key=2), Row(key=3)]
+        if nested == "nonempty":
+            expected.append(Row(key=3))
+        assert sorted(result.collect()) == sorted(expected)
+
+
+@pytest.mark.parametrize("input_kind", ["filter", "limit", "sql"])
+def test_missing_input_union_preserves_composed_inputs(spark, input_kind):
+    left = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    right = spark.createDataFrame([(3, 30)], "key int, value int")
+    intermediate = left.union(right)
+    if input_kind == "filter":
+        intermediate = intermediate.where("key != 2")
+    elif input_kind == "limit":
+        intermediate = intermediate.orderBy("key").limit(2)
+    else:
+        intermediate = spark.sql(
+            "SELECT * FROM VALUES (1, 20), (2, 10) AS l(key, value) "
+            "UNION ALL SELECT * FROM VALUES (3, 30) AS r(key, value)"
+        )
+    union = intermediate.union(right)
+    projected = union.select("key")
+    with pytest.raises(AnalysisException):
+        projected.where(intermediate.value > 15).collect()  # noqa: PLR2004
+    result = projected.where(union.value > 15)  # noqa: PLR2004
+    expected = [Row(key=1), Row(key=3)]
+    if input_kind != "limit":
+        expected.append(Row(key=3))
+    assert sorted(result.collect()) == expected
+    assert result.schema == projected.schema
+
+
+@pytest.mark.parametrize("extra_column", [False, True])
+def test_missing_input_union_rejects_mismatched_input_widths(spark, extra_column):
+    left = spark.range(1).selectExpr("id AS key", "id AS value")
+    right = left.withColumn("extra", F.lit(1)) if extra_column else left.select("key")
+    with pytest.raises(AnalysisException):
+        left.union(right).select("key").where("value > 0").collect()
+
+
+@pytest.mark.parametrize(
+    ("body", "copies"),
+    [
+        ("TABLE t UNION ALL TABLE t", 2),
+        ("SELECT a.key, a.value FROM t a JOIN (TABLE t UNION ALL TABLE t) u ON a.key = u.key", 2),
+        ("SELECT * FROM t WHERE key IN (SELECT key FROM (TABLE t UNION ALL TABLE t))", 1),
+    ],
+    ids=["union", "join", "subquery"],
+)
+def test_missing_input_union_preserves_shared_cte_bindings(spark, body, copies):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    result = spark.sql("WITH t AS (SELECT * FROM {source}) " + body, source=source)  # noqa: S608
+    # The CTE definition remains outside the Union and retains its source binding.
+    result = result.select("key").where(source.value > 15)  # noqa: PLR2004
+    assert result.collect() == [Row(key=1)] * copies
+
+
+@pytest.mark.parametrize(
+    ("query", "copies"),
+    [
+        pytest.param("WITH t AS (SELECT * FROM {source}), unused AS (SELECT * FROM t) TABLE t", 1, id="unused"),
+        pytest.param("WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM t) TABLE u", 1, id="chain"),
+        pytest.param("WITH t AS (SELECT * FROM {source}), u AS (TABLE t) TABLE u", 1, id="chain_table"),
+        pytest.param("WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) TABLE u", 1, id="two_defs"),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}), u AS (SELECT * FROM {source}) SELECT u.* FROM t JOIN u ON t.key=u.key",
+            1,
+            id="two_defs_join",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT key FROM t) u JOIN t a ON u.key=a.key",
+            1,
+            id="partial",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT value FROM t) u JOIN (SELECT key,value FROM t) a ON u.value=a.value",
+            1,
+            id="disjoint",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT key AS k,value AS v FROM t) u JOIN t a ON u.k=a.key",
+            1,
+            id="aliases",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT key+0 AS k FROM t) u JOIN t a ON u.k=a.key",
+            1,
+            id="computed",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}), unused AS (SELECT key AS k FROM t) TABLE t", 1, id="unused_alias"
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (TABLE t UNION ALL TABLE t) u JOIN (SELECT a.* FROM t a JOIN t b ON a.key=b.key) a ON u.key=a.key",
+            2,
+            id="nested",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (TABLE t UNION ALL TABLE t) u JOIN t a ON u.key=a.key",
+            2,
+            id="union_left",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM {source}) SELECT a.* FROM (SELECT * FROM t UNION ALL SELECT * FROM t) u JOIN t a ON u.key=a.key",
+            2,
+            id="select_union_left",
+        ),
+    ],
+)
+def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    result = spark.sql(query, source=source)
+    projected = result.select("key")
+    # Repeated CTE references have fresh attributes in Spark. The source binding
+    # in the definition must not silently bind to those new attributes.
+    with pytest.raises(AnalysisException):
+        projected.where(source.value > 15).collect()  # noqa: PLR2004
+    for reference in (result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1)] * copies
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH t AS (SELECT key,key,value FROM {source}) SELECT 1 AS key,value FROM t",
+        "WITH t AS (SELECT key FROM {source}), u AS (SELECT value,key FROM {source}) TABLE u",
+        "WITH t AS (SELECT key FROM {source}), u AS (SELECT value FROM {source}) SELECT 1 AS key,value FROM u",
+    ],
+    ids=["duplicate-column", "partial-definitions", "disjoint-definitions"],
+)
+def test_missing_input_cte_preserves_distinct_column_bindings(spark, query):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    projected = spark.sql(query, source=source).select("key")
+    result = projected.where(source.value > 15)  # noqa: PLR2004
+    assert result.collect() == [Row(key=1)]
+    assert result.schema == projected.schema
+
+
+def test_missing_input_cte_preserves_aliased_dataframe_bindings(spark):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    left, right = source.alias("left"), source.alias("right")
+    result = spark.sql("WITH t AS (SELECT * FROM {left}), u AS (SELECT * FROM {right}) TABLE u", left=left, right=right)
+    projected = result.select("key")
+    recovered = projected.where(right.value > 15)  # noqa: PLR2004
+    assert recovered.collect() == [Row(key=1)]
+    assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT * FROM {source} UNION ALL SELECT * FROM {source}",
+        "WITH t AS (SELECT * FROM {source} UNION ALL SELECT * FROM {source}) TABLE t",
+        "WITH t AS (SELECT * FROM {source}), u AS (TABLE t UNION ALL TABLE t) TABLE u",
+        "WITH t AS (SELECT * FROM {source}), u AS (TABLE t UNION ALL TABLE t) TABLE t",
+        "WITH t AS (SELECT * FROM {source}), u AS (TABLE t UNION ALL TABLE t) SELECT * FROM t WHERE false",
+    ],
+    ids=["sql-union", "union-definition", "union-reference", "used-reference", "empty-used-reference"],
+)
+def test_missing_input_sql_union_rejects_stale_source_binding(spark, query):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    result = spark.sql(query, source=source)
+    projected = result.select("key")
+    with pytest.raises(AnalysisException):
+        projected.where(source.value > 15).collect()  # noqa: PLR2004
+    expected = result.where("value > 15").select("key").collect()
+    for reference in (result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == expected
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    ("query", "ambiguous", "copies"),
+    [
+        pytest.param(
+            "WITH t AS (SELECT * FROM VALUES (1,20),(2,10) AS t(key,value)) "
+            "SELECT a.*,b.* FROM t a JOIN t b ON a.key=b.key",
+            True,
+            1,
+            id="cte-join",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM VALUES (1,20),(2,10) AS t(key,value)) SELECT a.*,b.* FROM t a CROSS JOIN t b",
+            True,
+            2,
+            id="cte-cross",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT * FROM VALUES (1,20),(2,10) AS t(key,value)),u AS (TABLE t) "
+            "SELECT a.*,b.* FROM u a JOIN u b ON a.key=b.key",
+            True,
+            1,
+            id="chained-cte",
+        ),
+        pytest.param(
+            "SELECT key,value,key,value FROM VALUES (1,20),(2,10) t(key,value)",
+            False,
+            1,
+            id="duplicate-attribute",
+        ),
+        pytest.param(
+            "WITH t AS (SELECT key,value,key,value FROM VALUES (1,20),(2,10) t(key,value)) "
+            "SELECT b.* FROM t a CROSS JOIN t b",
+            False,
+            2,
+            id="cte-duplicate-attribute",
+        ),
+        pytest.param(
+            "SELECT a.*,b.* FROM VALUES (1,20),(2,10) a(key,value) "
+            "JOIN VALUES (1,30),(2,40) b(key,value) ON a.key=b.key",
+            True,
+            1,
+            id="independent-join",
+        ),
+    ],
+)
+@pytest.mark.parametrize("reference", ["source", "name", "result"])
+def test_missing_input_sql_cte_preserves_attribute_identity(spark, query, ambiguous, copies, reference):
+    source = spark.sql(query)
+    result = source.toDF("key", "value", "other_key", "other_value")
+    value = {"source": source.value, "name": F.col("value"), "result": result.value}[reference]
+    projected = result.select("key")
+    if ambiguous and reference == "source":
+        with pytest.raises(AnalysisException):
+            projected.where(value > 15).collect()  # noqa: PLR2004
+    else:
+        recovered = projected.where(value > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1)] * copies
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize("source_kind", ["plain", "union", "using-join"])
+@pytest.mark.parametrize("projected_side", ["neither", "left", "right"])
+def test_missing_input_parameter_view_join_bindings(spark, source_kind, projected_side):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    other = spark.createDataFrame([(3, 30)], "key int, value int")
+    if source_kind == "union":
+        source = source.union(other)
+    elif source_kind == "using-join":
+        source = source.join(other.withColumnRenamed("value", "other"), ["key"], "left")
+    left = "(SELECT key FROM {source})" if projected_side == "left" else "{source}"
+    right = "(SELECT key FROM {source})" if projected_side == "right" else "{source}"
+    selected = "b" if projected_side == "left" else "a"
+    query = f"SELECT {selected}.* FROM {left} a JOIN {right} b ON a.key=b.key"  # noqa: S608
+    result = spark.sql(query, source=source)
+    projected = result.select("key")
+    expected = sorted(result.where("value > 15").select("key").collect())
+    if projected_side == "neither":
+        with pytest.raises(AnalysisException):
+            projected.where(source.value > 15).collect()  # noqa: PLR2004
+    else:
+        assert sorted(projected.where(source.value > 15).collect()) == expected  # noqa: PLR2004
+    for reference in (result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert sorted(recovered.collect()) == expected
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param(
+            "SELECT o.* FROM {source} o WHERE EXISTS(SELECT 1 FROM {source} a JOIN {source} b ON a.key=b.key)",
+            id="exists_join",
+        ),
+        pytest.param(
+            "SELECT o.* FROM {source} o WHERE EXISTS(SELECT 1 FROM {source} a JOIN {source} b ON a.key=b.key WHERE a.key=o.key)",
+            id="correlated_join",
+        ),
+        pytest.param(
+            "SELECT o.*, (SELECT count(*) FROM {source} a JOIN {source} b ON a.key=b.key) AS n FROM {source} o",
+            id="scalar_join",
+        ),
+        pytest.param(
+            "SELECT o.* FROM {source} o WHERE EXISTS(WITH t AS (SELECT * FROM {source}),u AS (SELECT * FROM {source}) SELECT 1 FROM t)",
+            id="exists_cte",
+        ),
+        pytest.param(
+            "SELECT o.* FROM {source} o WHERE EXISTS(WITH t AS (SELECT * FROM {source}),u AS (SELECT * FROM {source}) SELECT 1 FROM t JOIN u ON t.key=u.key)",
+            id="exists_cte_join",
+        ),
+    ],
+)
+def test_missing_input_subquery_ambiguity_preserves_outer_binding(spark, query):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    result = spark.sql(query, source=source)
+    projected = result.select("key")
+    for reference in (source.value, result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1)]
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    ("query", "copies"),
+    [
+        ("WITH t AS (SELECT * FROM {source}) TABLE t UNION ALL TABLE t", 2),
+        ("WITH t AS (SELECT * FROM {source}) SELECT b.* FROM t a JOIN t b ON a.key=b.key", 1),
+        ("SELECT b.* FROM {source} a JOIN {source} b ON a.key=b.key", 1),
+    ],
+    ids=["cte-union", "cte-join", "parameter-view-join"],
+)
+def test_missing_input_reused_relation_schema(spark, query, copies):
+    schema = StructType(
+        [
+            StructField("key", IntegerType(), False, {"origin": "key"}),
+            StructField("value", DecimalType(8, 2), True, {"origin": "value"}),
+            StructField(
+                "payload",
+                StructType([StructField("x", StringType(), False, {"inner": "x"})]),
+                True,
+                {"origin": "payload"},
+            ),
+        ]
+    )
+    source = spark.createDataFrame([(1, Decimal("20.25"), Row(x="a")), (2, None, None)], schema)
+    result = spark.sql(query, source=source)
+    projected = result.select("key", "payload")
+    for reference in (result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1, payload=Row(x="a"))] * copies
+        assert recovered.schema == StructType([schema["key"], schema["payload"]])
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH t AS (SELECT key, value + 1 AS value FROM {src}) "
+        "SELECT a.key, a.value AS first, b.value AS second "
+        "FROM t a JOIN t b ON a.key = b.key",
+        "WITH t AS (SELECT * FROM (SELECT key, value + 1 AS value FROM {src})) "
+        "SELECT a.key, a.value AS first, b.value AS second "
+        "FROM t a JOIN t b ON a.key = b.key",
+    ],
+    ids=["computed", "derived-computed"],
+)
+def test_missing_input_reused_relation_schema_computed_projection(spark, query):
+    schema = StructType(
+        [
+            StructField("key", IntegerType(), False, {"origin": "key"}),
+            StructField("value", IntegerType(), True),
+        ]
+    )
+    source = spark.createDataFrame([(1, 20), (2, None)], schema)
+    result = spark.sql(query, src=source)
+    assert sorted(result.collect()) == [(1, 21, 21), (2, None, None)]
+    assert result.schema == StructType(
+        [schema["key"], StructField("first", IntegerType(), True), StructField("second", IntegerType(), True)]
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "side"),
+    [(kind, side) for kind in ("inner", "left", "right", "full", "cross") for side in ("a", "b")]
+    + [("left_semi", "a"), ("left_anti", "a")],
+)
+def test_missing_input_self_join_rejects_ambiguous_ancestor(spark, kind, side):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    left, right = source.alias("a"), source.alias("b")
+    joined = left.crossJoin(right) if kind == "cross" else left.join(right, F.col("a.key") == F.col("b.key"), kind)
+    result = joined.select(f"{side}.key", f"{side}.value")
+    projected = result.select("key")
+    with pytest.raises(AnalysisException):
+        projected.where(source.value > 15).collect()  # noqa: PLR2004
+    selected = left if side == "a" else right
+    copies = 0 if kind == "left_anti" else (2 if kind == "cross" else 1)
+    for reference in (selected.value, result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1)] * copies
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    ("operation", "side"),
+    [("project", "a"), ("join", "a"), ("join", "b"), ("semi", "a"), ("overlap", "a"), ("overlap", "b")],
+)
+@pytest.mark.parametrize("reference", ["qualified", "unqualified", "name"])
+def test_missing_input_source_attribute_identity(spark, operation, side, reference):
+    a = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int").alias("a")
+    b = spark.createDataFrame([(1, 30), (2, 40)], "key int, value int").alias("b")
+    source = a.join(b, F.col("a.key") == F.col("b.key"))
+    left = source.drop(b.key, b.value)
+    right = source.drop(a.key, a.value)
+    if operation == "overlap":
+        result = source.join(left.alias("r"), F.col("a.key") == F.col("r.key"))
+    elif operation == "project":
+        result = left
+    else:
+        result = left.join(right, F.col("a.key") == F.col("b.key"), "left_semi" if operation == "semi" else "inner")
+    projected = result.select(f"{side}.key", f"{side}.value").select("key")
+    value = (
+        source[f"{side}.value"]
+        if reference == "qualified"
+        else source.value
+        if reference == "unqualified"
+        else F.col("value")
+    )
+    filtered = projected.where(value > 15)  # noqa: PLR2004
+    if reference == "unqualified" or (reference == "qualified" and operation == "overlap" and side == "a"):
+        with pytest.raises(AnalysisException):
+            filtered.collect()
+    else:
+        assert sorted(filtered.collect()) == ([Row(key=1)] if side == "a" else [Row(key=1), Row(key=2)])
+        assert filtered.schema == projected.schema
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+@pytest.mark.parametrize("name", ["value", "VALUE", "VaLuE"])
+def test_missing_input_source_root_uses_case_sensitive_resolver(spark, case_sensitive, name):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", str(case_sensitive).lower())
+    try:
+        source = spark.createDataFrame([(1, 20, 30), (2, 10, 40)], "key int, value int, VALUE int")
+        projected = source.drop("VALUE").select("key")
+        result = projected.where(source[name] > 15)  # noqa: PLR2004
+        if not case_sensitive or name == "VaLuE":
+            with pytest.raises(AnalysisException):
+                result.collect()
+        else:
+            assert sorted(result.collect()) == ([Row(key=1)] if name == "value" else [Row(key=1), Row(key=2)])
+            assert result.schema == projected.schema
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+@pytest.mark.parametrize("operation", ["intersect", "intersectAll", "subtract", "exceptAll"])
+def test_missing_input_set_operation_rejects_ambiguous_ancestor(spark, operation):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    left, right = source.alias("a"), source.alias("b")
+    result = getattr(left, operation)(right)
+    projected = result.select("key")
+    with pytest.raises(AnalysisException):
+        projected.where(source.value > 15).collect()  # noqa: PLR2004
+    expected = [Row(key=1)] if operation.startswith("intersect") else []
+    for reference in (left.value, result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == expected
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize(
+    ("query", "valid", "copies"),
+    [
+        ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source}", False, 1),
+        ("WITH t AS (SELECT key FROM {source}) SELECT * FROM {source}", True, 1),
+        ("WITH t AS (SELECT * FROM {source}) SELECT * FROM {source} UNION ALL SELECT * FROM {source}", False, 2),
+    ],
+    ids=["body-conflict", "partial-definition", "union-body"],
+)
+def test_missing_input_cte_body_binding(spark, query, valid, copies):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    result = spark.sql(query, source=source)
+    projected = result.select("key")
+    if valid:
+        assert projected.where(source.value > 15).collect() == [Row(key=1)]  # noqa: PLR2004
+    else:
+        with pytest.raises(AnalysisException):
+            projected.where(source.value > 15).collect()  # noqa: PLR2004
+    for reference in (result.value, F.col("value")):
+        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        assert recovered.collect() == [Row(key=1)] * copies
+        assert recovered.schema == projected.schema
+
+
+@pytest.mark.parametrize("operation", ["union", "intersect", "join"])
+@pytest.mark.parametrize("pattern", [".*", "key", "value"])
+def test_regex_expansion_ignores_ancestor_dataframe_binding(spark, operation, pattern):
+    source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    left, right = source.alias("a"), source.alias("b")
+    expected = [(1, 20), (2, 10)]
+    if operation == "join":
+        result = left.join(right, F.col("a.key") == F.col("b.key"))
+        expected = [row + row for row in expected]
+    else:
+        result = getattr(left, operation)(right)
+        if operation == "union":
+            expected *= 2
+    fields = result.schema.fields
+    indexes = [i for i, field in enumerate(fields) if pattern in (".*", field.name)]
+    selected = result.select(source.colRegex(f"`{pattern}`"))
+    assert selected.schema == StructType([fields[i] for i in indexes])
+    assert sorted(tuple(row) for row in selected.collect()) == sorted(
+        tuple(row[i] for i in indexes) for row in expected
+    )
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail's Union output loses its left input's qualifier",
+    strict=True,
+)
+def test_filter_missing_input_union_preserves_output_qualifier(spark):
+    left = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int").alias("left")
+    right = spark.createDataFrame([(3, 30)], "key int, value int")
+    # TODO: Preserve Union output qualifiers for name-based missing-input recovery.
+    # This DataFrame scope cannot be expressed with a SQL derived table, whose
+    # generated alias replaces the qualifier and forms a resolution boundary.
+    result = left.union(right).select("key").where("left.value > 15")
+    assert sorted(result.collect()) == [Row(key=1), Row(key=3)]
+
+
 @pytest.mark.parametrize("cogroup", [False, True], ids=["group-map", "co-group-map"])
 def test_filter_grouped_map_rejects_grouping_attribute(filter_source, cogroup):
     grouped = filter_source.groupBy("key")
@@ -560,6 +1093,26 @@ def test_filter_missing_attribute_discards_ambiguous_struct_field(spark):
     projected = source.select(F.struct(F.lit(2).alias("x"), F.lit(3).alias("X")).alias("s"), "a").select("a")
     # The nearer struct has two fields named `x` case-insensitively, so the older struct is used.
     assert projected.where("s.x = 1").collect() == [Row(a=7)]
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+@pytest.mark.parametrize("replacement", ["struct(4 AS X)", "struct(4 AS x, 5 AS X)"])
+@pytest.mark.parametrize("selector", ["s.x", "s['x']", "column"])
+def test_filter_recovered_struct_selector_uses_case_sensitive_resolver(spark, case_sensitive, replacement, selector):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", str(case_sensitive).lower())
+    try:
+        source = spark.createDataFrame([((1,), 7), ((2,), 8)], "s struct<x:int>, key int")
+        projected = source.selectExpr(f"{replacement} AS s", "key").select("key")
+        predicate = F.col("s").getField("x") == 1 if selector == "column" else f"{selector} = 1"
+        result = projected.where(predicate)
+        # Missing or ambiguous fields discard the intermediate output. An exact
+        # match keeps it, even when another field differs only in case.
+        use_original = case_sensitive == (replacement == "struct(4 AS X)")
+        assert result.collect() == ([Row(key=7)] if use_original else [])
+        assert result.schema == projected.schema
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
 
 
 @pytest.mark.parametrize("other_root", ["map", "array"])

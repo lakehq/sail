@@ -15,7 +15,9 @@ use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, Tab
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::logical_plan::{
+    rename_logical_plan, rename_logical_plan_reusing_projection,
+};
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -75,7 +77,11 @@ impl PlanResolver<'_> {
                     "SQL time travel is not supported for CTEs",
                 ));
             }
-            let plan = cte.clone();
+            let mut plan = cte.plan.as_ref().clone();
+            if let Some(names) = state.renew_cte_reference(&cte)? {
+                plan = rename_logical_plan_reusing_projection(plan, &names)?;
+                state.register_missing_input_boundary(&plan);
+            }
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
             } else {

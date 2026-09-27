@@ -1,6 +1,24 @@
 import pytest
 
 
+@pytest.mark.parametrize("alias", ["", " AS t"], ids=["anonymous", "named"])
+def test_union_alias_preserves_nondeterministic_projection(spark, alias):
+    rows_per_branch = 64
+    rows = spark.sql(
+        f"""
+        SELECT r, r AS r_copy
+        FROM (
+          SELECT rand() AS r FROM range({rows_per_branch})
+          UNION ALL
+          SELECT rand() AS r FROM range({rows_per_branch})
+        ){alias}
+        """  # noqa: S608
+    ).collect()
+    assert len(rows) == 2 * rows_per_branch
+    # Check outside SQL so the optimizer cannot simplify a self-comparison.
+    assert all(row.r == row.r_copy and 0 <= row.r < 1 for row in rows)
+
+
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
 

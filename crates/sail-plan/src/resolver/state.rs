@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue, TableReference};
+use datafusion_common::{DFSchema, DFSchemaRef, HashSet, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
@@ -10,11 +10,20 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 
+/// A DataFrame plan ID and an attribute in its first resolved instance.
+pub(super) type PlanBinding = (i64, usize);
+
+pub(super) type PlanAttributeRoots =
+    datafusion_common::HashMap<String, Vec<(Option<TableReference>, usize)>>;
+
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
 pub(super) struct FieldInfo {
-    /// The set of plan IDs, if any, that reference this field.
-    plan_ids: HashSet<i64>,
+    /// Bindings to original ancestor attributes, sorted by unique DataFrame plan ID.
+    /// A contiguous list keeps identity-projection clones cheap.
+    plan_bindings: Vec<PlanBinding>,
+    /// Attribute identity, preserved by identity projections.
+    origin: usize,
     /// The user-facing name of the field.
     name: String,
     /// Whether this is a hidden field that should be excluded from the
@@ -29,8 +38,18 @@ impl FieldInfo {
         &self.name
     }
 
-    pub fn plan_ids(&self) -> Vec<i64> {
-        self.plan_ids.iter().copied().collect()
+    pub fn plan_bindings(&self) -> impl Iterator<Item = PlanBinding> + '_ {
+        self.plan_bindings.iter().copied()
+    }
+
+    fn register_plan_binding(&mut self, binding: PlanBinding) {
+        match self
+            .plan_bindings
+            .binary_search_by_key(&binding.0, |binding| binding.0)
+        {
+            Ok(index) => self.plan_bindings[index] = binding,
+            Err(index) => self.plan_bindings.insert(index, binding),
+        }
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -40,10 +59,21 @@ impl FieldInfo {
     pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
         self.name.eq_ignore_ascii_case(name)
             && match plan_id {
-                Some(plan_id) => self.plan_ids.contains(&plan_id),
+                Some(plan_id) => self
+                    .plan_bindings
+                    .binary_search_by_key(&plan_id, |binding| binding.0)
+                    .is_ok(),
                 None => true,
             }
     }
+}
+
+#[derive(Debug)]
+pub(super) struct CteInfo {
+    pub plan: Arc<LogicalPlan>,
+    pub definition: bool,
+    origins: Vec<usize>,
+    bindings: datafusion_common::HashMap<usize, Vec<PlanBinding>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,8 +101,11 @@ pub(super) enum AggregateState {
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
+    next_origin: usize,
     /// A map from the generated opaque field ID to field information.
-    fields: HashMap<String, FieldInfo>,
+    fields: datafusion_common::HashMap<String, FieldInfo>,
+    plan_schemas: HashMap<i64, DFSchemaRef>,
+    plan_attribute_roots: HashMap<(i64, bool), PlanAttributeRoots>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for expressions
@@ -81,11 +114,13 @@ pub(super) struct PlanResolverState {
     /// Outputs whose descendants cannot participate in missing-reference resolution.
     /// Each output is paired with its input so that a pass-through projection that
     /// reproduces the output over a wider input (e.g. a join) is not a boundary.
-    missing_input_boundaries: Vec<(Vec<Column>, Option<Vec<Column>>)>,
+    missing_input_boundaries: Vec<(DFSchemaRef, Option<DFSchemaRef>)>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
-    ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    ctes: HashMap<TableReference, Arc<CteInfo>>,
+    cte_reference_origins: HashSet<usize>,
+    parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
@@ -113,12 +148,17 @@ impl PlanResolverState {
     pub fn new() -> Self {
         Self {
             next_id: 0,
-            fields: HashMap::new(),
+            next_origin: 0,
+            fields: datafusion_common::HashMap::new(),
+            plan_schemas: HashMap::new(),
+            plan_attribute_roots: HashMap::new(),
             outer_query_schema: None,
             missing_input_resolution: None,
             missing_input_boundaries: vec![],
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
+            cte_reference_origins: HashSet::new(),
+            parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
@@ -136,8 +176,11 @@ impl PlanResolverState {
 
     fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
         let field_id = self.next_field_id();
+        let origin = self.next_origin;
+        self.next_origin += 1;
         let info = FieldInfo {
-            plan_ids: HashSet::new(),
+            plan_bindings: vec![],
+            origin,
             name: name.into(),
             hidden,
         };
@@ -161,15 +204,18 @@ impl PlanResolverState {
     /// Sets the display name of a materialized field, registering an internal field
     /// when it becomes referenceable (e.g. an unnested `window` grouping column).
     pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
-        let info = self
-            .fields
-            .entry(field_id.to_string())
-            .or_insert_with(|| FieldInfo {
-                plan_ids: HashSet::new(),
+        let info = self.fields.entry(field_id.to_string()).or_insert_with(|| {
+            let origin = self.next_origin;
+            self.next_origin += 1;
+            FieldInfo {
+                plan_bindings: vec![],
+                origin,
                 name: String::new(),
                 hidden: false,
-            });
+            }
+        });
         info.name = name.into();
+        self.plan_attribute_roots.clear();
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
@@ -198,13 +244,83 @@ impl PlanResolverState {
             .collect()
     }
 
-    pub fn register_plan_id_for_field(&mut self, field_id: &str, plan_id: i64) -> PlanResult<()> {
+    pub fn clear_field_plan_ids(&mut self, field_id: &str) -> PlanResult<()> {
         let field_info = self
             .fields
             .get_mut(field_id)
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
-        field_info.plan_ids.insert(plan_id);
+        field_info.plan_bindings.clear();
         Ok(())
+    }
+
+    pub fn register_plan_binding(
+        &mut self,
+        field_id: &str,
+        binding: PlanBinding,
+    ) -> PlanResult<()> {
+        let info = self
+            .fields
+            .get_mut(field_id)
+            .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
+        info.register_plan_binding(binding);
+        Ok(())
+    }
+
+    pub fn register_plan_schema(&mut self, schema: &DFSchemaRef, plan_id: i64) -> PlanResult<()> {
+        let original = self
+            .plan_schemas
+            .entry(plan_id)
+            .or_insert_with(|| Arc::clone(schema))
+            .clone();
+        if original.fields().len() != schema.fields().len() {
+            return Err(PlanError::internal("inconsistent DataFrame schema"));
+        }
+        let first_instance = Arc::ptr_eq(&original, schema);
+        for (field, original_field) in schema.fields().iter().zip(original.fields()) {
+            let attribute = if first_instance {
+                None
+            } else {
+                Some(self.get_field_info(original_field.name())?.origin)
+            };
+            let info = self
+                .fields
+                .get_mut(field.name())
+                .ok_or_else(|| PlanError::internal(format!("unknown field: {}", field.name())))?;
+            info.register_plan_binding((plan_id, attribute.unwrap_or(info.origin)));
+        }
+        Ok(())
+    }
+
+    /// Index original roots only when a bound missing-input expression needs
+    /// them. Repeated validation must not rescan a wide source for every field.
+    pub fn get_plan_attribute_roots(
+        &mut self,
+        plan_id: i64,
+        case_sensitive: bool,
+    ) -> PlanResult<Option<&PlanAttributeRoots>> {
+        let key = (plan_id, case_sensitive);
+        if !self.plan_attribute_roots.contains_key(&key) {
+            let Some(schema) = self.plan_schemas.get(&plan_id) else {
+                return Ok(None);
+            };
+            let mut roots = PlanAttributeRoots::with_capacity(schema.fields().len());
+            for (qualifier, field) in schema.iter() {
+                let info = self.get_field_info(field.name())?;
+                if !info.hidden {
+                    let name = if case_sensitive {
+                        info.name.clone()
+                    } else {
+                        info.name.to_ascii_lowercase()
+                    };
+                    roots
+                        .entry(name)
+                        .or_default()
+                        .push((qualifier.cloned(), info.origin));
+                }
+            }
+            self.plan_attribute_roots.insert(key, roots);
+        }
+        Ok(self.plan_attribute_roots.get(&key))
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {
@@ -263,40 +379,35 @@ impl PlanResolverState {
             }
             plan = child;
         }
-        self.missing_input_boundaries
-            .push(Self::missing_input_boundary_key(plan));
+        self.missing_input_boundaries.push((
+            Arc::clone(plan.schema()),
+            plan.inputs()
+                .first()
+                .map(|input| Arc::clone(input.schema())),
+        ));
     }
 
     pub fn is_missing_input_boundary(&self, plan: &LogicalPlan) -> bool {
-        // Rewriters can rebuild a projection's schema while preserving its field IDs.
-        // Compare borrowed columns instead of allocating both schemas' column lists
-        // at every step of missing-input recovery.
-        let matches = |columns: &[Column], schema: &DFSchema| {
-            columns.len() == schema.fields().len()
-                && columns
-                    .iter()
-                    .map(|column| (column.relation.as_ref(), column.name.as_str()))
-                    .eq(schema
+        // Rewriters can rebuild schemas with different types or nullability.
+        // Retain the original schemas cheaply, but compare only column identities.
+        let matches = |left: &DFSchemaRef, right: &DFSchemaRef| {
+            Arc::ptr_eq(left, right)
+                || (left.fields().len() == right.fields().len()
+                    && left
                         .iter()
-                        .map(|(qualifier, field)| (qualifier, field.name().as_str())))
+                        .map(|(qualifier, field)| (qualifier, field.name()))
+                        .eq(right
+                            .iter()
+                            .map(|(qualifier, field)| (qualifier, field.name()))))
         };
         self.missing_input_boundaries.iter().any(|(output, input)| {
             matches(output, plan.schema())
                 && match (input, plan.inputs().first()) {
-                    (Some(columns), Some(child)) => matches(columns, child.schema()),
+                    (Some(schema), Some(child)) => matches(schema, child.schema()),
                     (None, None) => true,
                     _ => false,
                 }
         })
-    }
-
-    fn missing_input_boundary_key(plan: &LogicalPlan) -> (Vec<Column>, Option<Vec<Column>>) {
-        // Parameter binding recomputes data types and nullability after registration,
-        // so compare column identities instead of schema values.
-        (
-            plan.schema().columns(),
-            plan.inputs().first().map(|input| input.schema().columns()),
-        )
     }
 
     pub fn enter_missing_input_scope(
@@ -344,12 +455,301 @@ impl PlanResolverState {
         CteScope::new(self)
     }
 
-    pub fn get_cte(&self, table_ref: &TableReference) -> Option<&LogicalPlan> {
-        self.ctes.get(table_ref).map(|cte| cte.as_ref())
+    pub fn get_cte(&self, table_ref: &TableReference) -> Option<Arc<CteInfo>> {
+        self.ctes.get(table_ref).cloned()
     }
 
-    pub fn insert_cte(&mut self, table_ref: TableReference, plan: LogicalPlan) {
-        self.ctes.insert(table_ref, Arc::new(plan));
+    pub fn insert_cte(
+        &mut self,
+        table_ref: TableReference,
+        plan: LogicalPlan,
+        definition: bool,
+    ) -> PlanResult<()> {
+        let mut origins = Vec::with_capacity(plan.schema().fields().len());
+        let mut bindings = datafusion_common::HashMap::new();
+        for field in plan.schema().fields() {
+            let info = self.get_field_info(field.name())?;
+            origins.push(info.origin);
+            if !info.plan_bindings.is_empty() {
+                if bindings.is_empty() {
+                    bindings.reserve(plan.schema().fields().len());
+                }
+                bindings.insert(info.origin, info.plan_bindings.clone());
+            }
+        }
+        self.ctes.insert(
+            table_ref,
+            Arc::new(CteInfo {
+                plan: Arc::new(plan),
+                definition,
+                origins,
+                bindings,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Spark renews repeated CTERelationRef and parameter-view attributes
+    /// separately. Identity projections preserve the original attribute IDs.
+    pub fn renew_cte_reference(&mut self, cte: &CteInfo) -> PlanResult<Option<Vec<String>>> {
+        let origins = if cte.definition {
+            &mut self.cte_reference_origins
+        } else {
+            &mut self.parameter_view_origins
+        };
+        if !cte.origins.iter().any(|origin| origins.contains(origin)) {
+            // SQL outputs may acquire a DataFrame plan ID only after this query
+            // finishes. Their repeated CTE references already need fresh identities.
+            origins.extend(cte.origins.iter().copied());
+            return Ok(None);
+        }
+        // One saved binding entry per output proves all origins are distinct.
+        // Bound CTEs and parameter views usually satisfy this without another scan.
+        let distinct = cte.bindings.len() == cte.origins.len();
+        let mut renewed =
+            datafusion_common::HashMap::with_capacity(if distinct { 0 } else { cte.origins.len() });
+        let mut names = Vec::with_capacity(cte.origins.len());
+        for (field, &original) in cte.plan.schema().fields().iter().zip(&cte.origins) {
+            let info = self.get_field_info(field.name())?;
+            let (name, hidden) = (info.name.clone(), info.hidden);
+            // Spark's CTERelationRef.newInstance preserves duplicate attributes
+            // within one output while giving the reference fresh identities.
+            let origin = if distinct {
+                let origin = self.next_origin;
+                self.next_origin += 1;
+                origin
+            } else {
+                *renewed.entry(original).or_insert_with(|| {
+                    let origin = self.next_origin;
+                    self.next_origin += 1;
+                    origin
+                })
+            };
+            let plan_bindings = if cte.definition {
+                vec![]
+            } else {
+                cte.bindings.get(&original).cloned().unwrap_or_default()
+            };
+            let field_id = self.next_field_id();
+            self.fields.insert(
+                field_id.clone(),
+                FieldInfo {
+                    name,
+                    hidden,
+                    origin,
+                    plan_bindings,
+                },
+            );
+            if !cte.definition {
+                self.parameter_view_origins.insert(origin);
+            }
+            names.push(field_id);
+        }
+        Ok(Some(names))
+    }
+
+    /// Ancestor plan IDs found in both inputs are ambiguous above the operator,
+    /// even if a later projection selects only one side. Resolve join conditions
+    /// first: Spark can prefer a direct child there over a deeper ancestor.
+    pub fn discard_ambiguous_input_bindings(
+        &mut self,
+        left: &DFSchema,
+        right: &DFSchema,
+        output: &DFSchema,
+    ) -> PlanResult<()> {
+        // Bindings originate in register_plan_schema. SQL-only plans have none.
+        if self.plan_schemas.is_empty() {
+            return Ok(());
+        }
+        let mut right_ids = HashSet::new();
+        for field in right.fields() {
+            let info = self.get_field_info(field.name())?;
+            if !info.hidden {
+                right_ids.extend(info.plan_bindings().map(|binding| binding.0));
+            }
+        }
+        if right_ids.is_empty() {
+            return Ok(());
+        }
+        let mut left_bindings = HashSet::new();
+        for field in left.fields() {
+            let info = self.get_field_info(field.name())?;
+            if !info.hidden {
+                for binding in info.plan_bindings() {
+                    if right_ids.contains(&binding.0) {
+                        if left_bindings.is_empty() {
+                            left_bindings.reserve(left.fields().len());
+                        }
+                        left_bindings.insert((binding, info.name.as_str()));
+                    }
+                }
+            }
+        }
+        if left_bindings.is_empty() {
+            return Ok(());
+        }
+        let mut ambiguous = HashSet::new();
+        for field in right.fields() {
+            let info = self.get_field_info(field.name())?;
+            if !info.hidden {
+                for binding in info.plan_bindings() {
+                    if left_bindings.contains(&(binding, info.name.as_str())) {
+                        ambiguous.insert((binding, info.name.as_str()));
+                    }
+                }
+            }
+        }
+        let mut removals = vec![];
+        if !ambiguous.is_empty() {
+            for field in output.fields() {
+                let info = self.get_field_info(field.name())?;
+                for binding in info.plan_bindings() {
+                    if ambiguous.contains(&(binding, info.name.as_str())) {
+                        removals.push((field.name(), binding.0));
+                    }
+                }
+            }
+        }
+        drop(ambiguous);
+        drop(left_bindings);
+        // Only this operator's output is ambiguous. Other registered fields can
+        // still be valid outer references. Borrow names until mutations begin.
+        for (field, id) in removals {
+            self.fields
+                .get_mut(field)
+                .ok_or_else(|| PlanError::internal(format!("unknown field: {field}")))?
+                .plan_bindings
+                .retain(|binding| binding.0 != id);
+        }
+        Ok(())
+    }
+
+    /// A Union is a plan-ID lookup leaf, but WithCTE also exposes its definitions.
+    /// Restore only bindings whose original attributes survive in the output.
+    pub fn restore_cte_output_bindings(&mut self, plan: &LogicalPlan) -> PlanResult<()> {
+        use std::borrow::Cow;
+
+        use datafusion_common::HashMap;
+
+        let mut definitions = self
+            .ctes
+            .values()
+            .filter(|cte| cte.definition && !cte.bindings.is_empty())
+            .peekable();
+        if definitions.peek().is_none() {
+            return Ok(());
+        }
+        // Only surviving origins can be restored, and only output names can
+        // have their bindings removed. Filter narrow outputs, but do not build
+        // extra indexes when processing the definitions themselves is cheaper.
+        let filter_outputs = plan.schema().fields().len()
+            < definitions
+                .clone()
+                .map(|cte| cte.plan.schema().fields().len())
+                .sum::<usize>();
+        let mut output_origins = HashSet::new();
+        let mut output_names = HashSet::new();
+        if filter_outputs {
+            output_origins.reserve(plan.schema().fields().len());
+            output_names.reserve(plan.schema().fields().len());
+            for field in plan.schema().fields() {
+                let info = self.get_field_info(field.name())?;
+                output_origins.insert(info.origin);
+                output_names.insert(info.name.as_str());
+            }
+        }
+        let mut bindings: HashMap<usize, Cow<'_, [PlanBinding]>> = HashMap::new();
+        let mut origins = HashMap::new();
+        let mut ambiguous = HashSet::new();
+        for cte in definitions {
+            for field in cte.plan.schema().fields() {
+                let info = self.get_field_info(field.name())?;
+                let Some(ids) = cte.bindings.get(&info.origin) else {
+                    continue;
+                };
+                if !filter_outputs || output_origins.contains(&info.origin) {
+                    bindings
+                        .entry(info.origin)
+                        .and_modify(|value| value.to_mut().extend(ids))
+                        .or_insert(Cow::Borrowed(ids));
+                }
+                if !filter_outputs || output_names.contains(info.name.as_str()) {
+                    for &binding in ids {
+                        let previous = origins
+                            .entry((binding, info.name.as_str()))
+                            .or_insert(info.origin);
+                        if *previous != info.origin {
+                            ambiguous.insert((binding, info.name.as_str()));
+                        }
+                    }
+                }
+            }
+        }
+        drop(output_names);
+        if bindings.is_empty() && origins.is_empty() {
+            return Ok(());
+        }
+        // The body is another child of WithCTE, including when definitions are unused.
+        for field in plan.schema().fields() {
+            let info = self.get_field_info(field.name())?;
+            for binding in info.plan_bindings() {
+                if origins
+                    .get(&(binding, info.name.as_str()))
+                    .is_some_and(|origin| *origin != info.origin)
+                {
+                    ambiguous.insert((binding, info.name.as_str()));
+                }
+            }
+        }
+        let mut removals = vec![];
+        if !ambiguous.is_empty() {
+            for field in plan.schema().fields() {
+                let info = self.get_field_info(field.name())?;
+                let restored = bindings
+                    .get(&info.origin)
+                    .into_iter()
+                    .flat_map(|ids| ids.iter().copied());
+                for binding in info.plan_bindings().chain(restored) {
+                    if ambiguous.contains(&(binding, info.name.as_str())) {
+                        removals.push((field.name(), binding.0));
+                    }
+                }
+            }
+        }
+        drop(ambiguous);
+        drop(origins);
+        for field in plan.schema().fields() {
+            let info = self
+                .fields
+                .get_mut(field.name())
+                .ok_or_else(|| PlanError::internal(format!("unknown field: {}", field.name())))?;
+            if let Some(ids) = bindings.get(&info.origin) {
+                for &binding in ids.iter() {
+                    info.register_plan_binding(binding);
+                }
+            }
+        }
+        for (field, id) in removals {
+            self.fields
+                .get_mut(field)
+                .ok_or_else(|| PlanError::internal(format!("unknown field: {field}")))?
+                .plan_bindings
+                .retain(|binding| binding.0 != id);
+        }
+        Ok(())
+    }
+
+    pub fn register_identity_field(&mut self, name: String, source: &str) -> PlanResult<String> {
+        let source = self.get_field_info(source)?;
+        let info = FieldInfo {
+            name,
+            plan_bindings: source.plan_bindings.clone(),
+            origin: source.origin,
+            hidden: false,
+        };
+        let field_id = self.next_field_id();
+        self.fields.insert(field_id.clone(), info);
+        Ok(field_id)
     }
 
     /// Returns a subquery reference plan from state by plan_id.
@@ -558,7 +958,7 @@ impl Drop for AggregateScope<'_> {
 
 pub(crate) struct CteScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    previous_ctes: HashMap<TableReference, Arc<CteInfo>>,
 }
 
 impl<'a> CteScope<'a> {

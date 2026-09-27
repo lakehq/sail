@@ -95,12 +95,8 @@ impl PlanResolver<'_> {
 
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
-        for field in target_schema.fields() {
-            state.register_plan_id_for_field(field.name(), MERGE_TARGET_DEFAULT_PLAN_ID)?;
-        }
-        for field in source_schema.fields() {
-            state.register_plan_id_for_field(field.name(), MERGE_SOURCE_DEFAULT_PLAN_ID)?;
-        }
+        state.register_plan_schema(target_schema, MERGE_TARGET_DEFAULT_PLAN_ID)?;
+        state.register_plan_schema(source_schema, MERGE_SOURCE_DEFAULT_PLAN_ID)?;
 
         let merge_schema = Arc::new(build_join_schema(
             target_schema,

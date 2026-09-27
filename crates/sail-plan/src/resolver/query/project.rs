@@ -262,16 +262,11 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                let plan_ids = if let Expr::Column(Column { name: field_id, .. }) = &expr {
-                    let info = state.get_field_info(field_id)?;
-                    info.plan_ids()
+                let field_id = if let Expr::Column(Column { name: field_id, .. }) = &expr {
+                    state.register_identity_field(name, field_id)?
                 } else {
-                    vec![]
+                    state.register_field_name(name)
                 };
-                let field_id = state.register_field_name(name);
-                for plan_id in plan_ids {
-                    state.register_plan_id_for_field(&field_id, plan_id)?;
-                }
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));

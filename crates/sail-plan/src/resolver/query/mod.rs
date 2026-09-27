@@ -451,9 +451,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<()> {
         if let Some(plan_id) = plan_id {
-            for field in plan.schema().fields() {
-                state.register_plan_id_for_field(field.name(), plan_id)?;
-            }
+            state.register_plan_schema(plan.schema(), plan_id)?;
         }
         Ok(())
     }

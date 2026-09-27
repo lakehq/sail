@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
@@ -30,7 +32,10 @@ impl PlanResolver<'_> {
         } = op;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
-        match set_op_type {
+        let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
+        let is_union = matches!(set_op_type, SetOpType::Union);
+        let plan: PlanResult<LogicalPlan> = match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
                 let (left, right) = if by_name {
@@ -104,6 +109,11 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                // Spark Connect treats Union as a leaf for DataFrame plan IDs.
+                // WithCTE restores separately reachable definition bindings.
+                for field in left.schema().fields() {
+                    state.clear_field_plan_ids(field.name())?;
+                }
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -215,6 +225,11 @@ impl PlanResolver<'_> {
                 }?;
                 Ok(plan)
             }
+        };
+        let plan = plan?;
+        if !is_union {
+            state.discard_ambiguous_input_bindings(&left_schema, &right_schema, plan.schema())?;
         }
+        Ok(plan)
     }
 }

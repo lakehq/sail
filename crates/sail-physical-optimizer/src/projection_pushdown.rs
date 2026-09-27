@@ -5,18 +5,19 @@ use datafusion::common::{Result, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::LambdaVariable;
+use datafusion::physical_expr::expressions::{Column, LambdaVariable};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions, replace_children_if_necessary,
 };
 
-/// Runs DataFusion projection pushdown without moving physical lambda variables
-/// across the schema boundary where their positional indices were planned.
+/// Fuses Union renames and runs DataFusion projection pushdown without moving
+/// lambda variables across the schema where their positional indices were planned.
 #[derive(Debug, Default)]
 pub struct LambdaSafeProjectionPushdown {
     datafusion_projection_pushdown: ProjectionPushdown,
@@ -35,7 +36,9 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = plan
-            .transform_up(install_lambda_optimizer_boundary)
+            .transform_up(|plan| {
+                fuse_union_renames(plan)?.transform_data(install_lambda_optimizer_boundary)
+            })
             .map(|result| result.data)?;
         let plan = self.datafusion_projection_pushdown.optimize(plan, config)?;
         plan.transform_up(remove_lambda_optimizer_boundary)
@@ -49,6 +52,56 @@ impl PhysicalOptimizerRule for LambdaSafeProjectionPushdown {
     fn schema_check(&self) -> bool {
         self.datafusion_projection_pushdown.schema_check()
     }
+}
+
+/// Anonymous SQL aliases need fresh logical field IDs, but their physical
+/// identity projection can reuse the projections already on Union inputs.
+/// DataFusion only pushes narrowing projections through Union itself.
+fn fuse_union_renames(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(union) = projection.input().downcast_ref::<UnionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if projection.expr().len() != union.schema().fields().len()
+        || !projection.expr().iter().enumerate().all(|(index, expr)| {
+            expr.expr
+                .downcast_ref::<Column>()
+                .is_some_and(|column| column.index() == index)
+        })
+        || !union
+            .inputs()
+            .iter()
+            .all(|input| input.is::<ProjectionExec>())
+    {
+        return Ok(Transformed::no(plan));
+    }
+    let mut inputs = Vec::with_capacity(union.inputs().len());
+    for input in union.inputs() {
+        let renamed = ProjectionExec::try_new_with_schema_metadata(
+            projection.expr().to_vec(),
+            Arc::clone(input),
+            projection.schema().as_ref(),
+        )?;
+        let Some(fused) = input.try_swapping_with_projection(&renamed)? else {
+            return Ok(Transformed::no(plan));
+        };
+        // Metadata overrides can prevent fusion. Do not add a projection when
+        // the existing one cannot supply the renamed expressions directly.
+        if fused
+            .downcast_ref::<ProjectionExec>()
+            .is_some_and(|p| Arc::ptr_eq(p.input(), input))
+        {
+            return Ok(Transformed::no(plan));
+        }
+        inputs.push(fused);
+    }
+    let renamed = UnionExec::try_new(inputs)?;
+    if renamed.schema() != projection.schema() {
+        return Ok(Transformed::no(plan));
+    }
+    Ok(Transformed::yes(renamed))
 }
 
 fn install_lambda_optimizer_boundary(

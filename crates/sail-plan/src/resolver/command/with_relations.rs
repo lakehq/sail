@@ -48,7 +48,7 @@ impl PlanResolver<'_> {
                     Arc::new(resolved),
                     table_ref.clone(),
                 )?);
-                state.insert_cte(table_ref, aliased);
+                state.insert_cte(table_ref, aliased, false)?;
             }
             let plan_id = ref_plan
                 .plan_id

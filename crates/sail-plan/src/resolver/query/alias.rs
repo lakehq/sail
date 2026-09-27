@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion_common::arrow::datatypes::Schema;
 use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use sail_common::spec;
@@ -76,20 +77,22 @@ impl PlanResolver<'_> {
             for (expr, field) in expr.iter_mut().zip(input.schema().fields()) {
                 if let Expr::Alias(expr) = expr {
                     expr.relation = Some(alias.clone());
-                    fields.push((
-                        expr.relation.clone(),
-                        Arc::new(field.as_ref().clone().with_name(expr.name.clone())),
+                    fields.push(Arc::new(
+                        field.as_ref().clone().with_name(expr.name.clone()),
                     ));
                 }
             }
             // This projection only renames fields, preserving their types, metadata,
             // and positions. Reuse the schema instead of re-inferring every column;
-            // functional dependency indices are unchanged as well.
+            // functional dependency indices are unchanged as well. Registered field
+            // IDs are unique, so they need no duplicate-name validation.
             let schema = Arc::new(
-                DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
-                    .with_functional_dependencies(
-                        input.schema().functional_dependencies().clone(),
-                    )?,
+                DFSchema::try_from(Schema::new_with_metadata(
+                    fields,
+                    input.schema().metadata().clone(),
+                ))?
+                .replace_qualifier(alias.clone())
+                .with_functional_dependencies(input.schema().functional_dependencies().clone())?,
             );
             // Each input field is used exactly once, so an existing projection can
             // supply the expressions directly without another layer in the plan.

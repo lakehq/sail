@@ -15,6 +15,14 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
+/// Distinguish an absent root from a matching root whose extraction is not yet
+/// supported. The latter must still shadow deeper attributes.
+enum FieldResolution {
+    Resolved(String, expr::Expr),
+    Missing,
+    Unsupported,
+}
+
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
         &self,
@@ -61,10 +69,14 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        let local_schema = &state.get_local_schema(schema);
-        if let Some((name, expr)) =
-            self.resolve_field_or_nested_field(&name, plan_id, local_schema, state)?
+        if let Some(plan_id) = plan_id
+            && state.get_missing_input_schemas(schema).is_some()
         {
+            self.verify_plan_attribute_root(&name, plan_id, state)?;
+        }
+        let local_schema = &state.get_local_schema(schema);
+        let local = self.resolve_field_or_nested_field(&name, plan_id, local_schema, state)?;
+        if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
@@ -112,11 +124,7 @@ impl PlanResolver<'_> {
             .to_vec();
         // A projected struct with an invalid nested path shadows any older struct
         // of the same name. Only an absent root can be recovered from a descendant.
-        if !missing_input_schemas.is_empty()
-            && self
-                .missing_input_attribute_root_fails(&name, plan_id, local_schema, state)
-                .is_some()
-        {
+        if !missing_input_schemas.is_empty() && matches!(local, FieldResolution::Unsupported) {
             return Err(PlanError::analysis(format!(
                 "attribute {name:?} is missing from the schema: cannot resolve attribute"
             )));
@@ -127,24 +135,22 @@ impl PlanResolver<'_> {
         // a discarded output can still bind there once the failing name resolves deeper.
         // DataFrame column references (plan IDs) are never discarded in Spark either.
         for (index, schema) in missing_input_schemas.iter().enumerate().skip(1) {
-            if let Some((name, expr)) = self
+            match self
                 .resolve_field_or_nested_field(&name, plan_id, schema, state)
                 .inspect_err(|_| state.discard_missing_input_schema(index))?
             {
-                return Ok(NamedExpr::new(vec![name], expr));
-            }
-            if let Some(fails) =
-                self.missing_input_attribute_root_fails(&name, plan_id, schema, state)
-            {
-                // Spark keeps the bindings to this output if the nested field can be
-                // extracted without failing (a map value or an array item).
-                // TODO: Extract map values and array items by a dotted name as Spark does.
-                if fails {
-                    state.discard_missing_input_schema(index);
+                FieldResolution::Resolved(name, expr) => {
+                    return Ok(NamedExpr::new(vec![name], expr));
                 }
-                return Err(PlanError::analysis(format!(
-                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
-                )));
+                FieldResolution::Missing => {}
+                FieldResolution::Unsupported => {
+                    // A map value or array item that Spark can extract keeps this
+                    // output's bindings. Do not fall back to an older attribute.
+                    // TODO: Extract map values and array items by dotted names.
+                    return Err(PlanError::analysis(format!(
+                        "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                    )));
+                }
             }
             if let Some((name, expr)) = self
                 .resolve_hidden_field(&name, plan_id, schema, state)
@@ -166,34 +172,6 @@ impl PlanResolver<'_> {
                 "attribute {name:?} is missing from the schema: cannot resolve attribute or outer attribute"
             ))),
         }
-    }
-
-    /// Returns whether extracting the nested field fails for every attribute root in the
-    /// schema that the name refers to, or `None` if the schema has no such root.
-    fn missing_input_attribute_root_fails(
-        &self,
-        name: &spec::ObjectName,
-        plan_id: Option<i64>,
-        schema: &DFSchemaRef,
-        state: &PlanResolverState,
-    ) -> Option<bool> {
-        Self::generate_qualified_nested_field_candidates(name.parts())
-            .iter()
-            .rev()
-            .find_map(|(q, root, inner)| {
-                schema
-                    .iter()
-                    .filter(|(qualifier, field)| {
-                        qualifier_matches(q.as_ref(), *qualifier, self.config.case_sensitive)
-                            && state.get_field_info(field.name()).is_ok_and(|info| {
-                                !info.is_hidden()
-                                    && info.matches(root.as_ref(), plan_id)
-                                    && (!self.config.case_sensitive || info.name() == root.as_ref())
-                            })
-                    })
-                    .map(|(_, field)| self.nested_field_extraction_fails(field.data_type(), inner))
-                    .reduce(|a, b| a && b)
-            })
     }
 
     /// Returns whether Spark fails to extract the nested field from a value of the data type.
@@ -264,18 +242,64 @@ impl PlanResolver<'_> {
             .any(|x| part.as_ref().eq_ignore_ascii_case(x)))
     }
 
+    /// Spark checks a bound reference against the original DataFrame output
+    /// before filtering it to surviving attributes. A later projection cannot
+    /// make an originally ambiguous unqualified root unambiguous.
+    fn verify_plan_attribute_root(
+        &self,
+        name: &spec::ObjectName,
+        plan_id: i64,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<()> {
+        let Some(roots) = state.get_plan_attribute_roots(plan_id, self.config.case_sensitive)?
+        else {
+            return Ok(());
+        };
+        for (qualifier, root, _) in
+            Self::generate_qualified_nested_field_candidates(name.parts()).rev()
+        {
+            let root = if self.config.case_sensitive {
+                std::borrow::Cow::Borrowed(root.as_ref())
+            } else {
+                std::borrow::Cow::Owned(root.as_ref().to_ascii_lowercase())
+            };
+            let mut origins =
+                roots
+                    .get(root.as_ref())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(q, origin)| {
+                        qualifier_matches(
+                            qualifier.as_ref(),
+                            q.as_ref(),
+                            self.config.case_sensitive,
+                        )
+                        .then_some(*origin)
+                    });
+            if let Some(first) = origins.next() {
+                if origins.any(|origin| origin != first) {
+                    return Err(PlanError::analysis(format!(
+                        "ambiguous attribute: {name:?}"
+                    )));
+                }
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &PlanResolverState,
-    ) -> PlanResult<Option<(String, expr::Expr)>> {
+    ) -> PlanResult<FieldResolution> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
         // Spark chooses the most-qualified matching root before extracting nested
         // fields, using its configured resolver for both the qualifier and root name.
         // A missing field in that root cannot select a less-qualified root.
-        for (q, root, inner) in candidates.iter().rev() {
+        for (q, root, inner) in candidates.rev() {
             // Reuse the matching fields for extraction rather than scanning the
             // schema again after choosing a qualifier. Stop even if extraction is
             // unsupported: a matching root still shadows less-qualified roots.
@@ -304,17 +328,17 @@ impl PlanResolver<'_> {
             )? {
                 Some(expr) => {
                     let name = inner.last().unwrap_or(root).as_ref().to_string();
-                    Ok(Some((name, expr)))
+                    Ok(FieldResolution::Resolved(name, expr))
                 }
                 None if self.nested_field_extraction_fails(field.data_type(), inner) => {
                     Err(PlanError::analysis(format!(
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )))
                 }
-                None => Ok(None),
+                None => Ok(FieldResolution::Unsupported),
             };
         }
-        Ok(None)
+        Ok(FieldResolution::Missing)
     }
 
     fn resolve_aggregate_field(
@@ -497,29 +521,20 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &T, &[T])> {
-        let mut out = vec![];
-        if let [n1, x @ ..] = name {
-            out.push((None, n1, x));
-        }
-        if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::bare(n1.as_ref())), n2, x));
-        }
-        if let [n1, n2, n3, x @ ..] = name {
-            out.push((
-                Some(TableReference::partial(n1.as_ref(), n2.as_ref())),
-                n3,
-                x,
-            ));
-        }
-        if let [n1, n2, n3, n4, x @ ..] = name {
-            out.push((
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                n4,
-                x,
-            ));
-        }
-        out
+    ) -> impl DoubleEndedIterator<Item = (Option<TableReference>, &T, &[T])> {
+        (0..name.len().min(4)).map(|index| {
+            let qualifier = match index {
+                0 => None,
+                1 => Some(TableReference::bare(name[0].as_ref())),
+                2 => Some(TableReference::partial(name[0].as_ref(), name[1].as_ref())),
+                _ => Some(TableReference::full(
+                    name[0].as_ref(),
+                    name[1].as_ref(),
+                    name[2].as_ref(),
+                )),
+            };
+            (qualifier, &name[index], &name[index + 1..])
+        })
     }
 }
 
@@ -568,7 +583,7 @@ pub(super) fn qualifier_matches(
 
 /// Returns the struct field selected by Spark's configured name resolver.
 /// More than one match is an ambiguous reference.
-fn find_struct_field<'a>(
+pub(super) fn find_struct_field<'a>(
     fields: &'a Fields,
     name: &str,
     case_sensitive: bool,
