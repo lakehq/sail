@@ -578,3 +578,103 @@ Feature: Conditional boundaries around projected IN
       | 0  | true  |
       | 1  | false |
       | 2  | false |
+
+  Scenario Outline: conditional branches inline NULLIF before rewriting projected IN
+    When query
+      """
+      SELECT id, <expression> AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p     |
+      | 0  | false |
+      | 1  | true  |
+      | 2  | false |
+
+    Examples:
+      | expression |
+      | IF(id = 1, true, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)) |
+      | CASE WHEN id = 1 THEN true ELSE NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false) END |
+      | IF(id <> 1, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false), true) |
+      | COALESCE(CASE WHEN id = 1 THEN true END, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)) |
+      | NVL2(CASE WHEN id = 1 THEN true END, true, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)) |
+      | NVL2(IF(id = 1, CAST(NULL AS BOOLEAN), true), NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false), true) |
+      | NVL(CASE WHEN id = 1 THEN true END, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)) |
+      | IFNULL(CASE WHEN id = 1 THEN true END, NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)) |
+      | COALESCE(CAST(NULL AS BOOLEAN), COALESCE(NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false), true)) |
+
+  Scenario: nested NULLIF inlines its comparison operand while sharing its result operand
+    When query
+      """
+      SELECT id, NULLIF(
+        v IN (SELECT x FROM VALUES (1), (NULL) r(x)),
+        NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false)
+      ) AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p    |
+      | 0  | NULL |
+      | 1  | NULL |
+      | 2  | NULL |
+
+  Scenario: the first coalesce argument retains a shared NULLIF existence operand
+    When query
+      """
+      SELECT id, COALESCE(NULLIF(
+        v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false
+      ), true) AS p
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | p    |
+      | 0  | true |
+      | 1  | true |
+      | 2  | true |
+
+  Scenario: nested null-safe comparisons retain the projected existence result
+    When query
+      """
+      SELECT ((((((((((((((((((id IN (SELECT x FROM VALUES (1L), (CAST(NULL AS BIGINT)) t(x))) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false) <=> false AS p FROM range(2) ORDER BY id
+      """
+    Then query result ordered
+      | p     |
+      | false |
+      | true  |
+
+  Scenario: NANVL inlines NULLIF only in its conditional argument
+    When query
+      """
+      SELECT id,
+        NANVL(IF(id = 1, 1D, CAST('NaN' AS DOUBLE)),
+          CAST(NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false) AS DOUBLE)) AS branch,
+        NANVL(CAST(NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false) AS DOUBLE), -1D) AS first
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | branch | first |
+      | 0  | 0.0    | NULL  |
+      | 1  | 1.0    | 1.0   |
+      | 2  | 0.0    | NULL  |
+
+  Scenario: only later WHEN conditions inline NULLIF existence operands
+    When query
+      """
+      SELECT id,
+        CASE WHEN id = 1 THEN 10
+          WHEN NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false) <=> false THEN 20
+          ELSE 30 END AS later,
+        CASE WHEN NULLIF(v IN (SELECT x FROM VALUES (1), (NULL) r(x)), false) <=> false THEN 20
+          WHEN id = 1 THEN 10 ELSE 30 END AS first
+      FROM VALUES (0, CAST(NULL AS INT)), (1, 1), (2, 2) t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | later | first |
+      | 0  | 20    | 30    |
+      | 1  | 10    | 10    |
+      | 2  | 20    | 30    |

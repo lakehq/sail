@@ -23,46 +23,53 @@ pub(super) fn simplify(
     let mut replacements = HashMap::new();
     let mut shared = HashMap::<Expr, Column>::new();
     let mut qualifier = None;
+    let mut protect = |expr: Expr| {
+        if !is_conditional(&expr) || !has_uncorrelated_in(&expr)? {
+            return Ok(Transformed::no(expr));
+        }
+        let deterministic = !has_volatile_expression(&expr)?;
+        let existing = deterministic.then(|| shared.get(&expr)).flatten();
+        let column = if let Some(column) = existing {
+            column.clone()
+        } else {
+            let name = fields.len().to_string();
+            let qualifier = qualifier.get_or_insert_with(|| {
+                TableReference::bare(config.alias_generator().next("__sail_conditional"))
+            });
+            let column = Column::new(Some(qualifier.clone()), &name);
+            let (_, field) = expr.to_field(schema.as_ref())?;
+            fields.push((
+                Some(qualifier.clone()),
+                Arc::new(field.as_ref().clone().with_name(name)),
+            ));
+            if deterministic {
+                shared.insert(expr.clone(), column.clone());
+            }
+            replacements.insert(column.clone(), expr);
+            column
+        };
+        Ok(Transformed::new(
+            Expr::Column(column),
+            true,
+            TreeNodeRecursion::Jump,
+        ))
+    };
     let protected = expr
         .transform_down(|expr| {
-            let expr = simplify_complements(push_literal_comparison(
-                simplify_null_test(expr)?,
-                &schema,
-                config,
-            )?)?;
-            if !is_conditional(&expr) || !has_uncorrelated_in(&expr)? {
-                return Ok(Transformed::no(expr));
+            let comparison = push_literal_comparison(simplify_null_test(expr)?, &schema, config)?;
+            let expr = simplify_complements(comparison.data)?;
+            if comparison.tnr == TreeNodeRecursion::Jump {
+                // Recursive simplification restored its conditional expressions.
+                // Protect them in this enclosing pass without simplifying them again.
+                let expr = expr.transform_down(&mut protect)?.data;
+                return Ok(Transformed::new(expr, true, TreeNodeRecursion::Jump));
             }
-            let expr = simplify_conditional(expr, &schema, config)?;
-            if !is_conditional(&expr) || !has_uncorrelated_in(&expr)? {
-                return Ok(Transformed::yes(expr));
-            }
-            let deterministic = !has_volatile_expression(&expr)?;
-            let existing = deterministic.then(|| shared.get(&expr)).flatten();
-            let column = if let Some(column) = existing {
-                column.clone()
+            let expr = if is_conditional(&expr) && has_uncorrelated_in(&expr)? {
+                simplify_conditional(expr, &schema, config)?
             } else {
-                let name = fields.len().to_string();
-                let qualifier = qualifier.get_or_insert_with(|| {
-                    TableReference::bare(config.alias_generator().next("__sail_conditional"))
-                });
-                let column = Column::new(Some(qualifier.clone()), &name);
-                let (_, field) = expr.to_field(schema.as_ref())?;
-                fields.push((
-                    Some(qualifier.clone()),
-                    Arc::new(field.as_ref().clone().with_name(name)),
-                ));
-                if deterministic {
-                    shared.insert(expr.clone(), column.clone());
-                }
-                replacements.insert(column.clone(), expr);
-                column
+                expr
             };
-            Ok(Transformed::new(
-                Expr::Column(column),
-                true,
-                TreeNodeRecursion::Jump,
-            ))
+            protect(expr)
         })?
         .data;
     let extended = if fields.is_empty() {
@@ -83,10 +90,10 @@ pub(super) fn simplify(
         .data()
 }
 
-/// Alias substitution in a filter inlines Catalyst's NULLIF common value.
-/// Keep projected NULLIF as a scalar call so its comparison and result share
-/// the already evaluated existence value; only the copied predicate expands.
-pub(super) fn inline_filter_nullif(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+/// Expand NULLIF where Catalyst inlines its common value: copied filter
+/// predicates and conditionally evaluated branches. Other projected NULLIFs
+/// stay scalar calls so their comparison and result share the existence value.
+pub(super) fn inline_nullif(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     expr.transform_up(|expr| {
         let Expr::ScalarFunction(function) = &expr else {
             return Ok(Transformed::no(expr));
@@ -101,6 +108,44 @@ pub(super) fn inline_filter_nullif(expr: Expr, schema: &DFSchema) -> Result<Expr
         Ok(Transformed::yes(
             datafusion_expr::expr_fn::when(left.clone().eq(right), null).otherwise(left)?,
         ))
+    })
+    .data()
+}
+
+/// Catalyst inlines common expressions in conditional branches, where a
+/// pre-evaluated NULLIF operand would cross the branch's evaluation boundary.
+/// Its first condition/COALESCE argument stays shared, as does NULLIF's value;
+/// nested NULLIF in its comparison operand is inlined by RewriteWithExpression.
+pub(super) fn inline_conditional_nullif(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        let expr = match expr {
+            Expr::Case(mut case) => {
+                for (index, (when, then)) in case.when_then_expr.iter_mut().enumerate() {
+                    if index > 0 {
+                        **when = inline_nullif(*when.clone(), schema)?;
+                    }
+                    **then = inline_nullif(*then.clone(), schema)?;
+                }
+                case.else_expr = case
+                    .else_expr
+                    .map(|expr| inline_nullif(*expr, schema).map(Box::new))
+                    .transpose()?;
+                Expr::Case(case)
+            }
+            Expr::ScalarFunction(mut function)
+                if matches!(
+                    function.func.name(),
+                    "coalesce" | "nvl" | "nvl2" | "nanvl" | "nullif"
+                ) =>
+            {
+                for argument in function.args.iter_mut().skip(1) {
+                    *argument = inline_nullif(argument.clone(), schema)?;
+                }
+                Expr::ScalarFunction(function)
+            }
+            expr => return Ok(Transformed::no(expr)),
+        };
+        Ok(Transformed::yes(expr))
     })
     .data()
 }
@@ -224,24 +269,24 @@ fn push_literal_comparison(
     expr: Expr,
     schema: &DFSchemaRef,
     config: &dyn OptimizerConfig,
-) -> Result<Expr> {
+) -> Result<Transformed<Expr>> {
     let Expr::BinaryExpr(binary) = &expr else {
-        return Ok(expr);
+        return Ok(Transformed::no(expr));
     };
     // Catalyst represents <> as NOT(=). Keep that NOT outside a conditional
     // while pushing the equality into its branches, so it cannot become NOT IN.
     if binary.op == Operator::NotEq && has_uncorrelated_in(&expr)? {
-        return Ok(!datafusion_expr::expr_fn::binary_expr(
+        return Ok(Transformed::yes(!datafusion_expr::expr_fn::binary_expr(
             *binary.left.clone(),
             Operator::Eq,
             *binary.right.clone(),
-        ));
+        )));
     }
     // NULLIF comparisons must stay intact until alias substitution. Their
     // conditional simplifier already visits the operands; revisiting them here
     // would double the work at every level of a nested comparison chain.
     if is_conditional(&expr) {
-        return Ok(expr);
+        return Ok(Transformed::no(expr));
     }
     if !matches!(
         binary.op,
@@ -254,16 +299,16 @@ fn push_literal_comparison(
             | Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
     ) {
-        return Ok(expr);
+        return Ok(Transformed::no(expr));
     }
     let (conditional, literal, conditional_left) =
         match (binary.left.as_ref(), binary.right.as_ref()) {
             (conditional, literal @ Expr::Literal(_, _)) => (conditional, literal, true),
             (literal @ Expr::Literal(_, _), conditional) => (conditional, literal, false),
-            _ => return Ok(expr),
+            _ => return Ok(Transformed::no(expr)),
         };
     if !has_uncorrelated_in(conditional)? {
-        return Ok(expr);
+        return Ok(Transformed::no(expr));
     }
     // Catalyst reaches a fixed point across nested comparisons. Simplify the
     // inner expression first so each enclosing comparison sees its CASE result
@@ -272,11 +317,14 @@ fn push_literal_comparison(
     let conditional = lower_nvl2(conditional)?;
     let data_type = conditional.get_type(schema.as_ref())?;
     let Expr::Case(mut case) = conditional else {
-        return Ok(if conditional_left {
+        let comparison = if conditional_left {
             datafusion_expr::expr_fn::binary_expr(conditional, binary.op, literal.clone())
         } else {
             datafusion_expr::expr_fn::binary_expr(literal.clone(), binary.op, conditional)
-        });
+        };
+        // The operand has already completed this traversal. Descending into it
+        // again doubles the work at every level of nested comparisons.
+        return Ok(Transformed::new(comparison, true, TreeNodeRecursion::Jump));
     };
     // Spark pushes a foldable comparison into CASE/IF when at most one result
     // branch is not foldable. This happens before comparison-to-NOT folding.
@@ -295,7 +343,7 @@ fn push_literal_comparison(
         }
     }
     if non_foldable > 1 {
-        return Ok(expr);
+        return Ok(Transformed::no(expr));
     }
     let compare = |branch: Expr| {
         // Catalyst pushes a comparison through one conditional level per
@@ -320,7 +368,7 @@ fn push_literal_comparison(
         || ScalarValue::try_new_null(&data_type).map(lit),
         |expr| Ok(*expr),
     )?)));
-    Ok(Expr::Case(case))
+    Ok(Transformed::yes(Expr::Case(case)))
 }
 
 fn simplify_conditional(

@@ -180,7 +180,7 @@ fn rewrite_pushed_filter(
     }
     let columns = plan.schema().columns();
     let predicate = conditional::simplify(
-        conditional::inline_filter_nullif(filter.predicate.clone(), filter.input.schema())?,
+        conditional::inline_nullif(filter.predicate.clone(), filter.input.schema())?,
         Arc::clone(filter.input.schema()),
         config,
     )?;
@@ -838,7 +838,10 @@ fn rewrite_projection(
             // Spark optimizes subqueries before folding the containing expression,
             // including branches whose IN expression will disappear entirely.
             let expr = if prepare {
-                prepare_in_subqueries(expr, config)?
+                conditional::inline_conditional_nullif(
+                    prepare_in_subqueries(expr, config)?,
+                    schema.as_ref(),
+                )?
             } else {
                 expr
             };
