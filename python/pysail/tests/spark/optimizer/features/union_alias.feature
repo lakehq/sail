@@ -30,3 +30,21 @@ Feature: Anonymous Union alias resolution
     Then query result
       | n  |
       | 23 |
+
+  Scenario: Nested anonymous derived tables add no alias layers
+    When query
+      """
+      SELECT __auto_generated_subquery_name.x
+      FROM (SELECT * FROM (SELECT * FROM (SELECT id AS x FROM range(3))))
+      """
+    Then query result
+      | x |
+      | 0 |
+      | 1 |
+      | 2 |
+    When query
+      """
+      EXPLAIN EXTENDED
+      SELECT * FROM (SELECT * FROM (SELECT * FROM (SELECT id AS x FROM range(3))))
+      """
+    Then query plan matches snapshot

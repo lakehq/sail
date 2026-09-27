@@ -100,10 +100,7 @@ impl PlanResolver<'_> {
                 Ok(Expr::Column(column).alias(field_id))
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::projection_reusing_input_fields(expr, input)
     }
 
     pub(super) async fn resolve_query_drop(
@@ -270,10 +267,7 @@ impl PlanResolver<'_> {
                 alias.relation = column.relation.clone();
             }
         }
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::projection_reusing_input_fields(expr, input)
     }
 
     pub(super) async fn resolve_query_replace(

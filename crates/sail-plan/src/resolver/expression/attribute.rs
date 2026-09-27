@@ -88,7 +88,7 @@ impl PlanResolver<'_> {
         );
         let local = self
             .resolve_field_or_nested_field(&name, plan_id, local_schema, state)
-            .inspect_err(|_| state.discard_missing_input_schema(schema, 0))?;
+            .map_err(|error| Self::discard_failed_output(&name, schema, 0, error, state))?;
         if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -99,7 +99,7 @@ impl PlanResolver<'_> {
         }
         if let Some((name, expr)) = self
             .resolve_hidden_field(&name, plan_id, local_schema, state)
-            .inspect_err(|_| state.discard_missing_input_schema(schema, 0))?
+            .map_err(|error| Self::discard_failed_output(&name, schema, 0, error, state))?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -160,16 +160,18 @@ impl PlanResolver<'_> {
                     )));
                 }
                 Err(error) => {
-                    state.discard_missing_input_schema(schema, index);
-                    return Err(error);
+                    return Err(Self::discard_failed_output(
+                        &name, schema, index, error, state,
+                    ));
                 }
             }
             match self.resolve_hidden_field(&name, plan_id, input_schema, state) {
                 Ok(Some((name, expr))) => return Ok(NamedExpr::new(vec![name], expr)),
                 Ok(None) => {}
                 Err(error) => {
-                    state.discard_missing_input_schema(schema, index);
-                    return Err(error);
+                    return Err(Self::discard_failed_output(
+                        &name, schema, index, error, state,
+                    ));
                 }
             }
         }
@@ -185,6 +187,24 @@ impl PlanResolver<'_> {
                 // Spark tests expect the error message to start with: "attribute {name:?} is missing"
                 "attribute {name:?} is missing from the schema: cannot resolve attribute or outer attribute"
             ))),
+        }
+    }
+
+    /// Spark ignores a failed resolution against an output that the operator can discard,
+    /// and reports the attribute as unresolved if no other output binds it.
+    fn discard_failed_output(
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        index: usize,
+        error: PlanError,
+        state: &mut PlanResolverState,
+    ) -> PlanError {
+        if state.discard_missing_input_schema(schema, index) {
+            PlanError::analysis(format!(
+                "attribute {name:?} is missing from the schema: cannot resolve attribute"
+            ))
+        } else {
+            error
         }
     }
 

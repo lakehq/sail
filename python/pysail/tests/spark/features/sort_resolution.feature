@@ -77,3 +77,55 @@ Feature: Sort reference resolution
       ORDER BY s.x
       """
     Then query error (?i)(UNRESOLVED_COLUMN|cannot resolve attribute)
+
+  Scenario Outline: Sort keys resolve qualified select-list columns above distinct
+    When query
+      """
+      SELECT DISTINCT <columns>
+      FROM VALUES (1, 30), (2, 10), (1, 30), (3, 40) AS t(a, b)
+      ORDER BY <keys>
+      """
+    Then query result ordered
+      | a         | b         |
+      | <a_first> | <b_first> |
+      | <a_mid>   | <b_mid>   |
+      | <a_last>  | <b_last>  |
+
+    Examples:
+      | columns  | keys           | a_first | b_first | a_mid | b_mid | a_last | b_last |
+      | t.a, t.b | t.a DESC       | 3       | 40      | 2     | 10    | 1      | 30     |
+      | a, b     | t.b DESC, t.a  | 3       | 40      | 1     | 30    | 2      | 10     |
+      | a, b     | t.a + t.b      | 2       | 10      | 1     | 30    | 3      | 40     |
+      | *        | t.a DESC, t.b  | 3       | 40      | 2     | 10    | 1      | 30     |
+
+  Scenario: Sort keys resolve qualified join and grouping columns above distinct
+    When query
+      """
+      SELECT DISTINCT t.a, u.d
+      FROM VALUES (1), (2), (2) AS t(a) JOIN VALUES (1, 100), (2, 200) AS u(a, d) ON t.a = u.a
+      ORDER BY u.d DESC
+      """
+    Then query result ordered
+      | a | d   |
+      | 2 | 200 |
+      | 1 | 100 |
+    When query
+      """
+      SELECT DISTINCT a, count(*) AS n FROM VALUES (1), (1), (2) AS t(a) GROUP BY a ORDER BY t.a DESC
+      """
+    Then query result ordered
+      | a | n |
+      | 2 | 1 |
+      | 1 | 2 |
+
+  Scenario Outline: Sort keys above distinct do not resolve columns outside the select list
+    When query
+      """
+      SELECT DISTINCT <columns> FROM VALUES (1, 30), (2, 10) AS t(a, b) ORDER BY <keys>
+      """
+    Then query error (?i)(UNRESOLVED_COLUMN|cannot resolve attribute)
+
+    Examples:
+      | columns | keys |
+      | a       | t.b  |
+      | a AS x  | t.a  |

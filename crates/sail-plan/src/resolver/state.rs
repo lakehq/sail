@@ -339,14 +339,17 @@ impl PlanResolverState {
 
     /// Discards the bindings to one output when resolution against it fails.
     /// Sorts can discard their own output; other operators can only discard descendants.
-    pub fn discard_missing_input_schema(&mut self, schema: &DFSchemaRef, index: usize) {
+    /// Returns whether the output is discarded.
+    pub fn discard_missing_input_schema(&mut self, schema: &DFSchemaRef, index: usize) -> bool {
         if let Some(input) = &mut self.missing_input_resolution
             && Arc::ptr_eq(&input.schema, schema)
             && (index > 0 || input.resolve_sort_inputs)
             && index < input.schemas.len()
         {
             input.schemas.remove(index);
+            return true;
         }
+        false
     }
 
     /// Discards the bindings to one output and all deeper outputs.

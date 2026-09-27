@@ -48,19 +48,25 @@ impl PlanResolver<'_> {
         // An uncorrelated derived table uses a plain `SubqueryAlias`, like Spark. It
         // requalifies the output and stops missing-reference resolution without adding
         // an operator to the physical plan.
-        let mut correlated = false;
+        // DataFusion cannot merge projections across a `SubqueryAlias`, so nested derived
+        // tables would keep every layer through optimization. A derived table over a
+        // projection is therefore requalified in place, which adds no operator either.
+        let mut requalify = false;
         if alias.table() == AUTO_GENERATED_SUBQUERY_NAME {
+            requalify = matches!(input, LogicalPlan::Projection(_));
             // Include nested subqueries: their outer references can reach past this table.
-            input.apply_with_subqueries(|plan| {
-                correlated = plan.contains_outer_reference();
-                Ok(if correlated {
-                    TreeNodeRecursion::Stop
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            })?;
+            if !requalify {
+                input.apply_with_subqueries(|plan| {
+                    requalify = plan.contains_outer_reference();
+                    Ok(if requalify {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })?;
+            }
         }
-        if correlated {
+        if requalify {
             // Spark removes subquery aliases before decorrelation, and correlated predicates
             // cannot be pulled up through `SubqueryAlias` here. So the generated alias only
             // requalifies the output and, like Spark, stops missing-reference resolution.
@@ -146,9 +152,6 @@ impl PlanResolver<'_> {
             .zip(columns)
             .map(|(col, name)| Expr::Column(col).alias(state.register_field_name(name)))
             .collect();
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::projection_reusing_input_fields(expr, input)
     }
 }

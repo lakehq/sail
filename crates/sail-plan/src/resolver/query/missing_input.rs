@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef};
-use datafusion_expr::{Expr, LogicalPlan, Projection};
+use datafusion_expr::{Distinct, Expr, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
@@ -108,13 +108,27 @@ impl PlanResolver<'_> {
             schemas.push(Arc::clone(child.schema()));
             plan = child;
         }
-        // Sorts can contain grouping expressions and aggregate arguments that are
-        // not in the aggregate output. Rebase them before recovering inputs.
-        if resolve_sort_inputs
-            && !state.is_missing_input_boundary(plan)
-            && let LogicalPlan::Aggregate(aggregate) = plan
-        {
-            schemas.push(Arc::clone(aggregate.input.schema()));
+        if resolve_sort_inputs && !state.is_missing_input_boundary(plan) {
+            match plan {
+                // Sorts can contain grouping expressions and aggregate arguments that are
+                // not in the aggregate output. Rebase them before recovering inputs.
+                LogicalPlan::Aggregate(aggregate) => {
+                    schemas.push(Arc::clone(aggregate.input.schema()));
+                }
+                // Spark's projected attributes keep their qualifiers, so a sort over DISTINCT
+                // can reference `t.a` for a projected `t.a`. Sail's projection renames them,
+                // so resolve such references against the attributes that it passes through.
+                // The logical plan builder adds them below the DISTINCT, which keeps the
+                // distinct rows unchanged since they duplicate projected columns.
+                LogicalPlan::Distinct(Distinct::All(input)) => {
+                    if let LogicalPlan::Projection(projection) = input.as_ref()
+                        && !state.is_missing_input_boundary(input)
+                    {
+                        schemas.push(Self::projected_attributes(projection, state)?);
+                    }
+                }
+                _ => {}
+            }
         }
 
         // Type inference needs all reachable columns, while name resolution must
@@ -125,7 +139,9 @@ impl PlanResolver<'_> {
             // has every column. Reuse it so that no input needs to be recovered.
             Arc::clone(schema)
         } else {
-            let mut columns = HashSet::new();
+            // The combined schema can hold every descendant's fields. Hash them with
+            // DataFusion's faster hasher rather than SipHash.
+            let mut columns = datafusion_common::HashSet::new();
             let fields = schemas
                 .iter()
                 .flat_map(|schema| schema.iter())
@@ -178,6 +194,38 @@ impl PlanResolver<'_> {
             resolved.push(expr);
         }
         Ok((resolved, schema))
+    }
+
+    /// Returns the input attributes that the projection outputs without renaming them,
+    /// which keep their qualifiers in Spark (unlike aliases and computed columns).
+    fn projected_attributes(
+        projection: &Projection,
+        state: &PlanResolverState,
+    ) -> PlanResult<DFSchemaRef> {
+        let name = |id: &str| state.get_field_info(id).ok().map(|info| info.name());
+        let input = projection.input.schema();
+        let mut seen = HashSet::new();
+        let fields = projection
+            .expr
+            .iter()
+            .zip(projection.schema.fields())
+            .filter_map(|(expr, field)| {
+                let Expr::Alias(alias) = expr else {
+                    return None;
+                };
+                let Expr::Column(column) = alias.expr.as_ref() else {
+                    return None;
+                };
+                let (qualifier, source) = input.qualified_field_from_column(column).ok()?;
+                (name(field.name())? == name(source.name())?
+                    && seen.insert((qualifier, source.name())))
+                .then(|| (qualifier.cloned(), Arc::clone(source)))
+            })
+            .collect();
+        Ok(Arc::new(DFSchema::new_with_metadata(
+            fields,
+            input.metadata().clone(),
+        )?))
     }
 
     /// Returns whether the expression cannot contain a subquery. Expressions that

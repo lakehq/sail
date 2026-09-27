@@ -245,3 +245,10 @@ def test_sort_recovers_key_after_failed_output_resolution(spark, operation, repl
     for invalid in (projected.where(key > 0), projected.repartition(1, key), projected.alias("t").orderBy(key)):
         with pytest.raises(AnalysisException):
             invalid.collect()
+
+
+@pytest.mark.parametrize("columns", [["a"], ["x.a", "b"]])
+def test_sort_distinct_by_qualified_select_list_column(spark, columns):
+    df = spark.createDataFrame([(1, 30), (2, 10), (1, 30), (3, 40)], "a int, b int").alias("x")
+    result = df.select(*columns).distinct().orderBy(F.col("x.a").desc())
+    assert [row.a for row in result.collect()] == [3, 2, 1]

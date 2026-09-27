@@ -863,6 +863,28 @@ def test_union_hides_ambiguous_ancestor_from_another_instance(spark):
     assert sorted(result.collect()) == [Row(value=10), Row(value=20), Row(value=30)]
 
 
+@pytest.mark.parametrize("operation", ["where", "select", "orderBy"])
+def test_union_rejects_input_dataframe_columns(spark, operation):
+    left = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
+    right = spark.createDataFrame([(3, 30)], "key int, value int")
+    union = left.union(right)
+
+    def apply(reference):
+        return union.where(reference > 15) if operation == "where" else getattr(union, operation)(reference)  # noqa: PLR2004
+
+    # A Union is a leaf for DataFrame column lookup, so the input DataFrames'
+    # columns do not resolve against the Union output even though the names match.
+    for reference in (left.value, right.value):
+        with pytest.raises(AnalysisException):
+            apply(reference).collect()
+    expected = {
+        "where": [Row(key=1, value=20), Row(key=3, value=30)],
+        "select": [Row(value=10), Row(value=20), Row(value=30)],
+        "orderBy": [Row(key=1, value=20), Row(key=2, value=10), Row(key=3, value=30)],
+    }
+    assert sorted(apply(union.value).collect()) == expected[operation]
+
+
 @pytest.mark.parametrize(
     ("query", "valid", "copies"),
     [
@@ -1958,3 +1980,27 @@ def test_filter_recovered_qualified_root_uses_case_sensitive_resolver(spark, cas
         assert result.schema == projected.schema
     finally:
         spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda df: df.where("c > 4"),
+        lambda df: df.orderBy("c"),
+        lambda df: df.repartition(2, "c"),
+    ],
+    ids=["filter", "sort", "repartition"],
+)
+def test_missing_input_ambiguous_descendant_is_unresolved(spark, operation):
+    left = spark.createDataFrame([(1, 30, 5)], "a int, b int, c int")
+    right = spark.createDataFrame([(1, 100, 6)], "a int, d int, c int")
+    # Spark ignores the ambiguous join output while recovering `c` and reports it as unresolved.
+    with pytest.raises(AnalysisException, match=r"(?i)cannot (be )?resolve"):
+        operation(left.join(right, "a").select("b")).collect()
+
+
+def test_filter_ambiguous_output_stays_ambiguous(spark):
+    left = spark.createDataFrame([(1, 30, 5)], "a int, b int, c int")
+    right = spark.createDataFrame([(1, 100, 6)], "a int, d int, c int")
+    with pytest.raises(AnalysisException, match=r"(?i)ambiguous"):
+        left.join(right, "a").where("c > 4").collect()
