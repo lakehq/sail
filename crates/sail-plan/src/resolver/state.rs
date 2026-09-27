@@ -301,9 +301,8 @@ impl PlanResolverState {
         &self.missing_input_boundaries
     }
 
-    /// Returns the registered missing-input boundaries for registering more.
-    pub fn missing_input_boundaries_mut(&mut self) -> &mut MissingInputBoundaries {
-        &mut self.missing_input_boundaries
+    pub fn register_missing_input_boundary(&mut self, plan: &LogicalPlan) {
+        self.missing_input_boundaries.register(plan);
     }
 
     pub fn enter_missing_input_scope(

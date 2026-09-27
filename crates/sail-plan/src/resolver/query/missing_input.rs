@@ -86,7 +86,7 @@ pub(in crate::resolver) struct MissingInputBoundaries {
 
 impl MissingInputBoundaries {
     /// Registers the plan as a missing-input boundary.
-    pub(super) fn register(&mut self, plan: &LogicalPlan) {
+    pub(in crate::resolver) fn register(&mut self, plan: &LogicalPlan) {
         let mut plan = plan;
         // Empty outputs can share a schema with unrelated plans. Stop recovery at
         // the first nonempty input instead, whose field IDs distinguish the boundary.

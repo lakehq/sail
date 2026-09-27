@@ -130,7 +130,7 @@ impl PlanResolver<'_> {
         // Spark's `WithCTE` also has the CTE definitions as children, so
         // missing-reference recovery resolves only against the query output.
         Self::restore_cte_output_bindings(&plan, state)?;
-        state.missing_input_boundaries_mut().register(&plan);
+        state.register_missing_input_boundary(&plan);
         Ok(plan)
     }
 

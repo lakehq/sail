@@ -439,7 +439,7 @@ impl PlanResolver<'_> {
 
         let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
         // Spark's Expand cannot expose input columns removed by UNPIVOT.
-        state.missing_input_boundaries_mut().register(&plan);
+        state.register_missing_input_boundary(&plan);
         Ok(plan)
     }
 }
