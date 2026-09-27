@@ -21,6 +21,8 @@ pub(crate) struct ScanFileMetadata {
     partition_values: Vec<proto::ScalarValue>,
     #[prost(string, tag = "3")]
     identity_defaults: String,
+    #[prost(string, tag = "4")]
+    file_pruning: String,
 }
 
 impl ScanFileMetadata {
@@ -67,6 +69,10 @@ impl ScanFileMetadata {
             partition_values,
             identity_defaults: serde_json::to_string(&defaults)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            file_pruning: serde_json::to_string(
+                &crate::datasource::file_pruning::FilePruning::new(schema, specs, file),
+            )
+            .map_err(|error| DataFusionError::External(Box::new(error)))?,
         }
         .encode_to_vec())
     }
@@ -86,6 +92,10 @@ impl ScanFileMetadata {
         let defaults: IdentityPartitionDefaults = serde_json::from_str(&self.identity_defaults)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         file.extensions.insert(defaults);
+        let pruning: crate::datasource::file_pruning::FilePruning =
+            serde_json::from_str(&self.file_pruning)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        file.extensions.insert(pruning);
         Ok(())
     }
 }

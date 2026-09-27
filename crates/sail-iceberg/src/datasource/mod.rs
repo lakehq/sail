@@ -12,8 +12,10 @@
 
 pub(crate) mod copy_on_write;
 pub mod expressions;
+pub(crate) mod file_pruning;
 pub(crate) mod file_statistics;
 pub(crate) mod parquet;
+mod parquet_source;
 pub(crate) mod partition_defaults;
 pub(crate) mod predicate;
 pub mod pruning;
@@ -21,4 +23,5 @@ pub mod scan;
 pub(crate) mod scan_metadata;
 pub mod type_converter;
 
+pub use parquet_source::IcebergParquetSource;
 pub use scan::*;

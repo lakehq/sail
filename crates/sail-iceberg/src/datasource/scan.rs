@@ -586,6 +586,13 @@ impl IcebergScan {
                     &self.partition_specs,
                     &self.schema,
                 )?);
+            partitioned_file
+                .extensions
+                .insert(crate::datasource::file_pruning::FilePruning::new(
+                    &self.schema,
+                    &self.partition_specs,
+                    &data_file,
+                ));
 
             partitioned_files.push(partitioned_file);
         }

@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -17,7 +18,8 @@ from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 @pytest.mark.parametrize("partitioned", [False, True], ids=["manifest-statistics", "identity-partitions"])
-def test_dynamic_join_skips_unreadable_files(spark, tmp_path, partitioned):
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_dynamic_join_skips_unreadable_files(spark, tmp_path, partitioned, metadata_as_data):
     selected_key = 2
     catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
@@ -59,7 +61,11 @@ def test_dynamic_join_skips_unreadable_files(spark, tmp_path, partitioned):
                     append.append_data_file(data_file)
             else:
                 table.append(pa.table({"payload": payload, "key": pa.array([key, key], pa.int32())}))
-        frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(table.location())
+        frame = (
+            spark.read.format("iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(table.location())
+        )
         keys = spark.createDataFrame([(selected_key,), (selected_key,)], "key int")
         joined = frame.select("key", "payload").join(keys, "key").select("payload", "key")
         expected = [(20, 2), (20, 2), (21, 2), (21, 2)]
@@ -87,6 +93,101 @@ def test_streaming_partitioned_limit_spans_file_groups(spark, tmp_path):
     rows = frame.select("value", "key").limit(5).collect()
     assert len(rows) == 5  # noqa: PLR2004
     assert all(row.value in (row.key * 10, row.key * 10 + 1) for row in rows)
+
+
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+@pytest.mark.parametrize("deletes", [False, True], ids=["clean", "dv"])
+@pytest.mark.parametrize(
+    ("partitioning", "key_type", "values"),
+    [
+        ("bucket(16, key)", "INT", [-5, -4, -3, -2]),
+        ("truncate(10, key)", "INT", [-21, -11, 1, 11]),
+        (
+            "days(key)",
+            "TIMESTAMP_NTZ",
+            [datetime.fromisoformat(value) for value in ["1969-12-30", "1969-12-31", "1970-01-01", "1970-01-02"]],
+        ),
+    ],
+    ids=["bucket", "truncate", "day"],
+)
+def test_dynamic_partition_transforms_without_metrics(
+    spark, tmp_path, metadata_as_data, deletes, partitioning, key_type, values
+):
+    name = "dynamic_transforms"
+    path = tmp_path / name
+    spark.sql(f"""CREATE TABLE {name} (payload BIGINT, key {key_type}) USING iceberg
+        PARTITIONED BY ({partitioning}) LOCATION '{path.as_uri()}'
+        TBLPROPERTIES ('format-version'='3', 'write.merge.mode'='merge-on-read',
+                      'write.metadata.metrics.default'='none')""")
+    moved = []
+    try:
+        for index, key in enumerate(values):
+            rows = spark.createDataFrame(
+                [(index * 10 + offset, key) for offset in range(3)], f"payload long, key {key_type}"
+            )
+            rows.coalesce(1).writeTo(name).append()
+            if deletes:
+                rows.filter(f"payload = {index * 10}").createOrReplaceTempView("dynamic_delete_key")
+                spark.sql(f"""MERGE INTO {name} t USING dynamic_delete_key s
+                    ON t.key=s.key AND t.payload=s.payload WHEN MATCHED THEN DELETE""").collect()
+        data_files = [entry.data_file for entry in _current_manifest_entries(path, ManifestContent.DATA)]
+        assert len(data_files) == 4  # noqa: PLR2004
+        assert len({file.partition[0] for file in data_files}) == 4  # noqa: PLR2004
+        assert all(not file.lower_bounds and not file.upper_bounds for file in data_files)
+        frame = (
+            spark.read.format("iceberg").option("metadataAsDataRead", str(metadata_as_data).lower()).load(path.as_uri())
+        )
+        keys = spark.createDataFrame([(values[2],), (values[2],)], f"key {key_type}")
+        joined = frame.select("key", "payload").join(keys, "key").select("payload")
+        expected = [21, 21, 22, 22] if deletes else [20, 20, 21, 21, 22, 22]
+        assert sorted(row.payload for row in joined.collect()) == expected
+        excluded = set()
+        for file in data_files:
+            source = _local_file_path(file.file_path)
+            if pq.ParquetFile(source).read(columns=["key"])["key"][0].as_py() != values[2]:
+                excluded.add(file.file_path)
+        skipped = [_local_file_path(file) for file in excluded]
+        if deletes:
+            for entry in _current_manifest_entries(path, ManifestContent.DELETES):
+                source = _local_file_path(entry.data_file.file_path)
+                references = {
+                    blob.properties["referenced-data-file"] for blob in PuffinFile(source.read_bytes()).footer.blobs
+                }
+                if references <= excluded:
+                    skipped.append(source)
+        assert len(skipped) == (6 if deletes else 3)
+        for index, source in enumerate(skipped):
+            backup = tmp_path / f"excluded-{index}"
+            source.rename(backup)
+            moved.append((source, backup))
+        assert sorted(row.payload for row in joined.collect()) == expected
+        with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
+            frame.collect()
+    finally:
+        for source, backup in moved:
+            backup.rename(source)
+        if deletes:
+            spark.catalog.dropTempView("dynamic_delete_key")
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_predicate_does_not_evaluate_deleted_values(spark, tmp_path, metadata_as_data):
+    name = "deleted_predicate_values"
+    spark.sql(f"""CREATE TABLE {name} (key INT) USING iceberg LOCATION '{(tmp_path / name).as_uri()}'
+        TBLPROPERTIES ('format-version'='3', 'write.merge.mode'='merge-on-read')""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (0), (1), (2)")  # noqa: S608
+        spark.sql(f"""MERGE INTO {name} t USING (SELECT 0 AS key) s
+            ON t.key=s.key WHEN MATCHED THEN DELETE""").collect()
+        frame = (
+            spark.read.format("iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load((tmp_path / name).as_uri())
+        )
+        assert sorted(row.key for row in frame.where("100 DIV key > 0").collect()) == [1, 2]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
 @pytest.mark.parametrize("format_version", [2, 3], ids=["position-delete", "dv"])

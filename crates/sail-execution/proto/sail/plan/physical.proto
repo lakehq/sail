@@ -712,6 +712,7 @@ message ParquetExecNode {
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
   repeated bytes virtual_columns = 7;
+  optional string iceberg_file_pruning = 8;
 }
 
 message ArrowExecNode {

@@ -12,10 +12,10 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::common::config::ConfigOptions;
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, ParquetRowSelection};
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
@@ -24,7 +24,9 @@ use datafusion::physical_optimizer::pruning::FilePruner;
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion::physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -47,6 +49,8 @@ use parquet::schema::types::SchemaDescriptor;
 use roaring::RoaringTreemap;
 use url::Url;
 
+use crate::datasource::IcebergParquetSource;
+use crate::datasource::file_pruning::IcebergFilePruner;
 use crate::io::StoreContext;
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 use crate::spec::Schema as IcebergSchema;
@@ -136,7 +140,8 @@ fn select_live_parquet_rows(
     let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
         return Ok(None);
     };
-    if !config.file_source.is::<ParquetSource>()
+    if !(config.file_source.is::<ParquetSource>()
+        || config.file_source.is::<IcebergParquetSource>())
         || config.file_source.filter().is_some()
         || config.limit.is_some()
     {
@@ -167,6 +172,140 @@ fn select_live_parquet_rows(
     Ok(Some(Arc::new(
         scan.clone().with_data_source(Arc::new(config)),
     )))
+}
+
+struct PredicateScan {
+    plan: Arc<dyn ExecutionPlan>,
+    pruner: Option<IcebergFilePruner>,
+}
+
+fn prepare_predicate_scan(
+    input: &Arc<dyn ExecutionPlan>,
+    predicate: Arc<dyn PhysicalExpr>,
+    metric: Count,
+) -> Result<Option<PredicateScan>> {
+    let child = if let Some(delegate) = input.downcast_delegate() {
+        let children = input.children();
+        let [child] = children.as_slice() else {
+            return Ok(None);
+        };
+        if !std::ptr::addr_eq(delegate, child.as_ref()) {
+            return Ok(None);
+        }
+        Some((Arc::clone(child), predicate.clone()))
+    } else if let Some(projection) = input.downcast_ref::<ProjectionExec>() {
+        let Some(predicate) = datafusion::physical_expr::projection::update_expr(
+            &predicate,
+            projection.expr(),
+            true,
+        )?
+        else {
+            return Ok(None);
+        };
+        Some((projection.input().clone(), predicate))
+    } else if let Some(metadata) = input.downcast_ref::<IcebergMergeMetadataExec>() {
+        let mut materialized = false;
+        predicate.apply(|expr| {
+            if let Some(column) =
+                expr.downcast_ref::<datafusion::physical_expr::expressions::Column>()
+            {
+                materialized |= crate::row_lineage::LINEAGE_COLUMNS.contains(&column.name());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if materialized {
+            return Ok(None);
+        }
+        let Ok(predicate) = reassign_expr_columns(predicate.clone(), &metadata.input().schema())
+        else {
+            return Ok(None);
+        };
+        Some((metadata.input().clone(), predicate))
+    } else {
+        None
+    };
+    if let Some((child, predicate)) = child {
+        return prepare_predicate_scan(&child, predicate, metric)?
+            .map(|scan| {
+                Ok(PredicateScan {
+                    plan: input.clone().replace_children(
+                        vec![scan.plan],
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )?,
+                    pruner: scan.pruner,
+                })
+            })
+            .transpose();
+    }
+    let Some(scan) = input.downcast_ref::<DataSourceExec>() else {
+        return Ok(None);
+    };
+    let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+        return Ok(None);
+    };
+    if config.limit.is_some() {
+        return Ok(None);
+    }
+    let [group] = config.file_groups.as_slice() else {
+        return Ok(None);
+    };
+    let [file] = group.files() else {
+        return Ok(None);
+    };
+    let source = match config.file_source.downcast_ref::<IcebergParquetSource>() {
+        Some(source) => source.clone(),
+        None if config.file_source.is::<ParquetSource>() => {
+            IcebergParquetSource::new(config.file_source.clone(), Default::default())
+        }
+        _ => return Ok(None),
+    };
+    let predicate = match source.projection() {
+        Some(projection) => {
+            let Some(predicate) = datafusion::physical_expr::projection::update_expr(
+                &predicate,
+                projection.as_ref(),
+                true,
+            )?
+            else {
+                return Ok(None);
+            };
+            predicate
+        }
+        None => predicate,
+    };
+    let predicate = reassign_expr_columns(predicate, source.table_schema().table_schema())?;
+    let pruner = source.file_pruner(file, predicate.clone(), metric);
+    let mut config = config.clone();
+    config.file_source = Arc::new(source.pruning_predicate(predicate)?);
+    Ok(Some(PredicateScan {
+        plan: Arc::new(scan.clone().with_data_source(Arc::new(config))),
+        pruner,
+    }))
+}
+
+fn apply_position_bitmap(
+    input: Arc<dyn ExecutionPlan>,
+    positions: Arc<RoaringTreemap>,
+    rows_read: Count,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if input.downcast_delegate().is_none()
+        && let Some(scan) = input.downcast_ref::<DataSourceExec>()
+        && let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>()
+        && let Some(source) = config.file_source.downcast_ref::<IcebergParquetSource>()
+    {
+        let mut config = config.clone();
+        config.file_source = Arc::new(source.delete_positions(positions, rows_read));
+        return Ok(Arc::new(scan.clone().with_data_source(Arc::new(config))));
+    }
+    let children = input
+        .children()
+        .iter()
+        .map(|child| apply_position_bitmap(Arc::clone(child), positions.clone(), rows_read.clone()))
+        .collect::<Result<Vec<_>>>()?;
+    input.replace_children(
+        children,
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    )
 }
 
 #[derive(Clone)]
@@ -396,8 +535,8 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         }
         let mut scan = self.clone();
         scan.predicate = Some(conjunction(combined));
-        // Only whole-file pruning is safe for the row-offset fallback. Parent
-        // filters remain, and the default gather hook blocks reader pushdown.
+        // Reader pruning is installed at execution together with physical-position
+        // deletion. Keep parent filters and block ordinary child pushdown.
         Ok(FilterPushdownPropagation::all_unsupported(result).with_updated_node(Arc::new(scan)))
     }
 
@@ -464,6 +603,10 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             MetricBuilder::new(&self.metrics).counter("position_delete_row_selections", partition);
         let fallbacks =
             MetricBuilder::new(&self.metrics).counter("position_delete_fallbacks", partition);
+        let position_filters = MetricBuilder::new(&self.metrics)
+            .counter("position_delete_position_filters", partition);
+        let position_rows_read =
+            MetricBuilder::new(&self.metrics).counter("position_delete_rows_read", partition);
         let data_file_path = self.data_file_path.clone();
         let positional_deletes = self.positional_deletes.clone();
         let equality_deletes = self.equality_deletes.clone();
@@ -471,6 +614,17 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         let iceberg_schema = self.iceberg_schema.clone();
         let schema_for_adapter = output_schema.clone();
         let pruned = MetricBuilder::new(&self.metrics).counter("files_pruned", partition);
+        let prepared = self
+            .predicate
+            .as_ref()
+            .map(|predicate| prepare_predicate_scan(&input, predicate.clone(), pruned.clone()))
+            .transpose()?
+            .flatten();
+        let predicate_reader = prepared.is_some();
+        let (input, iceberg_pruner) = match prepared {
+            Some(scan) => (scan.plan, scan.pruner),
+            None => (input, None),
+        };
         let errors =
             MetricBuilder::new(&self.metrics).counter("predicate_creation_errors", partition);
         let mut file = PartitionedFile::new(data_file_path.clone(), 0);
@@ -479,6 +633,9 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             FilePruner::try_new(predicate.clone(), &output_schema, &file, errors)
         });
         let mut should_prune = move || -> Result<bool> {
+            if let Some(pruner) = &iceberg_pruner {
+                return pruner.should_prune();
+            }
             let skip = pruner
                 .as_mut()
                 .map(FilePruner::should_prune)
@@ -511,7 +668,12 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 
             // Materialize selections at the execution site, after worker decoding.
             let input = if !deleted_positions.is_empty() {
-                if let Some(selected) = select_live_parquet_rows(&input, &deleted_positions)? {
+                if predicate_reader {
+                    position_filters.add(1);
+                    let selected = apply_position_bitmap(input, Arc::new(deleted_positions.clone()), position_rows_read)?;
+                    deleted_positions.clear();
+                    selected
+                } else if let Some(selected) = select_live_parquet_rows(&input, &deleted_positions)? {
                     selections.add(1);
                     deleted_positions.clear();
                     selected
@@ -1129,6 +1291,12 @@ mod tests {
         assert!(live_row_selection(&fragmented, 20_000).is_none());
     }
 
+    #[derive(Clone, Copy)]
+    enum PredicatePruning {
+        RowGroups,
+        Pages,
+    }
+
     async fn scan_vector(
         positions: RoaringTreemap,
         known_rows: bool,
@@ -1136,7 +1304,7 @@ mod tests {
         limit: Option<usize>,
         merge_metadata: bool,
         sort_rows: bool,
-        filter_minimum: Option<i64>,
+        filter: Option<(i64, PredicatePruning)>,
     ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
         let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(17));
         let store = Arc::new(InMemory::new());
@@ -1157,6 +1325,9 @@ mod tests {
         )?;
         let properties = WriterProperties::builder()
             .set_max_row_group_row_count(Some(128))
+            .set_data_page_row_count_limit(32)
+            .set_write_batch_size(32)
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
             .build();
         let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(properties))?;
         writer.write(&batch)?;
@@ -1197,9 +1368,13 @@ mod tests {
             stats.num_rows = Precision::Exact(1024);
             file.statistics = Some(Arc::new(stats));
         }
+        let page_only = matches!(filter, Some((_, PredicatePruning::Pages)));
+        let mut options = datafusion::config::TableParquetOptions::default();
+        options.global.pruning = !page_only;
+        options.global.enable_page_index = page_only;
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("memory://iceberg")?,
-            Arc::new(ParquetSource::new(table_schema.build())),
+            Arc::new(ParquetSource::new(table_schema.build()).with_table_parquet_options(options)),
         )
         .with_file_groups(vec![FileGroup::from(vec![file])])
         .with_projection_indices(Some(projection))?
@@ -1281,7 +1456,7 @@ mod tests {
         } else {
             plan
         };
-        let plan = if let Some(minimum) = filter_minimum {
+        let plan = if let Some((minimum, _)) = filter {
             use datafusion::logical_expr::Operator;
             use datafusion::physical_expr::expressions::{
                 Column, DynamicFilterPhysicalExpr, binary, lit,
@@ -1506,9 +1681,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dynamic_filter_preserves_dv_selection_and_row_offset_fallback() -> Result<()> {
+    async fn dynamic_filter_prunes_row_groups_and_pages_with_physical_delete_positions()
+    -> Result<()> {
         let positions = RoaringTreemap::from_iter((0..128).chain([511, 512, 513, 600, 1023]));
-        for known_rows in [true, false] {
+        for (known_rows, pruning) in [
+            (true, PredicatePruning::RowGroups),
+            (false, PredicatePruning::RowGroups),
+            (true, PredicatePruning::Pages),
+            (false, PredicatePruning::Pages),
+        ] {
             let (batches, metrics) = scan_vector(
                 positions.clone(),
                 known_rows,
@@ -1516,7 +1697,7 @@ mod tests {
                 None,
                 false,
                 false,
-                Some(500),
+                Some((500, pruning)),
             )
             .await?;
             let mut actual = batches
@@ -1544,14 +1725,29 @@ mod tests {
                     .sum_by_name("position_delete_row_selections")
                     .unwrap()
                     .as_usize(),
-                usize::from(known_rows)
+                0
             );
             assert_eq!(
                 metrics
                     .sum_by_name("position_delete_fallbacks")
                     .unwrap()
                     .as_usize(),
-                usize::from(!known_rows)
+                0
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("position_delete_position_filters")
+                    .unwrap()
+                    .as_usize(),
+                1
+            );
+            let rows_read = metrics
+                .sum_by_name("position_delete_rows_read")
+                .unwrap()
+                .as_usize();
+            assert!(
+                rows_read > 0 && rows_read < 1024,
+                "rows read before DV filtering: {rows_read}"
             );
         }
         Ok(())
