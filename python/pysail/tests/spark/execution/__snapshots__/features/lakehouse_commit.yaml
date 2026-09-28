@@ -247,6 +247,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -608,6 +611,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -1006,6 +1012,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -1653,6 +1662,9 @@ data:
                                       DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata, __sail_iceberg_row_position], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_file_metadata@3], 1), file_type=parquet
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2192,6 +2204,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2628,6 +2643,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:

@@ -376,6 +376,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 

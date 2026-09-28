@@ -473,6 +473,9 @@ data:
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -982,6 +985,9 @@ data:
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -1505,6 +1511,9 @@ data:
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -2263,6 +2272,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2895,6 +2907,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -3408,6 +3423,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -3831,6 +3849,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -4310,6 +4331,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -4820,6 +4844,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -5293,6 +5320,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -5718,6 +5748,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -6217,6 +6250,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -6696,6 +6732,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -7167,6 +7206,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -7617,6 +7659,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -8091,6 +8136,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -8618,6 +8666,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -9133,6 +9184,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -9598,6 +9652,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -10074,6 +10131,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -10501,6 +10561,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -10924,6 +10987,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -11379,6 +11445,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -11847,6 +11916,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
