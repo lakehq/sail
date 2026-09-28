@@ -386,6 +386,9 @@ data:
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -851,6 +854,9 @@ data:
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -1319,6 +1325,9 @@ data:
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -1786,6 +1795,9 @@ data:
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2251,6 +2263,9 @@ data:
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -2719,6 +2734,9 @@ data:
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -3186,6 +3204,9 @@ data:
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -3651,6 +3672,9 @@ data:
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -4118,6 +4142,9 @@ data:
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
+
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
