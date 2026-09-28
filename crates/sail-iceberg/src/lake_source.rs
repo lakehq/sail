@@ -187,7 +187,17 @@ impl LakeSource for IcebergLakeSource {
         let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
             Ok(metadata_file) if columns.is_empty() && !replace => {
                 let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
+                let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
+                let metadata = TableMetadata::from_json(&bytes)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                let schema = metadata
+                    .current_schema()
+                    .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".to_string()))?;
                 return Ok(LakeSourceCreateTableResult {
+                    schema: Some(Arc::new(
+                        crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?,
+                    )),
+                    partition_by: Some(partition_columns_from_table_metadata(&metadata)?),
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),
@@ -272,40 +282,36 @@ impl LakeSource for IcebergLakeSource {
                     .to_string(),
                 metadata_location,
             )],
+            ..Default::default()
         })
     }
 
     async fn alter_table(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let Some(context) = lakehouse_table.as_ref()
+            && context.commit != CommitAuthority::Filesystem
+        {
+            crate::ddl::alter_catalog_table(ctx, path, &operation, context).await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                },
+            );
+        }
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                self.alter_table_properties(ctx.runtime_env(), path, changes, if_exists)
                     .await
             }
             op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
-        }
+        }?;
+        Ok(Default::default())
     }
-}
-
-fn reject_catalog_managed_iceberg_alter(
-    lakehouse_table: Option<&LakehouseExecutionContext>,
-) -> Result<()> {
-    let Some(context) = lakehouse_table else {
-        return Ok(());
-    };
-    if context.commit != CommitAuthority::Filesystem {
-        return not_impl_err!(
-            "ALTER TABLE is not yet supported for catalog-managed Iceberg tables: {}",
-            context.catalog_table().join(".")
-        );
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, Educe)]

@@ -273,7 +273,20 @@ impl LakeSource for DeltaLakeSource {
                         );
                     }
                 }
-                return Ok(LakeSourceCreateTableResult::default());
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                return Ok(LakeSourceCreateTableResult {
+                    schema: Some(
+                        snapshot
+                            .arrow_schema()
+                            .map_err(|error| DataFusionError::External(Box::new(error)))?,
+                    ),
+                    partition_by: Some(sail_common_datafusion::catalog::identity_partition_fields(
+                        snapshot.metadata().partition_columns(),
+                    )),
+                    ..Default::default()
+                });
             }
         }
 
@@ -434,12 +447,13 @@ impl LakeSource for DeltaLakeSource {
 
     async fn alter_table(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+        let runtime_env = ctx.runtime_env();
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -463,7 +477,8 @@ impl LakeSource for DeltaLakeSource {
                 self.add_check_constraint(runtime_env, path, &name, &expression)
                     .await
             }
-        }
+        }?;
+        Ok(Default::default())
     }
 }
 

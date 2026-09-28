@@ -1,5 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
@@ -261,9 +262,9 @@ impl CatalogCommand {
         Ok(schema)
     }
 
-    pub async fn execute<C: SessionExtensionAccessor>(
+    pub async fn execute(
         self,
-        ctx: &C,
+        ctx: &TaskContext,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
@@ -454,6 +455,7 @@ impl CatalogCommand {
                     Err(e) => return Err(e),
                 };
 
+                manager.validate_alter_table(&table, &options)?;
                 let (location, format) = match &table_status.kind {
                     sail_common_datafusion::catalog::TableKind::Table {
                         location: Some(loc),
@@ -466,10 +468,8 @@ impl CatalogCommand {
                     _ => (None, None),
                 };
 
-                // Persist changes to storage first (source of truth for lake sources
-                // such as Delta Lake). Only after storage commits successfully do we
-                // update the catalog metadata, so we never end up with the two layers
-                // out of sync.
+                // Lake sources commit authoritative format metadata, including catalog
+                // metadata when the provider supports an atomic update.
                 if let (Some(location), Some(format)) = (location, format) {
                     // Non-lakehouse formats (e.g., plain Parquet/Hive tables) have no
                     // storage-layer metadata — the catalog is the sole source of truth.
@@ -490,7 +490,6 @@ impl CatalogCommand {
                             "unknown lake source '{format}' for storage-backed ALTER TABLE: {e}"
                         ))
                     })?;
-                    let runtime = ctx.runtime_env();
                     let storage_operation = lake_source_alter_operation(&options);
                     let lakehouse_table = manager
                         .resolve_lakehouse_table_status(
@@ -500,8 +499,8 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    lake_source
-                        .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
+                    let result = lake_source
+                        .alter_table(ctx, &location, storage_operation, Some(lakehouse_table))
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -510,8 +509,10 @@ impl CatalogCommand {
                     // catalog. Surface catalog sync failures so callers do not
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
-                    let catalog_options = catalog_sync_alter_options(&format, &options)?;
-                    manager.alter_table(&table, catalog_options).await?;
+                    if !result.catalog_updated {
+                        let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                        manager.alter_table(&table, catalog_options).await?;
+                    }
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }
 
@@ -791,6 +792,34 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         context.as_deref().cloned(),
     )
     .await?;
+    if options.columns.is_empty() {
+        if let Some(schema) = metadata.schema {
+            options.columns = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let features =
+                        sail_common_datafusion::column_features::ColumnFeatures::from_field(field);
+                    crate::provider::CreateTableColumnOptions {
+                        name: field.name().clone(),
+                        data_type: field.data_type().clone(),
+                        nullable: field.is_nullable(),
+                        comment: field
+                            .metadata()
+                            .get("comment")
+                            .or_else(|| field.metadata().get("doc"))
+                            .cloned(),
+                        default: features.current_default(),
+                        generated_always_as: features.generation_expression(),
+                        identity: features.identity(),
+                    }
+                })
+                .collect();
+        }
+        if let Some(partition_by) = metadata.partition_by {
+            options.partition_by = partition_by;
+        }
+    }
     options.properties.extend(metadata.properties);
     Ok(Some((options, create_plan)))
 }
@@ -1020,6 +1049,13 @@ fn catalog_sync_alter_options(
     options: &AlterTableOptions,
 ) -> CatalogResult<AlterTableOptions> {
     match options {
+        AlterTableOptions::UnsetTableProperties { keys, .. } => {
+            // Existence was checked against the format metadata before committing.
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: keys.clone(),
+                if_exists: true,
+            })
+        }
         AlterTableOptions::AddCheckConstraint { name, expression } => {
             if !format.eq_ignore_ascii_case("delta") {
                 return Err(CatalogError::NotSupported(format!(
@@ -1336,12 +1372,13 @@ mod tests {
     impl LakeSource for TestLakeSource {
         async fn alter_table(
             &self,
-            _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+            _ctx: &datafusion::execution::TaskContext,
             _path: &str,
             _operation: LakeSourceAlterTableOperation,
             _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-        ) -> datafusion_common::Result<()> {
-            Ok(())
+        ) -> datafusion_common::Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult>
+        {
+            Ok(Default::default())
         }
     }
 
@@ -1478,7 +1515,7 @@ mod tests {
             },
         };
 
-        let result = command.execute(&ctx, &manager).await;
+        let result = command.execute(ctx.task_ctx().as_ref(), &manager).await;
         assert!(
             result.is_err(),
             "expected catalog sync failure, got success: {result:?}"

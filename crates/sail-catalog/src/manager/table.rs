@@ -159,6 +159,15 @@ impl CatalogManager {
         provider.drop_table(&database, &table, options).await
     }
 
+    pub fn validate_alter_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: &AlterTableOptions,
+    ) -> CatalogResult<()> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        provider.validate_alter_table(options)
+    }
+
     pub async fn alter_table<T: AsRef<str>>(
         &self,
         table: &[T],
@@ -166,6 +175,17 @@ impl CatalogManager {
     ) -> CatalogResult<()> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.alter_table(&database, &table, options).await
+    }
+
+    pub async fn alter_table_atomically<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .alter_table_atomically(&database, &table, options)
+            .await
     }
 
     pub async fn commit_lakehouse_table<T: AsRef<str>>(

@@ -265,6 +265,10 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_table: {e}")))?
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        self.inner.validate_alter_table(options)
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -278,6 +282,27 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.alter_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .alter_table_atomically(&database, &table, options)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute alter_table_atomically: {e}"))
+            })?
     }
 
     async fn create_view(
