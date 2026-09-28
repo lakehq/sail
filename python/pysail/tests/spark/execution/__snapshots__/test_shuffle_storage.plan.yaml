@@ -354,6 +354,9 @@ data:
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
 

@@ -85,44 +85,36 @@ fn rewrite(plan: Arc<dyn ExecutionPlan>, config: &ConfigOptions) -> Result<Arc<d
     if let Some(exchange) = plan.downcast_ref::<RepartitionExec>()
         && matches!(exchange.partitioning(), Partitioning::RoundRobinBatch(_))
         && !exchange.preserve_order()
-        && scan_row_upper_bound(exchange.input())
-            .is_some_and(|rows| rows <= config.execution.batch_size.get() as u64)
+        && scan_partition_count(exchange.input())
+            .is_some_and(|count| count <= exchange.partitioning().partition_count())
     {
-        // ExplicitRepartitionExec is intentionally not matched. A raw source
-        // count bounds filters/projections without making filtered stats exact.
+        // ExplicitRepartitionExec is intentionally not matched. Preserve the
+        // scan's row-group parallelism even when it produces multiple batches,
+        // without making filtered statistics exact.
         return Ok(Arc::clone(exchange.input()));
     }
     Ok(plan)
 }
 
-fn scan_row_upper_bound(plan: &Arc<dyn ExecutionPlan>) -> Option<u64> {
+fn scan_partition_count(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     if plan.is::<FilterExec>() || plan.is::<ProjectionExec>() || plan.is::<CooperativeExec>() {
         let children = plan.children();
         let [child] = children.as_slice() else {
             return None;
         };
-        return scan_row_upper_bound(child);
+        return scan_partition_count(child);
     }
     let source = plan.downcast_ref::<DataSourceExec>()?;
     let scan = source.data_source().downcast_ref::<FileScanConfig>()?;
     if !scan.file_source.is::<ParquetSource>() {
         return None;
     }
+    // Only apply this to scans with row-group planning metadata.
     scan.file_groups
         .iter()
         .flat_map(FileGroup::iter)
-        .try_fold(0u64, |total, file| {
-            let metadata = file.extensions.get::<ParquetScanMetadata>()?;
-            metadata
-                .row_groups
-                .iter()
-                .filter(|group| {
-                    file.range
-                        .as_ref()
-                        .is_none_or(|range| range.contains(group.offset))
-                })
-                .try_fold(total, |total, group| total.checked_add(group.num_rows))
-        })
+        .all(|file| file.extensions.get::<ParquetScanMetadata>().is_some())
+        .then_some(plan.output_partitioning().partition_count())
 }
 
 fn repartition_row_groups(scan: &FileScanConfig, min_size: usize) -> Option<Vec<FileGroup>> {

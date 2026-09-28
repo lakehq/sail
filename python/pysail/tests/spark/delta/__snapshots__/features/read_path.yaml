@@ -290,6 +290,9 @@ data:
                       DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_metadata/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
 
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
 
