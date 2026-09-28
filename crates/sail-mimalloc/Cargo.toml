@@ -1,0 +1,13 @@
+[package]
+name = "sail-mimalloc"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[features]
+local-dynamic-tls = ["rustfs-mimalloc-sys/local_dynamic_tls"]
+
+[dependencies]
+rustfs-mimalloc-sys = { workspace = true }
