@@ -29,25 +29,25 @@ data:
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[0]
   limit_3: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=3, step=1, num_partitions=1, projection=[0]
   limit_past_end: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=3, step=1, num_partitions=1, projection=[0]
   offset: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[0]
   offset_past_end: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
@@ -68,19 +68,19 @@ data:
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[0]
   limit_3: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=3, step=1, num_partitions=1, projection=[0]
   offset: |-
     == Physical Plan ==
     ProjectionExec: expr=[]
       ProjectionExec: expr=[]
         CooperativeExec
-          RangeExec
+          RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[0]
 ---
 name: "test_empty_projection_reads_unknown_files_when_counts_are_insufficient"
 data:

@@ -1,229 +1,40 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use datafusion_expr::Expr;
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::catalog::Session;
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
-
-use crate::datasource::pruning::{PartitionFilter, prune_files};
-use crate::spec::transform::Transform;
-use crate::spec::types::{PrimitiveType, Type};
-use crate::spec::{DataFile, Datum, Literal, PartitionSpec, Schema};
+use crate::datasource::predicate::Predicate;
+use crate::spec::{DataFile, PartitionSpec, Schema};
 
 pub(crate) struct CopyOnWriteFileSelection {
     pub candidates: Vec<(DataFile, i64)>,
     pub all_rows_match: bool,
 }
 
-/// Select whole files. Row predicates must remain above the scan so that
-/// survivors and original positions are available to the rewrite.
+/// Rewrites need every surviving row of a candidate file. Metadata removal
+/// requires proof that neither FALSE nor NULL is possible in any candidate.
 pub(crate) fn select_copy_on_write_files(
-    session: &dyn Session,
     predicate: &Expr,
-    arrow_schema: Arc<ArrowSchema>,
     schema: &Schema,
     specs: &[PartitionSpec],
     files: Vec<(DataFile, i64)>,
-) -> Result<CopyOnWriteFileSelection> {
-    let survivors = non_matching_rows(predicate);
-    let partition_filters = specs
-        .iter()
-        .map(|spec| {
-            (
-                spec.spec_id(),
-                (
-                    PartitionFilter::new(schema, spec, predicate),
-                    PartitionFilter::new(schema, spec, &survivors),
-                ),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    let files = files
+) -> CopyOnWriteFileSelection {
+    let predicate = Predicate::new(schema, predicate);
+    let mut all_rows_match = true;
+    let candidates = files
         .into_iter()
         .filter(|(file, _)| {
-            partition_filters
-                .get(&file.partition_spec_id)
-                .is_none_or(|(matches, _)| matches.may_match(&file.partition))
+            let spec = specs
+                .iter()
+                .find(|spec| spec.spec_id() == file.partition_spec_id);
+            let truth = predicate.file(file, spec);
+            if !truth.may_match() {
+                return false;
+            }
+            all_rows_match &= truth.all_match();
+            true
         })
-        .collect::<Vec<_>>();
-    let statistics = files
-        .iter()
-        .map(|(file, _)| file_statistics(file, schema, specs))
-        .collect::<Vec<_>>();
-    let filters = split_conjunction(predicate)
-        .into_iter()
-        .filter(|expr| can_prune(expr))
-        .cloned()
-        .collect::<Vec<_>>();
-    let (candidates, _) = prune_files(
-        session,
-        &filters,
-        None,
-        Arc::clone(&arrow_schema),
-        statistics,
-        schema,
-    )?;
-    let (possible_survivors, _) = prune_files(
-        session,
-        &[survivors],
-        None,
-        arrow_schema,
-        candidates
-            .iter()
-            .filter(|file| {
-                partition_filters
-                    .get(&file.partition_spec_id)
-                    .is_none_or(|(_, survivors)| survivors.may_match(&file.partition))
-            })
-            .cloned()
-            .collect(),
-        schema,
-    )?;
-    let paths = candidates
-        .iter()
-        .map(|file| file.file_path.as_str())
-        .collect::<HashSet<_>>();
-    Ok(CopyOnWriteFileSelection {
-        candidates: files
-            .into_iter()
-            .filter(|(file, _)| paths.contains(file.file_path.as_str()))
-            .collect(),
-        all_rows_match: possible_survivors.is_empty(),
-    })
-}
-
-fn file_statistics(file: &DataFile, schema: &Schema, specs: &[PartitionSpec]) -> DataFile {
-    let mut statistics = file.clone();
-    // Bounds omit NaNs, so they cannot bound a floating column unless the
-    // file explicitly establishes that no NaNs occur.
-    for field in schema.fields() {
-        if matches!(
-            field.field_type.as_ref(),
-            Type::Primitive(PrimitiveType::Float | PrimitiveType::Double)
-        ) && file.nan_value_counts.get(&field.id) != Some(&0)
-        {
-            statistics.lower_bounds.remove(&field.id);
-            statistics.upper_bounds.remove(&field.id);
-        }
-    }
-    if let Some(spec) = specs
-        .iter()
-        .find(|spec| spec.spec_id() == file.partition_spec_id)
-    {
-        for (partition, value) in spec.fields().iter().zip(&file.partition) {
-            if partition.transform != Transform::Identity {
-                continue;
-            }
-            let Some(field) = schema.field_by_id(partition.source_id) else {
-                continue;
-            };
-            let Type::Primitive(primitive) = field.field_type.as_ref() else {
-                continue;
-            };
-            if matches!(primitive, PrimitiveType::Float | PrimitiveType::Double) {
-                continue;
-            }
-            match value {
-                Some(Literal::Primitive(value)) => {
-                    let datum = Datum {
-                        r#type: primitive.clone(),
-                        literal: value.clone(),
-                    };
-                    statistics.lower_bounds.insert(field.id, datum.clone());
-                    statistics.upper_bounds.insert(field.id, datum);
-                    statistics.null_value_counts.insert(field.id, 0);
-                }
-                None => {
-                    statistics.lower_bounds.remove(&field.id);
-                    statistics.upper_bounds.remove(&field.id);
-                    statistics
-                        .null_value_counts
-                        .insert(field.id, file.record_count);
-                }
-                _ => {}
-            }
-        }
-    }
-    statistics
-}
-
-pub(crate) fn can_prune(expr: &Expr) -> bool {
-    match expr {
-        Expr::Column(_) | Expr::Literal(_, _) => true,
-        Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::And | Operator::Or,
-            right,
-        }) => can_prune(left) && can_prune(right),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if op.negate().is_some() => {
-            matches!(
-                (left.as_ref(), right.as_ref()),
-                (Expr::Column(_), Expr::Literal(_, _)) | (Expr::Literal(_, _), Expr::Column(_))
-            )
-        }
-        Expr::IsNull(value) | Expr::IsNotNull(value) => matches!(value.as_ref(), Expr::Column(_)),
-        Expr::InList(list) => {
-            matches!(list.expr.as_ref(), Expr::Column(_))
-                && list
-                    .list
-                    .iter()
-                    .all(|value| matches!(value, Expr::Literal(_, _)))
-        }
-        _ => false,
-    }
-}
-
-/// An inclusive predicate for rows that are FALSE or UNKNOWN. Pruning every
-/// such row proves a metadata-only delete; missing evidence must keep files.
-fn non_matching_rows(expr: &Expr) -> Expr {
-    match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(value)), _) => lit(!value),
-        Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        }) => non_matching_rows(left).or(non_matching_rows(right)),
-        Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        }) => non_matching_rows(left).and(non_matching_rows(right)),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if can_prune(expr) => {
-            let (column, literal) = match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_), Expr::Literal(value, _)) => (left, value),
-                (Expr::Literal(value, _), Expr::Column(_)) => (right, value),
-                _ => return lit(true),
-            };
-            if literal.is_null() {
-                return lit(true);
-            }
-            if let Some(op) = op.negate() {
-                Expr::BinaryExpr(BinaryExpr::new(left.clone(), op, right.clone()))
-                    .or(column.as_ref().clone().is_null())
-            } else {
-                lit(true)
-            }
-        }
-        Expr::IsNull(value) if can_prune(expr) => value.as_ref().clone().is_not_null(),
-        Expr::IsNotNull(value) if can_prune(expr) => value.as_ref().clone().is_null(),
-        Expr::InList(list) if can_prune(expr) => {
-            let comparisons = list.list.iter().map(|value| {
-                let comparison = if list.negated {
-                    list.expr.as_ref().clone().not_eq(value.clone())
-                } else {
-                    list.expr.as_ref().clone().eq(value.clone())
-                };
-                non_matching_rows(&comparison)
-            });
-            if list.negated {
-                comparisons.fold(lit(false), Expr::or)
-            } else {
-                comparisons.fold(lit(true), Expr::and)
-            }
-        }
-        _ => lit(true),
+        .collect();
+    CopyOnWriteFileSelection {
+        candidates,
+        all_rows_match,
     }
 }
 
@@ -231,16 +42,20 @@ fn non_matching_rows(expr: &Expr) -> Expr {
 #[expect(clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use datafusion::arrow::array::{Int32Array, as_boolean_array};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::col;
+    use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    use datafusion_expr::{col, lit};
 
     use super::*;
     use crate::datasource::type_converter::iceberg_schema_to_arrow;
-    use crate::spec::{DataContentType, DataFileFormat, NestedField, PrimitiveLiteral};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PrimitiveLiteral,
+        PrimitiveType, Transform, Type,
+    };
 
     fn data_file(path: &str, lower: i32, upper: i32) -> DataFile {
         DataFile {
@@ -281,14 +96,12 @@ mod tests {
         specs: &[PartitionSpec],
         files: Vec<DataFile>,
     ) -> Result<CopyOnWriteFileSelection> {
-        select_copy_on_write_files(
-            &SessionContext::new().state(),
+        Ok(select_copy_on_write_files(
             &predicate,
-            Arc::new(iceberg_schema_to_arrow(schema)?),
             schema,
             specs,
             files.into_iter().map(|file| (file, 7)).collect(),
-        )
+        ))
     }
 
     fn integer_schema() -> Schema {
@@ -415,13 +228,11 @@ mod tests {
                         .into_array(batch.num_rows())?;
                     let rows = as_boolean_array(evaluated.as_ref());
                     let selected = select_copy_on_write_files(
-                        &session,
                         predicate,
-                        Arc::clone(&arrow_schema),
                         &schema,
                         &[],
                         vec![(file.clone(), 7)],
-                    )?;
+                    );
                     if selected.candidates.is_empty() {
                         assert!(
                             rows.iter().all(|value| value != Some(true)),

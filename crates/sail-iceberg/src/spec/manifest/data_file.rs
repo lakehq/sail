@@ -107,6 +107,43 @@ pub struct DataFile {
 }
 
 impl DataFile {
+    pub fn is_deletion_vector(&self) -> bool {
+        self.file_format == DataFileFormat::Puffin
+    }
+
+    pub fn validate_deletion_vector(&self) -> Result<(), String> {
+        if self.content != DataContentType::PositionDeletes
+            || self.file_format != DataFileFormat::Puffin
+            || self
+                .referenced_data_file
+                .as_ref()
+                .is_none_or(String::is_empty)
+            || !self.equality_ids.is_empty()
+        {
+            return Err(format!(
+                "Invalid Iceberg deletion vector metadata: {}",
+                self.file_path
+            ));
+        }
+        let valid_range = self
+            .content_offset
+            .zip(self.content_size_in_bytes)
+            .is_some_and(|(offset, size)| {
+                offset >= 4
+                    && size >= 20
+                    && offset
+                        .checked_add(size)
+                        .is_some_and(|end| end as u64 <= self.file_size_in_bytes)
+            });
+        if !valid_range {
+            return Err(format!(
+                "Invalid Iceberg deletion vector content range: {}",
+                self.file_path
+            ));
+        }
+        Ok(())
+    }
+
     pub fn content_type(&self) -> DataContentType {
         self.content
     }

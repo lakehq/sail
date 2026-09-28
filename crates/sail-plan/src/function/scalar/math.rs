@@ -5,7 +5,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
@@ -666,6 +666,49 @@ fn negate_literal(arg: &Expr) -> Option<Expr> {
     Some(lit(negated))
 }
 
+fn string_to_double(arg: Expr, ansi_mode: bool) -> Expr {
+    if ansi_mode {
+        cast(arg, DataType::Float64)
+    } else {
+        try_cast(arg, DataType::Float64)
+    }
+}
+
+// TODO: Spark rounds a DOUBLE via `BigDecimal(d).setScale(scale, HALF_UP)` on the shortest
+//  decimal representation, while DataFusion computes `(x * 10^scale).round() / 10^scale`,
+//  so inexact binary ties differ (e.g. `round('1.005', 2)` is 1.01 in Spark but 1.0 in Sail).
+fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    let scale = arguments.get(1).cloned().unwrap_or_else(|| lit(0));
+    // TODO: A SQL parameter marker (`:p` or `?`) is resolved as an untyped placeholder whose
+    //  value is bound after planning, so a STRING parameter is not cast here and `round(:p)`
+    //  still fails to plan, while Spark binds parameters before analysis.
+    // TODO: Resolve CASE branch coercion before checking the argument type here. Mixed
+    //  CASE expressions can expose the first branch's type instead of their final type,
+    //  and their shared coercion does not yet follow Spark's ANSI rules.
+    if let Some(value) = arguments.first_mut()
+        && matches!(
+            value.get_type(function_context.schema),
+            Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+        )
+    {
+        // Guard the string before casting so a NULL scale skips malformed literals too.
+        // TODO: Shared expression resolution raises literal division-by-zero errors before
+        //  this guard; defer those errors so a NULL scale can skip the entire value.
+        let guarded =
+            when(scale.is_null(), lit(ScalarValue::Utf8(None))).otherwise(value.clone())?;
+        // Preserve Spark's nullable result; the inner ANSI cast still propagates errors.
+        *value = try_cast(
+            string_to_double(guarded, function_context.plan_config.ansi_mode),
+            DataType::Float64,
+        );
+    }
+    Ok(expr_fn::round(arguments))
+}
+
 /// Spark unary minus / `negative(x)`. Duration negation goes through
 /// `NegateDuration`; everything else uses `SparkNegative`, which honors the ANSI
 /// overflow semantics with `ansi_mode` baked at planning time.
@@ -679,12 +722,8 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         // errors under ANSI on. (Without this, the `SparkNegative` signature
         // would coerce the string to an interval instead.)
         Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            let casted = if ansi_mode {
-                cast(arg, DataType::Float64)
-            } else {
-                try_cast(arg, DataType::Float64)
-            };
-            ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![casted])
+            ScalarUDF::from(SparkNegative::new(ansi_mode))
+                .call(vec![string_to_double(arg, ansi_mode)])
         }
         // Floating-point negation never overflows and is identical in both ANSI
         // modes, so use the native (vectorized, foldable) operator.
@@ -770,7 +809,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
-        ("round", F::var_arg(expr_fn::round)),
+        ("round", F::custom(spark_round)),
         ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),

@@ -169,10 +169,8 @@ Feature: btrim function
         | true  |
         | false |
 
-  Rule: Deferred shared numeric formatting parity
+  Rule: Shared numeric formatting parity
 
-    # TODO: Use Java-compatible scientific notation in the shared floating point formatter.
-    @sail-bug
     Scenario Outline: btrim formats floating point exponents like Spark with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query

@@ -185,6 +185,7 @@ impl IcebergWriterExecOptions {
         };
         Ok(WriterProperties::builder()
             .set_compression(compression)
+            .set_statistics_truncate_length(None)
             .set_max_row_group_bytes(Some(positive(
                 "write.parquet.row-group-size-bytes",
                 128 * 1024 * 1024,

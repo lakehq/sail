@@ -82,8 +82,11 @@ def test_list_offset_widths_preserve_values_and_field_ids(spark, sql_catalog, tm
         sql_catalog.drop_table(identifier)
 
 
-@pytest.mark.parametrize(("format_version", "with_deletes"), [(2, False), (2, True), (3, False)])
-def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, tmp_path, format_version, with_deletes):
+@pytest.mark.parametrize(
+    ("format_version", "delete_kind"),
+    [(2, None), (2, "equality"), (2, "position"), (3, None), (3, "position")],
+)
+def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, tmp_path, format_version, delete_kind):
     from pyiceberg.manifest import DataFile, DataFileContent, FileFormat, ManifestContent
     from pyiceberg.partitioning import PartitionField, PartitionSpec
     from pyiceberg.transforms import IdentityTransform
@@ -129,16 +132,22 @@ def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, t
         with table.update_schema() as update:
             update.rename_column("p", "part")
         path = _local_file_path(table.location())
-        if with_deletes:
+        if delete_kind == "equality":
             _append_equality_delete_snapshot(table, pa.table({"id": [5]}), [1], partition=Record(None))
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
         if format_version == 3:  # noqa: PLR2004
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
-        expected = [(1, "x", 10), (2, "x", 20), (3, "y", 30), (4, None, 40)]
-        if not with_deletes:
-            expected.append((5, None, 50))
+        if delete_kind == "position":
+            spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('write.merge.mode'='merge-on-read')")
+            spark.sql(f"""MERGE INTO {name} t USING (SELECT * FROM VALUES (2L), (5L) AS s(id)) s
+                          ON t.id = s.id WHEN MATCHED THEN DELETE""").collect()  # noqa: S608
+            deletes = _current_manifest_entries(path, ManifestContent.DELETES)
+            assert deletes
+            assert all(entry.data_file.content == DataFileContent.POSITION_DELETES for entry in deletes)
+        removed = {2, 5} if delete_kind == "position" else {5} if delete_kind == "equality" else set()
+        expected = [(i, p, i * 10) for i, p in [(1, "x"), (2, "x"), (3, "y"), (4, None), (5, None)] if i not in removed]
         for metadata_as_data in [False, True]:
-            if with_deletes and metadata_as_data:
+            if delete_kind is not None and metadata_as_data:
                 continue
             frame = (
                 spark.read.format("iceberg")
@@ -147,8 +156,10 @@ def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, t
                 .select("id", "part", "value")
             )
             assert [tuple(row) for row in frame.orderBy("id").collect()] == expected
-            assert [row.id for row in frame.filter("part = 'x'").orderBy("id").collect()] == [1, 2]
-            assert frame.filter("part IS NULL").count() == (1 if with_deletes else 2)
+            assert [row.id for row in frame.filter("part = 'x'").orderBy("id").collect()] == [
+                i for i in (1, 2) if i not in removed
+            ]
+            assert frame.filter("part IS NULL").count() == (1 if delete_kind is not None else 2)
             assert frame.limit(1).count() == 1
         before = _find_latest_metadata(path)
         spark.sql(f"UPDATE {name} SET value = value + 1 WHERE id IN (1, 4)").collect()  # noqa: S608

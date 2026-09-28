@@ -93,8 +93,16 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
     assert _application_shuffle_ids(celeborn_master, session_id) == []
 
     with ThreadPoolExecutor(max_workers=1) as executor:
+        # Sum needs the range values even when its row count is known exactly.
         result = executor.submit(
-            lambda: spark.range(2).repartition(2).groupBy().count().select(identity("count").alias("count")).collect()
+            lambda: (
+                spark.range(2)
+                .repartition(2)
+                .groupBy()
+                .agg(F.sum("id").alias("total"))
+                .select(identity("total").alias("total"))
+                .collect()
+            )
         )
         deadline = time.monotonic() + 2
         while not (shuffle_ids := _application_shuffle_ids(celeborn_master, session_id)):
@@ -103,7 +111,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
             time.sleep(0.05)
 
         assert shuffle_ids, "the shuffle was never registered with the Celeborn master"
-        assert result.result() == [Row(count=2)]
+        assert result.result() == [Row(total=1)]
 
     deadline = time.monotonic() + 5
     while shuffle_ids := _application_shuffle_ids(celeborn_master, session_id):

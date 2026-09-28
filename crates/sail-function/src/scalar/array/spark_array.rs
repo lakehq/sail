@@ -194,11 +194,14 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
         DataType::Null => {
             let length = arrays.iter().map(|a| a.len()).sum();
             let array = new_null_array(&DataType::Null, length);
-            Ok(Arc::new(
-                SingleRowListArrayBuilder::new(array)
-                    .with_nullable(value_nullable)
-                    .build_list_array(),
-            ))
+            let offsets =
+                OffsetBuffer::from_lengths(std::iter::repeat_n(arrays.len(), arrays[0].len()));
+            Ok(Arc::new(GenericListArray::<i32>::try_new(
+                Arc::new(Field::new_list_field(DataType::Null, value_nullable)),
+                offsets,
+                array,
+                None,
+            )?))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
         _ => array_array::<i32>(arrays, data_type, value_nullable),

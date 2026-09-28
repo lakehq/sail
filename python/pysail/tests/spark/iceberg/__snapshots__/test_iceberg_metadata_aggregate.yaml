@@ -1,0 +1,375 @@
+# serializer version: 1
+---
+name: "test_added_column_does_not_inherit_metrics_from_existing_fields"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as rows, #3@1 as present, #4@2 as minimum, #5@3 as maximum]
+      ProjectionExec: expr=[2 as #2, __sail_residual_aggregate_1@0 as #3, __sail_residual_aggregate_2@1 as #4, __sail_residual_aggregate_3@2 as #5]
+        AggregateExec: mode=Single, gby=[], aggr=[count(?table?.#1) as __sail_residual_aggregate_1, min(?table?.#1) as __sail_residual_aggregate_2, max(?table?.#1) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/old_schema.parquet]]}, projection=[added@1 as #1], file_type=parquet
+---
+name: "test_aggregate_results_with_incomplete_metrics[complete]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_aggregate_results_with_incomplete_metrics[missing-bounds]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, __sail_residual_aggregate_2@0 as #3, __sail_residual_aggregate_3@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_2, max(?table?.#0) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/first.parquet, <tmp>/second.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_aggregate_results_with_incomplete_metrics[missing-max]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, 2 as #3, __sail_residual_aggregate_3@0 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[max(?table?.#0) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/first.parquet, <tmp>/second.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_aggregate_results_with_incomplete_metrics[missing-min]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, __sail_residual_aggregate_2@0 as #3, 10 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/first.parquet, <tmp>/second.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_aggregate_results_with_incomplete_metrics[missing-nulls]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, __sail_residual_aggregate_1@0 as #2, 2 as #3, 10 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[count(?table?.#0) as __sail_residual_aggregate_1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/first.parquet, <tmp>/second.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_aggregate_results_with_incomplete_metrics[missing-values]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_aggregate_results_with_incomplete_metrics[no-metrics]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, __sail_residual_aggregate_1@0 as #2, __sail_residual_aggregate_2@1 as #3, __sail_residual_aggregate_3@2 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[count(?table?.#0) as __sail_residual_aggregate_1, min(?table?.#0) as __sail_residual_aggregate_2, max(?table?.#0) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/first.parquet, <tmp>/second.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_aggregates_apply_equality_deletes"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[count(Int64(1))@0 as #1, count(?table?.#0)@1 as #2, min(?table?.#0)@2 as #3, max(?table?.#0)@3 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(?table?.#0), min(?table?.#0), max(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(?table?.#0), min(?table?.#0), max(?table?.#0)]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[v@0 as #0]
+                  IcebergDeleteApplyExec: data_file=file://<tmp>/data.parquet, pos_deletes=0, eq_deletes=1
+                    DataSourceExec: file_groups={1 group: [[<tmp>/data.parquet]]}, projection=[v], output_partitioning=UnknownPartitioning(1), file_type=parquet
+---
+name: "test_aggregates_apply_position_deletes"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[count(Int64(1))@0 as #1, count(metadata_agg_positions.#0)@1 as #2, min(metadata_agg_positions.#0)@2 as #3, max(metadata_agg_positions.#0)@3 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(metadata_agg_positions.#0), min(metadata_agg_positions.#0), max(metadata_agg_positions.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(metadata_agg_positions.#0), min(metadata_agg_positions.#0), max(metadata_agg_positions.#0)]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[v@0 as #0]
+                  IcebergDeleteApplyExec: data_file=file://<tmp>/position_deletes/data/part-<uuid>.parquet, pos_deletes=1, eq_deletes=0
+                    DataSourceExec: file_groups={1 group: [[<tmp>/position_deletes/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[v], output_partitioning=UnknownPartitioning(1), file_type=parquet
+---
+name: "test_constant_file_cast_overflow_preserves_null_counts"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as present]
+      ProjectionExec: expr=[count(?table?.#0)@0 as #1]
+        AggregateExec: mode=Single, gby=[], aggr=[count(?table?.#0)]
+          ProjectionExec: expr=[v@0 as #0]
+            IcebergMetadataScanExec
+              ProjectionExec: expr=[128 as v]
+                CooperativeExec
+                  RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_cast_overflow_preserves_null_counts.1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, __sail_residual_aggregate_1@0 as #2, __sail_residual_aggregate_2@1 as #3, __sail_residual_aggregate_3@2 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[count(?table?.#0) as __sail_residual_aggregate_1, min(?table?.#0) as __sail_residual_aggregate_2, max(?table?.#0) as __sail_residual_aggregate_3]
+          ProjectionExec: expr=[TRY_CAST(v@0 AS Int8) as __common_expr_1]
+            IcebergMetadataScanExec
+              ProjectionExec: expr=[128 as v]
+                CooperativeExec
+                  RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[non-null]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as minimum, #2@1 as maximum]
+      ProjectionExec: expr=[min(?table?.#0)@0 as #1, max(?table?.#0)@1 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#0), max(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#0), max(?table?.#0)]
+              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[2 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[3 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[10 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[non-null].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as present]
+      ProjectionExec: expr=[count(?table?.#0)@0 as #1]
+        AggregateExec: mode=Final, gby=[], aggr=[count(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(?table?.#0)]
+              ProjectionExec: expr=[v@0 as #0]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[2 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[3 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[10 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[non-null].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as minimum, #3@2 as maximum]
+      ProjectionExec: expr=[6 as #1, __sail_residual_aggregate_1@0 as #2, __sail_residual_aggregate_2@1 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[2 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[3 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[10 as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[null-file]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as minimum, #2@1 as maximum]
+      ProjectionExec: expr=[min(?table?.#0)@0 as #1, max(?table?.#0)@1 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#0), max(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#0), max(?table?.#0)]
+              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[NULL as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[null-file].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as present]
+      ProjectionExec: expr=[count(?table?.#0)@0 as #1]
+        AggregateExec: mode=Final, gby=[], aggr=[count(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(?table?.#0)]
+              ProjectionExec: expr=[v@0 as #0]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[NULL as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_constant_file_casts_preserve_lexical_order[null-file].2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as minimum, #3@2 as maximum]
+      ProjectionExec: expr=[8 as #1, __sail_residual_aggregate_1@0 as #2, __sail_residual_aggregate_2@1 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
+                IcebergMetadataScanExec
+                  UnionExec
+                    ProjectionExec: expr=[NULL as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                      RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
+---
+name: "test_decimal_metadata_preserves_integer_precision[aggregate_table0]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 2 as #2, 9007199254740993 as #3, 9007199254740995 as #4]
+        PlaceholderRowExec
+---
+name: "test_disjoint_delete_metrics_allow_exact_aggregation"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 2 as #2, 2 as #3, 3 as #4]
+        PlaceholderRowExec
+---
+name: "test_float_extrema_require_complete_nan_metrics[missing-aggregate_table0]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as minimum, #3@2 as nan_max]
+      ProjectionExec: expr=[2 as #1, __sail_residual_aggregate_1@0 as #2, isnan(__sail_residual_aggregate_2@1) as #3]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/floating.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_float_extrema_require_complete_nan_metrics[positive-aggregate_table0]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as minimum, #3@2 as nan_max]
+      ProjectionExec: expr=[2 as #1, __sail_residual_aggregate_1@0 as #2, isnan(__sail_residual_aggregate_2@1) as #3]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_1, max(?table?.#0) as __sail_residual_aggregate_2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/floating.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_float_extrema_require_complete_nan_metrics[zero-aggregate_table0]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as minimum, #3@2 as nan_max]
+      ProjectionExec: expr=[2 as #1, 1 as #2, isnan(3) as #3]
+        PlaceholderRowExec
+---
+name: "test_null_files_do_not_require_bounds_or_data_reads[False]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 2 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_null_files_do_not_require_bounds_or_data_reads[True]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 0 as #2, NULL as #3, NULL as #4]
+        PlaceholderRowExec
+---
+name: "test_partition_evolution_uses_each_files_spec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 2 as #2, 20 as #3, 20 as #4]
+        PlaceholderRowExec
+---
+name: "test_partition_evolution_uses_each_files_spec.1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[count(Int64(1))@0 as #1, count(?table?.#0)@1 as #2, min(?table?.#0)@2 as #3, max(?table?.#0)@3 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(?table?.#0), min(?table?.#0), max(?table?.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(?table?.#0), min(?table?.#0), max(?table?.#0)]
+              ProjectionExec: expr=[v@0 as #0]
+                FilterExec: v@0 = 3
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    DataSourceExec: file_groups={1 group: [[<tmp>/unpartitioned.parquet]]}, projection=[v], file_type=parquet, predicate=v@0 = 3, pruning_predicate=v_null_count@2 != row_count@3 AND v_min@0 <= 3 AND 3 <= v_max@1, required_guarantees=[v in (3)]
+---
+name: "test_schema_evolution_resolves_metrics_by_field_id[promote-int]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[3 as #1, 2 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_schema_evolution_resolves_metrics_by_field_id[rename-int]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[3 as #1, 2 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_snapshot_selection_pins_aggregate_statistics"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 1 as #2, 2 as #3, 2 as #4]
+        PlaceholderRowExec
+---
+name: "test_snapshot_selection_pins_aggregate_statistics.1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[4 as #1, 3 as #2, 2 as #3, 10 as #4]
+        PlaceholderRowExec
+---
+name: "test_truncated_bounds_cannot_replace_extrema[binary]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 2 as #2, __sail_residual_aggregate_2@0 as #3, __sail_residual_aggregate_3@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_2, max(?table?.#0) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/truncated.parquet]]}, projection=[v@0 as #0], file_type=parquet
+---
+name: "test_truncated_bounds_cannot_replace_extrema[string]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as rows, #2@1 as present, #3@2 as minimum, #4@3 as maximum]
+      ProjectionExec: expr=[2 as #1, 2 as #2, __sail_residual_aggregate_2@0 as #3, __sail_residual_aggregate_3@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(?table?.#0) as __sail_residual_aggregate_2, max(?table?.#0) as __sail_residual_aggregate_3]
+          DataSourceExec: file_groups={1 group: [[<tmp>/truncated.parquet]]}, projection=[v@0 as #0], file_type=parquet

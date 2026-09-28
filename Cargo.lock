@@ -962,15 +962,14 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c054752dd9e4dc73d0b75748c99ac2d0feafbf2f25c7b0516f03a3534161223"
+checksum = "3fbf162725183ec0df77a9dc82ce22d9ba0b6ea7f376e8ec4f6b695727c70698"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api-macros",
  "aws-smithy-types",
  "bytes",
- "http 0.2.12",
  "http 1.5.0",
  "pin-project-lite",
  "tokio",
@@ -1002,9 +1001,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.6.3"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f94d16e797ec62cd999fc9d5942b48fa7050c3093ddadff48e4d7528d16fcb9"
+checksum = "16ecf7989e381d0cbb7ca06104140d940bf38d8eb9004bd3a12d23df03e3d363"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -1410,9 +1409,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.0"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1518,9 +1517,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.6"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
+checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1528,9 +1527,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.6"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
+checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1540,9 +1539,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.4"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061"
+checksum = "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3082,7 +3081,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3125,7 +3124,7 @@ dependencies = [
  "fastrace-macro",
  "parking_lot",
  "pin-project",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rtrb",
  "serde",
 ]
@@ -3200,9 +3199,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.9"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "fixed_decimal"
@@ -4600,7 +4599,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4957,15 +4956,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "libredox"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5207,15 +5197,6 @@ dependencies = [
  "paste",
  "rustc-hash 2.1.3",
  "tokio",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
@@ -5623,7 +5604,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "quick-xml",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest 0.12.28",
  "ring",
  "rustls-pki-types",
@@ -6705,7 +6686,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash 2.1.3",
@@ -6729,7 +6710,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6792,9 +6773,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -6863,7 +6844,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -7260,6 +7241,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfs-mimalloc-sys"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e6571957abe93757f0c6dd99182589054ace7da4102af4296ffcc8297eb3524"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7282,7 +7272,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7554,12 +7544,12 @@ version = "0.7.1"
 dependencies = [
  "clap",
  "log",
- "mimalloc",
  "pyo3",
  "rustls",
  "sail-common",
  "sail-execution",
  "sail-flight",
+ "sail-mimalloc",
  "sail-session",
  "sail-spark-connect",
  "sail-telemetry",
@@ -7609,12 +7599,12 @@ dependencies = [
  "either",
  "futures",
  "lexical-core",
+ "num-bigint 0.4.8",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
  "prost",
- "ryu",
  "sail-common",
  "serde",
  "serde_arrow",
@@ -7736,6 +7726,10 @@ dependencies = [
  "datafusion-spark",
  "fastrace",
  "futures",
+ "h2",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "indexmap 2.14.2",
  "k8s-openapi",
  "kube",
@@ -7744,8 +7738,9 @@ dependencies = [
  "opentelemetry-proto",
  "prost",
  "prost-build",
- "rand 0.10.2",
+ "rand 0.10.3",
  "readonly",
+ "rustls",
  "sail-catalog",
  "sail-catalog-system",
  "sail-celeborn",
@@ -7812,7 +7807,9 @@ dependencies = [
  "aes-gcm",
  "arrow",
  "arrow-schema",
+ "async-trait",
  "base64 0.22.1",
+ "bytes",
  "cbc",
  "chrono",
  "chrono-tz",
@@ -7826,26 +7823,31 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-spark",
  "datasketches",
+ "futures",
  "half",
  "jiter",
  "lazy_static",
+ "log",
  "num",
  "ordered-float 5.5.0",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
  "percent-encoding",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_chacha 0.10.0",
  "rand_distr",
  "regex",
+ "reqwest 0.12.28",
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "url",
+ "uuid",
  "xee-xpath",
  "xot",
 ]
@@ -7873,6 +7875,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "crc32fast",
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",
@@ -7888,6 +7891,7 @@ dependencies = [
  "parquet",
  "parquet-variant",
  "parquet-variant-compute",
+ "roaring",
  "rust_decimal",
  "sail-build-scripts",
  "sail-catalog",
@@ -7897,6 +7901,7 @@ dependencies = [
  "sail-logical-plan",
  "sail-physical-plan",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_arrow",
  "serde_bytes",
@@ -7913,6 +7918,8 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "sail-logical-plan",
+ "sail-python-udf",
 ]
 
 [[package]]
@@ -7929,6 +7936,13 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-function",
+]
+
+[[package]]
+name = "sail-mimalloc"
+version = "0.7.1"
+dependencies = [
+ "rustfs-mimalloc-sys",
 ]
 
 [[package]]
@@ -7970,8 +7984,10 @@ name = "sail-physical-optimizer"
 version = "0.7.1"
 dependencies = [
  "datafusion",
+ "datafusion-datasource",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 
@@ -8024,10 +8040,9 @@ dependencies = [
  "log",
  "object_store",
  "parquet-variant-compute",
- "rand 0.10.2",
+ "rand 0.10.3",
  "regex",
  "regex-syntax 0.8.11",
- "ryu",
  "sail-cache",
  "sail-catalog",
  "sail-catalog-memory",
@@ -8068,6 +8083,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-flight",
+ "sail-mimalloc",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",
@@ -8434,7 +8450,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8998,7 +9014,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9539,7 +9555,7 @@ version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -9994,7 +10010,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

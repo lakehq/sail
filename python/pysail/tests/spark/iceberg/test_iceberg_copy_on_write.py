@@ -8,19 +8,22 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField
 
 from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata, _latest_metadata_path
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("format_version", [1, 2, 3])
-@pytest.mark.parametrize("predicate", ["part = 'A'", "id < 3", "true"])
-def test_cow_metadata_delete_does_not_read_parquet(spark, tmp_path, format_version, predicate):
+@pytest.mark.parametrize("predicate", ["part = 'A'", "id < 3", "true", None])
+@pytest.mark.parametrize("mode", ["copy-on-write", "merge-on-read"])
+def test_metadata_delete_does_not_read_parquet(spark, tmp_path, format_version, predicate, mode, snapshot):
     name = "cow_metadata_delete"
     path = tmp_path / name
     moved = []
     try:
         spark.sql(f"""CREATE TABLE {name} (id INT, part STRING) USING iceberg
             PARTITIONED BY (part) LOCATION '{path.as_uri()}'
-            TBLPROPERTIES ('format-version'='{format_version}')""")
+            TBLPROPERTIES ('format-version'='{format_version}', 'write.delete.mode'='{mode}')""")
         spark.sql(f"INSERT INTO {name} VALUES (1,'A'),(2,'A')")
         spark.sql(f"INSERT INTO {name} VALUES (3,'B'),(4,'B')")
         before = _find_latest_metadata(path)
@@ -29,11 +32,15 @@ def test_cow_metadata_delete_does_not_read_parquet(spark, tmp_path, format_versi
             file.rename(backup)
             moved.append((file, backup))
         assert moved
-        spark.sql(f"DELETE FROM {name} WHERE {predicate}").collect()
+        statement = f"DELETE FROM {name}" + (f" WHERE {predicate}" if predicate else "")
+        plan = spark.sql(f"EXPLAIN {statement}").collect()[0][0]
+        assert normalize_plan_text(plan) == snapshot
+        assert _find_latest_metadata(path) == before
+        spark.sql(statement).collect()
         for file, backup in moved:
             backup.rename(file)
         moved.clear()
-        expected = [] if predicate == "true" else [(3, "B"), (4, "B")]
+        expected = [] if predicate in ["true", None] else [(3, "B"), (4, "B")]
         assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
         after = _find_latest_metadata(path)
         assert _current_snapshot(after)["summary"]["operation"] == "delete"
@@ -212,6 +219,11 @@ def test_cow_applies_existing_equality_and_position_deletes(spark, tmp_path):
             entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DELETES)
         }
         assert len(deletes_before) == 2  # noqa: PLR2004
+        assert [tuple(row) for row in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [
+            (1, 10),
+            (5, 50),
+            (6, 60),
+        ]
         spark.sql(f"UPDATE {name} SET id = 3 WHERE id = 1").collect()
         assert [tuple(row) for row in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [
             (3, 10),

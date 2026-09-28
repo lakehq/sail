@@ -54,7 +54,100 @@ Feature: Timestamp and string predicate coercion
         """
       Then query error UNSUPPORTED_TYPED_LITERAL
 
+    Scenario: Timestamp IN uses the ANSI common type
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            IN ('2024-05-01 12:00:00.123456789') AS matched,
+          TIMESTAMP '2024-05-01 12:00:00'
+            IN ('2024-05-01 12:00:00', 1) AS mixed_matched
+        """
+      Then query result
+        | matched | mixed_matched |
+        | false   | true          |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
+        """
+      Then query result
+        | matched |
+        | 0       |
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456'
+          IN ('2024-05-01 12:00:00.123456789') AS matched
+        """
+      Then query result
+        | matched |
+        | true    |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
+        """
+      Then query result
+        | matched |
+        | 1       |
+
     @sail-bug
+    Scenario: An unaliased string literal in an IN subquery is a PARSE error
+      # Spark's `SELECT` is not a reserved keyword, so inside `IN (...)` the ANTLR grammar
+      # resolves `SELECT '<string>'` through the `inList` alternative and reads the two
+      # tokens as a typed literal (`identifier stringLit`, AstBuilder.visitTypeConstructor)
+      # rather than as a subquery projection. The result is a parse-time
+      # UNSUPPORTED_TYPED_LITERAL naming "SELECT" as the type.
+      #
+      # Sail's parser instead accepts it and evaluates it as a real subquery, returning 0 —
+      # so Sail is a strict superset of Spark's grammar here, and any test written against
+      # Sail alone reads as green.
+      #
+      # The three scenarios below are what make this discriminate. Only the FIRST is
+      # rejected: `IN (SELECT 1)` proves IN-subqueries are supported at all, and the
+      # aliased form proves the projection itself is fine — so a blanket "IN subqueries are
+      # broken" reading is ruled out, and the defect is pinned to the bare string literal.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query error Literals of the type "SELECT" are not supported
+
+    Scenario: An IN subquery over a non-string literal parses fine
+      # Control for the scenario above: an integer literal has no `identifier stringLit`
+      # reading, so the same shape parses and runs.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (1) AS t(x)
+        WHERE x IN (SELECT 1)
+        """
+      Then query result
+        | matched |
+        | 1       |
+
+    Scenario: Aliasing the string literal makes the IN subquery parse
+      # The fix, and the other control: adding the alias removes the
+      # `identifier stringLit` reading and the query behaves exactly like the in-list form.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
+        """
+      Then query result
+        | matched |
+        | 0       |
+
     Scenario: ANSI IN chooses one recursive datetime common type
       Given config spark.sql.session.timeZone = Asia/Shanghai
       And config spark.sql.ansi.enabled = true
@@ -257,6 +350,25 @@ Feature: Timestamp and string predicate coercion
         | true       | true                 | true           | true         | true                 |
 
     @sail-bug
+    Scenario: Legacy IN uses zero-padded interval strings
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          INTERVAL '1:02' HOUR TO MINUTE IN (
+            CONCAT('INTERVAL ', CHR(39), '01:02', CHR(39), ' HOUR TO MINUTE'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS literal_match,
+          v IN (
+            CONCAT('INTERVAL ', CHR(39), '01:02', CHR(39), ' HOUR TO MINUTE'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS column_match
+        FROM VALUES (INTERVAL '1:02' HOUR TO MINUTE) AS t(v)
+        """
+      Then query result
+        | literal_match | column_match |
+        | true          | true         |
+
     Scenario: Floating-point literal names use Spark-compatible rendering
       When query
         """
@@ -292,6 +404,39 @@ Feature: Timestamp and string predicate coercion
         | true          | true            |
 
     @sail-bug
+    Scenario: Legacy IN preserves interval qualifiers on nested casts
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(id AS INTERVAL DAY) IN (
+          CONCAT('INTERVAL ', CHR(39), id, CHR(39), ' DAY'),
+          TIMESTAMP '2000-01-01 00:00:00'
+        ) AS matched
+        FROM range(1, 3)
+        """
+      Then query result
+        | matched |
+        | true    |
+        | true    |
+
+    Scenario Outline: Legacy datetimeToString configuration accepts padded <value>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.typeCoercion.datetimeToString.enabled = {{ ' <value> ' }}
+      When query
+        """
+        SELECT TIMESTAMP '2024-01-01 00:00:00' > '9' AS ordering
+        """
+      Then query result
+        | ordering |
+        | <result> |
+
+      Examples:
+        | value | result |
+        | true  | false  |
+        | TrUe  | false  |
+        | false | NULL   |
+
     Scenario: Legacy datetime ordering honors datetimeToString configuration
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = false
@@ -316,6 +461,56 @@ Feature: Timestamp and string predicate coercion
       Then query result
         | timestamp_ordering | equality_still_parses |
         | false              | true                  |
+
+    Scenario Outline: Timestamp NTZ ordering parses strings with datetimeToString <enabled>
+      Given config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.typeCoercion.datetimeToString.enabled = <enabled>
+      When query
+        """
+        SELECT
+          TIMESTAMP_NTZ '2024-01-01 00:00:00' > '9' AS timestamp_first,
+          '9' < TIMESTAMP_NTZ '2024-01-01 00:00:00' AS string_first,
+          NOT (TIMESTAMP_NTZ '2024-01-01 00:00:00' > '9') AS negated,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00' >= '2024-1-1' AS valid_date
+        """
+      Then query result
+        | timestamp_first | string_first | negated | valid_date |
+        | NULL            | NULL         | NULL    | true       |
+
+      Examples:
+        | enabled |
+        | true    |
+        | false   |
+
+    @sail-only
+    Scenario: Timestamp string comparison pushes a literal predicate into Parquet
+      Given config spark.sql.session.timeZone = UTC
+      And variable location for temporary directory timestamp_predicate_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS timestamp_predicate_pushdown
+        """
+      Given statement template
+        """
+        CREATE TABLE timestamp_predicate_pushdown USING PARQUET LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (TIMESTAMP '2024-01-01 00:00:00'),
+          (TIMESTAMP '2024-01-02 00:00:00'),
+          (TIMESTAMP '2024-01-03 00:00:00') AS t(ts)
+        """
+      When query
+        """
+        EXPLAIN SELECT ts FROM timestamp_predicate_pushdown WHERE ts >= '2024-01-02 00:00:00'
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        SELECT ts FROM timestamp_predicate_pushdown WHERE ts >= '2024-01-02 00:00:00'
+        """
+      Then query result
+        | ts                  |
+        | 2024-01-02 00:00:00 |
+        | 2024-01-03 00:00:00 |
 
     @function(nullability)
     Scenario: Null-safe timestamp comparisons remain non-nullable after coercion

@@ -256,23 +256,35 @@ Feature: DataSketches functions
         """
       Then query error (UNEXPECTED_INPUT_TYPE|integer seed argument)
 
-  Rule: HLL sketches are not byte-identical to Spark
+  Rule: HLL sketch estimates
 
-    # The hash (MurmurHash3 seed 9001) matches Spark exactly and sketches are
-    # mutually readable, but Sail's `datasketches` crate serializes the LIST/SET
-    # mode compactly (vs Spark's padded form) and its dense HLL estimator diverges
-    # slightly, so the serialized bytes and the estimate differ from Spark JVM.
-
-    @sail-bug
     Scenario: hll_sketch_agg estimate matches Spark at high cardinality
       When query
         """
         SELECT hll_sketch_estimate(hll_sketch_agg(id)) AS result
-        FROM range(0, 1000)
+        FROM range(0, 1000, 1, 1)
         """
       Then query result
         | result |
         | 996    |
+
+  Rule: HLL sketches are not byte-identical to Spark
+
+    # The hash (MurmurHash3 seed 9001) matches Spark exactly and sketches are
+    # mutually readable, but Sail's `datasketches` crate serializes the LIST/SET
+    # mode compactly (vs Spark's padded form) and its merged dense HLL estimator
+    # diverges slightly, so the serialized bytes and parallel estimate differ.
+
+    @sail-bug
+    Scenario: hll_sketch_agg parallel estimate matches Spark at high cardinality
+      When query
+        """
+        SELECT hll_sketch_estimate(hll_sketch_agg(id)) AS result
+        FROM range(0, 1000, 1, 4)
+        """
+      Then query result
+        | result |
+        | 990    |
 
     @sail-bug
     Scenario: hll_sketch_agg serialized size matches Spark at low cardinality

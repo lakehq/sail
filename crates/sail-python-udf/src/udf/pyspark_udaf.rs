@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -25,10 +25,17 @@ pub enum PySparkGroupAggKind {
     Arrow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PySparkAggregateMode {
+    Grouped,
+    Window,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
     kind: PySparkGroupAggKind,
+    mode: PySparkAggregateMode,
     name: String,
     payload: Vec<u8>,
     deterministic: bool,
@@ -47,6 +54,7 @@ impl PySparkGroupAggregateUDF {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         kind: PySparkGroupAggKind,
+        mode: PySparkAggregateMode,
         name: String,
         payload: Vec<u8>,
         deterministic: bool,
@@ -66,6 +74,7 @@ impl PySparkGroupAggregateUDF {
         Self {
             signature,
             kind,
+            mode,
             name,
             payload,
             deterministic,
@@ -80,6 +89,10 @@ impl PySparkGroupAggregateUDF {
 
     pub fn kind(&self) -> PySparkGroupAggKind {
         self.kind
+    }
+
+    pub fn mode(&self) -> PySparkAggregateMode {
+        self.mode
     }
 
     pub fn actual_arg_count(&self) -> usize {
@@ -127,6 +140,21 @@ impl PySparkGroupAggregateUDF {
         })?;
         Ok(udf.clone_ref(py))
     }
+
+    fn batch_accumulator(&self) -> Result<BatchAggregateAccumulator> {
+        let udf = Python::attach(|py| self.udf(py))?;
+        let aggregator = Box::new(PySparkGroupAggregator {
+            udf,
+            output_type: self.output_type.clone(),
+            large_var_types: self.config.arrow_use_large_var_types,
+        });
+        Ok(BatchAggregateAccumulator::new(
+            self.input_types.clone(),
+            self.output_type.clone(),
+            aggregator,
+            self.actual_arg_count,
+        ))
+    }
 }
 
 impl AggregateUDFImpl for PySparkGroupAggregateUDF {
@@ -143,18 +171,15 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let udf = Python::attach(|py| self.udf(py))?;
-        let aggregator = Box::new(PySparkGroupAggregator {
-            udf,
-            output_type: self.output_type.clone(),
-            large_var_types: self.config.arrow_use_large_var_types,
-        });
-        Ok(Box::new(BatchAggregateAccumulator::new(
-            self.input_types.clone(),
-            self.output_type.clone(),
-            aggregator,
-            self.actual_arg_count,
-        )))
+        Ok(Box::new(self.batch_accumulator()?))
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        match self.mode {
+            // Optimizer defaults must not execute Python. Empty windows are evaluated at runtime.
+            PySparkAggregateMode::Grouped => ScalarValue::try_from(data_type),
+            PySparkAggregateMode::Window => self.batch_accumulator()?.evaluate(),
+        }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

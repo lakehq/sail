@@ -196,6 +196,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after extract_scalar_iterator_udf:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -518,6 +521,9 @@ data:
                                   Filter: column3 + Int32(1) > Int32(10) AND (column1 = Int32(1) OR column1 = Int32(2) OR column1 = Int32(4))
                                     Values: (Int32(1), Utf8("existing"), Int32(15), Utf8("promote")), (Int32(2), Utf8("vip"), Int32(22), Utf8("platinum")), (Int32(4), Utf8("standard"), Int32(25), Utf8("regular"))
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -705,6 +711,9 @@ data:
                                 Projection: column1 AS #4, column2 AS #5, column3 AS #6, column4 AS #7
                                   Filter: column3 + Int32(1) > Int32(10) AND (column1 = Int32(1) OR column1 = Int32(2) OR column1 = Int32(4))
                                     Values: (Int32(1), Utf8("existing"), Int32(15), Utf8("promote")), (Int32(2), Utf8("vip"), Int32(22), Utf8("platinum")), (Int32(4), Utf8("standard"), Int32(25), Utf8("regular"))
+
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -1346,6 +1355,9 @@ data:
                           DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -1603,6 +1615,9 @@ data:
                             ExplicitRepartitionExec: partitioning=Hash([CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], 4), input_partitions=2
                               DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
