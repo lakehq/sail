@@ -48,7 +48,7 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
         })
         .collect::<PlanResult<_>>()?;
-    let args = struct_field_values(&field_names, input.arguments, &input.function_context.schema);
+    let args = struct_field_values(&field_names, input.arguments, input.function_context.schema);
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func: Arc::new(ScalarUDF::from(StructFunction::new(field_names))),
         args,
@@ -79,7 +79,7 @@ fn named_struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
     match names {
         Some(names) if !names.is_empty() && !repeated(&names) => {
             let values = args.into_iter().skip(1).step_by(2).collect();
-            let values = struct_field_values(&names, values, &schema);
+            let values = struct_field_values(&names, values, schema);
             Ok(Expr::ScalarFunction(expr::ScalarFunction {
                 func: Arc::new(ScalarUDF::from(StructFunction::new(names))),
                 args: values,

@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod conversions;
+pub(crate) mod literal_serde;
 pub mod metadata;
 pub mod partition_transform;
 pub mod snapshot_id;
@@ -80,8 +81,11 @@ pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
     let is_file = url.scheme() == "file";
     let p = if is_file {
         if cfg!(windows) {
-            // On Windows, decode percent-encoding and normalize drive-letter file URLs.
-            url.to_file_path()
+            // Normalize Windows drive/UNC paths without decoding literal partition escapes.
+            let mut escaped = url.clone();
+            escaped.set_path(&url.path().replace('%', "%25"));
+            escaped
+                .to_file_path()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| url.path().to_string())
         } else {
@@ -118,4 +122,35 @@ pub fn get_object_store_from_session(
         .object_store_registry
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::Result;
+    use url::Url;
+
+    use super::url_to_object_path;
+
+    #[test]
+    fn object_paths_preserve_partition_escapes() -> Result<()> {
+        for (root, prefix) in [
+            ("file:///C:/warehouse/", "C:/warehouse/"),
+            ("file:///warehouse/", "warehouse/"),
+            ("s3://bucket/warehouse/", "warehouse/"),
+        ] {
+            for partition in [
+                "key=AQI%3D",
+                "key=%2Fw%3D%3D",
+                "key=a%2Fb",
+                "key=a%253Ab",
+                "key=a+b",
+            ] {
+                let url = Url::parse(&format!("{root}{partition}/data.parquet"))
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                let expected = format!("{prefix}{partition}/data.parquet");
+                assert_eq!(url_to_object_path(&url)?.as_ref(), expected);
+            }
+        }
+        Ok(())
+    }
 }

@@ -284,11 +284,9 @@ fn apply_timestamp_string_in_coercion(
                     list_depth,
                 )?;
                 // The name is one this coercion generated, so it is matched as it is.
-                expression = ScalarUDF::from(UpdateStructField::new(
-                    vec![unique_name.clone()],
-                    true,
-                ))
-                    .call(vec![expression, value]);
+                expression =
+                    ScalarUDF::from(UpdateStructField::new(vec![unique_name.clone()], true))
+                        .call(vec![expression, value]);
             }
 
             let DataType::Struct(updated_fields) = expression.get_type(schema.as_ref())? else {

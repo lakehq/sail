@@ -25,6 +25,7 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -216,6 +217,9 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
         }
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf { ansi_mode }) => Arc::new(
+            HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(ansi_mode)),
+        ),
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf { swapped }) => {
             if swapped {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))

@@ -36,6 +36,16 @@ use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructT
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
 pub const ICEBERG_FIELD_WRITE_DEFAULT: &str = "iceberg.field.write-default";
+const ICEBERG_ARROW_TYPE_KEY: &str = "iceberg.type";
+
+pub(crate) fn is_uuid_arrow_field(field: &ArrowField) -> bool {
+    field.data_type() == &ArrowDataType::FixedSizeBinary(16)
+        && field
+            .metadata()
+            .get(ICEBERG_ARROW_TYPE_KEY)
+            .map(String::as_str)
+            == Some("uuid")
+}
 
 pub(crate) fn iceberg_field_id(field: &ArrowField) -> Result<Option<i32>> {
     field
@@ -142,6 +152,12 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
             VariantType::NAME.to_string(),
         );
     }
+    if matches!(
+        field.field_type.as_ref(),
+        Type::Primitive(PrimitiveType::Uuid)
+    ) {
+        metadata.insert(ICEBERG_ARROW_TYPE_KEY.to_string(), "uuid".to_string());
+    }
 
     if let Some(doc) = &field.doc {
         metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
@@ -200,6 +216,8 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 );
             }
             Type::Primitive(PrimitiveType::Variant)
+        } else if is_uuid_arrow_field(field) {
+            Type::Primitive(PrimitiveType::Uuid)
         } else {
             arrow_type_to_iceberg(field.data_type())?
         };
@@ -435,7 +453,6 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
             PrimitiveType::String
         }
-        ArrowDataType::FixedSizeBinary(16) => PrimitiveType::Uuid,
         ArrowDataType::FixedSizeBinary(size) => PrimitiveType::Fixed(*size as u64),
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
@@ -610,7 +627,7 @@ mod tests {
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 PrimitiveType::TimestamptzNs,
             ),
-            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
+            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Fixed(16)),
             (ArrowDataType::FixedSizeBinary(10), PrimitiveType::Fixed(10)),
         ];
 

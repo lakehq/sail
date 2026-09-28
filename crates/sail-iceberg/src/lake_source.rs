@@ -15,7 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -43,7 +43,7 @@ use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
-use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::scan::IcebergScan;
 use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
@@ -90,8 +90,8 @@ impl DataSource for IcebergLakeSource {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
-        let provider = build_iceberg_provider(ctx, info).await?;
-        Ok(Arc::new(IcebergTableSource::new(provider)))
+        let scan = build_iceberg_scan(ctx, info).await?;
+        Ok(Arc::new(IcebergTableSource::new(scan)))
     }
 
     async fn infer_schema(
@@ -218,10 +218,7 @@ impl LakeSource for IcebergLakeSource {
         let arrow_schema = create_table_arrow_schema(columns)?;
         let mut iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)?;
         iceberg_schema = if let Some((_, metadata)) = existing_metadata.as_ref() {
-            let next_field_id = metadata.last_column_id + 1;
-            let schema =
-                SchemaEvolver::assign_schema_field_ids_starting_at(&iceberg_schema, next_field_id)?;
-            iceberg_schema_with_id(&schema, next_schema_id(metadata))?
+            SchemaEvolver::assign_replacement_schema_ids(&iceberg_schema, metadata)?
         } else {
             SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?
         };
@@ -231,7 +228,7 @@ impl LakeSource for IcebergLakeSource {
 
         let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
         if let Some((_, metadata)) = existing_metadata.as_ref() {
-            partition_spec = partition_spec.with_spec_id(next_partition_spec_id(metadata));
+            partition_spec = partition_spec.assign_ids(metadata);
         }
         let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
         let store_ctx = StoreContext::new(object_store, &table_url)?;
@@ -501,7 +498,7 @@ pub(crate) async fn plan_iceberg_write(
         })?;
         let read_options = IcebergReadOptions::resolve(ctx, vec![])?;
         table
-            .to_provider(&read_options)?
+            .new_scan(&read_options)?
             .predicate_overwrite_paths(ctx, &condition.expr)
             .await?
     } else {
@@ -703,33 +700,7 @@ impl IcebergLakeSource {
     // TODO: Add row-level UPDATE and configurable COW/MOR strategy selection.
 }
 
-/// Create an Iceberg table provider for reading.
-pub async fn create_iceberg_provider(
-    ctx: &dyn Session,
-    table_url: Url,
-    options: IcebergReadOptions,
-) -> Result<Arc<dyn TableProvider>> {
-    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None, false).await?)
-}
-
-pub async fn create_iceberg_provider_concrete(
-    ctx: &dyn Session,
-    table_url: Url,
-    options: IcebergReadOptions,
-    metadata_location: Option<String>,
-    catalog_managed_table: bool,
-) -> Result<Arc<IcebergTableProvider>> {
-    let metadata_location =
-        resolve_iceberg_metadata_location(None, metadata_location, catalog_managed_table)?;
-    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
-    let provider = table.to_provider(&options)?;
-    Ok(Arc::new(provider))
-}
-
-async fn build_iceberg_provider(
-    ctx: &dyn Session,
-    info: SourceInfo,
-) -> Result<Arc<IcebergTableProvider>> {
+async fn build_iceberg_scan(ctx: &dyn Session, info: SourceInfo) -> Result<Arc<IcebergScan>> {
     let SourceInfo {
         paths,
         lakehouse_table,
@@ -753,7 +724,7 @@ async fn build_iceberg_provider(
         catalog_managed_table,
     )?;
     let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
-    Ok(Arc::new(table.to_provider(&iceberg_options)?))
+    Ok(Arc::new(table.new_scan(&iceberg_options)?))
 }
 
 fn validate_iceberg_read_lakehouse_context(
@@ -949,34 +920,6 @@ fn create_table_partition_spec(
         );
     }
     Ok(partition_spec_builder.build())
-}
-
-fn iceberg_schema_with_id(schema: &Schema, schema_id: i32) -> Result<Schema> {
-    Schema::builder()
-        .with_schema_id(schema_id)
-        .with_fields(schema.fields().iter().cloned())
-        .build()
-        .map_err(|e| DataFusionError::Plan(format!("Failed to assign Iceberg schema id: {e}")))
-}
-
-fn next_schema_id(metadata: &TableMetadata) -> i32 {
-    metadata
-        .schemas
-        .iter()
-        .map(|schema| schema.schema_id())
-        .max()
-        .unwrap_or(0)
-        + 1
-}
-
-fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
-    metadata
-        .partition_specs
-        .iter()
-        .map(|spec| spec.spec_id())
-        .max()
-        .unwrap_or(0)
-        + 1
 }
 
 pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {

@@ -1110,7 +1110,7 @@
       parser: crate::options::parsers::parse_usize
 
 - key: write_metadata_properties
-  description: Iceberg table properties controlling metadata files and metrics collection.
+  description: Iceberg table properties controlling metadata files.
   supported: false
   rust_type: String
   scopes: [write]
@@ -1120,9 +1120,48 @@
         - write.metadata.compression-codec
         - write.metadata.previous-versions-max
         - write.metadata.delete-after-commit.enabled
-        - write.metadata.metrics.max-inferred-column-defaults
-        - write.metadata.metrics.column.
-        - write.metadata.metrics.default
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_metrics_default
+  description: Default Iceberg file metrics mode (none, counts, full, or truncate(n)).
+  default:
+    value: "truncate(16)"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.metadata.metrics.default]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_metrics_column
+  description: Iceberg file metrics mode overrides by column name, resolved from table properties.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.metadata.metrics.column.]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_metrics_max_inferred_columns
+  description: Maximum number of fields receiving inferred default metrics when no default mode is set.
+  default:
+    value: "100"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.metadata.metrics.max-inferred-column-defaults]
       case_sensitive: true
       parser: crate::options::parsers::parse_string
 

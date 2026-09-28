@@ -369,10 +369,20 @@ Feature: Data source temporary views
       | 2  | b    |
       | 4  | a    |
       | 5  | c    |
-    Given statement with error (EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE|table does not exist.*fails)
+    Given statement with error (EXPECT_TABLE_NOT_VIEW\.NO_ALTERNATIVE|\[TABLE_OR_VIEW_NOT_FOUND\].*`fails`)
       """
       INSERT INTO fails VALUES (7, 'e')
       """
+    When query template
+      """
+      SELECT * FROM parquet.`{{ insert_fail_path.string }}`
+      """
+    Then query result
+      | id | name |
+      | 1  | a    |
+      | 2  | b    |
+      | 4  | a    |
+      | 5  | c    |
 
   Scenario: SQL-only temporary data source views and related grammar pins from test_view
     Given variable view_parquet_data for temporary directory test_view_parquet_data

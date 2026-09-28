@@ -31,14 +31,15 @@ use super::utils::{
     LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
 use crate::datasource::{
-    DeltaScanConfig, PATH_COLUMN, df_logical_schema, rewrite_predicate_for_column_mapping,
+    DeltaScanConfig, PATH_COLUMN, df_logical_schema, physical_predicate_uses_struct_value,
+    rewrite_predicate_for_column_mapping,
 };
 use crate::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaDecodePath, DeltaDiscoveryExec, DeltaScanByAddsExec,
     DeltaWriterExecOptions, prepare_delta_write_context,
 };
-use crate::spec::DeltaOperation;
+use crate::spec::{ColumnMappingMode, DeltaOperation};
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
@@ -283,11 +284,20 @@ pub async fn build_delete_plan_mor(
     projection.push(scan_schema.index_of(PATH_COLUMN)?);
     projection.push(scan_schema.index_of(MERGE_ROW_INDEX_COLUMN)?);
     let scan_schema = Arc::new(scan_schema.project(&projection)?);
-    let pushdown_filter = rewrite_predicate_for_column_mapping(
-        Arc::clone(&physical_condition),
-        &table_schema,
-        snapshot_state.effective_column_mapping_mode(),
-    )?;
+    let column_mapping_mode = snapshot_state.effective_column_mapping_mode();
+    // Struct fields in the data files of column-mapped tables use physical names, so a
+    // condition using a whole struct value is only evaluated on the scan output below.
+    let pushdown_filter = if column_mapping_mode != ColumnMappingMode::None
+        && physical_predicate_uses_struct_value(&physical_condition, &table_schema)
+    {
+        None
+    } else {
+        Some(rewrite_predicate_for_column_mapping(
+            Arc::clone(&physical_condition),
+            &table_schema,
+            column_mapping_mode,
+        )?)
+    };
     let scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
         find_files,
         ctx.table_url().clone(),
@@ -297,7 +307,7 @@ pub async fn build_delete_plan_mor(
         scan_config,
         Some(projection),
         None,
-        Some(pushdown_filter),
+        pushdown_filter,
         ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));

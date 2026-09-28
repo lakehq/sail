@@ -519,17 +519,7 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query error INCOMPATIBLE_COLUMN_TYPE
 
-    @sail-bug
     Scenario: a value that does not fit the wider decimal is NULL without ANSI mode
-      # TODO: Sail raises where Spark reads the value as NULL, since a cast that overflows is an
-      #   error in Sail whatever the mode. The same query fails on `main` too.
-      #
-      #   This is not the widening of a set operation: the cast the union inserts fails the same
-      #   way when it is written by hand, so the fix belongs to the cast and not here. Measured
-      #   without ANSI mode, where Spark reads an overflow as NULL for a decimal and WRAPS it for
-      #   an integral, and Sail raises for both:
-      #     SELECT CAST(CAST(9999999999999999999 AS DECIMAL(38,0)) AS DECIMAL(38,20))  -- NULL
-      #     SELECT CAST(99999 AS TINYINT)                                              -- -97
       Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
       And config spark.sql.ansi.enabled = false
       When query
@@ -543,10 +533,7 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | NULL                   |
         | 1.50000000000000000000 |
 
-    @sail-bug
     Scenario: an integral value that does not fit the wider decimal is NULL as well
-      # TODO: the same gap as above, in the cast rather than in the widening, reached here by
-      #   widening an integral type into a decimal whose digits are all fraction.
       Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
       And config spark.sql.ansi.enabled = false
       When query

@@ -46,11 +46,11 @@ pytestmark = pytest.mark.skipif(
 #
 # TODO: the leaves still marked as Sail bugs, each group with one cause outside the set operation,
 #   where it is explained:
-#   - B23 B25 B27 C-*-dt / C-*-ym F01 F03: an interval type loses its fields in Arrow, so it
-#     renders as `INTERVAL DAY TO SECOND` where Spark writes `INTERVAL DAY`.
+#   - B25 B27 C-str-dt/ansi C-str-ym/ansi C-dt-str/ansi F01 F03: an interval type loses its fields
+#     in Arrow, so it renders as `INTERVAL DAY TO SECOND` where Spark writes `INTERVAL DAY`.
 #   - J23-J29: a column read from Parquet keeps the nullability the file declares, where Spark reads
 #     every column as nullable (`listing/source.rs`).
-#   - B15 B36: a cast is not declared nullable where it can turn a value into NULL (`cast.rs`).
+#   - B15: a cast is not declared nullable where it can turn a value into NULL (`cast.rs`).
 #   - C-abc-*: a string that is not a number fails with DataFusion's message rather than
 #     `CAST_INVALID_INPUT` (`cast.rs`).
 #   - J13 J33b: an intersection is not narrowed to where both inputs can hold NULL (`set_op.rs`).
@@ -59,7 +59,6 @@ pytestmark = pytest.mark.skipif(
 #   The intersection and the difference of a string and a day-time interval with ANSI mode are not
 #   leaves at all: Spark fails there with `INTERNAL_ERROR` ("Found the unresolved operator"), which
 #   is not a behavior to match.
-#   - B28: Spark refuses the TIME type by default.
 
 _CLASS = re.compile(r"\[([A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\]")
 
@@ -706,7 +705,7 @@ _MATRIX = [
             "rows": ["(Decimal('1'),)", "(Decimal('2'),)"],
         },
     ),  # pre-existing
-    _bug(
+    (
         "B36-tinyint-dec2_0",
         ("two", ("CAST(1 AS TINYINT) a", "CAST(2 AS DECIMAL(2,0)) a"), {}),
         False,
@@ -715,7 +714,7 @@ _MATRIX = [
             "schema": '[{"metadata": {}, "name": "a", "nullable": true, "type": "decimal(3,0)"}]',
             "rows": ["(Decimal('1'),)", "(Decimal('2'),)"],
         },
-    ),  # pre-existing
+    ),
     (
         "B37-binary-binary",
         ("two", ("X'61' a", "X'6263' a", "intersect"), {}),

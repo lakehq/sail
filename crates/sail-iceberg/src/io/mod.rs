@@ -17,7 +17,12 @@ use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use url::Url;
 
-use crate::spec::{FormatVersion, Manifest, ManifestList};
+use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
+use crate::spec::{
+    FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec,
+};
+
+pub(crate) mod deletion_vector;
 
 #[derive(Clone)]
 pub struct StoreContext {
@@ -106,4 +111,63 @@ pub async fn load_manifest(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
+}
+
+/// Build a [`DeleteFileIndex`] scoped to the current snapshot.
+pub(crate) async fn load_delete_file_index(
+    partition_specs: &[PartitionSpec],
+    format_version: FormatVersion,
+    store_ctx: &StoreContext,
+    manifest_list: &ManifestList,
+) -> datafusion_common::Result<DeleteFileIndex> {
+    let spec_map: std::collections::HashMap<i32, PartitionSpec> = partition_specs
+        .iter()
+        .map(|s| (s.spec_id(), s.clone()))
+        .collect();
+
+    let mut index = DeleteFileIndex::new();
+    for manifest_file in manifest_list
+        .entries()
+        .iter()
+        .filter(|mf| mf.content == ManifestContentType::Deletes)
+    {
+        let manifest_path_str = manifest_file.manifest_path.as_str();
+        let manifest = load_manifest(store_ctx, manifest_path_str).await?;
+        let partition_spec_id = manifest_file.partition_spec_id;
+        let is_unpartitioned = spec_map
+            .get(&partition_spec_id)
+            .map(|s| s.is_unpartitioned())
+            .unwrap_or(false);
+        let parent_seq = manifest_file.sequence_number;
+
+        for entry_ref in manifest.entries().iter() {
+            let entry = entry_ref.as_ref();
+            if !matches!(
+                entry.status,
+                ManifestStatus::Added | ManifestStatus::Existing
+            ) {
+                continue;
+            }
+            let mut df = entry.data_file.clone();
+            df.partition_spec_id = partition_spec_id;
+            let seq = entry.sequence_number.unwrap_or(parent_seq);
+            let file_ref = DeleteFileRef {
+                data_file: df,
+                data_sequence_number: seq,
+                partition_spec_id,
+                is_unpartitioned_spec: is_unpartitioned,
+            };
+            if file_ref.is_deletion_vector() && format_version != FormatVersion::V3 {
+                return datafusion_common::plan_err!(
+                    "Iceberg deletion vectors require format-version 3"
+                );
+            }
+            index.insert(file_ref).map_err(|e| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to index Iceberg delete file: {e}"
+                ))
+            })?;
+        }
+    }
+    Ok(index)
 }

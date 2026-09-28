@@ -368,7 +368,7 @@ data:
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#2), max(?table?.#2)]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                DataSourceExec: file_groups={1 group: [[<tmp>/missing_row_count_plans/part-0.parquet]]}, projection=[v@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                DataSourceExec: file_groups={1 group: [[<tmp>/missing_row_count_plans/part-0.parquet]]}, projection=[v@0 as #2], file_type=parquet
   filtered_group: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as p, #4@1 as count]
