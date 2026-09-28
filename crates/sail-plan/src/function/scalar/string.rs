@@ -509,6 +509,12 @@ fn format_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
             match argument.get_type(schema.as_ref())? {
                 DataType::Duration(TimeUnit::Microsecond) => Ok(cast(argument, DataType::Int64)),
+                // TODO: Arrow's `Interval(DayTime)` isn't handled here; see
+                // `math::rejects_unsupported_day_time_interval_operand` for why.
+                DataType::Interval(IntervalUnit::DayTime) => Err(PlanError::todo(
+                    "format_string over Arrow's Interval(DayTime) representation of a day-time \
+                     interval is not yet implemented",
+                )),
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     Ok(ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![argument]))
                 }

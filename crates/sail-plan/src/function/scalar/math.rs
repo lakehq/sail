@@ -401,6 +401,14 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.schema,
             ));
         }
+        if rejects_unsupported_day_time_interval_operand(&left_type)
+            || rejects_unsupported_day_time_interval_operand(&right_type)
+        {
+            return Err(PlanError::todo(
+                "arithmetic on Arrow's Interval(DayTime) representation of a day-time interval \
+                 is not yet implemented",
+            ));
+        }
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -587,6 +595,14 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.schema,
             ));
         }
+        if rejects_unsupported_day_time_interval_operand(&left_type)
+            || rejects_unsupported_day_time_interval_operand(&right_type)
+        {
+            return Err(PlanError::todo(
+                "arithmetic on Arrow's Interval(DayTime) representation of a day-time interval \
+                 is not yet implemented",
+            ));
+        }
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -700,6 +716,15 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
+/// Arrow's own `Interval(DayTime)` (as opposed to Sail's canonical `Duration(Microsecond)`) can
+/// reach here from foreign data. TODO: support it instead of rejecting -- casting through
+/// `Interval(MonthDayNano)` looks lossless but `cast_month_day_nano_to_duration` errors on any
+/// nonzero day count (see `tests::interval_day_time_to_month_day_nano_to_duration_only_works_for_zero_days`);
+/// a real fix needs to extract `(days, milliseconds)` and sum them directly, not chain casts.
+fn rejects_unsupported_day_time_interval_operand<E>(data_type: &Result<DataType, E>) -> bool {
+    matches!(data_type, Ok(DataType::Interval(IntervalUnit::DayTime)))
+}
+
 /// Arguments:
 ///   - left: A numeric or INTERVAL expression.
 ///   - right: A numeric expression or INTERVAL expression.
@@ -759,6 +784,14 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
             function_context.schema,
         ));
     }
+    if rejects_unsupported_day_time_interval_operand(&left_type)
+        || rejects_unsupported_day_time_interval_operand(&right_type)
+    {
+        return Err(PlanError::todo(
+            "arithmetic on Arrow's Interval(DayTime) representation of a day-time interval is \
+             not yet implemented",
+        ));
+    }
     let ansi_mode = function_context.plan_config.ansi_mode;
     let is_interval = |data_type: &Result<DataType, _>| {
         matches!(
@@ -802,6 +835,8 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // scaling its micros through DataFusion truncated the product instead of rounding it
         // HALF_UP -- `INTERVAL '0.000001' SECOND * 0.5` came back as zero where Spark answers one
         // microsecond -- so it goes through the same UDF as the year-month one.
+        // A foreign `Interval(DayTime)` operand was normalized to `Duration` above, so it takes
+        // this same arm too.
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
             ScalarUDF::from(SparkMultiplyDtInterval::new()).call(vec![left, right])
         }
@@ -919,6 +954,12 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             function_context.schema,
         ));
     }
+    if rejects_unsupported_day_time_interval_operand(&dividend_type) {
+        return Err(PlanError::todo(
+            "arithmetic on Arrow's Interval(DayTime) representation of a day-time interval is \
+             not yet implemented",
+        ));
+    }
     let divisor = match (&dividend_type, &divisor_type) {
         (
             Ok(
@@ -974,10 +1015,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal256(_, _)))
-        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
-        | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => dividend / divisor,
+        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_)) => dividend / divisor,
+        // Unreachable for `dividend_type == Duration(Microsecond)`: that case already returned
+        // above via `SparkDivideDtInterval` (which a foreign `Interval(DayTime)` dividend now
+        // reaches too, normalized to `Duration` before this match).
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
             cast(
                 cast(dividend, DataType::Int64) / divisor,
                 DataType::Duration(TimeUnit::Microsecond),
@@ -1439,6 +1481,9 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
                 None => negated,
             }
         }
+        // TODO: Arrow's `Interval(DayTime)` isn't handled here; falls through to `SparkNegative`
+        // below. See `rejects_unsupported_day_time_interval_operand` for why.
+        //
         // Spark's unary minus coerces strings to DOUBLE before negating. The
         // cast honors ANSI mode: an invalid string is NULL under ANSI off and
         // errors under ANSI on. (Without this, the `SparkNegative` signature
@@ -2946,4 +2991,37 @@ fn named_struct_type_name(operand: &Expr, schema: &DFSchemaRef) -> Option<String
         );
     }
     Some(spark_type_name(&DataType::Struct(Fields::from(fields))))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::IntervalDayTimeType;
+    use datafusion_common::ScalarValue;
+
+    use super::*;
+
+    /// Pins the `arrow-cast` limitation from `rejects_unsupported_day_time_interval_operand`:
+    /// `Interval(DayTime) -> Interval(MonthDayNano) -> Duration` only works when `days == 0`.
+    /// If the second case starts passing, arrow-cast now folds days into nanoseconds too.
+    #[test]
+    fn interval_day_time_to_month_day_nano_to_duration_only_works_for_zero_days() {
+        let zero_days = ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 500)))
+            .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
+            .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
+            .cast_to(&DataType::Duration(TimeUnit::Microsecond))
+            .expect("days == 0, so Interval(MonthDayNano) -> Duration(Microsecond) succeeds");
+        assert_eq!(zero_days, ScalarValue::DurationMicrosecond(Some(500_000)));
+
+        let nonzero_days = ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+            3, 500,
+        )))
+        .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
+        .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
+        .cast_to(&DataType::Duration(TimeUnit::Microsecond));
+        assert!(
+            nonzero_days.is_err(),
+            "expected arrow-cast to still reject a nonzero day count; if this now succeeds, \
+             Interval(DayTime) arithmetic can go through this cast chain after all"
+        );
+    }
 }

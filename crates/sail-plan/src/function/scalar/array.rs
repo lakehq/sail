@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::{
     ExprSchemable, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, cast, expr, is_null, lit, not, or,
     when,
@@ -32,6 +32,26 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
+/// Wraps a Spark force-nullable cast (`spark_cast_force_nullable`) in a `CASE WHEN true THEN
+/// <cast> END`, which DataFusion's own `Expr::Case::nullable` reports as nullable unconditionally.
+/// Patching just the cast, then delegating to the whole expression's `nullable()`, lets an
+/// enclosing `coalesce`/`case` apply its own real combinator rule instead of a blanket OR.
+fn force_nullable_casts(expr: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
+    Ok(expr
+        .transform_up(|node| {
+            let expr::Expr::Cast(cast) = &node else {
+                return Ok(Transformed::no(node));
+            };
+            let source_type = cast.expr.get_type(schema)?;
+            if spark_cast_force_nullable(&source_type, cast.field.data_type()) {
+                Ok(Transformed::yes(when(lit(true), node).end()?))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })?
+        .data)
+}
+
 fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -44,21 +64,12 @@ fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 if force {
                     return Ok(true);
                 }
-                let mut nullable = false;
-                argument.apply(|candidate| {
-                    match candidate {
-                        expr::Expr::Cast(cast) => {
-                            nullable |= spark_cast_force_nullable(
-                                &cast.expr.get_type(schema.as_ref())?,
-                                cast.field.data_type(),
-                            );
-                        }
-                        expr::Expr::TryCast(_) => nullable = true,
-                        _ => {}
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
-                Ok(nullable)
+                if argument.nullable(schema.as_ref())? {
+                    // Already nullable on its own; `SparkArray` accounts for that separately.
+                    return Ok(false);
+                }
+                let patched = force_nullable_casts(argument.clone(), schema.as_ref())?;
+                Ok(patched.nullable(schema.as_ref())?)
             })?;
     F::udf(SparkArray::new_with_force_element_nullable(
         force_element_nullable,
