@@ -234,7 +234,7 @@ RESULT_TYPES = {
     "current_date()": {"spark": "date", "sail": "date"},
     "current_path()": {"spark": "string", "sail": "<error>"},
     "current_schema()": {"spark": "string", "sail": "string"},
-    "current_time": {"spark": "time(6)", "sail": "<error>"},
+    "current_time": {"spark": "time(6)", "sail": "time(9)"},
     "current_time()": {"spark": "time(6)", "sail": "time(9)"},
     "current_time(0)": {"spark": "time(0)", "sail": "<error>"},
     "current_time(1+1)": {"spark": "time(2)", "sail": "<error>"},
