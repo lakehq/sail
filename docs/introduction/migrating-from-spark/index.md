@@ -47,7 +47,7 @@ To scan a file or directory:
 
 Run `spark-to-sail scan --help` to see what else it can do.
 
-Sail also bundles an older utility script (experimental :construction:) that scans a folder for `*.py` and `*.ipynb` files and reports the Sail support status of the PySpark functions it finds. It only checks whether functions are _implemented_ in Sail and does not read Spark SQL strings. Prefer the scanner above. The script remains for offline use after installing Sail.
+Sail also bundles a utility script (experimental :construction:) that scans a folder for `*.py` and `*.ipynb` files and reports the Sail support status of the PySpark functions it finds. It only checks whether functions are _implemented_ in Sail and does not read Spark SQL strings. Prefer the scanner above. The script remains for offline use after installing Sail.
 
 <SyntaxBlock>
   <SyntaxText
