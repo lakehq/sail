@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{
     ExprSchemable, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, cast, expr, is_null, lit, not, or,
     when,

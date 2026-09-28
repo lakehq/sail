@@ -1019,12 +1019,10 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // Unreachable for `dividend_type == Duration(Microsecond)`: that case already returned
         // above via `SparkDivideDtInterval` (which a foreign `Interval(DayTime)` dividend now
         // reaches too, normalized to `Duration` before this match).
-        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            cast(
-                cast(dividend, DataType::Int64) / divisor,
-                DataType::Duration(TimeUnit::Microsecond),
-            )
-        }
+        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => cast(
+            cast(dividend, DataType::Int64) / divisor,
+            DataType::Duration(TimeUnit::Microsecond),
+        ),
         (Ok(_), Ok(_)) => cast(dividend, DataType::Float64) / cast(divisor, DataType::Float64),
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
@@ -3012,12 +3010,11 @@ mod tests {
             .expect("days == 0, so Interval(MonthDayNano) -> Duration(Microsecond) succeeds");
         assert_eq!(zero_days, ScalarValue::DurationMicrosecond(Some(500_000)));
 
-        let nonzero_days = ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-            3, 500,
-        )))
-        .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
-        .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
-        .cast_to(&DataType::Duration(TimeUnit::Microsecond));
+        let nonzero_days =
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(3, 500)))
+                .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
+                .cast_to(&DataType::Duration(TimeUnit::Microsecond));
         assert!(
             nonzero_days.is_err(),
             "expected arrow-cast to still reject a nonzero day count; if this now succeeds, \
