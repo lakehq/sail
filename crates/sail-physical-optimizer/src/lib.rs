@@ -33,6 +33,7 @@ mod explicit_repartition;
 mod filter_pushdown;
 mod join_reorder;
 mod projection_pushdown;
+mod scan_partitions;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -60,6 +61,7 @@ pub fn get_physical_optimizers(
     // Revisit the opt-in default when that trade-off is addressed.
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
