@@ -58,7 +58,7 @@ def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path)
     )
 
     with pytest.raises(Exception, match="Nanosecond"):
-        spark.read.parquet(path).schema
+        _ = spark.read.parquet(path).schema
 
 
 def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
