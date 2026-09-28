@@ -32,6 +32,10 @@ pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
 educe = "0.6.0"
 tower = { version = "0.5.3", features = ["full"] }
+hyper = { version = "1.11.0", features = ["client", "http2"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "http2", "tokio"] }
+hyper-rustls = { version = "0.27.9", default-features = false, features = ["http2", "native-tokio", "ring", "tls12"] }
+h2 = "0.4.15"
 uuid = { version = "1.23.2", features = ["serde", "v4"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
