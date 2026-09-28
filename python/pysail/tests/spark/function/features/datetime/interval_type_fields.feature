@@ -21,7 +21,6 @@ Feature: Leading and trailing fields of the interval types
         | case          | lit                            | fields        |
         | year to month | INTERVAL '10-8' YEAR TO MONTH  | year to month |
 
-    @sail-bug
     Scenario Outline: Year-month interval: <case> (known Sail bug)
       When query
         """
@@ -56,7 +55,6 @@ Feature: Leading and trailing fields of the interval types
         | case           | lit                              | fields         |
         | day to second  | INTERVAL '1 2:3:4' DAY TO SECOND | day to second  |
 
-    @sail-bug
     Scenario Outline: Day-time interval: <case> (known Sail bug)
       When query
         """
@@ -83,7 +81,6 @@ Feature: Leading and trailing fields of the interval types
   @function(nullability)
   Rule: A multi-unit interval with a single unit only spans that unit
 
-    @sail-bug
     Scenario Outline: Multi-unit interval: <case>
       When query
         """
@@ -106,7 +103,6 @@ Feature: Leading and trailing fields of the interval types
   @function(nullability)
   Rule: A week folds into the day field and sub-second units fold into the second field
 
-    @sail-bug
     Scenario Outline: Coarser field for <case>
       When query
         """
@@ -145,7 +141,6 @@ Feature: Leading and trailing fields of the interval types
         | year to month         | INTERVAL 1 YEAR 2 MONTHS                    | year to month    |
         | day to second         | INTERVAL 3 DAYS 4 HOURS 5 MINUTES 6 SECONDS | day to second    |
 
-    @sail-bug
     Scenario Outline: Multi-unit span: <case> (known Sail bug)
       When query
         """
@@ -165,7 +160,6 @@ Feature: Leading and trailing fields of the interval types
         | minute to second      | INTERVAL 1 MINUTE 5 MICROSECONDS            | minute to second |
         | second only           | INTERVAL 1 SECOND 2 MILLISECONDS            | second           |
 
-    @sail-bug
     Scenario: The span ignores the order the units are written in
       When query
         """
@@ -195,7 +189,6 @@ Feature: Leading and trailing fields of the interval types
         | case          | type          | fields        |
         | year to month | YEAR TO MONTH | year to month |
 
-    @sail-bug
     Scenario Outline: Cast of NULL to an interval type: <case> (known Sail bug)
       When query
         """
@@ -214,7 +207,6 @@ Feature: Leading and trailing fields of the interval types
         | hour only     | HOUR          | hour          |
         | minute only   | MINUTE        | minute        |
 
-    @sail-bug
     Scenario: Cast narrows a year-month interval to its leading field
       When query
         """
@@ -226,7 +218,6 @@ Feature: Leading and trailing fields of the interval types
          |-- result: interval year (nullable = false)
         """
 
-    @sail-bug
     Scenario: Cast of a day-time interval keeps the declared field
       When query
         """
@@ -276,7 +267,6 @@ Feature: Leading and trailing fields of the interval types
   @function(nullability)
   Rule: A multi-unit interval takes its family from the units written, not from its value
 
-    @sail-bug
     Scenario Outline: Zero-valued year-month multi-unit interval: <case>
       When query
         """
@@ -294,7 +284,6 @@ Feature: Leading and trailing fields of the interval types
         | all year-month zeros | INTERVAL 0 YEARS 0 MONTHS  | year to month |
         | month cancels month  | INTERVAL 1 MONTH -1 MONTH  | month         |
 
-    @sail-bug
     Scenario Outline: Zero-valued interval keeps its units: <case>
       When query
         """
@@ -365,7 +354,6 @@ Feature: Leading and trailing fields of the interval types
          |-- result: interval year to month (nullable = false)
         """
 
-    @sail-bug
     Scenario Outline: Qualifier of an interval column: <case>
       When query
         """
@@ -447,7 +435,6 @@ Feature: Leading and trailing fields of the interval types
 
   Rule: An interval renders with the fields it is declared with
 
-    @sail-bug
     Scenario Outline: Rendering of a single-field interval: <case>
       When query
         """
@@ -534,7 +521,6 @@ Feature: Leading and trailing fields of the interval types
          |-- a: interval hour (nullable = false)
         """
 
-    @sail-bug
     Scenario Outline: Qualifier of a cast from a number: <case>
       When query
         """

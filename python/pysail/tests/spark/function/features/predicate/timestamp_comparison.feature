@@ -2,7 +2,6 @@ Feature: Timestamp and string predicate coercion
 
   Rule: Timestamp comparisons use Spark coercion semantics
 
-    @sail-bug
     Scenario: String-to-timestamp comparison uses the session time zone and microsecond precision
       Given config spark.sql.session.timeZone = Asia/Shanghai
       When query
@@ -180,7 +179,6 @@ Feature: Timestamp and string predicate coercion
         | ltz_after_ntz | date_promoted | array_match | nested_array_match | struct_match |
         | true          | true          | true        | true               | true         |
 
-    @sail-bug
     Scenario: Struct IN resolves fields positionally and with the configured resolver
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = true
@@ -199,7 +197,6 @@ Feature: Timestamp and string predicate coercion
         | duplicate_mismatch | case_insensitive_match |
         | false              | true                   |
 
-    @sail-bug
     Scenario: Array and struct IN subqueries use recursive common types
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.caseSensitive = false
@@ -250,7 +247,6 @@ Feature: Timestamp and string predicate coercion
         | matched |
         | 1       |
 
-    @sail-bug
     Scenario: Legacy IN promotes nested timestamp and string values to string
       Given config spark.sql.session.timeZone = Asia/Shanghai
       And config spark.sql.ansi.enabled = false
@@ -273,7 +269,6 @@ Feature: Timestamp and string predicate coercion
         | array_with_null | nested_array_match | struct_with_null |
         | NULL            | false              | NULL             |
 
-    @sail-bug
     Scenario: Legacy IN uses Spark-compatible string rendering
       Given config spark.sql.ansi.enabled = false
       When query
@@ -349,7 +344,6 @@ Feature: Timestamp and string predicate coercion
         | day_column | day_to_second_column | day_expression | month_column | year_to_month_column |
         | true       | true                 | true           | true         | true                 |
 
-    @sail-bug
     Scenario: Legacy IN uses zero-padded interval strings
       Given config spark.sql.ansi.enabled = false
       When query
@@ -381,7 +375,6 @@ Feature: Timestamp and string predicate coercion
          |-- 1.0E-7: double (nullable = false)
         """
 
-    @sail-bug
     Scenario: Legacy IN preserves interval qualifiers through value expressions
       Given config spark.sql.ansi.enabled = false
       When query
@@ -403,7 +396,6 @@ Feature: Timestamp and string predicate coercion
         | case_interval | zero_year_month |
         | true          | true            |
 
-    @sail-bug
     Scenario: Legacy IN preserves interval qualifiers on nested casts
       Given config spark.sql.ansi.enabled = false
       When query
@@ -534,7 +526,6 @@ Feature: Timestamp and string predicate coercion
          |-- not_distinct_value: boolean (nullable = false)
         """
 
-    @sail-bug
     Scenario: Multi-column timestamp IN subquery coerces every pair
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = false
@@ -596,7 +587,6 @@ Feature: Timestamp and string predicate coercion
         | matched |
         | 1       |
 
-    @sail-bug
     Scenario: Implicit comparisons use Spark unformatted timestamp semantics
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = false

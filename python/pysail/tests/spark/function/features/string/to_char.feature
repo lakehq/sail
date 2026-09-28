@@ -3552,7 +3552,6 @@ Feature: to_char with an argument coming from a column
         """
       Then query error .*
 
-    @sail-bug
     Scenario: ANSI false DECIMAL overflow returns NULL
       Given config spark.sql.ansi.enabled = false
       When query

@@ -88,7 +88,6 @@ Feature: array_min and array_max functions
         | min_val                 | max_val                |
         | -1.7976931348623157E308 | 1.7976931348623157E308 |
 
-    @sail-bug
     Scenario: array_min and array_max with extreme double values
       When query
         """

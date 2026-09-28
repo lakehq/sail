@@ -1564,7 +1564,7 @@ Feature: to_timestamp (strict variant)
       """
       SELECT to_timestamp('not-a-timestamp')
       """
-      Then query error CAST_INVALID_INPUT|cannot be cast|error parsing|error in SQL parser
+      Then query error CAST_INVALID_INPUT|cannot be cast|error parsing|error in SQL parser|invalid timestamp
 
     @sail-bug
     Scenario: Format mismatch raises error
@@ -1740,7 +1740,6 @@ Feature: to_timestamp (strict variant)
     # ('10:30:45' or 'T10:30:45') takes today's date in the session zone, the zone suffix may be
     # any ZoneId.of form (GMT+1, short ids such as PST), and years reach +294247.
 
-    @sail-bug
     Scenario Outline: to_timestamp accepts the lenient cast form <case> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -1758,9 +1757,18 @@ Feature: to_timestamp (strict variant)
         | leading space date  | true  | ' 2024-01-16'                   | 2024-01-16 00:00:00    |
         | GMT offset zone     | true  | '2024-01-15 10:30:45 GMT+1'     | 2024-01-15 09:30:45    |
         | short zone id       | false | '2024-01-15 10:30:45 PST'       | 2024-01-15 18:30:45    |
-        | six-digit year      | true  | '294247-01-01'                  | +294247-01-01 00:00:00 |
 
     @sail-bug
+    Scenario: to_timestamp accepts the lenient cast form six-digit year with ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('294247-01-01') AS result
+        """
+      Then query result
+        | result                 |
+        | +294247-01-01 00:00:00 |
+
     Scenario Outline: to_timestamp of the bare time <value> takes the current date with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -2000,7 +2008,6 @@ Feature: to_timestamp (strict variant)
         | Pacific/Chatham     | 2023-11-15 11:58:20 |
         | Pacific/Pago_Pago   | 2023-11-14 11:13:20 |
 
-    @sail-bug
     Scenario: to_timestamp of a bare time takes the current date of a 45-minute offset zone
       Given config spark.sql.session.timeZone = Pacific/Chatham
       When query

@@ -317,7 +317,6 @@ Feature: vector_inner_product
   # in conditional/nullif.feature, reached here through an ordinary inner product.
   Rule: Rendering of the FLOAT result
 
-    @sail-bug
     Scenario Outline: an inner product of <case> renders in scientific notation
       When query
         """

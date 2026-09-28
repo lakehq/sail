@@ -207,7 +207,6 @@ Feature: CAST expressions
     # printed form differs, so these use the rendered value on purpose; the
     # equality checks in the rule above stay rendering-independent.
 
-    @sail-bug
     Scenario Outline: a double renders with an uppercase exponent: <case>
       When query
         """

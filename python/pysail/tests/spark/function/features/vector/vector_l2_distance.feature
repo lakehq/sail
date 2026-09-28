@@ -212,7 +212,6 @@ Feature: vector_l2_distance
   # value is identical, so only a lens that looks at the printed form can see it.
   Rule: Rendering of the FLOAT result
 
-    @sail-bug
     Scenario Outline: a distance below 1.0E-3 renders with an uppercase exponent: <case>
       When query template
         """

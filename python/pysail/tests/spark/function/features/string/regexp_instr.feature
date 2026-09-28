@@ -254,7 +254,6 @@ Feature: regexp_instr returns the first match position
         | result |
         | 1      |
 
-    @sail-bug
     Scenario: idx 2 yields the whole-match start, not the group-2 position
       When query
         """
@@ -282,7 +281,6 @@ Feature: regexp_instr returns the first match position
         | result |
         | 5      |
 
-    @sail-bug
     Scenario: out-of-range idx does not error and returns the whole-match start
       When query
         """
@@ -338,7 +336,6 @@ Feature: regexp_instr returns the first match position
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: a non-integer numeric idx is coerced and ignored
       When query
         """
@@ -362,7 +359,6 @@ Feature: regexp_instr returns the first match position
         """
       Then query error .*
 
-    @sail-bug
     Scenario: a non-numeric string idx is NULL under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query

@@ -516,7 +516,6 @@ Feature: identifier resolution beyond ASCII
 
   Rule: A qualified interpretation of a name wins over a nested one
 
-    @sail-bug
     Scenario: a qualifier is preferred over a struct of the same name
       # The analyzer tries the interpretations from the longest qualifier down and stops at the
       # first one that matches anything, so the struct field is never considered.

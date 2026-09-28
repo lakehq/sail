@@ -90,7 +90,6 @@ Feature: round with an argument coming from a column
 
   Rule: a string value is cast to a double
 
-    @sail-bug
     Scenario: round of a string
       When query
         """
@@ -142,7 +141,6 @@ Feature: round with an argument coming from a column
         | 20     |
         | NULL   |
 
-    @sail-bug
     Scenario: round of a string column
       When query
         """

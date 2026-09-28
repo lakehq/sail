@@ -380,7 +380,6 @@ Feature: TIME data type support
         | 23:59:59.999999 |
         | NULL            |
 
-    @sail-bug
     Scenario: CAST of a TIME literal to STRING is not nullable
       Given config spark.sql.timeType.enabled = true
       When query

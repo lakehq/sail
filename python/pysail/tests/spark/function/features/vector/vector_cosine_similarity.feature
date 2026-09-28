@@ -302,7 +302,6 @@ Feature: vector_cosine_similarity
   # conditional/nullif.feature, reached here through an ordinary cosine result.
   Rule: Rendering of the FLOAT result
 
-    @sail-bug
     Scenario: a cosine below 1.0E-3 renders in scientific notation
       When query
         """

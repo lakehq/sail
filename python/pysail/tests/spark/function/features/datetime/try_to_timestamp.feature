@@ -340,7 +340,6 @@ Feature: try_to_timestamp
 
   Rule: Without a format, try_to_timestamp follows the lenient STRING to TIMESTAMP cast
 
-    @sail-bug
     Scenario: try_to_timestamp trims surrounding whitespace
       Given config spark.sql.ansi.enabled = true
       When query
@@ -351,7 +350,6 @@ Feature: try_to_timestamp
         | result              |
         | 2024-01-15 10:30:00 |
 
-    @sail-bug
     Scenario: try_to_timestamp of a bare time takes the current date
       Given config spark.sql.ansi.enabled = true
       When query

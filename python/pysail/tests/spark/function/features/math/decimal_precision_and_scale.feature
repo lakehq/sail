@@ -104,7 +104,6 @@ Feature: the precision and the scale Spark gives a decimal
 
   Rule: a value that does not fit the type
 
-    @sail-bug
     Scenario Outline: a value too large for the type: <case>
       Given config spark.sql.ansi.enabled = false
       When query template

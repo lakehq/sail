@@ -207,7 +207,6 @@ Feature: INTERVAL YEAR TO MONTH operations
   # modes). A STRING parses with castStringToYMInterval.
   Rule: Casts between year-month intervals and numbers or strings
 
-    @sail-bug
     Scenario Outline: a year-month interval casts to an integral: <case>
       When query
         """

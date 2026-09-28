@@ -99,7 +99,6 @@ Feature: nullability of an explicit CAST
         | tinyint -> timestamp           | CAST(1 AS TINYINT)                  | TIMESTAMP     | timestamp     |
         | tinyint -> tinyint             | CAST(1 AS TINYINT)                  | TINYINT       | byte          |
 
-    @sail-bug
     Scenario Outline: a scalar CAST that keeps the input non-nullable: <case> (known Sail bug)
       When query
         """
@@ -155,9 +154,11 @@ Feature: nullability of an explicit CAST
         | smallint -> interval y-m      | CAST(1 AS SMALLINT)                 | INTERVAL YEAR TO MONTH | interval year to month |
         | tinyint -> interval d-s       | CAST(1 AS TINYINT)                  | INTERVAL DAY TO SECOND | interval day to second |
         | tinyint -> interval y-m       | CAST(1 AS TINYINT)                  | INTERVAL YEAR TO MONTH | interval year to month |
+        | interval d-s -> string        | INTERVAL '1 12:30:01' DAY TO SECOND | STRING                 | string                 |
+        | interval y-m -> string        | INTERVAL '1-2' YEAR TO MONTH        | STRING                 | string                 |
 
-    @spark-4
     @sail-bug
+    @spark-4
     Scenario Outline: a scalar CAST that keeps the input non-nullable: <case>, on Spark 4+ (known Sail bug)
       When query
         """
@@ -179,8 +180,6 @@ Feature: nullability of an explicit CAST
         | double -> variant             | CAST(1.5 AS DOUBLE)                 | VARIANT                | variant                |
         | float -> variant              | CAST(1.5 AS FLOAT)                  | VARIANT                | variant                |
         | int -> variant                | 1                                   | VARIANT                | variant                |
-        | interval d-s -> string        | INTERVAL '1 12:30:01' DAY TO SECOND | STRING                 | string                 |
-        | interval y-m -> string        | INTERVAL '1-2' YEAR TO MONTH        | STRING                 | string                 |
         | smallint -> variant           | CAST(1 AS SMALLINT)                 | VARIANT                | variant                |
         | timestamp -> variant          | TIMESTAMP '2024-01-15 10:00:00'     | VARIANT                | variant                |
         | timestamp_ntz -> variant      | TIMESTAMP_NTZ '2024-01-15 10:00:00' | VARIANT                | variant                |
@@ -189,7 +188,6 @@ Feature: nullability of an explicit CAST
   @function(nullability)
   Rule: scalar casts, non-nullable (Sail diverges)
 
-    @sail-bug
     Scenario Outline: a scalar CAST that keeps the input non-nullable but Sail does not: <case>
       When query
         """
@@ -204,7 +202,18 @@ Feature: nullability of an explicit CAST
       Examples:
         | case                      | input                | type   | result |
         | map<string,int> -> string | map('a', 1)          | STRING | string |
-        | struct<a:int> -> string   | named_struct('a', 1) | STRING | string |
+
+    @sail-bug
+    Scenario: a scalar CAST that keeps the input non-nullable but Sail does not: struct<a:int> -> string
+      When query
+        """
+        SELECT CAST(named_struct('a', 1) AS STRING) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
 
   @function(nullability)
   Rule: scalar casts, non-nullable (Sail diverges), VARIANT and INTERVAL types
@@ -408,7 +417,6 @@ Feature: nullability of an explicit CAST
   @function(nullability)
   Rule: map casts, non-nullable (Sail diverges)
 
-    @sail-bug
     Scenario Outline: a map CAST that keeps the input non-nullable but Sail does not: <case>
       When query
         """

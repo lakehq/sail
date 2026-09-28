@@ -73,7 +73,6 @@ Feature: to_timestamp_ntz
         """
       Then query error CAST_INVALID_INPUT
 
-    @sail-bug
     Scenario Outline: to_timestamp_ntz accepts the lenient cast form <case> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -88,9 +87,18 @@ Feature: to_timestamp_ntz
         | case               | ansi  | value            | result                 |
         | surrounding spaces | true  | '  2024-01-15  ' | 2024-01-15 00:00:00    |
         | surrounding spaces | false | '  2024-01-15  ' | 2024-01-15 00:00:00    |
-        | six-digit year     | true  | '294247-01-01'   | +294247-01-01 00:00:00 |
 
     @sail-bug
+    Scenario: to_timestamp_ntz accepts the lenient cast form six-digit year with ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp_ntz('294247-01-01') AS result
+        """
+      Then query result
+        | result                 |
+        | +294247-01-01 00:00:00 |
+
     Scenario: to_timestamp_ntz returns NULL for an unknown zone suffix per row with ANSI disabled
       Given config spark.sql.ansi.enabled = false
       When query

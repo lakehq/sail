@@ -23,7 +23,6 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         """
       Then query error (?i)invalid.*interval
 
-    @sail-bug
     Scenario: Zero multi-unit intervals preserve their syntactic family
       When query
         """
@@ -233,7 +232,6 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | x                                   |
         | INTERVAL '3 10:00:00' DAY TO SECOND |
 
-    @sail-bug
     Scenario: VALUES widens interval qualifiers across rows
       When query
         """
