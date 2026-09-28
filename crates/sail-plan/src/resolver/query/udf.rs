@@ -273,6 +273,8 @@ impl PlanResolver<'_> {
                     .collect::<PlanResult<Vec<_>>>()?,
             )?
             .build()?;
+        // Spark's grouped-map output has only the function output columns.
+        state.register_missing_input_boundary(&plan);
         Ok(plan)
     }
 
@@ -402,6 +404,8 @@ impl PlanResolver<'_> {
                     .collect::<PlanResult<Vec<_>>>()?,
             )?
             .build()?;
+        // Spark's co-grouped map output has only the function output columns.
+        state.register_missing_input_boundary(&plan);
         Ok(plan)
     }
 

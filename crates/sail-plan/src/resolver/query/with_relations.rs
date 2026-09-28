@@ -5,6 +5,7 @@ use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::query::CteKind;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -41,7 +42,7 @@ impl PlanResolver<'_> {
                     Arc::new(resolved),
                     table_ref.clone(),
                 )?);
-                state.insert_cte(table_ref, aliased);
+                state.insert_cte(table_ref, aliased, CteKind::ParameterView)?;
             }
             let plan_id = ref_plan
                 .plan_id
