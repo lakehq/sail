@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.7.1"
+version = "0.7.2"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -37,6 +37,7 @@ test = [
     "duckdb>=1.0,<2",
     "pytest>=9.1,<10",
     "pytest-xdist>=3.7,<4",
+    "pytest-rerunfailures>=16.7,<17",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -157,6 +158,7 @@ dependencies = [
     "pandas<3",
     "pytest>=9.1,<10",
     "pytest-xdist>=3.7,<4",
+    "pytest-rerunfailures>=16.7,<17",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
