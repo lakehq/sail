@@ -339,6 +339,19 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.repartition"],
+        reason="Uses DataFrame.rdd to count partitions; Connect-compatible coverage is in dataframe/test_repartition.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.repartitionByRange"],
+        reason=(
+            "Uses DataFrame.rdd to count partitions; dataframe/test_repartition.py covers counts and rows "
+            "and retains the known range-boundary defect as a strict xfail"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.observe"],
         reason=(
             "PySpark 3.x Connect does not support Observation.get and this example installs a streaming listener; "
