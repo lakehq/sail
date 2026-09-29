@@ -2330,12 +2330,6 @@ def _pull_up_refused_cases(spark):
         pytest.param(
             "the_condition_also_names_the_replacement",
             [-_SELECTED],
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="Sail resolves the whole condition at once, so a name the output also "
-                "carries cannot be read below at the same time",
-                strict=True,
-            ),
         ),
         pytest.param(
             "a_distinct_in_between",

@@ -7,8 +7,11 @@ use datafusion_expr::{LogicalPlan, ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_sql_analyzer::query::AUTO_GENERATED_SUBQUERY_NAME;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
+use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -58,17 +61,23 @@ fn quote_identifier(name: &spec::ObjectName) -> String {
 /// are read from it rather than from its rendering: splitting that on dots would cut a single part
 /// that contains one, naming a qualifier nobody wrote.
 ///
-/// A relation the user did not name carries DataFusion's placeholder qualifier, while the matching
-/// attribute in Spark has no qualifier at all, so it contributes nothing.
+/// A relation the user did not name carries DataFusion's placeholder qualifier, or Sail's own
+/// synthetic name for an unaliased derived table, while the matching attribute in Spark has no
+/// qualifier at all, so neither contributes anything.
 pub(crate) fn qualifier_parts(relation: Option<&TableReference>) -> Vec<String> {
     match relation {
-        Some(relation) if relation.table() != UNNAMED_TABLE => relation
-            .catalog()
-            .into_iter()
-            .chain(relation.schema())
-            .chain(std::iter::once(relation.table()))
-            .map(|x| x.to_string())
-            .collect(),
+        Some(relation)
+            if relation.table() != UNNAMED_TABLE
+                && relation.table() != AUTO_GENERATED_SUBQUERY_NAME =>
+        {
+            relation
+                .catalog()
+                .into_iter()
+                .chain(relation.schema())
+                .chain(std::iter::once(relation.table()))
+                .map(|x| x.to_string())
+                .collect()
+        }
         _ => vec![],
     }
 }
@@ -393,8 +402,31 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        // A DataFrame column's own plan can itself carry more than one field with this name
+        // (e.g. a join of two same-shaped DataFrames, or a self-join). Spark reports that
+        // ambiguity from the plan's own output, regardless of which schema still has a
+        // surviving copy closest by, so it is checked against the frozen schema directly:
+        // walking the missing-input chain below only ever sees the nearest survivor, and
+        // would silently resolve to it instead of raising the ambiguity.
+        if let Some(id) = plan_id
+            && let Some(plan_schema) = state.get_plan_schema(id).cloned()
+        {
+            self.resolve_field_or_nested_field(&name, plan_id, &plan_schema, state)?;
+        }
+        // Missing-input resolution type-checks against a combined schema, but names must bind
+        // to the nearest output first. Resolving directly against that combined schema would
+        // make a visible alias and an older input column of the same name ambiguous.
+        // For sorts, a failed local binding can be discarded and the next retry must begin at
+        // the newly nearest output. Other consumers keep their original local schema.
+        let local_schema = state
+            .missing_input(schema)
+            .and_then(|input| input.schemas().first().cloned())
+            .unwrap_or_else(|| Self::local_schema(schema, state));
+        if let Some((name, expr)) = self
+            .resolve_field_or_nested_field(&name, plan_id, &local_schema, state)
+            .map_err(|error| {
+                Self::discard_failed_missing_input_output(&name, plan_id, schema, 0, error, state)
+            })?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -403,8 +435,69 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+        if let Some((name, expr)) = self
+            .resolve_hidden_field(&name, plan_id, &local_schema, state)
+            .map_err(|error| {
+                Self::discard_failed_missing_input_output(&name, plan_id, schema, 0, error, state)
+            })?
+        {
             return Ok(NamedExpr::new(vec![name], expr));
+        }
+        // Spark resolves literal function names (e.g. `current_date`) that the output does
+        // not have to the functions, before missing attributes and outer references
+        // (`LiteralFunctionResolution`).
+        if plan_id.is_none() && Self::is_literal_function_name(&name) {
+            let function_name = name.parts()[0].as_ref().to_ascii_lowercase();
+            if function_name == "grouping__id" {
+                return Err(PlanError::todo("resolve the Hive grouping ID function"));
+            }
+            let function_name = match function_name.as_str() {
+                "user" | "session_user" => "current_user",
+                name => name,
+            };
+            let expr = get_built_in_function(function_name)?(ScalarFunctionInput {
+                arguments: vec![],
+                function_context: FunctionContextInput {
+                    argument_display_names: &[],
+                    plan_config: &self.config,
+                    session_context: self.ctx,
+                    schema,
+                },
+            })?;
+            let name = match function_name {
+                "current_time" => "current_time(6)".to_string(),
+                name => format!("{name}()"),
+            };
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
+        // Only an absent local binding can be recovered from a descendant. Each descendant is
+        // tried independently, nearest first, so a visible alias keeps precedence over a source
+        // attribute with the same user-facing name.
+        let missing_input_schemas = state
+            .missing_input(schema)
+            .map(|input| input.schemas().to_vec())
+            .unwrap_or_default();
+        for (index, input_schema) in missing_input_schemas.into_iter().enumerate().skip(1) {
+            if let Some((name, expr)) = self
+                .resolve_field_or_nested_field(&name, plan_id, &input_schema, state)
+                .map_err(|error| {
+                    Self::discard_failed_missing_input_output(
+                        &name, plan_id, schema, index, error, state,
+                    )
+                })?
+            {
+                return Ok(NamedExpr::new(vec![name], expr));
+            }
+            if let Some((name, expr)) = self
+                .resolve_hidden_field(&name, plan_id, &input_schema, state)
+                .map_err(|error| {
+                    Self::discard_failed_missing_input_output(
+                        &name, plan_id, schema, index, error, state,
+                    )
+                })?
+            {
+                return Ok(NamedExpr::new(vec![name], expr));
+            }
         }
         // A name that carries a plan ID comes from a DataFrame column object. Spark normally
         // reports it on its own error condition, but with non-strict resolution it retries the
@@ -438,6 +531,46 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// A failed extraction or an ambiguous name from a tentative descendant output does not
+    /// decide the expression: Spark retries older outputs. Bound DataFrame columns retain their
+    /// original binding and therefore are never discarded this way.
+    ///
+    /// One extraction failure is an exception: once a schema binds the name to a concrete
+    /// attribute, indexing it as an array whose element is not a struct builds a `GetArrayItem`
+    /// the way Spark's own `ExtractValue.extractValue` does, and that call's type mismatch is a
+    /// hard analysis error Spark never retries past, unlike a name that is merely unreachable
+    /// here (`array_index_type_error`). Reporting it as a missing column instead would let this
+    /// attempt fall through to an older, shadowed output that happens to resolve.
+    fn discard_failed_missing_input_output(
+        name: &spec::ObjectName,
+        plan_id: Option<i64>,
+        schema: &DFSchemaRef,
+        index: usize,
+        error: PlanError,
+        state: &mut PlanResolverState,
+    ) -> PlanError {
+        if Self::is_array_index_type_error(&error) {
+            return error;
+        }
+        if plan_id.is_none()
+            && state
+                .missing_input_mut(schema)
+                .is_some_and(|input| input.discard(index))
+        {
+            unresolved_column_error(name, schema, state)
+        } else {
+            error
+        }
+    }
+
+    /// Whether `error` is `array_index_type_error`'s fatal `GetArrayItem` type mismatch, the one
+    /// extraction failure `discard_failed_missing_input_output` must never retry past.
+    fn is_array_index_type_error(error: &PlanError) -> bool {
+        matches!(error, PlanError::AnalysisError(message) if message.starts_with(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \""
+        ) && message.contains("requires the \"INTEGRAL\" type"))
+    }
+
     pub(in crate::resolver) fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
@@ -464,6 +597,12 @@ impl PlanResolver<'_> {
                     !info.is_hidden()
                         && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier)
                         && self.match_field(info, field_name.as_ref(), plan_id)
+                        && self.matches_plan_attribute(
+                            field.name(),
+                            field_name.as_ref(),
+                            plan_id,
+                            state,
+                        )
                 })
                 .collect::<Vec<_>>();
             // Two outputs of one attribute are a single candidate, so selecting a column twice
@@ -527,6 +666,38 @@ impl PlanResolver<'_> {
         Ok(None)
     }
 
+    /// A plan ID identifies a DataFrame output, not every later expression that happened to read
+    /// from that DataFrame. A field belongs to the plan ID when either the field itself, or the
+    /// field it ultimately passes a value on from (its root, itself when it computes one), is a
+    /// direct output of some instance of that plan ID. The field itself matches the plan ID that
+    /// was attached to the very node that output it (e.g. a later DataFrame's own plan ID). The
+    /// root matches an OLDER plan ID that a pass-through chain still descends from: a fresh,
+    /// independent read of the same DataFrame (as a self-join gives) is one such instance in its
+    /// own right, so `value` still resolves through a chain of pass-through projections down to
+    /// whichever side's read registered it, and two independent reads stay two candidates rather
+    /// than collapsing into one. A field that computes a new value is its own root and was never
+    /// registered as a direct output of an older plan ID, so `source.b` is not `b` after
+    /// `withColumn("b", col("a"))`, even though that `b` inherited the plan ID by being passed
+    /// through a projection (`rewrite_named_expressions`).
+    fn matches_plan_attribute(
+        &self,
+        field_id: &str,
+        _name: &str,
+        plan_id: Option<i64>,
+        state: &PlanResolverState,
+    ) -> bool {
+        let Some(plan_id) = plan_id else {
+            return true;
+        };
+        if state.is_direct_plan_field(field_id, plan_id) {
+            return true;
+        }
+        let Ok(root) = state.get_field_root(field_id) else {
+            return false;
+        };
+        state.is_direct_plan_field(root, plan_id)
+    }
+
     /// The error for a part of the name that does not name a field of what it reached, as Spark
     /// reports it once the attribute itself has matched: a name that is not a field of the struct
     /// is a missing field, and a base that is not a complex type at all is a different error.
@@ -538,17 +709,39 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Option<PlanError>> {
         let mut base = base.to_string();
         let mut data_type = data_type.clone();
-        for part in inner {
+        let last = inner.len().saturating_sub(1);
+        for (index, part) in inner.iter().enumerate() {
             let fields = match &data_type {
                 DataType::Struct(fields) => fields.clone(),
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => match field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
-                    // An array of anything else is read by index, so the name is not a field that
-                    // is missing but an index whose type is wrong: Spark builds a `GetArrayItem`
-                    // here rather than refusing the base (`ExtractValue.extractValue`).
-                    _ => return Ok(Some(Self::array_index_type_error(&base, part.as_ref()))),
+                    // An element that is itself Array-like or Map, or this being the last part
+                    // walked, is read by index without Spark ever checking the index's type while
+                    // building the node: `GetArrayItem` (`ExtractValue.extractValue`'s catch-all
+                    // `(_: ArrayType, _)` arm) and `GetMapValue` both construct unconditionally,
+                    // deferring the mismatch to `CheckAnalysis`. Once that candidate builds
+                    // without throwing, Spark commits to it, so this is fatal and never retried
+                    // past.
+                    other
+                        if index == last
+                            || matches!(
+                                other,
+                                DataType::List(_)
+                                    | DataType::LargeList(_)
+                                    | DataType::FixedSizeList(_, _)
+                                    | DataType::Map(..)
+                            ) =>
+                    {
+                        return Ok(Some(Self::array_index_type_error(&base, part.as_ref())));
+                    }
+                    // A plain scalar element with a further part still to walk has no
+                    // `ExtractValue` case at all, so Spark's resolution throws immediately while
+                    // still trying this candidate. The driving retry catches that and continues
+                    // past it to an older, shadowed output, so this is reported as unresolved,
+                    // the way it always was.
+                    _ => return Ok(None),
                 },
                 // A map is a complex type that Spark walks into by key. Sail does not reach it
                 // through a dotted name, and that gap is reported the way it always was.
@@ -627,6 +820,23 @@ impl PlanResolver<'_> {
             quote_identifier_name(name),
             fields
         ))
+    }
+
+    /// Returns whether the name is one Spark resolves to a niladic literal function
+    /// (`LiteralFunctionResolution`) when nothing else matches it.
+    fn is_literal_function_name(name: &spec::ObjectName) -> bool {
+        const LITERAL_FUNCTION_NAMES: [&str; 7] = [
+            "current_date",
+            "current_timestamp",
+            "current_time",
+            "current_user",
+            "user",
+            "session_user",
+            "grouping__id",
+        ];
+        matches!(name.parts(), [part] if LITERAL_FUNCTION_NAMES
+            .iter()
+            .any(|x| part.as_ref().eq_ignore_ascii_case(x)))
     }
 
     /// Resolves a name against the expressions of an aggregate.

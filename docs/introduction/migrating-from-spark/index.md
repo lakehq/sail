@@ -19,9 +19,35 @@ If you use [Ibis](https://ibis-project.org/) with its PySpark backend, the same 
 
 ## Check Your Code for Compatibility
 
-Sail comes with a utility script (experimental :construction:) that helps you assess whether Sail already covers all PySpark functionality used in your project. It searches a given folder for `*.py` and `*.ipynb` files and analyzes the code for used PySpark functions. The output shows which functions are used in your code and the corresponding Sail support status.
+The [Spark-to-Sail scanner](https://migrate.lakesail.com/?from=sail-migrating) reports which Spark features your code uses, where each one appears, and whether Sail supports them today. It runs as WebAssembly in your browser or offline from the CLI.
 
-To use it, simply run the following command in your terminal after installing Sail.
+To install the CLI:
+
+::: code-group
+
+```bash [uv]
+uv tool install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
+```
+
+```bash [pip]
+pip install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
+```
+
+```bash [venv]
+python3 -m venv .venv && source .venv/bin/activate && pip install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
+```
+
+:::
+
+To scan a file or directory:
+
+<SyntaxBlock>
+  <SyntaxText raw="'spark-to-sail scan '<directory>" />
+</SyntaxBlock>
+
+Run `spark-to-sail scan --help` to see what else it can do.
+
+Sail also bundles a utility script (experimental :construction:) that scans a folder for `*.py` and `*.ipynb` files and reports the Sail support status of the PySpark functions it finds. It only checks whether functions are _implemented_ in Sail and does not read Spark SQL strings. Prefer the scanner above. The script remains for offline use after installing Sail.
 
 <SyntaxBlock>
   <SyntaxText
@@ -32,7 +58,7 @@ To use it, simply run the following command in your terminal after installing Sa
 The command also allows you to specify the desired output format using `--output=text` (human-readable), `--output=json`, or `--output=csv`.
 
 ::: info
-Use the script as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity. It looks for functions used in DataFrame operations but does **not** cover Spark SQL strings.
+Use either tool as a first pass. Neither runs your code, so they check which Spark features you reference but do **not** verify behavioral parity.
 :::
 
 ## Considerations

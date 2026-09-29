@@ -31,25 +31,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
-        if columns.len() != schema.fields().len() {
-            return Err(PlanError::invalid(format!(
-                "number of column names ({}) does not match number of columns ({})",
-                columns.len(),
-                schema.fields().len()
-            )));
-        }
-        let expr = schema
-            .columns()
-            .into_iter()
-            .zip(columns)
-            .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
-            .collect();
-        let expr = self.rewrite_named_expressions(expr, schema, state)?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::rename_query_output(input, columns, state)
     }
 
     /// TODO: this reads every target field out of the input by name, which diverges from Spark's
@@ -113,29 +95,40 @@ impl PlanResolver<'_> {
                 }
             }
         }
-        let expr = columns
-            .iter()
-            .zip(names)
-            .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column.clone())))
-            .collect::<Vec<_>>();
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
         // A column a rename matched becomes an alias, which is an attribute of its own and has no
         // qualifier; every other column is passed on as it was and keeps the one it had
         // (`UnresolvedStarWithColumnsRenames.expandStar`). A rename that matches the name the
         // column already has still builds the alias, so what decides this is whether the name was
-        // matched and not whether it changed.
-        let expr = expr
-            .into_iter()
-            .zip(columns)
+        // matched and not whether it changed -- `rewrite_named_expressions`'s own same-name check
+        // cannot tell the two apart, so the root and the plan ids are carried over here instead,
+        // only for the columns a rename did not match.
+        let expr = columns
+            .iter()
+            .zip(names)
             .zip(renamed)
-            .map(|((e, column), renamed)| match e {
-                Expr::Alias(e) if !renamed => Expr::Alias(datafusion_expr::expr::Alias {
-                    relation: column.relation,
-                    ..e
-                }),
-                e => e,
+            .map(|((column, name), renamed)| -> PlanResult<Expr> {
+                let field_id = state.register_field_name(name);
+                if !renamed {
+                    let info = state.get_field_info(&column.name)?;
+                    let plan_ids = info.plan_ids().collect::<Vec<_>>();
+                    for plan_id in plan_ids {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                    }
+                    state.register_root_for_field(&field_id, &column.name)?;
+                }
+                let alias = Expr::Column(column.clone()).alias(field_id);
+                Ok(if renamed {
+                    alias
+                } else if let Expr::Alias(alias) = alias {
+                    Expr::Alias(datafusion_expr::expr::Alias {
+                        relation: column.relation.clone(),
+                        ..alias
+                    })
+                } else {
+                    alias
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -359,11 +352,10 @@ impl PlanResolver<'_> {
         let mut qualifiers = Vec::with_capacity(visible.len());
         let mut expr = Vec::with_capacity(visible.len());
         for (column, name) in visible {
-            // The alias name replaces the name of the column that it matches.
-            //
-            // TODO: replacing in place takes the column out of the output, and Sail has no
-            // equivalent of Spark's missing-attribute pull-up for `Filter`, only for `Sort`.
-            // See `test_a_filter_by_a_replaced_column_reads_the_original`.
+            // The alias name replaces the name of the column that it matches, and a `Filter`
+            // (or `Sort`, etc.) over this projection can still recover the replaced column:
+            // `MissingInputBoundaries`/`add_missing_inputs` pull it back up from the input it
+            // was read from.
             match aliases
                 .iter()
                 .find(|(alias, ..)| self.match_identifier(alias, &name))

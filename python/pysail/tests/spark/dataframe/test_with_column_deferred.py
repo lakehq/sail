@@ -138,11 +138,6 @@ def test_a_column_outside_the_grouping(spark, projection):
         spark.sql(f"SELECT {projection} {_REPEATED_ALIAS} GROUP BY a").collect()
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail reports a repeated alias in an ORDER BY as ambiguous rather than unresolved",
-    strict=True,
-)
 def test_a_repeated_alias_in_an_order_by(spark):
     """A sort resolves the name against the projection, where neither alias wins outright."""
     with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):

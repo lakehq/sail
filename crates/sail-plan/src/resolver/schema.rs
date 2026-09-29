@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_expr::UNNAMED_TABLE;
 use sail_common::spec;
 use sail_common::utils::string::{equals_ignore_case, to_lowercase};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -159,6 +160,16 @@ impl PlanResolver<'_> {
         target: Option<&TableReference>,
         matches: impl Fn(&str, &str) -> bool,
     ) -> bool {
+        // DataFusion's placeholder for an unnamed relation is not a qualifier a user can spell:
+        // the matching attribute in Spark has no qualifier at all, so a reference to the
+        // placeholder's literal text must stay unresolved rather than accidentally match the
+        // field it happens to render as. Sail's own placeholder for an unaliased derived table is
+        // different: Spark gives such a subquery a real, referenceable synthetic qualifier, so
+        // that one is not excluded here.
+        if matches!(qualifier, Some(TableReference::Bare { table }) if table.as_ref() == UNNAMED_TABLE)
+        {
+            return false;
+        }
         let table_matches =
             |table: &str| target.map(|x| x.table()).is_some_and(|x| matches(x, table));
         let schema_matches = |schema: &str| {
@@ -311,6 +322,7 @@ impl PlanResolver<'_> {
         plan_id: Option<i64>,
         state: &PlanResolverState,
     ) -> PlanResult<Option<Column>> {
+        // TODO: Deduplicate candidates of the same attribute (e.g. `SELECT a, a`) as Spark does.
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
             let mut references = columns

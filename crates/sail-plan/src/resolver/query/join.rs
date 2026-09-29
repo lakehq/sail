@@ -125,6 +125,8 @@ impl PlanResolver<'_> {
                     right.schema(),
                     &JoinType::Inner,
                 )?);
+                // TODO: Like Spark, prefer a DataFrame column of a direct join child over
+                //   another instance of the DataFrame deeper in the other child.
                 let condition = self
                     .resolve_expression(condition, &join_schema, state)
                     .await?
@@ -294,6 +296,9 @@ impl PlanResolver<'_> {
         )?;
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.
+        // TODO: Spark keeps the left key (the right key for right joins) as the visible
+        //   key attribute, which DataFrame columns prefer over hidden keys, and it keeps
+        //   hidden keys available to later joins.
         let hidden_columns = builder
             .schema()
             .columns()

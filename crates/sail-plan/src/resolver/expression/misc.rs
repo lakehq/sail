@@ -203,8 +203,20 @@ impl PlanResolver<'_> {
         use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
-        // Remove backticks from the pattern if present
-        let pattern_str = col_name.trim_matches('`');
+        let schema = &Self::local_schema(schema, state);
+
+        // Spark expands a quoted regex over the current output without the
+        // originating DataFrame's plan ID (SparkConnectPlanner.transformUnresolvedRegex).
+        let quoted_pattern = col_name
+            .strip_prefix('`')
+            .and_then(|name| name.strip_suffix('`'))
+            .filter(|name| !name.is_empty());
+        let pattern_str = quoted_pattern.unwrap_or_else(|| col_name.trim_matches('`'));
+        let plan_id = if quoted_pattern.is_some() {
+            None
+        } else {
+            plan_id
+        };
 
         // `String.matches` matches the whole name, so the pattern is grouped before it is
         // anchored: an alternation would otherwise bind tighter than the anchors. It is printed
@@ -297,6 +309,54 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        fn is_attribute_path(expr: &spec::Expr) -> bool {
+            match expr {
+                spec::Expr::UnresolvedAttribute { .. } => true,
+                spec::Expr::UnresolvedExtractValue { child, .. } => is_attribute_path(child),
+                spec::Expr::Alias { expr, .. } => is_attribute_path(expr),
+                _ => false,
+            }
+        }
+
+        fn discard_failed_missing_input(
+            expr: &expr::Expr,
+            child_is_attribute_path: bool,
+            schema: &DFSchemaRef,
+            state: &mut PlanResolverState,
+        ) {
+            let Some(input) = state.missing_input_mut(schema) else {
+                return;
+            };
+            let Some(index) = expr
+                .column_refs()
+                .into_iter()
+                .filter_map(|column| {
+                    input
+                        .schemas()
+                        .iter()
+                        .position(|schema| schema.has_column(column))
+                })
+                .max()
+            else {
+                return;
+            };
+            if child_is_attribute_path {
+                // Spark discards tentative descendant bindings when extracting a
+                // struct field fails, then retries deeper outputs and outer references.
+                input.discard(index);
+            } else {
+                // Spark binds the arguments of a function before resolving the function, so it
+                // keeps those bindings and fails. Retry only earlier outputs and outer references,
+                // which cannot bind a deeper column in place of the failed one.
+                // TODO: Keep the bindings as Spark does once name resolution is staged. Spark
+                //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
+                // TODO: Preserve analyzer staging for native `UpdateFields`: unlike an
+                //   unresolved function, it can fail and discard bindings in this pass.
+                input.discard_from(index);
+            }
+        }
+
+        let child_is_attribute_path = is_attribute_path(&child);
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -318,17 +378,37 @@ impl PlanResolver<'_> {
         }
 
         // For other types (List, Struct), extraction must be a literal.
-        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
-        // literal field name so that the spec can keep the attribute unresolved.
+        // SQL dot selectors are represented as literals; an attribute selector
+        // is a column expression and cannot select a struct field.
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
+                if matches!(data_type, DataType::Struct(_)) {
+                    // A column cannot select a struct field, even if it is named like one.
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                    return Err(PlanError::AnalysisError(
+                        "extraction must be a literal".to_string(),
+                    ));
+                }
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),
                 }
             }
-            _ => return Err(PlanError::invalid("extraction must be a literal")),
+            _ => {
+                // Array-index validation preserves the resolved array binding in Spark.
+                if !matches!(
+                    data_type,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                ) {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                }
+                return Err(PlanError::invalid("extraction must be a literal"));
+            }
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
@@ -386,23 +466,34 @@ impl PlanResolver<'_> {
             }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
                 // The field is matched the way every other name is, so it folds the case
                 // unless the analysis is case sensitive, and a name that matches more than one
-                // field is ambiguous rather than missing.
-                let Some(field) = self.resolve_struct_field(&fields, &name)? else {
-                    let names = fields
-                        .iter()
-                        .map(|x| x.name().to_string())
-                        .collect::<Vec<_>>();
-                    return Err(Self::field_not_found_error(&name, &names));
+                // field is ambiguous rather than missing. Either failure discards the tentative
+                // binding the same way, so a retry can recover an older, unambiguous struct.
+                let field = match self.resolve_struct_field(&fields, &name) {
+                    Ok(Some(field)) => field,
+                    Ok(None) => {
+                        discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                        let names = fields
+                            .iter()
+                            .map(|x| x.name().to_string())
+                            .collect::<Vec<_>>();
+                        return Err(Self::field_not_found_error(&name, &names));
+                    }
+                    Err(e) => {
+                        discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                        return Err(e);
+                    }
                 };
                 expr.field(field.name().clone())
             }
             _ => {
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
                 )));

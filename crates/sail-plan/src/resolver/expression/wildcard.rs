@@ -24,6 +24,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let schema = &Self::local_schema(schema, state);
         if plan_id.is_some() {
             return Err(PlanError::todo("wildcard with plan ID"));
         }

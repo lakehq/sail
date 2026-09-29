@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
@@ -44,6 +46,7 @@ impl JobGraph {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
+        let plan = materialize_shared_file_scan_builds(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -61,6 +64,48 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+/// A single-partition build no longer needs a physical coalesce, but should
+/// still be scanned once and broadcast rather than read again by every task.
+fn materialize_shared_file_scan_builds(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    Ok(plan
+        .transform_up(|plan| {
+            let shared_build = plan
+                .downcast_ref::<HashJoinExec>()
+                .is_some_and(|join| join.mode == PartitionMode::CollectLeft)
+                || plan.is::<CrossJoinExec>()
+                || plan.is::<NestedLoopJoinExec>()
+                || plan.is::<PiecewiseMergeJoinExec>();
+            if !shared_build {
+                return Ok(Transformed::no(plan));
+            }
+            let (left, right) = plan.children().two()?;
+            if left.is::<CoalescePartitionsExec>()
+                || left.output_partitioning().partition_count() != 1
+                || right.output_partitioning().partition_count() <= 1
+                || !left.exists(|node| {
+                    Ok(node.downcast_ref::<DataSourceExec>().is_some_and(|source| {
+                        source
+                            .data_source()
+                            .downcast_ref::<FileScanConfig>()
+                            .is_some()
+                    }))
+                })?
+            {
+                return Ok(Transformed::no(plan));
+            }
+            let children = vec![
+                Arc::new(CoalescePartitionsExec::new(Arc::clone(left))) as Arc<dyn ExecutionPlan>,
+                Arc::clone(right),
+            ];
+            Ok(Transformed::yes(replace_children_if_necessary(
+                plan, children,
+            )?))
+        })?
+        .data)
 }
 
 fn ensure_single_probe_partition_for_nested_loop_join(

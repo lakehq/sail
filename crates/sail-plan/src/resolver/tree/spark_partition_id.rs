@@ -52,8 +52,8 @@ impl TreeNodeRewriter for SparkPartitionIdRewriter<'_> {
         let col = match &self.column_name {
             Some(c) => c.clone(),
             None => {
-                // Create an internal-only field id (external name is empty)
-                let col = self.state.register_field_name("");
+                // Create an internal-only field ID without a referenceable name.
+                let col = self.state.next_field_id();
 
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Extension(Extension {
@@ -64,6 +64,6 @@ impl TreeNodeRewriter for SparkPartitionIdRewriter<'_> {
             }
         };
 
-        Ok(Transformed::yes(ident(&col)))
+        Ok(Transformed::yes(ident(&col).alias(&col)))
     }
 }

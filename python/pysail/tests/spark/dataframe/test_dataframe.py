@@ -96,6 +96,97 @@ def test_drop_column_reports_an_ambiguous_reference_with_a_dotted_alias(spark):
         _ = left.crossJoin(right).drop(col("a")).columns
 
 
+def test_dataframe_describe_and_summary_string_column(spark):
+    """Compute Spark-compatible statistics for a string column."""
+    df = spark.createDataFrame([("Alice",), ("Bob",), (None,)], "name STRING")
+
+    assert {row.summary: row.name for row in df.describe("name").collect()} == {
+        "count": "2",
+        "mean": None,
+        "stddev": None,
+        "min": "Alice",
+        "max": "Bob",
+    }
+    assert {row.summary: row.name for row in df.summary().collect()} == {
+        "count": "2",
+        "mean": None,
+        "stddev": None,
+        "min": "Alice",
+        "25%": None,
+        "50%": None,
+        "75%": None,
+        "max": "Bob",
+    }
+
+
+def test_dataframe_describe_and_summary_numeric_string_column(spark):
+    """Include numeric strings in numeric statistics while counting all strings."""
+    df = spark.createDataFrame([("10",), ("20",), ("not-a-number",), (None,)], "value STRING")
+
+    assert {row.summary: row.value for row in df.describe("value").collect()} == {
+        "count": "3",
+        "mean": "15.0",
+        "stddev": "7.0710678118654755",
+        "min": "10",
+        "max": "not-a-number",
+    }
+    summary = df.summary("count", "mean", "stddev", "min", "max").collect()
+    assert {row.summary: row.value for row in summary} == {
+        "count": "3",
+        "mean": "15.0",
+        "stddev": "7.0710678118654755",
+        "min": "10",
+        "max": "not-a-number",
+    }
+
+
+def test_dataframe_describe_and_summary_ignore_unsupported_columns(spark):
+    """Exclude unsupported columns from statistics on a mixed schema."""
+    df = spark.createDataFrame(
+        [(1, "10", True), (2, "not-a-number", False)],
+        "id LONG, value STRING, flag BOOLEAN",
+    )
+
+    describe = df.describe()
+    assert describe.columns == ["summary", "id", "value"]
+    assert {row.summary for row in describe.collect()} == {"count", "mean", "stddev", "min", "max"}
+
+    summary = df.summary()
+    assert summary.columns == ["summary", "id", "value"]
+    assert {row.summary for row in summary.collect()} == {
+        "count",
+        "mean",
+        "stddev",
+        "min",
+        "25%",
+        "50%",
+        "75%",
+        "max",
+    }
+
+
+def test_dataframe_describe_and_summary_unsupported_column_only(spark):
+    """Return only statistic labels when every selected column is unsupported."""
+    df = spark.createDataFrame([(True,), (False,)], "flag BOOLEAN")
+
+    describe = df.describe("flag")
+    assert describe.columns == ["summary"]
+    assert {row.summary for row in describe.collect()} == {"count", "mean", "stddev", "min", "max"}
+
+    summary = df.summary()
+    assert summary.columns == ["summary"]
+    assert {row.summary for row in summary.collect()} == {
+        "count",
+        "mean",
+        "stddev",
+        "min",
+        "25%",
+        "50%",
+        "75%",
+        "max",
+    }
+
+
 def test_dataframe_with_column_alias(spark):
     df = spark.createDataFrame(
         schema="id INTEGER, value STRING",
@@ -222,6 +313,23 @@ def test_with_metadata(spark):
     assert df.withMetadata("a", {"m": "x"}).schema["a"].metadata == {"m": "x"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {"n": "y"}).schema["a"].metadata == {"n": "y"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
+
+
+def test_column_projections_keep_input_fields(spark):
+    df = (
+        spark.createDataFrame([(1, "x", None)], "a int not null, b string, c double")
+        .withMetadata("a", {"m": "x"})
+        .withMetadata("b", {"n": "y"})
+    )
+
+    def fields(df):
+        return [(f.name, f.dataType.simpleString(), f.nullable, f.metadata) for f in df.schema.fields]
+
+    a, b, c = ("int", False, {"m": "x"}), ("string", True, {"n": "y"}), ("double", True, {})
+    assert fields(df.withColumn("z", lit(1))) == [("a", *a), ("b", *b), ("c", *c), ("z", "int", False, {})]
+    assert fields(df.withColumn("b", lit("v"))) == [("a", *a), ("b", "string", False, {}), ("c", *c)]
+    assert fields(df.withColumnsRenamed({"a": "aa", "c": "cc"})) == [("aa", *a), ("b", *b), ("cc", *c)]
+    assert fields(df.toDF("p", "q", "r")) == [("p", *a), ("q", *b), ("r", *c)]
 
 
 def reverse_sorted_map_in_pandas(df):
