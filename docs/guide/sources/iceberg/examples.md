@@ -9,6 +9,8 @@ rank: 1
 
 ## Basic Usage
 
+The Python example writes a DataFrame to an Iceberg table, appends the same rows, and reads the result. The SQL example creates a table at a path before inserting and querying rows.
+
 ::: code-group
 
 ```python [Python]
@@ -41,9 +43,7 @@ SELECT * FROM users;
 
 ## Data Partitioning
 
-You can work with partitioned Iceberg tables using the Spark DataFrame API.
-Iceberg records partition values and transforms in its metadata so queries can skip files that cannot match a filter.
-The examples below use identity partitioning.
+Iceberg records partition values and transforms in table metadata. Sail uses them to skip files that cannot match a query filter. These examples partition `metrics` by the value of `year` and filter out the 2024 row.
 
 ::: code-group
 
@@ -73,7 +73,7 @@ SELECT * FROM metrics WHERE year > 2024;
 
 :::
 
-Iceberg also supports hidden partitioning with transforms. For example, partition by day while querying the original timestamp column:
+With hidden partitioning, a transform determines the partition without adding a column to queries. This table partitions events by day, while the query filters on the original `event_time` column:
 
 ```sql
 CREATE TABLE events (id BIGINT, event_time TIMESTAMP, message STRING)
@@ -90,7 +90,7 @@ WHERE event_time >= TIMESTAMP '2025-01-02 00:00:00'
 
 ## Format Version
 
-New Iceberg tables created in Sail default to version 2. Select a different version through `TBLPROPERTIES`:
+Sail creates version 2 Iceberg tables by default. Set `format-version` in `TBLPROPERTIES` to create a table in another supported version:
 
 ```sql
 CREATE TABLE iceberg_v3_users (id INT, name STRING)
@@ -99,18 +99,17 @@ LOCATION 'file:///tmp/sail/iceberg_v3_users'
 TBLPROPERTIES ('format-version' = '3');
 ```
 
-For a filesystem-backed table, you can upgrade the version with:
+To upgrade a filesystem-backed table, change the same property:
 
 ```sql
 ALTER TABLE users SET TBLPROPERTIES ('format-version' = '3');
 ```
 
-See [Supported Features](./features#format-versions) for details by format version.
+The [format version reference](./features#format-versions) describes the available features in each version.
 
 ## Schema Evolution
 
-Use `mergeSchema` to add fields or apply supported promotions during an append or overwrite.
-For the table created by the basic Python example, append a row with a new `age` column:
+Set `mergeSchema` during an append or overwrite to add fields or apply supported type promotions. For the `users` table from the basic Python example, this append adds an `age` column:
 
 ```python
 path = "file:///tmp/sail/users"
@@ -118,8 +117,7 @@ df = spark.createDataFrame([(3, "Carol", 30)], "id INT, name STRING, age INT")
 df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(path)
 ```
 
-Supported promotions include `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and increasing decimal precision while keeping the scale.
-Use `overwriteSchema` with a full overwrite to replace the schema:
+Supported promotions include `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and greater decimal precision with the same scale. To replace the schema instead, use `overwriteSchema` with a full overwrite:
 
 ```python
 df = spark.createDataFrame([(1, "Alice")], "id BIGINT, name STRING")
@@ -128,7 +126,7 @@ df.write.format("iceberg").mode("overwrite").option("overwriteSchema", "true").s
 
 ## Scoped Overwrite
 
-For the identity-partitioned `metrics` table from the SQL example, replace one partition using a predicate:
+For the `metrics` table partitioned by `year`, a predicate overwrite replaces only the 2025 partition:
 
 ```python
 from pyspark.sql import functions as F
@@ -137,18 +135,17 @@ replacement = spark.createDataFrame([(2025, 3.0)], "year INT, value FLOAT")
 replacement.writeTo("metrics").overwrite(F.col("year") == 2025)
 ```
 
-Alternatively, replace the partitions present in the input:
+To replace every partition present in the input, use dynamic partition overwrite:
 
 ```python
 replacement.writeTo("metrics").overwritePartitions()
 ```
 
-Both operations preserve untouched partitions. Dynamic overwrite with empty input is a no-op.
+Both operations leave other partitions intact. An empty input makes a dynamic overwrite a no-op.
 
 ## DML Operations
 
-In Sail, `DELETE`, `UPDATE`, and `MERGE INTO` use copy-on-write by default and work with format versions 1, 2, and 3.
-For the `users` table from the SQL example:
+By default, Sail uses copy-on-write for `DELETE`, `UPDATE`, and `MERGE INTO` on format versions 1, 2, and 3. These statements change the `users` table from the SQL example:
 
 ```sql
 UPDATE users SET name = 'Robert' WHERE id = 2;
@@ -162,7 +159,7 @@ WHEN MATCHED THEN UPDATE SET name = source.name
 WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
 ```
 
-For version 3 merge-on-read, set the mode for each DML operation:
+For a version 3 table, set each DML operation to merge-on-read through its table property:
 
 ```sql
 CREATE TABLE iceberg_mor_users (id INT, name STRING)
@@ -189,14 +186,11 @@ WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
 SELECT * FROM iceberg_mor_users ORDER BY id;
 ```
 
-The result contains `(1, 'Alicia')`, `(3, 'Caroline')`, and `(4, 'Dave')`.
-Version 3 merge-on-read records deleted row positions in Puffin deletion vectors and writes replacement data files for updated rows.
-See [DML Operations](./features#dml-operations) for the supported modes.
+The final query returns `(1, 'Alicia')`, `(3, 'Caroline')`, and `(4, 'Dave')`. Version 3 merge-on-read records deleted row positions in Puffin deletion vectors and writes replacement data files for updated rows. See [DML operations](./features#dml-operations) for the supported modes.
 
 ## Time Travel
 
-Iceberg snapshots can be selected by ID, timestamp, or an existing branch or tag.
-A timestamp selects the snapshot that was current at or before that time.
+Time travel selects an Iceberg snapshot by ID, timestamp, or an existing branch or tag. A timestamp selects the snapshot that was current at or before that time.
 
 ```python
 df = spark.read.format("iceberg").option("snapshotId", "123").load(path)
@@ -205,7 +199,4 @@ df = spark.read.format("iceberg").option("branch", "main").load(path)
 df = spark.read.format("iceberg").option("tag", "release_1").load(path)
 ```
 
-Replace the snapshot ID, timestamp, or reference with one that exists in the table's history.
-
-For catalog-backed tables, use the catalog table name so that reads and writes follow the catalog's metadata pointer.
-See [Catalogs and Maintenance](./features#catalogs-and-maintenance) for catalog integration details.
+Use a snapshot ID, timestamp, or reference from the table history. For catalog-backed tables, read and write by table name so Sail follows the catalog metadata pointer. See [catalogs and maintenance](./features#catalogs-and-maintenance) for details.
