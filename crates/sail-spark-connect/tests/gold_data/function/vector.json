@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_l2_distance"
+        "success": "ok"
       }
     },
     {

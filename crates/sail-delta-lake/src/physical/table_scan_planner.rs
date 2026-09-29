@@ -12,8 +12,12 @@ use sail_logical_plan::row_level::RowLevelWriteNode;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::lake_source::{DeltaWriteNode, plan_delta_write};
-use crate::logical::table_source::{DeltaFileSelection, DeltaTableSource};
-use crate::physical::scan_planner::{DeltaFileSource, plan_delta_scan};
+use crate::logical::table_source::{
+    DeltaFileSelection, DeltaMetadataAggregateSource, DeltaTableSource,
+};
+use crate::physical::scan_planner::{
+    DeltaFileSource, plan_delta_metadata_aggregate, plan_delta_scan,
+};
 use crate::physical_plan::planner::create_row_level_write_physical_plan;
 
 /// Physical planner for logical Delta table scans.
@@ -81,6 +85,11 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(source) = scan.source.downcast_ref::<DeltaMetadataAggregateSource>() {
+            return plan_delta_metadata_aggregate(session, source)
+                .await
+                .map(Some);
+        }
         let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
             return Ok(None);
         };

@@ -242,7 +242,7 @@ fn empty_filtered_list(list_array: &ArrayRef, field: FieldRef) -> Result<ArrayRe
 
 /// Filters flat list values using a boolean predicate, returning filtered values and
 /// recomputed per-sublist offsets. Null predicate values are treated as false.
-fn filter_list_values<O: OffsetSizeTrait>(
+pub(crate) fn filter_list_values<O: OffsetSizeTrait>(
     values: &ArrayRef,
     predicate: &BooleanArray,
     offsets: &OffsetBuffer<O>,

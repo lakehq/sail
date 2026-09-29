@@ -187,6 +187,7 @@ impl ServerSessionFactory {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.join_reordering = self.config.optimizer.enable_join_swap;
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
+        optimizer.enable_window_topn = self.config.optimizer.enable_window_topn;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
         // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
         // process-local state. Cluster execution uses independently decoded task plans, so keep

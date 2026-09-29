@@ -319,6 +319,7 @@ impl RowLevelWriteNode {
     pub fn new_delete(
         raw_target: Arc<LogicalPlan>,
         mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
     ) -> Self {
@@ -326,7 +327,7 @@ impl RowLevelWriteNode {
             target,
             raw_target,
             mode,
-            effects: RowLevelEffectPlans::default(),
+            effects,
             commit: RowLevelCommitInfo::Delete {
                 predicate: condition,
             },
@@ -488,7 +489,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 struct NormalizedRowLevelTarget {
     plan: LogicalPlan,
     field_names: Vec<String>,
-    rename_map: HashMap<String, String>,
+    rename_map: TargetExpressionNames,
 }
 
 fn normalize_row_level_target(
@@ -497,6 +498,7 @@ fn normalize_row_level_target(
     resolved_field_names: &[String],
     path_column: &str,
     row_index_column: Option<&str>,
+    metadata_columns: &[&str],
 ) -> Result<NormalizedRowLevelTarget> {
     let rename_map =
         row_level_target_rename_map(input_schema, plan.schema(), resolved_field_names)?;
@@ -514,6 +516,9 @@ fn normalize_row_level_target(
         append_metadata_projection(&plan, &mut projections, row_index_column)?;
     }
 
+    for column in metadata_columns {
+        append_metadata_projection(&plan, &mut projections, column)?;
+    }
     let plan = LogicalPlanBuilder::from(plan)
         .project(projections)?
         .build()?;
@@ -524,11 +529,16 @@ fn normalize_row_level_target(
     })
 }
 
+struct TargetExpressionNames {
+    columns: HashMap<String, String>,
+    correlations: HashMap<Column, String>,
+}
+
 fn row_level_target_rename_map(
     input_schema: &DFSchemaRef,
     plan_schema: &DFSchemaRef,
     resolved_field_names: &[String],
-) -> Result<HashMap<String, String>> {
+) -> Result<TargetExpressionNames> {
     if input_schema.fields().len() != resolved_field_names.len() {
         return plan_err!(
             "row-level target schema has {} fields but {} resolved names",
@@ -555,7 +565,20 @@ fn row_level_target_rename_map(
         rename_map.insert(plan_field.name().clone(), resolved_name.clone());
         rename_map.insert(resolved_name.clone(), resolved_name.clone());
     }
-    Ok(rename_map)
+    let mut correlations = HashMap::new();
+    for ((input, plan), name) in input_schema
+        .columns()
+        .into_iter()
+        .zip(plan_schema.columns())
+        .zip(resolved_field_names)
+    {
+        correlations.insert(input, name.clone());
+        correlations.insert(plan, name.clone());
+    }
+    Ok(TargetExpressionNames {
+        columns: rename_map,
+        correlations,
+    })
 }
 
 fn append_metadata_projection(
@@ -574,20 +597,97 @@ fn append_metadata_projection(
     Ok(())
 }
 
-fn rewrite_target_expr(expr: Expr, rename_map: &HashMap<String, String>) -> Result<Expr> {
-    expr.transform(|expr| {
-        if let Expr::Column(column) = &expr
-            && let Some(name) = rename_map.get(&column.name)
-        {
-            return Ok(Transformed::yes(Expr::Column(Column {
-                relation: None,
-                name: name.clone(),
-                spans: column.spans.clone(),
-            })));
+fn rewrite_target_outer_refs(expr: Expr, names: &TargetExpressionNames) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        if let Expr::OuterReferenceColumn(field, mut column) = expr {
+            if let Some(name) = names.correlations.get(&column) {
+                column.relation = None;
+                column.name = name.clone();
+                return Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                    Arc::new(field.as_ref().clone().with_name(name)),
+                    column,
+                )));
+            }
+            return Ok(Transformed::no(Expr::OuterReferenceColumn(field, column)));
         }
         Ok(Transformed::no(expr))
     })
+    .map(|result| result.data)
+}
+
+fn rewrite_target_subquery(
+    subquery: datafusion_expr::Subquery,
+    names: &TargetExpressionNames,
+) -> Result<datafusion_expr::Subquery> {
+    let plan = LogicalPlan::Subquery(subquery)
+        .transform_up_with_subqueries(|plan| match plan {
+            LogicalPlan::Subquery(mut subquery) => {
+                subquery.outer_ref_columns = subquery
+                    .outer_ref_columns
+                    .into_iter()
+                    .map(|expr| rewrite_target_outer_refs(expr, names))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Transformed::yes(LogicalPlan::Subquery(subquery)))
+            }
+            plan => plan.map_expressions(|expr| {
+                let rewritten = rewrite_target_outer_refs(expr.clone(), names)?;
+                Ok(Transformed::new(
+                    rewritten.clone(),
+                    rewritten != expr,
+                    datafusion_common::tree_node::TreeNodeRecursion::Continue,
+                ))
+            }),
+        })?
+        .data;
+    let LogicalPlan::Subquery(subquery) = plan else {
+        return plan_err!("expected subquery while rewriting row-level correlations");
+    };
+    Ok(subquery)
+}
+
+fn rewrite_target_expr(expr: Expr, names: &TargetExpressionNames) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        let rewritten = match expr {
+            Expr::Column(mut column) => {
+                if let Some(name) = names.columns.get(&column.name) {
+                    column.relation = None;
+                    column.name = name.clone();
+                    return Ok(Transformed::yes(Expr::Column(column)));
+                }
+                return Ok(Transformed::no(Expr::Column(column)));
+            }
+            Expr::ScalarSubquery(subquery) => {
+                Expr::ScalarSubquery(rewrite_target_subquery(subquery, names)?)
+            }
+            Expr::Exists(mut exists) => {
+                exists.subquery = rewrite_target_subquery(exists.subquery, names)?;
+                Expr::Exists(exists)
+            }
+            Expr::InSubquery(mut query) => {
+                query.subquery = rewrite_target_subquery(query.subquery, names)?;
+                Expr::InSubquery(query)
+            }
+            Expr::SetComparison(mut query) => {
+                query.subquery = rewrite_target_subquery(query.subquery, names)?;
+                Expr::SetComparison(query)
+            }
+            expr => return Ok(Transformed::no(expr)),
+        };
+        Ok(Transformed::yes(rewritten))
+    })
     .map(|transformed| transformed.data)
+}
+
+pub fn row_level_expr_contains_subquery(expr: &Expr) -> Result<bool> {
+    expr.exists(|expr| {
+        Ok(matches!(
+            expr,
+            Expr::ScalarSubquery(_)
+                | Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+        ))
+    })
 }
 
 pub fn rewrite_row_level_target_condition(
@@ -613,6 +713,7 @@ pub fn expand_update(
     requirements: RowLevelEffectRequirements,
     path_column: &str,
     row_index_column: Option<&str>,
+    metadata_columns: &[&str],
 ) -> Result<RowLevelWriteNode> {
     let UpdateInfo {
         target_plan,
@@ -638,6 +739,7 @@ pub fn expand_update(
         &resolved_target_field_names,
         path_column,
         row_index_column,
+        metadata_columns,
     )?;
     let condition = condition
         .map(|condition| -> Result<_> {
@@ -671,12 +773,20 @@ pub fn expand_update(
             )
         })
         .collect::<HashMap<_, _>>();
+    let split_subqueries = row_level_expr_contains_subquery(&predicate)?
+        || assignment_map
+            .values()
+            .map(row_level_expr_contains_subquery)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .any(|value| value);
     let mut write_projection = Vec::with_capacity(normalized.field_names.len() + 2);
+    let mut copy_projection = Vec::with_capacity(normalized.field_names.len() + 2);
     for (index, name) in normalized.field_names.iter().enumerate() {
-        let current = col(name);
-        let value = assignment_map
-            .get(&row_level_name_key(name, case_sensitive))
-            .map(|value| {
+        let current = Expr::Column(Column::from_name(name));
+        copy_projection.push(current.clone().alias(name));
+        let value = match assignment_map.get(&row_level_name_key(name, case_sensitive)) {
+            Some(value) => {
                 let target_type = input_schema
                     .fields()
                     .get(index)
@@ -687,26 +797,46 @@ pub fn expand_update(
                     })?
                     .data_type()
                     .clone();
-                when(predicate.clone(), cast(value.clone(), target_type))
-                    .otherwise(current.clone())
-                    .map(|expr| expr.alias(name))
-            })
-            .transpose()?
-            .unwrap_or_else(|| current.alias(name));
-        write_projection.push(value);
+                let updated = cast(value.clone(), target_type);
+                if split_subqueries {
+                    updated
+                } else {
+                    when(predicate.clone(), updated).otherwise(current)?
+                }
+            }
+            None => current,
+        };
+        write_projection.push(value.alias(name));
     }
-    write_projection.push(col(path_column).alias(path_column));
-    write_projection.push(
-        when(
-            predicate.clone(),
-            lit(RowLevelOperationType::Update.as_i32()),
-        )
-        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
-        .alias(OPERATION_COLUMN),
-    );
-    let write_rows = LogicalPlanBuilder::from(normalized.plan.clone())
-        .project(write_projection)?
-        .build()?;
+    for name in std::iter::once(path_column).chain(metadata_columns.iter().copied()) {
+        write_projection.push(col(name).alias(name));
+        copy_projection.push(col(name).alias(name));
+    }
+    let write_rows = if split_subqueries {
+        write_projection.push(lit(RowLevelOperationType::Update.as_i32()).alias(OPERATION_COLUMN));
+        copy_projection.push(lit(RowLevelOperationType::Copy.as_i32()).alias(OPERATION_COLUMN));
+        let updated = LogicalPlanBuilder::from(normalized.plan.clone())
+            .filter(predicate.clone())?
+            .project(write_projection)?
+            .build()?;
+        let copied = LogicalPlanBuilder::from(normalized.plan.clone())
+            .filter(predicate.clone().is_not_true())?
+            .project(copy_projection)?
+            .build()?;
+        LogicalPlanBuilder::from(updated).union(copied)?.build()?
+    } else {
+        write_projection.push(
+            when(
+                predicate.clone(),
+                lit(RowLevelOperationType::Update.as_i32()),
+            )
+            .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
+            .alias(OPERATION_COLUMN),
+        );
+        LogicalPlanBuilder::from(normalized.plan.clone())
+            .project(write_projection)?
+            .build()?
+    };
 
     let generated_column_exprs = generated_column_exprs
         .into_iter()
@@ -781,7 +911,7 @@ pub fn expand_update(
 
 fn rewrite_assignments(
     assignments: Vec<UpdateAssignment>,
-    rename_map: &HashMap<String, String>,
+    rename_map: &TargetExpressionNames,
     field_names: &[String],
     case_sensitive: bool,
 ) -> Result<Vec<UpdateAssignment>> {
@@ -789,7 +919,7 @@ fn rewrite_assignments(
         .into_iter()
         .map(|assignment| {
             let UpdateAssignment { column, value } = assignment;
-            let column = rename_map.get(&column).cloned().unwrap_or(column);
+            let column = rename_map.columns.get(&column).cloned().unwrap_or(column);
             let column =
                 resolve_assignment_column(&column, field_names, case_sensitive)?.to_string();
             Ok(UpdateAssignment {
@@ -857,7 +987,7 @@ fn apply_update_generation(
                 let generated_value = if assigned_columns
                     .contains(&row_level_name_key(name, case_sensitive))
                 {
-                    let current_value = col(name);
+                    let current_value = Expr::Column(Column::from_name(name));
                     let matches_generation = Expr::BinaryExpr(
                         datafusion_expr::expr::BinaryExpr::new(
                             Box::new(current_value.clone()),
@@ -877,10 +1007,10 @@ fn apply_update_generation(
                     (*generation_expr).clone()
                 };
                 when(update_row.clone(), generated_value)
-                    .otherwise(col(name))
+                    .otherwise(Expr::Column(Column::from_name(name)))
                     .map(|expr| expr.alias(name))
             } else {
-                Ok(col(name))
+                Ok(Expr::Column(Column::from_name(name)))
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -968,9 +1098,14 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node =
-            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::MergeOnRead, None, target)
-                .with_expected_snapshot_id(Some(None));
+        let node = RowLevelWriteNode::new_delete(
+            plan,
+            RowLevelWriteMode::MergeOnRead,
+            RowLevelEffectPlans::default(),
+            None,
+            target,
+        )
+        .with_expected_snapshot_id(Some(None));
 
         assert_eq!(node.command(), RowLevelCommand::Delete);
         assert_eq!(node.mode(), RowLevelWriteMode::MergeOnRead);
@@ -994,8 +1129,13 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node =
-            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::CopyOnWrite, None, target);
+        let node = RowLevelWriteNode::new_delete(
+            plan,
+            RowLevelWriteMode::CopyOnWrite,
+            RowLevelEffectPlans::default(),
+            None,
+            target,
+        );
         let mut distinct_commit = node.clone();
         distinct_commit.commit = RowLevelCommitInfo::Delete {
             predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),

@@ -25,6 +25,17 @@ use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
 
+/// Forward a single positional load path as the `"path"` option.
+///
+/// Mirrors PySpark: a single `.load(path)` surfaces as `options["path"]`.
+/// An explicit `"path"` option (case-insensitive) wins; any other number of
+/// positional paths is left alone so pathless sources (e.g. JDBC) are unaffected.
+fn inject_load_path(options: &mut HashMap<String, String>, paths: &[String]) {
+    if paths.len() == 1 && !options.keys().any(|k| k.eq_ignore_ascii_case("path")) {
+        options.insert("path".to_string(), paths[0].clone());
+    }
+}
+
 /// DataSource implementation for a Python data source.
 ///
 /// Each registered Python datasource gets its own PythonDataSourceAdapter instance,
@@ -100,7 +111,14 @@ impl PythonDataSourceAdapter {
     }
 
     /// Create PythonDataSource from options.
-    fn create_datasource(&self, options: &[HashMap<String, String>]) -> Result<PythonDataSource> {
+    ///
+    /// `paths` carries positional `.load(path)` paths; a single one is forwarded
+    /// as the `"path"` option unless explicitly set.
+    fn create_datasource(
+        &self,
+        options: &[HashMap<String, String>],
+        paths: &[String],
+    ) -> Result<PythonDataSource> {
         // Get pickled class bytes: prefer embedded (session-scoped) over global registry
         let pickled_class = match &self.pickled_class {
             Some(bytes) => bytes.clone(),
@@ -117,11 +135,12 @@ impl PythonDataSourceAdapter {
         };
 
         // Merge options
-        let merged_options: HashMap<String, String> = options
+        let mut merged_options: HashMap<String, String> = options
             .iter()
             .flat_map(|m| m.iter())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        inject_load_path(&mut merged_options, paths);
 
         // Create datasource instance with options
         self.instantiate_datasource(&pickled_class, merged_options)
@@ -193,7 +212,7 @@ impl DataSource for PythonDataSourceAdapter {
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
-        let datasource = self.create_datasource(&opaque_options)?;
+        let datasource = self.create_datasource(&opaque_options, &info.paths)?;
 
         // Get schema (use provided schema or discover from Python).
         // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
@@ -344,7 +363,9 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             name: node.name.clone(),
             pickled_class: node.pickled_class.clone(),
         };
-        let datasource = adapter.create_datasource(&opaque_options)?;
+        // Writes already carry `.save(path)` in the options (see `create_writer`), so
+        // there are no positional paths to forward here.
+        let datasource = adapter.create_datasource(&opaque_options, &[])?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();
@@ -378,5 +399,38 @@ mod tests {
     fn test_python_data_source_adapter_name() {
         let source = PythonDataSourceAdapter::new("test_datasource".to_string());
         assert_eq!(source.name(), "test_datasource");
+    }
+
+    #[test]
+    fn test_inject_load_path_forwards_single_positional_path() {
+        let mut options = HashMap::new();
+        inject_load_path(&mut options, &["/data/events.lance".to_string()]);
+        assert_eq!(
+            options.get("path").map(String::as_str),
+            Some("/data/events.lance")
+        );
+    }
+
+    #[test]
+    fn test_inject_load_path_explicit_option_wins() {
+        for key in ["path", "PATH", "Path"] {
+            let mut options = HashMap::from([(key.to_string(), "/explicit".to_string())]);
+            inject_load_path(&mut options, &["/positional".to_string()]);
+            assert_eq!(options.len(), 1);
+            assert_eq!(options.get(key).map(String::as_str), Some("/explicit"));
+        }
+    }
+
+    #[test]
+    fn test_inject_load_path_leaves_other_cases_alone() {
+        // No positional paths (e.g. JDBC): no spurious option.
+        let mut options = HashMap::new();
+        inject_load_path(&mut options, &[]);
+        assert!(options.is_empty());
+
+        // Multiple positional paths: previous behavior is preserved.
+        let mut options = HashMap::new();
+        inject_load_path(&mut options, &["/a".to_string(), "/b".to_string()]);
+        assert!(options.is_empty());
     }
 }

@@ -273,17 +273,16 @@ async fn shuffle_write(
     let result = async {
         while let Some(batch) = stream.next().await {
             let batch = batch?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
             let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
             partitioner.partition(batch, |p, batch| {
                 partitions[p] = Some(batch);
                 Ok(())
             })?;
-            for (channel, partition) in partitions.iter_mut().enumerate() {
-                if let Some(batch) = partition.take()
-                    && sink.write(channel, batch).await? == TaskStreamWriteState::Closed
-                {
-                    return Ok::<_, datafusion::error::DataFusionError>(false);
-                }
+            if sink.write(partitions).await? == TaskStreamWriteState::Closed {
+                return Ok::<_, datafusion::error::DataFusionError>(false);
             }
         }
         Ok(true)

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
@@ -9,9 +9,19 @@ use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
+use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{FieldInfo, PlanResolverState};
+
+/// Distinguish an absent root from a matching root whose extraction is not yet
+/// supported. The latter must still shadow deeper attributes.
+enum FieldResolution {
+    Resolved(String, expr::Expr),
+    Missing,
+    Unsupported,
+}
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
@@ -59,9 +69,28 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        if let Some(plan_id) = plan_id
+            && state.missing_input(schema).is_some()
         {
+            self.verify_plan_attribute_root(&name, plan_id, state)?;
+        }
+        // Sort resolution can discard even the operator's own output when a
+        // nested field or root is invalid. Filters and repartitions reject that
+        // error. Keep wildcard/ordinal expansion on the original local schema.
+        let local_schema = &state.missing_input(schema).map_or_else(
+            || Arc::clone(schema),
+            |input| {
+                input
+                    .schemas()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(DFSchema::empty()))
+            },
+        );
+        let local = self
+            .resolve_field_or_nested_field(&name, plan_id, local_schema, state)
+            .map_err(|error| Self::discard_failed_output(&name, schema, 0, error, state))?;
+        if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
@@ -69,8 +98,86 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+        if let Some((name, expr)) = self
+            .resolve_hidden_field(&name, plan_id, local_schema, state)
+            .map_err(|error| Self::discard_failed_output(&name, schema, 0, error, state))?
+        {
             return Ok(NamedExpr::new(vec![name], expr));
+        }
+        // Spark resolves literal function names (e.g. `current_date`) that the output does
+        // not have to the functions, before missing attributes and outer references.
+        if plan_id.is_none() && Self::is_literal_function_name(&name) {
+            let function_name = name.parts()[0].as_ref().to_ascii_lowercase();
+            if function_name == "grouping__id" {
+                // TODO: Resolve the Hive grouping ID name to Spark's grouping aggregate.
+                return Err(PlanError::analysis(format!(
+                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                )));
+            }
+            let function_name = match function_name.as_str() {
+                "user" | "session_user" => "current_user",
+                name => name,
+            };
+            let expr = get_built_in_function(function_name)?(ScalarFunctionInput {
+                arguments: vec![],
+                function_context: FunctionContextInput {
+                    argument_display_names: &[],
+                    plan_config: &self.config,
+                    session_context: self.ctx,
+                    schema,
+                },
+            })?;
+            let name = match function_name {
+                "current_time" => "current_time(6)".to_string(),
+                name => format!("{name}()"),
+            };
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
+        let missing_input_schemas = state
+            .missing_input(schema)
+            .map(|input| input.schemas())
+            .unwrap_or_default();
+        // A projected struct with an invalid nested path shadows any older struct
+        // of the same name. Only an absent root can be recovered from a descendant.
+        if !missing_input_schemas.is_empty() && matches!(local, FieldResolution::Unsupported) {
+            return Err(PlanError::analysis(format!(
+                "attribute {name:?} is missing from the schema: cannot resolve attribute"
+            )));
+        }
+        // Spark discards all tentative bindings to a descendant output where resolution
+        // fails and continues with deeper outputs, then outer references.
+        // TODO: Spark resolves again in later analyzer iterations, so a name bound only by
+        // a discarded output can still bind there once the failing name resolves deeper.
+        // DataFrame column references (plan IDs) are never discarded in Spark either.
+        for (index, input_schema) in missing_input_schemas.iter().enumerate().skip(1) {
+            match self.resolve_field_or_nested_field(&name, plan_id, input_schema, state) {
+                Ok(FieldResolution::Resolved(name, expr)) => {
+                    return Ok(NamedExpr::new(vec![name], expr));
+                }
+                Ok(FieldResolution::Missing) => {}
+                Ok(FieldResolution::Unsupported) => {
+                    // A map value or array item that Spark can extract keeps this
+                    // output's bindings. Do not fall back to an older attribute.
+                    // TODO: Extract map values and array items by dotted names.
+                    return Err(PlanError::analysis(format!(
+                        "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                    )));
+                }
+                Err(error) => {
+                    return Err(Self::discard_failed_output(
+                        &name, schema, index, error, state,
+                    ));
+                }
+            }
+            match self.resolve_hidden_field(&name, plan_id, input_schema, state) {
+                Ok(Some((name, expr))) => return Ok(NamedExpr::new(vec![name], expr)),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(Self::discard_failed_output(
+                        &name, schema, index, error, state,
+                    ));
+                }
+            }
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(PlanError::AnalysisError(format!(
@@ -87,49 +194,196 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Spark ignores a failed resolution against an output that the operator can discard,
+    /// and reports the attribute as unresolved if no other output binds it.
+    fn discard_failed_output(
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        index: usize,
+        error: PlanError,
+        state: &mut PlanResolverState,
+    ) -> PlanError {
+        if state
+            .missing_input_mut(schema)
+            .is_some_and(|input| input.discard(index))
+        {
+            PlanError::analysis(format!(
+                "attribute {name:?} is missing from the schema: cannot resolve attribute"
+            ))
+        } else {
+            error
+        }
+    }
+
+    /// Returns whether Spark fails to extract the nested field from a value of the data type.
+    /// Map values and array items resolve before coercion, but extracting a later
+    /// field can still fail for the resulting type.
+    // TODO: Spark 4.2 propagates NullType through extraction via `applyOrNull`.
+    // Support that behavior without changing Spark 3.5–4.1 missing-input recovery.
+    fn nested_field_extraction_fails<T: AsRef<str>>(
+        &self,
+        data_type: &DataType,
+        inner: &[T],
+    ) -> bool {
+        let [name, remaining @ ..] = inner else {
+            return false;
+        };
+        match data_type {
+            DataType::Struct(fields) => {
+                match find_struct_field(fields, name.as_ref(), self.config.case_sensitive) {
+                    Ok(Some(field)) => {
+                        self.nested_field_extraction_fails(field.data_type(), remaining)
+                    }
+                    _ => true,
+                }
+            }
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => match field.data_type() {
+                DataType::Struct(fields) => {
+                    match find_struct_field(fields, name.as_ref(), self.config.case_sensitive) {
+                        Ok(Some(child)) => {
+                            let item = Field::new_list_field(child.data_type().clone(), true);
+                            self.nested_field_extraction_fails(
+                                &DataType::List(Arc::new(item)),
+                                remaining,
+                            )
+                        }
+                        _ => true,
+                    }
+                }
+                _ => self.nested_field_extraction_fails(field.data_type(), remaining),
+            },
+            DataType::Map(field, _) => {
+                if let DataType::Struct(fields) = field.data_type()
+                    && let Some(value) = fields.get(1)
+                {
+                    self.nested_field_extraction_fails(value.data_type(), remaining)
+                } else {
+                    false
+                }
+            }
+            _ => true,
+        }
+    }
+
+    fn is_literal_function_name(name: &spec::ObjectName) -> bool {
+        // The names in Spark's `LiteralFunctionResolution`.
+        const LITERAL_FUNCTION_NAMES: [&str; 7] = [
+            "current_date",
+            "current_timestamp",
+            "current_time",
+            "current_user",
+            "user",
+            "session_user",
+            "grouping__id",
+        ];
+        matches!(name.parts(), [part] if LITERAL_FUNCTION_NAMES
+            .iter()
+            .any(|x| part.as_ref().eq_ignore_ascii_case(x)))
+    }
+
+    /// Spark checks a bound reference against the original DataFrame output
+    /// before filtering it to surviving attributes. A later projection cannot
+    /// make an originally ambiguous unqualified root unambiguous.
+    fn verify_plan_attribute_root(
+        &self,
+        name: &spec::ObjectName,
+        plan_id: i64,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        let Some(schema) = state.get_plan_schema(plan_id) else {
+            return Ok(());
+        };
+        for (qualifier, root, _) in
+            Self::generate_qualified_nested_field_candidates(name.parts()).rev()
+        {
+            let mut origins = self
+                .matching_root_fields(schema, qualifier.as_ref(), root.as_ref(), None, state)
+                .map(|(_, _, info)| info.origin());
+            let Some(first) = origins.next() else {
+                continue;
+            };
+            if origins.any(|origin| origin != first) {
+                return Err(PlanError::analysis(format!(
+                    "ambiguous attribute: {name:?}"
+                )));
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    /// Returns the visible fields of the schema that match the qualifier and root name,
+    /// along with their field information.
+    fn matching_root_fields<'a>(
+        &'a self,
+        schema: &'a DFSchema,
+        qualifier: Option<&'a TableReference>,
+        root: &'a str,
+        plan_id: Option<i64>,
+        state: &'a PlanResolverState,
+    ) -> impl Iterator<Item = (Option<&'a TableReference>, &'a FieldRef, &'a FieldInfo)> {
+        schema.iter().filter_map(move |(field_qualifier, field)| {
+            if !qualifier_matches(qualifier, field_qualifier, self.config.case_sensitive) {
+                return None;
+            }
+            let info = state.get_field_info(field.name()).ok()?;
+            (!info.is_hidden()
+                && info.matches(root, plan_id)
+                && (!self.config.case_sensitive || info.name() == root))
+                .then_some((field_qualifier, field, info))
+        })
+    }
+
     fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        state: &PlanResolverState,
+    ) -> PlanResult<FieldResolution> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
-        let mut candidates = schema
-            .iter()
-            .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field_info(field.name()) else {
-                    return vec![];
-                };
-                if info.is_hidden() {
-                    return vec![];
+        // Spark chooses the most-qualified matching root before extracting nested
+        // fields, using its configured resolver for both the qualifier and root name.
+        // A missing field in that root cannot select a less-qualified root.
+        for (q, root, inner) in candidates.rev() {
+            // Reuse the matching fields for extraction rather than scanning the
+            // schema again after choosing a qualifier. Stop even if extraction is
+            // unsupported: a matching root still shadows less-qualified roots.
+            let mut fields =
+                self.matching_root_fields(schema, q.as_ref(), root.as_ref(), plan_id, state);
+            let Some((qualifier, field, info)) = fields.next() else {
+                continue;
+            };
+            // Spark checks root ambiguity before extracting fields. An unsupported
+            // extraction must not hide a second root and bind the first one instead.
+            // Spark deduplicates matches of the same attribute (e.g. `SELECT a, a`).
+            if fields.any(|(other_qualifier, _, other)| {
+                other_qualifier != qualifier || other.origin() != info.origin()
+            }) {
+                return Err(PlanError::AnalysisError(format!(
+                    "ambiguous attribute: {name:?}"
+                )));
+            }
+            return match self.resolve_potentially_nested_field(
+                col((qualifier, field)),
+                field.data_type(),
+                inner,
+            )? {
+                Some(expr) => {
+                    let name = inner.last().unwrap_or(root).as_ref().to_string();
+                    Ok(FieldResolution::Resolved(name, expr))
                 }
-                candidates
-                    .iter()
-                    .filter_map(|(q, name, inner)| {
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), plan_id)
-                        {
-                            let expr = Self::resolve_potentially_nested_field(
-                                col((qualifier, field)),
-                                field.data_type(),
-                                inner,
-                            )?;
-                            let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some((name, expr))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect::<Vec<_>>();
-        if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous attribute: {name:?}"
-            )));
+                None if self.nested_field_extraction_fails(field.data_type(), inner) => {
+                    Err(PlanError::analysis(format!(
+                        "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                    )))
+                }
+                None => Ok(FieldResolution::Unsupported),
+            };
         }
-        Ok(candidates.pop())
+        Ok(FieldResolution::Missing)
     }
 
     fn resolve_aggregate_field(
@@ -167,7 +421,7 @@ impl PlanResolver<'_> {
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let [name] = name.parts() else {
             return Ok(None);
@@ -221,8 +475,9 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier)
+                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
                             && info.matches(name.as_ref(), None)
+                            && (!self.config.case_sensitive || info.name() == name.as_ref())
                     })
                     .map(|(_, name)| {
                         (
@@ -245,50 +500,51 @@ impl PlanResolver<'_> {
     }
 
     fn resolve_potentially_nested_field<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<expr::Expr> {
+    ) -> PlanResult<Option<expr::Expr>> {
         match inner {
-            [] => Some(expr),
+            [] => Ok(Some(expr)),
             [name, remaining @ ..] => match data_type {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                    .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
-                    }),
+                DataType::Struct(fields) => {
+                    let Some(field) =
+                        find_struct_field(fields, name.as_ref(), self.config.case_sensitive)?
+                    else {
+                        return Ok(None);
+                    };
+                    let args = vec![expr, lit(field.name().to_string())];
+                    let expr =
+                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    self.resolve_potentially_nested_field(expr, field.data_type(), remaining)
+                }
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => {
                     let DataType::Struct(fields) = field.data_type() else {
-                        return None;
+                        return Ok(None);
                     };
-                    fields
-                        .iter()
-                        .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                        .and_then(|child| {
-                            let expr = ScalarUDF::from(ArrayStructField::new())
-                                .call(vec![expr, lit(child.name().to_string())]);
-                            let item = Arc::new(Field::new_list_field(
-                                child.data_type().clone(),
-                                field.is_nullable() || child.is_nullable(),
-                            ));
-                            let data_type = match data_type {
-                                DataType::List(_) => DataType::List(item),
-                                DataType::LargeList(_) => DataType::LargeList(item),
-                                DataType::FixedSizeList(_, size) => {
-                                    DataType::FixedSizeList(item, *size)
-                                }
-                                _ => unreachable!("list data type matched above"),
-                            };
-                            Self::resolve_potentially_nested_field(expr, &data_type, remaining)
-                        })
+                    let Some(child) =
+                        find_struct_field(fields, name.as_ref(), self.config.case_sensitive)?
+                    else {
+                        return Ok(None);
+                    };
+                    let expr = ScalarUDF::from(ArrayStructField::new())
+                        .call(vec![expr, lit(child.name().to_string())]);
+                    let item = Arc::new(Field::new_list_field(
+                        child.data_type().clone(),
+                        field.is_nullable() || child.is_nullable(),
+                    ));
+                    let data_type = match data_type {
+                        DataType::List(_) => DataType::List(item),
+                        DataType::LargeList(_) => DataType::LargeList(item),
+                        DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
+                        _ => unreachable!("list data type matched above"),
+                    };
+                    self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }
-                _ => None,
+                _ => Ok(None),
             },
         }
     }
@@ -310,53 +566,51 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &T, &[T])> {
-        let mut out = vec![];
-        if let [n1, x @ ..] = name {
-            out.push((None, n1, x));
-        }
-        if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::bare(n1.as_ref())), n2, x));
-        }
-        if let [n1, n2, n3, x @ ..] = name {
-            out.push((
-                Some(TableReference::partial(n1.as_ref(), n2.as_ref())),
-                n3,
-                x,
-            ));
-        }
-        if let [n1, n2, n3, n4, x @ ..] = name {
-            out.push((
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                n4,
-                x,
-            ));
-        }
-        out
+    ) -> impl DoubleEndedIterator<Item = (Option<TableReference>, &T, &[T])> {
+        (0..name.len().min(4)).map(|index| {
+            let qualifier = match index {
+                0 => None,
+                1 => Some(TableReference::bare(name[0].as_ref())),
+                2 => Some(TableReference::partial(name[0].as_ref(), name[1].as_ref())),
+                _ => Some(TableReference::full(
+                    name[0].as_ref(),
+                    name[1].as_ref(),
+                    name[2].as_ref(),
+                )),
+            };
+            (qualifier, &name[index], &name[index + 1..])
+        })
     }
 }
 
 /// Returns whether the qualifier matches the target qualifier.
-/// Identifiers are case-insensitive.
 /// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
 pub(super) fn qualifier_matches(
     qualifier: Option<&TableReference>,
     target: Option<&TableReference>,
+    case_sensitive: bool,
 ) -> bool {
+    let names_equal = |left: &str, right: &str| {
+        if case_sensitive {
+            left == right
+        } else {
+            left.eq_ignore_ascii_case(right)
+        }
+    };
     let table_matches = |table: &str| {
         target
             .map(|x| x.table())
-            .is_some_and(|x| x.eq_ignore_ascii_case(table))
+            .is_some_and(|x| names_equal(x, table))
     };
     let schema_matches = |schema: &str| {
         target
             .and_then(|x| x.schema())
-            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
+            .is_some_and(|x| names_equal(x, schema))
     };
     let catalog_matches = |catalog: &str| {
         target
             .and_then(|x| x.catalog())
-            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
+            .is_some_and(|x| names_equal(x, catalog))
     };
     match qualifier {
         Some(TableReference::Bare { table }) => table_matches(table),
@@ -370,4 +624,27 @@ pub(super) fn qualifier_matches(
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
     }
+}
+
+/// Returns the struct field selected by Spark's configured name resolver.
+/// More than one match is an ambiguous reference.
+pub(super) fn find_struct_field<'a>(
+    fields: &'a Fields,
+    name: &str,
+    case_sensitive: bool,
+) -> PlanResult<Option<&'a FieldRef>> {
+    let mut matches = fields.iter().filter(|x| {
+        if case_sensitive {
+            x.name() == name
+        } else {
+            x.name().eq_ignore_ascii_case(name)
+        }
+    });
+    let field = matches.next();
+    if matches.next().is_some() {
+        return Err(PlanError::AnalysisError(format!(
+            "ambiguous reference to the field: {name}"
+        )));
+    }
+    Ok(field)
 }

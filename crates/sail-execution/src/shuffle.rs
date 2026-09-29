@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::ipc::CompressionType;
+use datafusion::arrow::ipc::writer::IpcWriteOptions;
 use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
 use sail_celeborn::endpoint::{EndpointResolver, StaticEndpointResolver};
 use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
-    Flight,
+    Flight {
+        compression: ShuffleCompression,
+    },
     Storage {
         path: Option<String>,
         max_file_size: usize,
@@ -32,7 +37,9 @@ pub struct ShuffleEndpointOverride {
 impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
     fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
-            sail_common::config::ShuffleBackend::Flight => Self::Flight,
+            sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
+                compression: flight.compression.clone().into(),
+            },
             sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
                 max_file_size: storage.max_file_size,
@@ -69,6 +76,13 @@ pub fn celeborn_application_id(session_id: &str) -> String {
 }
 
 impl ShuffleBackendKind {
+    pub fn flight_compression(&self) -> ShuffleCompression {
+        match self {
+            Self::Flight { compression } => *compression,
+            Self::Storage { .. } | Self::Celeborn { .. } => ShuffleCompression::None,
+        }
+    }
+
     pub fn celeborn_master_endpoints_string(&self) -> String {
         let Self::Celeborn {
             master_endpoints, ..
@@ -136,6 +150,26 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
     }
 }
 
+impl ShuffleCompression {
+    pub fn ipc_write_options(self) -> Result<IpcWriteOptions, ArrowError> {
+        IpcWriteOptions::default().try_with_compression(match self {
+            Self::None => None,
+            Self::Lz4 => Some(CompressionType::LZ4_FRAME),
+            Self::Zstd => Some(CompressionType::ZSTD),
+        })
+    }
+}
+
+impl std::fmt::Display for ShuffleCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Lz4 => "lz4",
+            Self::Zstd => "zstd",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -182,7 +216,10 @@ mod tests {
     #[test]
     fn test_non_celeborn_endpoint_overrides_string_is_empty() {
         assert_eq!(
-            ShuffleBackendKind::Flight.celeborn_endpoint_overrides_string(),
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None
+            }
+            .celeborn_endpoint_overrides_string(),
             "[]"
         );
     }
@@ -190,7 +227,10 @@ mod tests {
     #[test]
     fn test_non_celeborn_master_endpoints_string_is_empty() {
         assert_eq!(
-            ShuffleBackendKind::Flight.celeborn_master_endpoints_string(),
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None
+            }
+            .celeborn_master_endpoints_string(),
             "[]"
         );
     }

@@ -282,6 +282,41 @@ Feature: Delta Lake Delete
         | 8  | Henry | 33  | HR         | 60000  | true   |
         | 2  | Bob   | 30  | Marketing  | 65000  | true   |
 
+  Rule: Partition-only deletes compare logical values
+    Scenario: Numeric partition comparisons delete only matching files
+      Given variable location for temporary directory delta_delete_numeric_partitions
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_numeric_partitions
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_numeric_partitions (p INT, q INT, v INT)
+        USING DELTA PARTITIONED BY (p, q) LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_numeric_partitions VALUES
+          (10, 2, 100), (2, 10, 200), (3, 2, 300), (NULL, 2, 400)
+        """
+      When query
+        """
+        EXPLAIN DELETE FROM delta_delete_numeric_partitions WHERE p > q
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        DELETE FROM delta_delete_numeric_partitions WHERE p > q
+        """
+      When query
+        """
+        SELECT p, q, v FROM delta_delete_numeric_partitions ORDER BY v
+        """
+      Then query result collected ordered
+        | p    | q  | v   |
+        | 2    | 10 | 200 |
+        | NULL | 2  | 400 |
+
   Rule: Operations on partitioned tables
     Background:
       Given variable location for temporary directory x

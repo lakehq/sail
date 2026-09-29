@@ -195,6 +195,26 @@ impl Hash for Add {
 }
 
 impl Add {
+    /// Exact live row count, excluding rows removed by a deletion vector.
+    pub(crate) fn num_logical_records(&self) -> Option<usize> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RowCount {
+            num_records: i64,
+        }
+        let count: RowCount = serde_json::from_str(self.stats.as_deref()?).ok()?;
+        let deleted = self
+            .deletion_vector
+            .as_ref()
+            .map(|vector| usize::try_from(vector.cardinality))
+            .transpose()
+            .ok()?
+            .unwrap_or(0);
+        usize::try_from(count.num_records)
+            .ok()?
+            .checked_sub(deleted)
+    }
+
     /// Returns parsed statistics if present.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         Stats::from_json_opt(self.stats.as_deref())

@@ -7,6 +7,16 @@ use sail_common_datafusion::catalog::managed::{
 
 use crate::spec::{FormatVersion, TableMetadata};
 
+pub(crate) fn validate_write_properties(properties: &HashMap<String, String>) -> Result<()> {
+    if properties
+        .get("write.wap.enabled")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
+        return datafusion_common::not_impl_err!("Iceberg write-audit-publish (WAP) writes");
+    }
+    Ok(())
+}
+
 pub(crate) fn metadata_properties_from_table_properties(
     table_properties: &[(String, String)],
 ) -> Result<(FormatVersion, HashMap<String, String>)> {

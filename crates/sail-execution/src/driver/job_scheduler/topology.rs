@@ -11,6 +11,7 @@ use crate::job_graph::{InputMode, JobGraph, OutputMode};
 pub struct JobTopology {
     pub regions: Vec<TaskRegionTopology>,
     pub stages: Vec<StageTopology>,
+    pub task_regions: HashMap<TaskTopology, usize>,
 }
 
 #[derive(Debug)]
@@ -209,7 +210,11 @@ impl JobTopology {
             }
         }
 
-        Ok(Self { regions, stages })
+        Ok(Self {
+            regions,
+            stages,
+            task_regions: task_to_region,
+        })
     }
 }
 

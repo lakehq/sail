@@ -69,7 +69,7 @@ impl Actor for WorkerActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn { compression, .. } => {
@@ -87,7 +87,7 @@ impl Actor for WorkerActor {
                 ));
                 Some(CelebornStreamManager::new(client))
             }
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
         let task_runner = ctx
             .children_mut()
@@ -116,7 +116,16 @@ impl Actor for WorkerActor {
         let span = Span::enter_with_local_parent("WorkerActor::serve");
         let task_context = self.options.session.task_ctx();
         self.server = server
-            .start(Self::serve(ctx.handle().clone(), task_runner, task_context, addr).in_span(span))
+            .start(
+                Self::serve(
+                    ctx.handle().clone(),
+                    task_runner,
+                    task_context,
+                    addr,
+                    self.options.shuffle_backend.flight_compression(),
+                )
+                .in_span(span),
+            )
             .await;
     }
 

@@ -42,6 +42,20 @@ pub struct DeltaTableSource {
     file_selection: DeltaFileSelection,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DeltaMetadataAggregateSource {
+    pub table: DeltaTableSource,
+    pub filters: Vec<Expr>,
+    pub group_columns: Vec<String>,
+    pub schema: SchemaRef,
+}
+
+impl TableSource for DeltaMetadataAggregateSource {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 impl std::fmt::Debug for DeltaTableSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeltaTableSource")

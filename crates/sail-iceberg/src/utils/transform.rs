@@ -14,7 +14,6 @@
 ///
 /// This module contains pure computational functions for applying Iceberg partition
 /// transforms like bucket, truncate, year, month, day, and hour.
-use chrono::Datelike;
 use uuid::Uuid;
 
 use crate::spec::transform::Transform;
@@ -30,21 +29,39 @@ pub fn apply_transform(
     value: Option<Literal>,
 ) -> Option<Literal> {
     match transform {
-        Transform::Identity | Transform::Unknown | Transform::Void => value,
+        Transform::Identity | Transform::Unknown => value,
+        Transform::Void => None,
         Transform::Truncate(w) => match value {
             Some(Literal::Primitive(PrimitiveLiteral::String(s))) => {
                 let taken = s.chars().take(w as usize).collect::<String>();
                 Some(Literal::Primitive(PrimitiveLiteral::String(taken)))
             }
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(mut bytes))) => {
+                bytes.truncate(w as usize);
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes)))
+            }
             Some(Literal::Primitive(PrimitiveLiteral::Int(v))) => {
-                let w = w as i32;
+                let w = i32::try_from(w).ok().filter(|width| *width > 0)?;
                 let rem = v.rem_euclid(w);
-                Some(Literal::Primitive(PrimitiveLiteral::Int(v - rem)))
+                Some(Literal::Primitive(PrimitiveLiteral::Int(
+                    v.wrapping_sub(rem),
+                )))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                let w = w as i64;
+                let w = i64::from(w);
+                if w == 0 {
+                    return None;
+                }
                 let rem = v.rem_euclid(w);
-                Some(Literal::Primitive(PrimitiveLiteral::Long(v - rem)))
+                Some(Literal::Primitive(PrimitiveLiteral::Long(
+                    v.wrapping_sub(rem),
+                )))
+            }
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => {
+                let width = i128::from(w);
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(
+                    v - v.rem_euclid(width),
+                )))
             }
             other => other,
         },
@@ -54,7 +71,17 @@ pub fn apply_transform(
                 Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_int(v, n))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(v, n))))
+                let micros = if matches!(
+                    field_type,
+                    Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+                ) {
+                    v.div_euclid(1_000)
+                } else {
+                    v
+                };
+                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(
+                    micros, n,
+                ))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => Some(Literal::Primitive(
                 PrimitiveLiteral::Int(bucket_decimal(v, n)),
@@ -180,8 +207,7 @@ pub fn apply_transform(
                     _ => us_or_ns,
                 };
                 let hours = micros.div_euclid(3_600_000_000);
-                // safe downcast in typical ranges
-                let hours_i32 = i32::try_from(hours).unwrap_or(i32::MAX);
+                let hours_i32 = hours as i32;
                 Some(Literal::Primitive(PrimitiveLiteral::Int(hours_i32)))
             }
             _ => value,
@@ -193,38 +219,36 @@ pub fn apply_transform(
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
 pub fn days_to_year(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    date.year() - UNIX_EPOCH_YEAR
+    let (year, _) = year_month_from_days(days);
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn micros_to_year(micros: i64) -> i32 {
-    chrono::DateTime::from_timestamp_micros(micros)
-        .map(|dt| dt.year() - UNIX_EPOCH_YEAR)
-        .unwrap_or(0)
+    days_to_year(micros.div_euclid(86_400_000_000) as i32)
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
+    let (year, month) = year_month_from_days(days);
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 pub fn micros_to_months(micros: i64) -> i32 {
-    let date = match chrono::DateTime::from_timestamp_micros(micros) {
-        Some(dt) => dt,
-        None => return 0,
-    };
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::DateTime::from_timestamp_micros(0).unwrap();
-    if date > epoch {
-        (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
-    } else {
-        let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-        -delta
-    }
+    days_to_months(micros.div_euclid(86_400_000_000) as i32)
+}
+
+fn year_month_from_days(days: i32) -> (i32, i32) {
+    // March-based Gregorian eras cover the full Date32 range, including dates
+    // outside chrono's supported years. Euclidean division handles pre-epoch dates.
+    let days = i64::from(days) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let month = march_month + if march_month < 10 { 3 } else { -9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year as i32, month as i32)
 }
 
 // ==== Helpers for bucket transform (Murmur3) ====
@@ -248,11 +272,16 @@ fn hash_long(v: i64) -> i32 {
 #[inline]
 fn hash_decimal(v: i128) -> i32 {
     let bytes = v.to_be_bytes();
-    if let Some(start) = bytes.iter().position(|&x| x != 0) {
-        hash_bytes(&bytes[start..])
-    } else {
-        hash_bytes(&[0])
+    let mut start = 0;
+    while start < bytes.len() - 1 {
+        let redundant = (bytes[start] == 0 && bytes[start + 1] & 0x80 == 0)
+            || (bytes[start] == 0xff && bytes[start + 1] & 0x80 != 0);
+        if !redundant {
+            break;
+        }
+        start += 1;
     }
+    hash_bytes(&bytes[start..])
 }
 
 #[inline]
@@ -288,6 +317,63 @@ pub fn bucket_bytes(b: &[u8], n: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn temporal_transforms_match_signed_gregorian_dates() {
+        use chrono::Datelike;
+
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch");
+        for days in (-800_000..800_000).step_by(31).chain([-1, 0, 1, -3653]) {
+            let date = epoch + chrono::TimeDelta::days(i64::from(days));
+            let year = date.year() - 1970;
+            let months = year * 12 + date.month0() as i32;
+            assert_eq!(days_to_year(days), year);
+            assert_eq!(days_to_months(days), months);
+            assert_eq!(micros_to_year(i64::from(days) * 86_400_000_000), year);
+            assert_eq!(micros_to_months(i64::from(days) * 86_400_000_000), months);
+        }
+        assert_eq!(micros_to_year(-1), -1);
+        assert_eq!(micros_to_months(-1), -1);
+        // The complete Date32 domain fits in year/month offsets.
+        assert!(days_to_year(i32::MIN) < -5_000_000);
+        assert!(days_to_months(i32::MAX) > 60_000_000);
+    }
+
+    #[test]
+    fn decimal_bucket_preserves_twos_complement_sign() {
+        for (value, bytes) in [
+            (0, vec![0]),
+            (127, vec![127]),
+            (128, vec![0, 128]),
+            (255, vec![0, 255]),
+            (256, vec![1, 0]),
+            (-1, vec![255]),
+            (-128, vec![128]),
+            (-129, vec![255, 127]),
+        ] {
+            assert_eq!(hash_decimal(value), hash_bytes(&bytes), "{value}");
+        }
+        assert_eq!(bucket_decimal(128, 100), 49);
+    }
+
+    #[test]
+    fn decimal_truncate_uses_floor_on_unscaled_values() {
+        let data_type = Type::Primitive(PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        });
+        for (value, expected) in [(1065, 1050), (-1065, -1100), (-1050, -1050), (0, 0)] {
+            assert_eq!(
+                apply_transform(
+                    Transform::Truncate(50),
+                    &data_type,
+                    Some(Literal::Primitive(PrimitiveLiteral::Int128(value)))
+                ),
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(expected)))
+            );
+        }
+    }
 
     #[test]
     fn test_days_to_year() {

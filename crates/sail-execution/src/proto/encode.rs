@@ -21,6 +21,8 @@ use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -34,8 +36,8 @@ pub fn encode_remote_physical_plan(
     let plan = plan
         .transform(|node| {
             if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
-                // TODO: Preserve `TableSchema` virtual columns in the remote source payload
-                // before exposing DataFusion's `file_row_index()` through Sail.
+                // TODO: Add SQL planner support and distributed SQL tests for
+                // DataFusion's `file_row_index()`.
                 let node =
                     Arc::new(RemoteDataSourceExec::new(data_source)) as Arc<dyn ExecutionPlan>;
                 Ok(Transformed::yes(node))
@@ -159,6 +161,8 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
         })
+    } else if udf_inner.is::<SparkMapFilter>() {
+        HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
             index_first: transform.is_index_first(),
@@ -184,6 +188,10 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic: convert_tz.classic(),
             null_short_circuit: convert_tz.null_short_circuit(),
+        })
+    } else if let Some(regexp_instr) = udf_inner.downcast_ref::<SparkRegexpInstr>() {
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {
+            ansi_mode: regexp_instr.ansi_mode(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());

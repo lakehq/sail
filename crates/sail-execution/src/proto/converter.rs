@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::{Result, plan_datafusion_err, plan_err};
+use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
@@ -43,7 +44,15 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         proto: &PhysicalPlanNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.default_proto_to_execution_plan(proto, ctx)
+        if let Some(results) = ctx.scalar_subquery_results() {
+            let converter = ScopedPhysicalProtoConverter {
+                inner: self,
+                results,
+            };
+            converter.default_proto_to_execution_plan(proto, ctx)
+        } else {
+            self.default_proto_to_execution_plan(proto, ctx)
+        }
     }
 
     fn execution_plan_to_proto(
@@ -129,6 +138,66 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
             );
         }
         serialize_physical_expr_with_converter(expr, codec, self)
+    }
+}
+
+/// Extension codecs receive a TaskContext rather than a PhysicalPlanDecodeContext.
+/// Carry the enclosing scalar scope through their converter so that decoding
+/// embedded plans and expressions does not lose the shared results container.
+struct ScopedPhysicalProtoConverter<'a> {
+    inner: &'a RemotePhysicalProtoConverter,
+    results: &'a ScalarSubqueryResults,
+}
+
+impl PhysicalProtoConverterExtension for ScopedPhysicalProtoConverter<'_> {
+    fn proto_to_execution_plan(
+        &self,
+        proto: &PhysicalPlanNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let ctx = self.restore_scalar_scope(ctx);
+        self.inner.proto_to_execution_plan(proto, &ctx)
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &PhysicalExprNode,
+        input_schema: &Schema,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let ctx = self.restore_scalar_scope(ctx);
+        self.inner.proto_to_physical_expr(proto, input_schema, &ctx)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalPlanNode> {
+        self.inner.execution_plan_to_proto(plan, codec)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalExprNode> {
+        self.inner.physical_expr_to_proto(expr, codec)
+    }
+}
+
+impl ScopedPhysicalProtoConverter<'_> {
+    fn restore_scalar_scope<'a>(
+        &self,
+        ctx: &PhysicalPlanDecodeContext<'a>,
+    ) -> PhysicalPlanDecodeContext<'a> {
+        // A nested ScalarSubqueryExec establishes its own scope, which must win
+        // over the enclosing scope retained for extension codec callbacks.
+        if ctx.scalar_subquery_results().is_some() {
+            ctx.clone()
+        } else {
+            ctx.with_scalar_subquery_results(self.results.clone())
+        }
     }
 }
 

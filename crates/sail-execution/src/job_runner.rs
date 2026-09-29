@@ -49,7 +49,12 @@ impl Default for LocalJobRunner {
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, ShuffleBackendKind::Flight)
+        explain_job_graph(
+            plan,
+            ShuffleBackendKind::Flight {
+                compression: crate::shuffle::ShuffleCompression::None,
+            },
+        )
     }
 
     async fn execute(

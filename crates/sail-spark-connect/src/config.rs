@@ -143,6 +143,8 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
+        // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
+        // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
         self.config.insert(key, value);
         Ok(())
@@ -266,6 +268,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.ansi_mode = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_type_coercion_datetime_to_string = value;
         }
 
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {

@@ -14,7 +14,9 @@ use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{
+    NanosecondTimestamps, infer_listing_compression, try_merge_normalized,
+};
 use crate::options::r#gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
@@ -88,7 +90,13 @@ impl ReadFormat for JsonReadFormat {
             }
         }
 
-        let schema = Schema::try_merge(schemas)?;
+        // Spark's JSON reader behaves like its CSV reader: with `inferTimestamp`
+        // it infers a timestamp from a string and truncates to microseconds.
+        // Nothing observable depends on this today, because `arrow-json` never
+        // infers a timestamp from a string, so this path cannot produce one; the
+        // policy is stated so that the day it can, it matches Spark rather than
+        // inheriting Parquet's.
+        let schema = try_merge_normalized(schemas, NanosecondTimestamps::WidenToMicrosecond)?;
         let schema = if self.options.drop_field_if_all_null {
             drop_all_null_fields(schema)
         } else {

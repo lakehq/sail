@@ -243,6 +243,7 @@ async fn build_overwrite_if_plan(
         ctx.session(),
         meta_scan,
         &snapshot_state,
+        snapshot_state.schema(),
         condition_expr.clone(),
     )?;
 
@@ -295,6 +296,7 @@ async fn build_old_data_plan(
         ctx.session(),
         meta_scan,
         snapshot_state,
+        snapshot_state.schema(),
         condition_expr.clone(),
     )?;
 

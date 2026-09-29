@@ -26,10 +26,53 @@ pub struct DeleteFileRef {
 impl DeleteFileRef {
     /// Whether this ref describes a v3 deletion vector (Puffin blob).
     pub fn is_deletion_vector(&self) -> bool {
-        self.data_file.content == DataContentType::PositionDeletes
-            && self.data_file.file_format == DataFileFormat::Puffin
-            && self.data_file.content_offset.is_some()
-            && self.data_file.content_size_in_bytes.is_some()
+        self.data_file.is_deletion_vector()
+    }
+}
+
+/// The read descriptor after snapshot, sequence, and partition matching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PositionDeleteFile {
+    Parquet {
+        path: String,
+        size: u64,
+    },
+    DeletionVector {
+        path: String,
+        range: std::ops::Range<u64>,
+        cardinality: u64,
+    },
+}
+
+impl TryFrom<&DataFile> for PositionDeleteFile {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(file: &DataFile) -> Result<Self, Self::Error> {
+        if file.is_deletion_vector() {
+            file.validate_deletion_vector()
+                .map_err(Self::Error::Execution)?;
+            let (Some(offset), Some(size)) = (file.content_offset, file.content_size_in_bytes)
+            else {
+                return datafusion_common::exec_err!("Missing Iceberg deletion vector range");
+            };
+            Ok(Self::DeletionVector {
+                path: file.file_path.clone(),
+                range: offset as u64..(offset + size) as u64,
+                cardinality: file.record_count,
+            })
+        } else if file.content == DataContentType::PositionDeletes
+            && file.file_format == DataFileFormat::Parquet
+        {
+            Ok(Self::Parquet {
+                path: file.file_path.clone(),
+                size: file.file_size_in_bytes,
+            })
+        } else {
+            datafusion_common::exec_err!(
+                "Unsupported Iceberg position delete file: {}",
+                file.file_path
+            )
+        }
     }
 }
 
@@ -41,7 +84,7 @@ pub struct PartitionKey {
 }
 
 impl PartitionKey {
-    /// Build a [`PartitionKey`] for a delete file or data file's partition values.
+    /// Build a key with the same encoding before and after numeric type promotion.
     pub fn new(spec_id: i32, values: &[Option<Literal>]) -> Self {
         let mut bytes: Vec<u8> = Vec::with_capacity(values.len() * 8);
         for v in values {
@@ -59,6 +102,7 @@ impl PartitionKey {
 
 fn encode_literal(lit: &Literal, out: &mut Vec<u8>) {
     match lit {
+        Literal::Null => out.push(0),
         Literal::Primitive(p) => encode_primitive(p, out),
         Literal::Struct(fields) => {
             out.extend_from_slice(&(fields.len() as u32).to_le_bytes());
@@ -109,21 +153,14 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
             out.push(u8::from(*b));
         }
         PrimitiveLiteral::Int(i) => {
-            out.push(0x02);
-            out.extend_from_slice(&i.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Long(i64::from(*i)), out);
         }
         PrimitiveLiteral::Long(l) => {
             out.push(0x03);
             out.extend_from_slice(&l.to_le_bytes());
         }
         PrimitiveLiteral::Float(OrderedFloat(f)) => {
-            out.push(0x04);
-            let bits = if f.is_nan() {
-                f32::NAN.to_bits()
-            } else {
-                f.to_bits()
-            };
-            out.extend_from_slice(&bits.to_le_bytes());
+            encode_primitive(&PrimitiveLiteral::Double(OrderedFloat(f64::from(*f))), out);
         }
         PrimitiveLiteral::Double(OrderedFloat(f)) => {
             out.push(0x05);
@@ -195,13 +232,23 @@ impl DeleteFileIndex {
             && self.pos_by_path.is_empty()
     }
 
-    /// Register a delete file reference into the index. Returns `Err` if the ref is a
-    /// deletion vector (v3) — callers handle DV support separately.
+    /// Register a delete file, rejecting malformed or duplicate deletion vectors.
     pub fn insert(&mut self, file_ref: DeleteFileRef) -> Result<(), DeleteIndexError> {
         if file_ref.is_deletion_vector() {
-            return Err(DeleteIndexError::DeletionVectorUnsupported(
-                file_ref.data_file.file_path.clone(),
-            ));
+            file_ref
+                .data_file
+                .validate_deletion_vector()
+                .map_err(DeleteIndexError::InvalidDeletionVector)?;
+            if let Some(path) = &file_ref.data_file.referenced_data_file
+                && self
+                    .pos_by_path
+                    .get(path)
+                    .is_some_and(|files| files.iter().any(DeleteFileRef::is_deletion_vector))
+            {
+                return Err(DeleteIndexError::InvalidDeletionVector(format!(
+                    "Multiple Iceberg deletion vectors reference {path}"
+                )));
+            }
         }
         match file_ref.data_file.content {
             DataContentType::Data => Err(DeleteIndexError::NotADeleteFile(
@@ -220,11 +267,9 @@ impl DeleteFileIndex {
                 Ok(())
             }
             DataContentType::PositionDeletes => {
-                if let Some(ref path) = file_ref.data_file.referenced_data_file {
-                    self.pos_by_path
-                        .entry(path.clone())
-                        .or_default()
-                        .push(file_ref);
+                let path = referenced_path(&file_ref.data_file);
+                if let Some(path) = path {
+                    self.pos_by_path.entry(path).or_default().push(file_ref);
                 } else {
                     let key = PartitionKey::new(
                         file_ref.partition_spec_id,
@@ -245,7 +290,9 @@ impl DeleteFileIndex {
         // Positional deletes that reference this path.
         if let Some(refs) = self.pos_by_path.get(&data_file.file_path) {
             for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
+                if data_sequence_number <= r.data_sequence_number
+                    && key == PartitionKey::new(r.partition_spec_id, &r.data_file.partition)
+                {
                     matched.positional.push(r.clone());
                 }
             }
@@ -260,10 +307,20 @@ impl DeleteFileIndex {
             }
         }
 
+        if matched
+            .positional
+            .iter()
+            .any(DeleteFileRef::is_deletion_vector)
+        {
+            matched.positional.retain(DeleteFileRef::is_deletion_vector);
+        }
+
         // Equality deletes scoped to the same partition.
         if let Some(refs) = self.eq_by_partition.get(&key) {
             for r in refs {
-                if data_sequence_number < r.data_sequence_number {
+                if data_sequence_number < r.data_sequence_number
+                    && equality_may_match(data_file, &r.data_file)
+                {
                     matched.equality.push(r.clone());
                 }
             }
@@ -271,7 +328,9 @@ impl DeleteFileIndex {
 
         // Global (unpartitioned) equality deletes.
         for r in &self.global_eq {
-            if data_sequence_number < r.data_sequence_number {
+            if data_sequence_number < r.data_sequence_number
+                && equality_may_match(data_file, &r.data_file)
+            {
                 matched.equality.push(r.clone());
             }
         }
@@ -283,17 +342,14 @@ impl DeleteFileIndex {
 /// Errors surfaced when building a [`DeleteFileIndex`].
 #[derive(Debug)]
 pub enum DeleteIndexError {
-    DeletionVectorUnsupported(String),
+    InvalidDeletionVector(String),
     NotADeleteFile(String),
 }
 
 impl std::fmt::Display for DeleteIndexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DeletionVectorUnsupported(path) => write!(
-                f,
-                "v3 deletion vectors are not yet supported (file: {path})"
-            ),
+            Self::InvalidDeletionVector(message) => write!(f, "{message}"),
             Self::NotADeleteFile(path) => {
                 write!(f, "attempted to index a non-delete file: {path}")
             }
@@ -302,6 +358,65 @@ impl std::fmt::Display for DeleteIndexError {
 }
 
 impl std::error::Error for DeleteIndexError {}
+
+fn referenced_path(file: &DataFile) -> Option<String> {
+    const PATH_FIELD_ID: i32 = 2_147_483_546;
+    if let Some(path) = &file.referenced_data_file {
+        return Some(path.clone());
+    }
+    let lower = file.lower_bounds.get(&PATH_FIELD_ID)?;
+    let upper = file.upper_bounds.get(&PATH_FIELD_ID)?;
+    if lower != upper {
+        return None;
+    }
+    if let PrimitiveLiteral::String(path) = &lower.literal {
+        Some(path.clone())
+    } else {
+        None
+    }
+}
+
+fn equality_may_match(data: &DataFile, delete: &DataFile) -> bool {
+    if data.record_count == 0 || delete.record_count == 0 {
+        return false;
+    }
+    delete.equality_ids.iter().all(|id| {
+        let data_nulls = data.null_value_counts.get(id).copied();
+        let delete_nulls = delete.null_value_counts.get(id).copied();
+        if (data_nulls == Some(data.record_count) && delete_nulls == Some(0))
+            || (delete_nulls == Some(delete.record_count) && data_nulls == Some(0))
+        {
+            return false;
+        }
+        // Equality deletes match NULL and NaN keys as well as ordinary values.
+        if data_nulls != Some(0) && delete_nulls != Some(0) {
+            return true;
+        }
+        let bounds = [
+            data.lower_bounds.get(id),
+            data.upper_bounds.get(id),
+            delete.lower_bounds.get(id),
+            delete.upper_bounds.get(id),
+        ];
+        if bounds.iter().flatten().any(|bound| {
+            matches!(
+                bound.literal,
+                PrimitiveLiteral::Float(_) | PrimitiveLiteral::Double(_)
+            )
+        }) && data.nan_value_counts.get(id) != Some(&0)
+            && delete.nan_value_counts.get(id) != Some(&0)
+        {
+            return true;
+        }
+        let less = |left: Option<&crate::spec::Datum>, right: Option<&crate::spec::Datum>| {
+            left.zip(right).is_some_and(|(left, right)| {
+                crate::datasource::predicate::compare(&left.literal, &right.literal)
+                    .is_some_and(|order| order.is_lt())
+            })
+        };
+        !less(bounds[1], bounds[2]) && !less(bounds[3], bounds[0])
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -469,6 +584,85 @@ mod tests {
     }
 
     #[test]
+    fn equality_bounds_keep_possible_null_and_nan_matches() {
+        use crate::spec::{Datum, PrimitiveType};
+        for (nulls, nans, expected) in [
+            (Some(0), Some(0), false),
+            (Some(1), Some(0), true),
+            (None, Some(0), true),
+            (Some(0), Some(1), true),
+            (Some(0), None, true),
+        ] {
+            let (mut data, _) = unpartitioned_data("data", 1);
+            let mut delete = make_delete(
+                DataContentType::EqualityDeletes,
+                "delete",
+                vec![],
+                0,
+                None,
+                2,
+                true,
+            );
+            for (file, value) in [(&mut data, 1.0), (&mut delete.data_file, 2.0)] {
+                file.lower_bounds.insert(
+                    1,
+                    Datum::new(
+                        PrimitiveType::Double,
+                        PrimitiveLiteral::Double(value.into()),
+                    ),
+                );
+                file.upper_bounds = file.lower_bounds.clone();
+                file.null_value_counts = nulls.map(|count| (1, count)).into_iter().collect();
+                file.nan_value_counts = nans.map(|count| (1, count)).into_iter().collect();
+            }
+            let mut index = DeleteFileIndex::new();
+            index.insert(delete).unwrap();
+            assert_eq!(!index.for_data_file(&data, 1).equality.is_empty(), expected);
+            assert!(index.for_data_file(&data, 2).equality.is_empty());
+        }
+    }
+
+    #[test]
+    fn position_path_bounds_only_infer_a_single_target() {
+        use crate::spec::{Datum, PrimitiveType};
+        for upper in ["target", "z-other"] {
+            let mut delete = make_delete(
+                DataContentType::PositionDeletes,
+                "delete",
+                vec![],
+                0,
+                None,
+                2,
+                true,
+            );
+            delete.data_file.lower_bounds.insert(
+                2_147_483_546,
+                Datum::new(
+                    PrimitiveType::String,
+                    PrimitiveLiteral::String("target".into()),
+                ),
+            );
+            delete.data_file.upper_bounds.insert(
+                2_147_483_546,
+                Datum::new(
+                    PrimitiveType::String,
+                    PrimitiveLiteral::String(upper.into()),
+                ),
+            );
+            let mut index = DeleteFileIndex::new();
+            index.insert(delete).unwrap();
+            let (target, _) = unpartitioned_data("target", 2);
+            let (other, _) = unpartitioned_data("other", 2);
+            assert_eq!(index.for_data_file(&target, 2).positional.len(), 1);
+            assert_eq!(
+                index.for_data_file(&other, 2).positional.len(),
+                usize::from(upper != "target")
+            );
+            assert!(index.for_data_file(&target, 3).positional.is_empty());
+        }
+    }
+
+    #[test]
     fn global_equality_applies_across_partitions() {
         let mut idx = DeleteFileIndex::new();
         idx.insert(make_delete(
@@ -493,6 +687,43 @@ mod tests {
         df.partition_spec_id = 3;
         let m = idx.for_data_file(&df, 5);
         assert_eq!(m.equality.len(), 1);
+    }
+
+    #[test]
+    fn partition_keys_preserve_numeric_promotions() {
+        let key = |value| PartitionKey::new(0, &[Some(Literal::Primitive(value))]);
+        for value in [i32::MIN, -1, 0, 1, i32::MAX] {
+            assert_eq!(
+                key(PrimitiveLiteral::Int(value)),
+                key(PrimitiveLiteral::Long(i64::from(value)))
+            );
+        }
+        for value in [
+            f32::NEG_INFINITY,
+            -0.0,
+            0.0,
+            0.1,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            assert_eq!(
+                key(PrimitiveLiteral::Float(OrderedFloat(value))),
+                key(PrimitiveLiteral::Double(OrderedFloat(f64::from(value))))
+            );
+        }
+        assert_ne!(
+            key(PrimitiveLiteral::Int(-1)),
+            key(PrimitiveLiteral::Long(i64::MAX))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Float(OrderedFloat(0.1))),
+            key(PrimitiveLiteral::Double(OrderedFloat(0.1)))
+        );
+        assert_ne!(
+            key(PrimitiveLiteral::Int(1)),
+            key(PrimitiveLiteral::Double(OrderedFloat(1.0)))
+        );
     }
 
     #[test]
@@ -539,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn deletion_vector_rejected_at_insert() {
+    fn deletion_vector_supersedes_position_deletes_and_rejects_duplicates() {
         let mut dv = make_delete(
             DataContentType::PositionDeletes,
             "s3://t/dv.puffin",
@@ -554,12 +785,22 @@ mod tests {
         dv.data_file.content_size_in_bytes = Some(128);
         assert!(dv.is_deletion_vector());
 
+        dv.data_file.file_size_in_bytes = 256;
         let mut idx = DeleteFileIndex::new();
-        let err = idx.insert(dv).unwrap_err();
-        assert!(matches!(
-            err,
-            DeleteIndexError::DeletionVectorUnsupported(_)
-        ));
+        idx.insert(dv.clone()).unwrap();
+        let mut older = dv.clone();
+        older.data_file.file_format = DataFileFormat::Parquet;
+        older.data_file.content_offset = None;
+        older.data_file.content_size_in_bytes = None;
+        idx.insert(older).unwrap();
+        let mut data = dv.data_file.clone();
+        data.content = DataContentType::Data;
+        data.file_path = "s3://t/d.parquet".to_string();
+        assert_eq!(idx.for_data_file(&data, 5).positional, vec![dv.clone()]);
+        assert!(idx.for_data_file(&data, 6).is_empty());
+        data.partition_spec_id = 1;
+        assert!(idx.for_data_file(&data, 5).is_empty());
+        assert!(idx.insert(dv).is_err());
     }
 
     #[test]
