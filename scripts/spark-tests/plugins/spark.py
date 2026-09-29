@@ -431,6 +431,19 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_tail"],
+        reason="Compares tails of unordered scans across engines; ordered scan coverage is in dataframe/test_collect.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_collect"],
+        reason=(
+            "Compares LIMIT subsets of unordered scans across engines; ordered LIMIT, duplicate columns and structs "
+            "are covered in dataframe/test_collect.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
         reason="Not available in Spark Connect until Spark 4",
         spark_major_version_less_than=4,
