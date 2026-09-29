@@ -399,6 +399,38 @@ SKIPPED_SPARK_TESTS = [
         ),
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.getFunction"],
+        reason=(
+            "Creates a persistent function backed by a JVM class; builtin/Python lookup is covered in "
+            "catalog/test_function.py, including strict xfails for unimplemented catalog APIs"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_function_exists"],
+        reason=(
+            "Creates persistent JVM class-backed functions; portable existence/lifecycle regressions "
+            "are retained in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_get_function"],
+        reason=(
+            "Inspects a persistent JVM class-backed function; builtin/Python metadata and missing-function "
+            "regressions are retained in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_list_functions"],
+        reason=(
+            "Uses persistent JVM class-backed functions; builtin/Python listing, namespace and lifecycle coverage "
+            "is in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
