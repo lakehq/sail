@@ -139,6 +139,16 @@ def test_the_internal_udt_marker_does_not_reach_the_wire(spark):
     assert {path: keys for path, keys in leaked.items() if keys} == {}
 
 
+def test_the_interval_range_marker_does_not_reach_the_wire(spark):
+    # Sail carries a day-time interval's SQL range (e.g. DAY TO SECOND) on the Arrow field under
+    # `SAIL::spark::interval` so it can rebuild `df.schema`'s exact interval type. That marker must
+    # not ride along on the wire either, same as the UDT one above.
+    metadata = wire_metadata(spark.sql("SELECT INTERVAL '1' DAY AS iv"))
+    assert metadata, "the probe walked no fields"
+    leaked = {path: sorted(k.decode() for k in value if k.startswith(b"SAIL::")) for path, value in metadata.items()}
+    assert {path: keys for path, keys in leaked.items() if keys} == {}
+
+
 @pytest.mark.parametrize(
     "metadata",
     [pytest.param({"comment": "new"}, id="same-key"), pytest.param({"k": "v"}, id="other-key")],

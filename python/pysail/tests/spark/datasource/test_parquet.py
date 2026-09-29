@@ -46,6 +46,23 @@ def test_parquet_merges_mixed_timestamp_units_with_different_arrow_timezones(spa
     ]
 
 
+def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path):
+    # The counterpart of `test_csv_infer_schema_timestamp_fractional_digits`: a nanosecond
+    # timestamp is widened for CSV, where Spark's reader truncates, but not for Parquet, where
+    # Spark rejects `NANOS` rather than losing precision silently (SPARK-40819). Pinned here so
+    # the two formats stay deliberately different rather than accidentally so.
+    path = str(tmp_path / "parquet_nanosecond_timestamp.parquet")
+    value = datetime(2018, 5, 1, 0, 0, 5, 123456, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"t": pa.array([value], type=pa.timestamp("ns", tz="UTC"))}),
+        path,
+        version="2.6",
+    )
+
+    with pytest.raises(Exception, match="Nanosecond"):
+        _ = spark.read.parquet(path).schema
+
+
 def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
     # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
     # column read as BinaryView must still reach the client as Spark binary.
