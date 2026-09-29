@@ -8,6 +8,9 @@ def normalize_pandas_data_frame(df):
     # Canonicalize only the sort keys, preserving the values that assertions compare.
     keys = df.apply(lambda column: column.map(lambda value: bytes(value) if isinstance(value, bytearray) else value))
     keys = keys.reset_index(drop=True)
+    # A label may identify multiple columns (for example select("id", "id")).
+    # Sort by positions without changing the schema of the compared DataFrame.
+    keys.columns = range(len(keys.columns))
     columns = [col for col in keys.columns if all(is_hashable(v) for v in keys[col])]
     if not columns:
         return df.reset_index(drop=True)
@@ -25,7 +28,7 @@ def normalize_datetime_dtypes(df):
     ``assert_frame_equal`` do not fail due to this precision difference.
     """
     result = df.copy()
-    for col in result.columns:
-        if str(result[col].dtype) == "datetime64[ns]":
-            result[col] = result[col].astype("datetime64[us]")
+    for position, dtype in enumerate(result.dtypes):
+        if str(dtype) == "datetime64[ns]":
+            result.isetitem(position, result.iloc[:, position].astype("datetime64[us]"))
     return result
