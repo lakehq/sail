@@ -5,7 +5,7 @@ rank: 2
 
 # Supported Features
 
-The tables below describe which Delta Lake features Sail supports. A :white_check_mark: indicates support, :white_check_mark: (Partial) identifies the supported cases in the notes, and :x: indicates that the feature is unavailable.
+The tables below describe which Delta Lake features Sail supports. A :white_check_mark: indicates support, :white_check_mark: (partial) identifies the supported cases in the notes, and :x: indicates that the feature is unavailable.
 
 ## Protocol Compatibility
 
@@ -29,9 +29,9 @@ The Delta protocol defines separate requirements for readers and writers. Older 
 | Metadata aggregate optimization               | :white_check_mark:           | Eligible aggregates can use exact file statistics. Other queries scan data.                                               |
 | Schema validation and evolution               | :white_check_mark:           | `mergeSchema`, `overwriteSchema` with full overwrite, and `MERGE WITH SCHEMA EVOLUTION`.                                  |
 | Time travel                                   | :white_check_mark:           | Version or timestamp through read options or SQL. Requires retained log/checkpoint state and data files for that version. |
-| Table property DDL                            | :white_check_mark: (Partial) | `SET/UNSET TBLPROPERTIES`. See [Catalog Integration](#catalog-integration) for catalog-managed tables.                    |
-| Column type and default DDL                   | :white_check_mark: (Partial) | Supported type widening and `SET/DROP DEFAULT`. Not all `ALTER TABLE` forms are implemented.                              |
-| Optimistic commit conflict handling           | :white_check_mark: (Partial) | Creation and blind appends can retry compatible conflicts. Other writes fail on a competing commit and must be replanned. |
+| Table property DDL                            | :white_check_mark: (partial) | `SET/UNSET TBLPROPERTIES`. See [Catalog Integration](#catalog-integration) for catalog-managed tables.                    |
+| Column type and default DDL                   | :white_check_mark: (partial) | Supported type widening and `SET/DROP DEFAULT`. Not all `ALTER TABLE` forms are implemented.                              |
+| Optimistic commit conflict handling           | :white_check_mark: (partial) | Creation and blind appends can retry compatible conflicts. Other writes fail on a competing commit and must be replanned. |
 
 ## DML Operations
 
@@ -57,7 +57,7 @@ For row changes, Sail can rewrite affected files (copy-on-write) or use deletion
 | Variant shredding (`variantShredding`, `variantShredding-preview`) | :white_check_mark:           | :white_check_mark:           | Shredded reads and writes. Writes require shredding enablement.                                                                  |
 | V2 checkpoints (`v2Checkpoint`)                                    | :white_check_mark:           | :white_check_mark:           | Checkpoint policy controls the checkpoint format.                                                                                |
 | VACUUM protocol check (`vacuumProtocolCheck`)                      | :white_check_mark:           | :white_check_mark:           | Accepted for ordinary reads and writes. Command support is listed under [Maintenance and Streaming](#maintenance-and-streaming). |
-| Catalog-managed tables (`catalogManaged`)                          | :white_check_mark: (Partial) | :white_check_mark: (Partial) | Requires Unity Catalog commit and replay support. See [Catalog Integration](#catalog-integration).                               |
+| Catalog-managed tables (`catalogManaged`)                          | :white_check_mark: (partial) | :white_check_mark: (partial) | Requires Unity Catalog commit and replay support. See [Catalog Integration](#catalog-integration).                               |
 
 ### Writer Features and Constraints
 
@@ -85,8 +85,8 @@ The write behavior of individual table features varies. The table below shows wh
 | ------------------------------------------------------------------- | ------------------ | ---------------------------- | ---------------------------------------------------------------------------------------- |
 | Parquet data files                                                  | :white_check_mark: | :white_check_mark:           | Partition values come from the transaction log.                                          |
 | JSON commits: `protocol`, `metaData`, `add`, `remove`, `commitInfo` | :white_check_mark: | :white_check_mark:           | Snapshot reconstruction and table commits.                                               |
-| `txn` actions                                                       | :white_check_mark: | :white_check_mark: (Partial) | Preserves transaction state in checkpoints.                                              |
-| `domainMetadata` actions                                            | :white_check_mark: | :white_check_mark: (Partial) | Replays and preserves existing state in checkpoints. No public domain-update operation.  |
+| `txn` actions                                                       | :white_check_mark: | :white_check_mark: (partial) | Preserves transaction state in checkpoints.                                              |
+| `domainMetadata` actions                                            | :white_check_mark: | :white_check_mark: (partial) | Replays and preserves existing state in checkpoints. No public domain-update operation.  |
 | Change data files (`cdc`)                                           | :x:                | :x:                          | Ordinary snapshot reads do not read change data files.                                   |
 | Classic Parquet checkpoints                                         | :white_check_mark: | :white_check_mark:           | Includes supported parsed statistics and partition fields.                               |
 | UUID-named V2 checkpoints and Parquet sidecars                      | :white_check_mark: | :white_check_mark:           | Reads JSON or Parquet top-level checkpoints. Writes use `delta.checkpointPolicy = 'v2'`. |

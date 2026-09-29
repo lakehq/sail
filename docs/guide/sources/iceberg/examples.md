@@ -43,7 +43,7 @@ SELECT * FROM users;
 
 ## Data Partitioning
 
-Iceberg records partition values and transforms in table metadata. Sail uses them to skip files that cannot match a query filter. These examples partition `metrics` by the value of `year` and filter out the 2024 row.
+Iceberg records partition values and transforms in table metadata. Sail uses them to skip files that cannot match a query filter. These examples use identity partitioning on `metrics.year` and filter out the 2024 row.
 
 ::: code-group
 
@@ -126,7 +126,7 @@ df.write.format("iceberg").mode("overwrite").option("overwriteSchema", "true").s
 
 ## Scoped Overwrite
 
-For the `metrics` table partitioned by `year`, a predicate overwrite replaces only the 2025 partition:
+For the identity-partitioned `metrics` table, a predicate overwrite replaces only the 2025 partition:
 
 ```python
 from pyspark.sql import functions as F

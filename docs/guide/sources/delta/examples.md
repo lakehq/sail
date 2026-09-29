@@ -90,7 +90,7 @@ df = spark.createDataFrame([(1, "Alice")], "id BIGINT, name STRING")
 df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
 ```
 
-To widen an existing column, enable `delta.enableTypeWidening` first. For example, the SQL `users` table can widen `id` from `INT` to `BIGINT`:
+To apply supported type widening to an existing column, enable `delta.enableTypeWidening` first. For example, the SQL `users` table can widen `id` from `INT` to `BIGINT`:
 
 ```sql
 ALTER TABLE users SET TBLPROPERTIES ('delta.enableTypeWidening' = 'true');
