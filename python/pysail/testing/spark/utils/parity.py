@@ -1,6 +1,8 @@
 """Comparators for upstream Spark parity tests."""
 
-from pandas.api.types import is_hashable
+from pandas._testing.asserters import assert_frame_equal
+from pandas.api.types import is_float_dtype, is_hashable
+from pandas.testing import assert_index_equal
 
 
 def normalize_pandas_data_frame(df):
@@ -32,3 +34,53 @@ def normalize_datetime_dtypes(df):
         if str(dtype) == "datetime64[ns]":
             result.isetitem(position, result.iloc[:, position].astype("datetime64[us]"))
     return result
+
+
+def assert_math_function_frames_equal(left, right):
+    """Allow rounding error only in floating transcendental function results."""
+    # Use the unpatched comparator: sorting each column subset again would lose
+    # the correspondence between exact and approximate values in a row.
+    assert_index_equal(left.columns, right.columns, exact=True)
+    left = normalize_pandas_data_frame(left)
+    right = normalize_pandas_data_frame(right)
+    transcendental = {
+        "acos",
+        "acosh",
+        "asin",
+        "asinh",
+        "atan",
+        "atanh",
+        "atan2",
+        "cbrt",
+        "cos",
+        "cosh",
+        "cot",
+        "csc",
+        "degrees",
+        "exp",
+        "expm1",
+        "hypot",
+        "ln",
+        "log",
+        "log10",
+        "log1p",
+        "log2",
+        "pow",
+        "power",
+        "radians",
+        "sec",
+        "sin",
+        "sinh",
+        "sqrt",
+        "tan",
+        "tanh",
+    }
+    approximate = [
+        i
+        for i, name in enumerate(left.columns)
+        if str(name).split("(", 1)[0].lower() in transcendental and is_float_dtype(left.iloc[:, i].dtype)
+    ]
+    exact = [i for i in range(len(left.columns)) if i not in approximate]
+    # Preserve the complete schema, integer/decimal/string results and special values.
+    assert_frame_equal(left.iloc[:, exact], right.iloc[:, exact], check_exact=True)
+    assert_frame_equal(left.iloc[:, approximate], right.iloc[:, approximate], check_exact=False, rtol=1e-14, atol=1e-15)

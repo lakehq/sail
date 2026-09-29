@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from pysail.testing.spark.utils.parity import (
+    assert_math_function_frames_equal,
     normalize_datetime_dtypes,
     normalize_pandas_data_frame,
 )
@@ -126,6 +127,25 @@ def spark_doctest_session(doctest_namespace, request):
 # Here we patch test utilities to ignore row order in PySpark tests.
 # This may result in false positives in some tests where the result is expected to be sorted.
 # Such tests should be ported to the PySail test suite where the patch is not applied.
+
+
+@pytest.fixture(autouse=_is_spark_testing())
+def spark_math_function_tolerance(request, monkeypatch):
+    keywords = ["test_connect_function.py", "SparkConnectFunctionTests", "test_math_functions"]
+    if _spark_major_version() >= 4 or not all(key in request.node.keywords for key in keywords):  # noqa: PLR2004
+        return
+
+    import pandas as pd
+
+    original = request.instance.assert_eq
+
+    def assert_eq(left, right, **kwargs):
+        if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame) and not kwargs:
+            assert_math_function_frames_equal(left, right)
+        else:
+            original(left, right, **kwargs)
+
+    monkeypatch.setattr(request.instance, "assert_eq", assert_eq)
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
