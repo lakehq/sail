@@ -358,6 +358,14 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_connect_basic.py", "SparkConnectSessionTests", "test_error_stack_trace"],
         reason="Asserts JVM/Catalyst stack frames and JVM stacktrace configuration, which do not apply to Sail",
     ),
+    TestMarker(
+        keywords=["test_parity_types.py", "TypesParityTests", "test_cast_to_string_with_udt"],
+        reason=(
+            "Requires a Scala UDT's JVM toString implementation; Python UDT casts, NULLs and nested fields "
+            "are covered in dataframe/test_udt.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
