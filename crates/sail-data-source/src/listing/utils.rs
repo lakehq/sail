@@ -20,14 +20,38 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
+/// What normalization does with an inferred nanosecond timestamp.
+///
+/// Spark has no nanosecond timestamp type, so a nanosecond column has to be either rejected or
+/// truncated. Which one matches Spark depends on the format, so the format's reader chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NanosecondTimestamps {
+    /// Leave nanoseconds alone, so that the Arrow-to-Spark conversion reports them rather than
+    /// losing precision silently. This is what Spark's Parquet reader does: it accepts `MILLIS`
+    /// and `MICROS` but rejects `NANOS` (SPARK-40819).
+    Report,
+    /// Widen nanoseconds to microseconds, discarding the last three digits. This is what Spark's
+    /// text-format readers do: given `2018-05-01 00:00:05.123456789`, Spark's CSV reader with
+    /// `inferSchema` infers a timestamp and stores `.123456` (verified on Spark 4.0.1; its JSON
+    /// reader with `inferTimestamp` does the same).
+    WidenToMicrosecond,
+}
+
 /// Rewrites inferred field types that have no Spark counterpart.
 ///
 /// Spark's type system is narrower than Arrow's, and the Arrow-to-Spark conversion rejects
 /// what it cannot represent. Coercing the inferred schema here, rather than letting the
 /// conversion fail later, keeps files readable that DataFusion can already read: the listing
 /// table casts each file to this schema as it scans.
+///
+/// This runs on a schema a format has already inferred and normalized, so it applies the
+/// conservative [`NanosecondTimestamps::Report`] policy; widening, where the format wants it, has
+/// happened in [`try_merge_normalized`] already.
 pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
-    Arc::new(normalize_unsupported_fields(&schema))
+    Arc::new(normalize_unsupported_fields(
+        &schema,
+        NanosecondTimestamps::Report,
+    ))
 }
 
 /// Merges per-file inferred schemas, normalizing each one before the merge.
@@ -37,15 +61,16 @@ pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
 /// `timestamp[ms]` in one file and `timestamp[us]` in another would otherwise fail to merge,
 /// even though Spark represents both as a single timestamp type, and that failure would occur
 /// before [`rewrite_unsupported_fields`] ever ran.
-pub fn try_merge_normalized(schemas: impl IntoIterator<Item = Schema>) -> Result<Schema> {
-    Ok(Schema::try_merge(
-        schemas
-            .into_iter()
-            .map(|schema| normalize_unsupported_fields(&schema)),
-    )?)
+pub fn try_merge_normalized(
+    schemas: impl IntoIterator<Item = Schema>,
+    nanoseconds: NanosecondTimestamps,
+) -> Result<Schema> {
+    Ok(Schema::try_merge(schemas.into_iter().map(|schema| {
+        normalize_unsupported_fields(&schema, nanoseconds)
+    }))?)
 }
 
-fn normalize_unsupported_fields(schema: &Schema) -> Schema {
+fn normalize_unsupported_fields(schema: &Schema, nanoseconds: NanosecondTimestamps) -> Schema {
     // TODO: Apply Spark-compatible type normalization recursively inside structs, lists, and
     // maps. Only top-level fields are normalized today, so nested millisecond timestamps remain
     // unsupported even though Spark accepts them (SPARK recurses through nested timestamp leaves).
@@ -61,13 +86,23 @@ fn normalize_unsupported_fields(schema: &Schema) -> Schema {
             DataType::BinaryView => field.as_ref().clone().with_data_type(DataType::Binary),
             // Spark timestamps are microseconds, so second and millisecond timestamps are
             // widened here; the conversion would otherwise reject them even though the
-            // widening is lossless. Nanoseconds are left alone so that they are still
-            // reported rather than silently truncated, which matches Spark: its Parquet
-            // reader accepts `MILLIS` and `MICROS` but not `NANOS` (SPARK-40819).
+            // widening is lossless.
             DataType::Timestamp(TimeUnit::Second | TimeUnit::Millisecond, tz) => field
                 .as_ref()
                 .clone()
                 .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone())),
+            // Nanoseconds are lossy to widen, so what matches Spark depends on the format; see
+            // [`NanosecondTimestamps`]. For Parquet they are left alone and therefore reported
+            // rather than silently truncated; for a text format Spark itself truncates, so
+            // rejecting the column would be the larger deviation.
+            DataType::Timestamp(TimeUnit::Nanosecond, tz)
+                if nanoseconds == NanosecondTimestamps::WidenToMicrosecond =>
+            {
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+            }
             _ => field.as_ref().clone(),
         })
         .collect();
@@ -495,8 +530,11 @@ mod tests {
         };
 
         // Files that disagree only on timestamp unit merge into a single microsecond field.
-        let merged =
-            try_merge_normalized([ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)]).unwrap();
+        let merged = try_merge_normalized(
+            [ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)],
+            NanosecondTimestamps::Report,
+        )
+        .unwrap();
         assert_eq!(
             merged.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -506,16 +544,62 @@ mod tests {
         assert!(Schema::try_merge([ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)]).is_err());
 
         // `Utf8View` and `Utf8` reconcile the same way.
-        let merged = try_merge_normalized([
-            Schema::new(vec![Field::new("s", DataType::Utf8View, true)]),
-            Schema::new(vec![Field::new("s", DataType::Utf8, true)]),
-        ])
+        let merged = try_merge_normalized(
+            [
+                Schema::new(vec![Field::new("s", DataType::Utf8View, true)]),
+                Schema::new(vec![Field::new("s", DataType::Utf8, true)]),
+            ],
+            NanosecondTimestamps::Report,
+        )
         .unwrap();
         assert_eq!(merged.field(0).data_type(), &DataType::Utf8);
 
         // Nanoseconds are deliberately left alone, so they still conflict.
         assert!(
-            try_merge_normalized([ts(TimeUnit::Nanosecond), ts(TimeUnit::Microsecond)]).is_err()
+            try_merge_normalized(
+                [ts(TimeUnit::Nanosecond), ts(TimeUnit::Microsecond)],
+                NanosecondTimestamps::Report
+            )
+            .is_err()
         );
+    }
+
+    #[test]
+    fn test_try_merge_normalized_nanosecond_policy() {
+        let ts = |unit| {
+            Schema::new(vec![
+                Field::new("ts", DataType::Timestamp(unit, None), true),
+                Field::new("ts_tz", DataType::Timestamp(unit, Some("UTC".into())), true),
+            ])
+        };
+        let us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let us_tz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+
+        // Under `Report`, nanoseconds pass through: the Arrow-to-Spark conversion rejects the
+        // column rather than truncating it, which is what Spark's Parquet reader does.
+        let merged =
+            try_merge_normalized([ts(TimeUnit::Nanosecond)], NanosecondTimestamps::Report).unwrap();
+        assert_eq!(
+            merged.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+
+        // Under `WidenToMicrosecond`, nanoseconds widen like seconds and milliseconds, keeping
+        // the time zone, so a text format infers a Spark timestamp and truncates as Spark does.
+        let merged = try_merge_normalized(
+            [ts(TimeUnit::Nanosecond)],
+            NanosecondTimestamps::WidenToMicrosecond,
+        )
+        .unwrap();
+        assert_eq!(merged.field(0).data_type(), &us);
+        assert_eq!(merged.field(1).data_type(), &us_tz);
+
+        // And a directory mixing nanosecond and microsecond files then merges instead of failing.
+        let merged = try_merge_normalized(
+            [ts(TimeUnit::Nanosecond), ts(TimeUnit::Microsecond)],
+            NanosecondTimestamps::WidenToMicrosecond,
+        )
+        .unwrap();
+        assert_eq!(merged.field(0).data_type(), &us);
     }
 }

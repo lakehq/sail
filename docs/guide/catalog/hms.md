@@ -28,7 +28,7 @@ See [Common Options](./index.md#common-options) for options that configure cachi
 
 ## Endpoint Failover Behavior
 
-Sail tries endpoints in the order in which they are configured. It resolves the selected endpoint's DNS name for each new connection, so connections do not remain pinned to the address found at startup. When a retryable transport or Thrift error occurs, Sail moves to the next endpoint. If a connection fails after a create or drop request may have succeeded, Sail treats the resulting `AlreadyExists` or `NotFound` response as a successful retry.
+Sail tries endpoints in the order in which they are configured. It resolves the DNS name of the selected endpoint for each new connection, so connections do not remain pinned to the address found at startup. When a retryable transport or Thrift error occurs, Sail moves to the next endpoint. If a connection fails after a create or drop request may have succeeded, Sail treats the resulting `AlreadyExists` or `NotFound` response as a successful retry.
 
 ## Kerberos Authentication
 
@@ -82,7 +82,7 @@ HMS records whether a table is managed or external in its `table_type` metadata.
 
 Sail always creates tables as external by marking them as `EXTERNAL` and setting `table_type` to `EXTERNAL_TABLE`. For tables created by other engines, Sail reports the type stored in HMS.
 
-When Sail drops an HMS table, it removes only the metadata. It does not ask HMS to delete the table's data, regardless of the table type.
+When Sail drops an HMS table, it removes only the metadata. It does not ask HMS to delete the table data, regardless of the table type.
 
 ## Examples
 
