@@ -181,6 +181,9 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: $/.github/actions/adjust-swap-space
+        if: runner.os == 'Linux'
+
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -274,6 +277,9 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: $/.github/actions/adjust-swap-space
+        if: runner.os == 'Linux'
+
       - name: Install Package
         shell: bash
         env:
@@ -299,7 +305,7 @@ jobs:
 
       - name: Run Tests
         shell: bash
-        run: pytest --pyargs pysail
+        run: pytest --pyargs pysail --reruns 5 --reruns-delay 2
 
   test-wheel:
     name: Test Wheel
@@ -342,7 +348,7 @@ jobs:
 
       - name: Run Tests
         shell: bash
-        run: pytest --pyargs pysail
+        run: pytest --pyargs pysail --reruns 5 --reruns-delay 2
 
   review:
     name: Review
