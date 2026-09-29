@@ -426,6 +426,11 @@ SKIPPED_SPARK_TESTS = [
         ),
     ),
     TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_extended_hint_types"],
+        reason="Asserts unresolved hint arguments in Spark plan text; portable behavior is in dataframe/test_hint.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
         reason="Not available in Spark Connect until Spark 4",
         spark_major_version_less_than=4,
