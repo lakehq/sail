@@ -11,6 +11,7 @@ mod csv;
 mod datetime;
 mod geo;
 mod hash;
+mod jev;
 mod json;
 mod lambda;
 mod map;
@@ -35,6 +36,7 @@ pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, ScalarFunct
     output.extend(datetime::list_built_in_datetime_functions());
     output.extend(geo::list_built_in_geo_functions());
     output.extend(hash::list_built_in_hash_functions());
+    output.extend(jev::list_built_in_jev_functions());
     output.extend(json::list_built_in_json_functions());
     output.extend(lambda::list_built_in_lambda_functions());
     output.extend(map::list_built_in_map_functions());
