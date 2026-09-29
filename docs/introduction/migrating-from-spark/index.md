@@ -33,10 +33,6 @@ uv tool install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-a
 pip install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
 ```
 
-```bash [venv]
-python3 -m venv .venv && source .venv/bin/activate && pip install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
-```
-
 :::
 
 To scan a file or directory:
