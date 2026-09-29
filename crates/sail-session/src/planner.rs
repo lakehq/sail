@@ -44,6 +44,7 @@ use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::distributed_sequence_id::DistributedSequenceIdNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
@@ -62,6 +63,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::distributed_sequence_id::DistributedSequenceIdExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
@@ -390,6 +392,17 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.udf().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<DistributedSequenceIdNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!(
+                    "DistributedSequenceIdExec requires exactly one physical input"
+                );
+            };
+            Arc::new(DistributedSequenceIdExec::try_new(
+                input.clone(),
+                node.column_name().to_string(),
+                None,
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<MonotonicIdNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");

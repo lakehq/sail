@@ -27,6 +27,7 @@ use sail_iceberg::physical_plan::IcebergCommitExec;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::distributed_sequence_id::{DistributedSequenceIdExec, PartitionCountsExec};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -344,6 +345,13 @@ fn plan_job_graph_stages(
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
 
+    if let Some(sequence) = plan.downcast_ref::<DistributedSequenceIdExec>()
+        && sequence.counts().is_none()
+        && sequence.input().output_partitioning().partition_count() > 1
+    {
+        return build_distributed_sequence_job_graph(sequence, graph, scalar_context);
+    }
+
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -554,6 +562,40 @@ fn plan_job_graph_stages(
     Ok(plan)
 }
 
+fn build_distributed_sequence_job_graph(
+    sequence: &DistributedSequenceIdExec,
+    graph: &mut JobGraph,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<PlannedSubtree> {
+    let child = plan_job_graph_stages(
+        sequence.input().clone(),
+        PartitionUsage::Once,
+        graph,
+        DriverStageHandling::CreateStage,
+        scalar_context,
+    )?;
+    let properties = child.plan.properties().clone();
+    let child = wrap_pending_scalar_subqueries(child, scalar_context);
+    // Both consumers read the same materialized partition, including volatile input.
+    let stage = push_stage(
+        child,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        materialized_output_mode(graph),
+    )?;
+    let input = stage_input_exec(stage, InputMode::Forward, properties);
+    let counts = Arc::new(PartitionCountsExec::new(input.clone())) as Arc<dyn ExecutionPlan>;
+    let counts = create_broadcast_input(&counts, graph)?;
+    Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+        Arc::new(DistributedSequenceIdExec::try_new(
+            input,
+            sequence.column_name().to_string(),
+            Some(counts),
+        )?),
+    ))
+}
+
 fn rebuild_subtree(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<PlannedSubtree>,
@@ -597,7 +639,7 @@ fn build_scalar_subquery_job_graph(
                 DriverStageHandling::CreateStage,
                 None,
             )?;
-            let plan = create_scalar_subquery_input(&plan.plan, graph)?;
+            let plan = create_broadcast_input(&plan.plan, graph)?;
             Ok(ScalarSubqueryLink {
                 plan,
                 index: link.index,
@@ -752,7 +794,7 @@ fn create_merge_input(
     Ok(stage_input_exec(stage, InputMode::Merge, properties))
 }
 
-fn create_scalar_subquery_input(
+fn create_broadcast_input(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
@@ -761,10 +803,9 @@ fn create_scalar_subquery_input(
         graph,
         OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
-        scalar_subquery_output_mode(graph),
+        materialized_output_mode(graph),
     )?;
-    // ScalarSubqueryExec reads the link as a scalar value on every output
-    // partition, so the materialized stage is exposed as one broadcast input.
+    // Every consumer reads the complete materialized relation as a single partition.
     let properties = stage_properties_with_unknown_partitioning(graph, stage, 1);
     Ok(stage_input_exec(stage, InputMode::Broadcast, properties))
 }
@@ -860,7 +901,7 @@ fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
     }
 }
 
-fn scalar_subquery_output_mode(graph: &JobGraph) -> OutputMode {
+fn materialized_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
         ShuffleBackendKind::Flight { .. } => OutputMode::Pipelined,
         ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
@@ -1008,7 +1049,7 @@ mod tests {
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
-    use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
+    use super::{JobGraph, JobGraphOptions, create_broadcast_input};
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
@@ -1049,6 +1090,70 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn distributed_sequence_reuses_input_and_broadcasts_only_counts() {
+        use sail_physical_plan::distributed_sequence_id::{
+            DistributedSequenceIdExec, PartitionCountsExec,
+        };
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let input = UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan()]).unwrap();
+            let sequence =
+                Arc::new(DistributedSequenceIdExec::try_new(input, "index".into(), None).unwrap());
+            let graph = JobGraph::try_new(sequence, options).unwrap();
+            assert_eq!(graph.stages.len(), 3);
+            let counts = &graph.stages[1];
+            assert!(counts.plan.is::<PartitionCountsExec>());
+            assert_eq!(counts.plan.output_partitioning().partition_count(), 3);
+            assert!(matches!(
+                counts.inputs.as_slice(),
+                [StageInput {
+                    stage: 0,
+                    mode: InputMode::Forward
+                }]
+            ));
+            let output = &graph.stages[2];
+            let sequence = output
+                .plan
+                .downcast_ref::<DistributedSequenceIdExec>()
+                .unwrap();
+            assert_eq!(
+                sequence
+                    .properties()
+                    .output_partitioning()
+                    .partition_count(),
+                3
+            );
+            assert_eq!(
+                sequence
+                    .counts()
+                    .unwrap()
+                    .output_partitioning()
+                    .partition_count(),
+                1
+            );
+            assert!(matches!(
+                output.inputs.as_slice(),
+                [
+                    StageInput {
+                        stage: 0,
+                        mode: InputMode::Forward
+                    },
+                    StageInput {
+                        stage: 1,
+                        mode: InputMode::Broadcast
+                    },
+                ]
+            ));
+            assert_eq!(graph.replicas(0), 2);
+            assert_eq!(graph.replicas(1), 3);
         }
     }
 
@@ -1231,7 +1336,7 @@ mod tests {
                 schema: schema(),
                 options,
             };
-            let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
+            let input = create_broadcast_input(&empty_plan(), &mut graph).unwrap();
 
             assert_eq!(
                 matches!(graph.stages()[0].mode, OutputMode::Blocking),

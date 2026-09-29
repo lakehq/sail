@@ -22,6 +22,8 @@ impl PlanResolver<'_> {
         let (predicate, input) = self
             .resolve_expressions_with_missing_inputs(vec![condition], input, state)
             .await?;
+        let (input, predicate) =
+            self.rewrite_distributed_sequence_expressions(input, predicate, state)?;
         let filter = LogicalPlan::Filter(Filter::try_new(predicate.one()?, Arc::new(input))?);
         Self::restore_missing_input_output(filter, output_schema)
     }

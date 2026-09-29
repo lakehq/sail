@@ -71,6 +71,8 @@ message ExtendedPhysicalPlanNode {
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
     IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
+    DistributedSequenceIdExecNode distributed_sequence_id = 59;
+    PartitionCountsExecNode partition_counts = 60;
   }
 }
 
@@ -1200,4 +1202,14 @@ message BarrierExecNode {
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+message DistributedSequenceIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  optional bytes counts = 3;
+}
+
+message PartitionCountsExecNode {
+  bytes input = 1;
 }
