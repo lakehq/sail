@@ -10,9 +10,7 @@ use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion::physical_expr::{
-    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalExpr};
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -27,7 +25,7 @@ use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
-use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
+use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -67,7 +65,7 @@ use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
-    checkpoint_storage_schema,
+    checkpoint_schema_ordering, checkpoint_schema_partitioning, checkpoint_storage_schema,
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -544,70 +542,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         };
         Ok(Some(plan))
     }
-}
-
-// Column ordinals survive logical/storage renames; names may be duplicated or synthetic.
-fn checkpoint_schema_partitioning(
-    partitioning: &Partitioning,
-    schema: &datafusion::arrow::datatypes::Schema,
-) -> datafusion_common::Result<Partitioning> {
-    match partitioning {
-        Partitioning::RoundRobinBatch(partitions) => Ok(Partitioning::RoundRobinBatch(*partitions)),
-        Partitioning::Hash(expressions, partitions) => Ok(Partitioning::Hash(
-            expressions
-                .iter()
-                .map(|expression| checkpoint_schema_expression(Arc::clone(expression), schema))
-                .collect::<datafusion_common::Result<Vec<_>>>()?,
-            *partitions,
-        )),
-        Partitioning::Range(range) => Ok(Partitioning::Range(RangePartitioning::try_new(
-            checkpoint_schema_ordering(range.ordering(), schema)?,
-            range.split_points().to_vec(),
-        )?)),
-        Partitioning::UnknownPartitioning(partitions) => {
-            Ok(Partitioning::UnknownPartitioning(*partitions))
-        }
-    }
-}
-
-fn checkpoint_schema_ordering(
-    ordering: &LexOrdering,
-    schema: &datafusion::arrow::datatypes::Schema,
-) -> datafusion_common::Result<LexOrdering> {
-    let expressions = ordering
-        .iter()
-        .map(|sort| {
-            Ok(PhysicalSortExpr::new(
-                checkpoint_schema_expression(Arc::clone(&sort.expr), schema)?,
-                sort.options,
-            ))
-        })
-        .collect::<datafusion_common::Result<Vec<_>>>()?;
-    LexOrdering::new(expressions)
-        .ok_or_else(|| internal_datafusion_err!("checkpoint output ordering cannot be empty"))
-}
-
-fn checkpoint_schema_expression(
-    expression: Arc<dyn PhysicalExpr>,
-    schema: &datafusion::arrow::datatypes::Schema,
-) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-    expression
-        .transform_down(|expression| {
-            let Some(column) = expression.downcast_ref::<Column>() else {
-                return Ok(Transformed::no(expression));
-            };
-            let field = schema.fields().get(column.index()).ok_or_else(|| {
-                internal_datafusion_err!(
-                    "checkpoint property references column {} at invalid index {}",
-                    column.name(),
-                    column.index()
-                )
-            })?;
-            Ok(Transformed::yes(
-                Arc::new(Column::new(field.name(), column.index())) as Arc<dyn PhysicalExpr>,
-            ))
-        })
-        .data()
 }
 
 /// Plans the explicit repartitioning emitted by the logical planner.

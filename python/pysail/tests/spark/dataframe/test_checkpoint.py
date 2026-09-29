@@ -78,6 +78,15 @@ def test_checkpoint_preserves_field_metadata(spark):
     assert checkpointed.schema["value"].metadata == {"source": "checkpoint-test"}
 
 
+def test_checkpoint_preserves_global_sort(spark):
+    source = spark.createDataFrame([(3,), (1,), (2,), (0,)], "id LONG").orderBy("id")
+
+    checkpointed = source.checkpoint()
+
+    assert checkpointed.collect() == [(0,), (1,), (2,), (3,)]
+    assert checkpointed.orderBy("id").limit(2).collect() == [(0,), (1,)]
+
+
 def test_map_in_pandas_after_checkpoint_changes_partition_keys(spark):
     source = spark.range(100, numPartitions=4).repartition(4, "id").checkpoint()
 
