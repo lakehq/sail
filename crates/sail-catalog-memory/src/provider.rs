@@ -341,6 +341,16 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
+        self.alter_table_atomically(database, table, vec![options])
+            .await
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
@@ -348,64 +358,71 @@ impl CatalogProvider for MemoryCatalogProvider {
             .tables
             .get_mut(table)
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
-        match &mut status.kind {
-            TableKind::Table {
-                columns,
-                properties,
-                ..
-            } => match options {
-                AlterTableOptions::SetTableProperties {
-                    properties: new_props,
-                } => {
-                    managed_table::validate_metadata_location_precondition(
-                        table, properties, &new_props,
-                    )?;
-                    for (key, value) in new_props {
-                        if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
-                            existing.1 = value;
-                        } else {
-                            properties.push((key, value));
+        let mut updated = status.clone();
+        for options in options {
+            match &mut updated.kind {
+                TableKind::Table {
+                    columns,
+                    properties,
+                    ..
+                } => match options {
+                    AlterTableOptions::SetTableProperties {
+                        properties: new_props,
+                    } => {
+                        managed_table::validate_metadata_location_precondition(
+                            table, properties, &new_props,
+                        )?;
+                        for (key, value) in new_props {
+                            if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
+                                existing.1 = value;
+                            } else {
+                                properties.push((key, value));
+                            }
                         }
+                        Ok(())
                     }
-                    Ok(())
-                }
-                AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                    for key in &keys {
-                        let found = properties.iter().any(|(k, _)| k == key);
-                        if !found && !if_exists {
-                            return Err(CatalogError::NotFound(
-                                CatalogObject::Table,
-                                format!("property '{key}' not found on table '{table}'"),
-                            ));
+                    AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                        for key in &keys {
+                            let found = properties.iter().any(|(k, _)| k == key);
+                            if !found && !if_exists {
+                                return Err(CatalogError::NotFound(
+                                    CatalogObject::Table,
+                                    format!("property '{key}' not found on table '{table}'"),
+                                ));
+                            }
+                            properties.retain(|(k, _)| k != key);
                         }
-                        properties.retain(|(k, _)| k != key);
+                        Ok(())
                     }
-                    Ok(())
-                }
-                AlterTableOptions::AlterColumnType { name, data_type } => {
-                    alter_column_type(columns, &name, data_type).map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "failed to alter column type for '{}': {e}",
-                            name.join(".")
+                    AlterTableOptions::AlterColumnType { name, data_type } => {
+                        alter_column_type(columns, &name, data_type).map_err(|e| {
+                            CatalogError::InvalidArgument(format!(
+                                "failed to alter column type for '{}': {e}",
+                                name.join(".")
+                            ))
+                        })
+                    }
+                    AlterTableOptions::AlterColumnDefault { name, default } => {
+                        alter_column_default(columns, &name, default).map_err(|e| {
+                            CatalogError::InvalidArgument(format!(
+                                "failed to alter column default for '{}': {e}",
+                                name.join(".")
+                            ))
+                        })
+                    }
+                    AlterTableOptions::AddCheckConstraint { .. } => {
+                        Err(CatalogError::NotSupported(
+                            "CHECK constraints are handled by lake sources".to_string(),
                         ))
-                    })
-                }
-                AlterTableOptions::AlterColumnDefault { name, default } => {
-                    alter_column_default(columns, &name, default).map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "failed to alter column default for '{}': {e}",
-                            name.join(".")
-                        ))
-                    })
-                }
-                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
-                    "CHECK constraints are handled by lake sources".to_string(),
+                    }
+                },
+                _ => Err(CatalogError::NotSupported(
+                    "ALTER TABLE is not supported for views".to_string(),
                 )),
-            },
-            _ => Err(CatalogError::NotSupported(
-                "ALTER TABLE is not supported for views".to_string(),
-            )),
+            }?;
         }
+        *status = updated;
+        Ok(())
     }
 
     async fn create_view(

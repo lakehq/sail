@@ -64,3 +64,14 @@ This example configures a client-side namespace separator fallback.
 ```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", namespace_separator="::"}]'
 ```
+
+## Table DDL
+
+See the [lakehouse DDL support matrix](./index.md#lakehouse-ddl). Schema and property
+changes use REST commit requirements; the server publishes the new metadata file.
+Registering an existing table uses the register-table endpoint.
+
+Available features also depend on the server version. Nessie 0.107.5 in the integration
+suite serves Iceberg v2 and cannot apply v3 column defaults. Lakekeeper 0.12.1 retains
+the final removed table property in load-table responses; this is reproducible with
+both Sail and PyIceberg. Removing a property while other properties remain works.

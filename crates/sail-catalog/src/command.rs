@@ -6,8 +6,7 @@ use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
-    LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
-    LakeSourceCreateTableResult,
+    LakeSourceCreateTableColumn, LakeSourceCreateTableInfo, LakeSourceCreateTableResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -490,7 +489,7 @@ impl CatalogCommand {
                             "unknown lake source '{format}' for storage-backed ALTER TABLE: {e}"
                         ))
                     })?;
-                    let storage_operation = lake_source_alter_operation(&options);
+                    let storage_operation = (&options).into();
                     let lakehouse_table = manager
                         .resolve_lakehouse_table_status(
                             &table,
@@ -499,6 +498,13 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
+                    if matches!(lakehouse_table.commit,
+                        sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
+                        | sail_common_datafusion::catalog::CommitAuthority::VersionedCatalogCommit)
+                    {
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
                     let result = lake_source
                         .alter_table(ctx, &location, storage_operation, Some(lakehouse_table))
                         .await
@@ -1006,44 +1012,6 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
     }
 }
 
-fn lake_source_alter_operation(options: &AlterTableOptions) -> LakeSourceAlterTableOperation {
-    match options {
-        AlterTableOptions::SetTableProperties { properties } => {
-            LakeSourceAlterTableOperation::SetTableProperties {
-                changes: properties
-                    .iter()
-                    .map(|(key, value)| (key.clone(), Some(value.clone())))
-                    .collect(),
-                if_exists: false,
-            }
-        }
-        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-            LakeSourceAlterTableOperation::SetTableProperties {
-                changes: keys.iter().map(|key| (key.clone(), None)).collect(),
-                if_exists: *if_exists,
-            }
-        }
-        AlterTableOptions::AlterColumnType { name, data_type } => {
-            LakeSourceAlterTableOperation::AlterColumnType {
-                column_path: name.clone(),
-                data_type: data_type.clone(),
-            }
-        }
-        AlterTableOptions::AlterColumnDefault { name, default } => {
-            LakeSourceAlterTableOperation::AlterColumnDefault {
-                column_path: name.clone(),
-                default: default.clone(),
-            }
-        }
-        AlterTableOptions::AddCheckConstraint { name, expression } => {
-            LakeSourceAlterTableOperation::AddCheckConstraint {
-                name: name.clone(),
-                expression: expression.clone(),
-            }
-        }
-    }
-}
-
 fn catalog_sync_alter_options(
     format: &str,
     options: &AlterTableOptions,
@@ -1127,7 +1095,7 @@ mod tests {
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
     use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
-    use sail_common_datafusion::lakesource::LakeSource;
+    use sail_common_datafusion::lakesource::{LakeSource, LakeSourceAlterTableOperation};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
     use serde::{Deserialize, Serialize};
 

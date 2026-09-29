@@ -67,3 +67,32 @@ Here is a list of the supported (:white_check_mark:) catalog providers and the o
 | [AWS Glue](./glue)             | :white_check_mark: |
 | [OneLake](./onelake)           | :white_check_mark: |
 | [Hive Metastore](./hms)        | :white_check_mark: |
+
+## Lakehouse DDL
+
+For supported formats, Sail supports `CREATE TABLE`, CTAS, registration by `LOCATION`,
+`ALTER COLUMN TYPE`, `SET/DROP DEFAULT`, `SET/UNSET TBLPROPERTIES`, and `DROP TABLE`.
+
+| Catalog | Delta Lake | Iceberg | Metadata commit |
+| --- | --- | --- | --- |
+| Memory | Supported | Supported | Format metadata with in-memory registration |
+| Hive Metastore | Supported | Supported | Delta log; locked Iceberg pointer and schema update |
+| AWS Glue | Supported | Supported | Delta log; version-checked Iceberg pointer and schema update |
+| Iceberg REST (including Nessie and Lakekeeper) | Not supported by the API | Supported | REST schema/property updates with commit requirements |
+| Unity Catalog | Managed and external tables | Native Iceberg DDL requires Iceberg REST | Managed Delta ratification; external Delta log |
+| OneLake | Read-only Table API | Read-only Table API | DDL rejected before storage changes |
+
+Type changes follow each format's evolution rules. Delta widening requires
+`delta.enableTypeWidening=true`. Iceberg permits `INT` to `BIGINT`, `FLOAT` to `DOUBLE`,
+and decimal precision increases at the same scale. Iceberg column defaults require
+format version 3 and typed literals. Column ALTER operations in this scope target
+top-level columns. Iceberg partition transforms remain in format metadata rather
+than Hive partition keys.
+
+Register an existing table using `CREATE TABLE ... USING delta|iceberg LOCATION '...'`
+without a column list. The location must be accessible to Sail; Iceberg REST registration
+also requires the server to support its register-table endpoint and access the metadata.
+Unity LOCATION registration applies to external Delta tables. Unity external Delta ALTER updates the Delta log; the Unity table API has no endpoint
+for updating the external registration's columns or properties, so catalog-only
+`DESCRIBE` and `SHOW TBLPROPERTIES` can retain their registered values. Managed Delta
+schema and property changes are published through Unity's commit protocol.

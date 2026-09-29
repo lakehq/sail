@@ -303,13 +303,8 @@ impl LakeSource for IcebergLakeSource {
                 },
             );
         }
-        match operation {
-            LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(ctx.runtime_env(), path, changes, if_exists)
-                    .await
-            }
-            op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
-        }?;
+        self.alter_path_table(ctx.runtime_env(), path, &operation)
+            .await?;
         Ok(Default::default())
     }
 }
@@ -585,12 +580,11 @@ pub(crate) async fn plan_iceberg_write(
 }
 
 impl IcebergLakeSource {
-    async fn alter_table_properties(
+    async fn alter_path_table(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
-        changes: Vec<(String, Option<String>)>,
-        if_exists: bool,
+        operation: &LakeSourceAlterTableOperation,
     ) -> Result<()> {
         let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
         let object_store = runtime_env
@@ -614,7 +608,16 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
-            crate::properties::apply_table_property_changes(&mut table_meta, &changes, if_exists)?;
+            match operation {
+                LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                    crate::properties::apply_table_property_changes(
+                        &mut table_meta,
+                        changes,
+                        *if_exists,
+                    )?;
+                }
+                _ => crate::ddl::apply_operation(&mut table_meta, operation)?,
+            }
 
             let current_version =
                 metadata_file_version_from_path(&latest_metadata_file).unwrap_or(0);

@@ -139,7 +139,7 @@ fn catalog_alter_options(
     })
 }
 
-fn apply_operation(
+pub(crate) fn apply_operation(
     metadata: &mut TableMetadata,
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
@@ -227,6 +227,79 @@ fn apply_operation(
             not_impl_err!("CHECK constraints for Iceberg tables")
         }
     }
+}
+
+/// Build protocol updates without accessing storage; REST catalogs publish their own metadata.
+pub fn catalog_alter_updates(
+    metadata: &TableMetadata,
+    operation: &LakeSourceAlterTableOperation,
+) -> Result<(
+    Vec<crate::spec::TableRequirement>,
+    Vec<crate::spec::catalog::TableUpdate>,
+)> {
+    use crate::spec::catalog::{TableRequirement, TableUpdate};
+    let mut updated = metadata.clone();
+    apply_operation(&mut updated, operation)?;
+    let mut requirements = Vec::new();
+    if let Some(uuid) = metadata.table_uuid {
+        requirements.push(TableRequirement::UuidMatch { uuid });
+    }
+    let mut updates = Vec::new();
+    if updated.format_version != metadata.format_version {
+        updates.push(TableUpdate::UpgradeFormatVersion {
+            format_version: updated.format_version,
+        });
+    }
+    if updated.current_schema_id != metadata.current_schema_id {
+        requirements.push(TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: metadata.current_schema_id,
+        });
+        requirements.push(TableRequirement::LastAssignedFieldIdMatch {
+            last_assigned_field_id: metadata.last_column_id,
+        });
+        let schema = updated
+            .current_schema()
+            .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".to_string()))?;
+        if let Some(existing) = metadata.schemas.iter().find(|existing| {
+            existing.as_struct() == schema.as_struct()
+                && existing
+                    .identifier_field_ids()
+                    .collect::<std::collections::HashSet<_>>()
+                    == schema
+                        .identifier_field_ids()
+                        .collect::<std::collections::HashSet<_>>()
+        }) {
+            updates.push(TableUpdate::SetCurrentSchema {
+                schema_id: existing.schema_id(),
+            });
+        } else {
+            updates.push(TableUpdate::AddSchema {
+                schema: Box::new(schema.clone()),
+            });
+            updates.push(TableUpdate::SetCurrentSchema { schema_id: -1 });
+        }
+    }
+    let properties = updated
+        .properties
+        .iter()
+        .filter(|(key, value)| metadata.properties.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    if !properties.is_empty() {
+        updates.push(TableUpdate::SetProperties {
+            updates: properties,
+        });
+    }
+    let removals = metadata
+        .properties
+        .keys()
+        .filter(|key| !updated.properties.contains_key(*key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !removals.is_empty() {
+        updates.push(TableUpdate::RemoveProperties { removals });
+    }
+    Ok((requirements, updates))
 }
 
 fn update_column(
