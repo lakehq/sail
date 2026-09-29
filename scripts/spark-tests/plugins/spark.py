@@ -382,6 +382,22 @@ SKIPPED_SPARK_TESTS = [
         reason="Streaming test",
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.withWatermark"],
+        reason="Structured Streaming watermark example; Sail streaming behavior is tested in PySail",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.dropDuplicatesWithinWatermark"],
+        reason="Structured Streaming watermark example; Sail streaming behavior is tested in PySail",
+    ),
+    TestMarker(
+        keywords=[
+            "test_parity_pandas_grouped_map_with_state.py",
+            "GroupedApplyInPandasWithStateTests",
+            "test_apply_in_pandas_with_state_python_worker_random_failure",
+        ],
+        reason="Tests Spark Structured Streaming state and worker retry semantics; Sail streaming is tested in PySail",
+    ),
+    TestMarker(
         keywords=["connect", "streaming", "test_parity_foreach.py"],
         reason="Streaming test",
     ),
