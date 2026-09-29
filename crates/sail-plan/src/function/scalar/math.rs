@@ -3002,23 +3002,22 @@ mod tests {
     /// `Interval(DayTime) -> Interval(MonthDayNano) -> Duration` only works when `days == 0`.
     /// If the second case starts passing, arrow-cast now folds days into nanoseconds too.
     #[test]
-    fn interval_day_time_to_month_day_nano_to_duration_only_works_for_zero_days() {
+    fn interval_day_time_to_month_day_nano_to_duration_only_works_for_zero_days() -> PlanResult<()>
+    {
         let zero_days = ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 500)))
-            .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
-            .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
-            .cast_to(&DataType::Duration(TimeUnit::Microsecond))
-            .expect("days == 0, so Interval(MonthDayNano) -> Duration(Microsecond) succeeds");
+            .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))?
+            .cast_to(&DataType::Duration(TimeUnit::Microsecond))?;
         assert_eq!(zero_days, ScalarValue::DurationMicrosecond(Some(500_000)));
 
         let nonzero_days =
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(3, 500)))
-                .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))
-                .expect("Interval(DayTime) -> Interval(MonthDayNano) is a supported Arrow cast")
+                .cast_to(&DataType::Interval(IntervalUnit::MonthDayNano))?
                 .cast_to(&DataType::Duration(TimeUnit::Microsecond));
         assert!(
             nonzero_days.is_err(),
             "expected arrow-cast to still reject a nonzero day count; if this now succeeds, \
              Interval(DayTime) arithmetic can go through this cast chain after all"
         );
+        Ok(())
     }
 }
