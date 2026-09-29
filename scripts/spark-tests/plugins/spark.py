@@ -352,6 +352,11 @@ SKIPPED_SPARK_TESTS = [
         reason="JVM-dependent test",
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.toJSON"],
+        reason="PySpark 3.x Spark Connect does not implement the RDD-returning DataFrame.toJSON API",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
