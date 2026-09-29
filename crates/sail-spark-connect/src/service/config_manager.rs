@@ -1,4 +1,11 @@
+use std::sync::Arc;
+
+use datafusion::arrow::array::StringArray;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
+use sail_common::spec;
+use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::config::ConfigKeyValue;
@@ -6,6 +13,68 @@ use crate::error::SparkResult;
 use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
+
+pub(crate) fn handle_sql_config(
+    ctx: &SessionContext,
+    plan: &spec::Plan,
+) -> SparkResult<Option<RecordBatch>> {
+    let spec::Plan::Command(command) = plan else {
+        return Ok(None);
+    };
+    match &command.node {
+        spec::CommandNode::SetVariable { variable, value }
+            if !variable.starts_with("datafusion.")
+                && !variable.eq_ignore_ascii_case("timezone")
+                && !variable.eq_ignore_ascii_case("time.zone") =>
+        {
+            handle_config_set(
+                ctx,
+                vec![KeyValue {
+                    key: variable.clone(),
+                    value: Some(value.clone()),
+                }],
+            )?;
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, false),
+            ]));
+            Ok(Some(RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(StringArray::from(vec![variable.as_str()])),
+                    Arc::new(StringArray::from(vec![value.as_str()])),
+                ],
+            )?))
+        }
+        spec::CommandNode::ResetVariable { variable } => {
+            let spark = ctx.extension::<SparkSession>()?;
+            let keys = match variable {
+                Some(key) => vec![key.clone()],
+                None => spark
+                    .get_all_config(None)?
+                    .into_iter()
+                    .map(|kv| kv.key)
+                    .collect(),
+            };
+            handle_config_unset(ctx, keys)?;
+            // The session starts with the system time zone rather than a static config default.
+            if variable
+                .as_deref()
+                .is_none_or(|key| key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
+            {
+                handle_config_set(
+                    ctx,
+                    vec![KeyValue {
+                        key: SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string(),
+                        value: Some(get_system_timezone()?),
+                    }],
+                )?;
+            }
+            Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+        }
+        _ => Ok(None),
+    }
+}
 
 pub(crate) fn handle_config_get(
     ctx: &SessionContext,

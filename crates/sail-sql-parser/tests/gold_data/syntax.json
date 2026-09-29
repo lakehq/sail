@@ -1658,6 +1658,12 @@
               }
             },
             {
+              "name": "Configuration Value",
+              "node": {
+                "terminal": "configurationValue"
+              }
+            },
+            {
               "name": "CreateDatabaseClause",
               "node": {
                 "choice": [
@@ -5844,6 +5850,14 @@
               }
             },
             {
+              "name": "Keyword(Reset)",
+              "node": {
+                "terminal": {
+                  "keyword": "RESET"
+                }
+              }
+            },
+            {
               "name": "Keyword(Respect)",
               "node": {
                 "terminal": {
@@ -7741,10 +7755,10 @@
               }
             },
             {
-              "name": "Option(PropertyKeyValue)",
+              "name": "Option(PropertyKey)",
               "node": {
                 "optional": {
-                  "nonTerminal": "PropertyKeyValue"
+                  "nonTerminal": "PropertyKey"
                 }
               }
             },
@@ -8013,6 +8027,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Operator(Equals), Configuration Value))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(Equals), Configuration Value)"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Operator(Equals), Expression))",
               "node": {
                 "optional": {
@@ -8081,6 +8103,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Option(Operator(Equals)), PropertyValue)"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value))))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value)))"
                 }
               }
             },
@@ -10240,7 +10270,17 @@
                         "nonTerminal": "Keyword(Set)"
                       },
                       {
-                        "nonTerminal": "Option(PropertyKeyValue)"
+                        "nonTerminal": "Option(Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value))))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Reset)"
+                      },
+                      {
+                        "nonTerminal": "Option(PropertyKey)"
                       }
                     ]
                   },
@@ -11655,6 +11695,19 @@
               }
             },
             {
+              "name": "Tuple(Operator(Equals), Configuration Value)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(Equals)"
+                  },
+                  {
+                    "nonTerminal": "Configuration Value"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Operator(Equals), Expression)",
               "node": {
                 "sequence": [
@@ -11776,6 +11829,19 @@
                   },
                   {
                     "nonTerminal": "PropertyValue"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value)))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "PropertyKey"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Operator(Equals), Configuration Value))"
                   }
                 ]
               }
