@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{RecordBatch, StringArray};
-use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     ReplaceChildrenOptions,
@@ -37,7 +37,7 @@ impl SchemaPivotExec {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
-            input.pipeline_behavior(),
+            EmissionType::Final,
             input.boundedness(),
         ));
         Self {
@@ -146,9 +146,8 @@ impl ExecutionPlan for SchemaPivotExec {
 struct SchemaPivotStream {
     input: Option<SendableRecordBatchStream>,
     names: Vec<String>,
-    input_schema: SchemaRef,
     output_schema: SchemaRef,
-    data: Vec<RecordBatch>,
+    seen_values: Vec<bool>,
 }
 
 enum SchemaPivotState {
@@ -164,33 +163,19 @@ impl SchemaPivotStream {
         names: Vec<String>,
         output_schema: SchemaRef,
     ) -> Self {
-        let input_schema = input.schema();
+        let seen_values = vec![false; names.len()];
         Self {
             input: Some(input),
             names,
-            input_schema,
             output_schema,
-            data: vec![],
+            seen_values,
         }
     }
 
     fn schema_pivot(&self) -> Result<RecordBatch> {
         let input_fields = &self.names;
-        let num_fields = input_fields.len();
-        let mut seen_values = vec![false; num_fields];
-        let batch = concat_batches(&self.input_schema, &self.data)?;
-        let num_rows = batch.num_rows();
-
-        for (i, seen) in seen_values.iter_mut().enumerate() {
-            if !*seen {
-                let column = batch.column(i);
-                if !column.is_empty() && column.null_count() < num_rows {
-                    *seen = true;
-                }
-            }
-        }
-
-        let column_names: StringArray = seen_values
+        let column_names: StringArray = self
+            .seen_values
             .iter()
             .enumerate()
             .filter_map(|(i, &has_values)| {
@@ -218,7 +203,9 @@ impl SchemaPivotStream {
             Poll::Ready(None) => Poll::Ready(SchemaPivotState::SchemaPivot),
             Poll::Ready(Some(Err(e))) => Poll::Ready(SchemaPivotState::Error(e)),
             Poll::Ready(Some(Ok(batch))) => {
-                self.data.push(batch);
+                for (seen, column) in self.seen_values.iter_mut().zip(batch.columns()) {
+                    *seen |= column.null_count() < batch.num_rows();
+                }
                 Poll::Ready(SchemaPivotState::Continue)
             }
         }
