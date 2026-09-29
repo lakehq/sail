@@ -357,6 +357,14 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.observe"],
+        reason=(
+            "PySpark 3.x Connect does not support Observation.get and this example installs a streaming listener; "
+            "batch observed_metrics remain covered by test_observe"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
