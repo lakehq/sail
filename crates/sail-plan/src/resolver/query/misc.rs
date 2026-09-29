@@ -154,12 +154,14 @@ impl PlanResolver<'_> {
 
         if name.eq_ignore_ascii_case("REPARTITION") {
             let mut parameters = parameters.into_iter().peekable();
+            // Sail also recognizes Int64 counts; Spark only recognizes Int8/Int16/Int32.
             let num_partitions = if let Some(spec::Expr::Literal(literal)) = parameters.peek()
                 && matches!(
                     literal,
                     spec::Literal::Int8 { .. }
                         | spec::Literal::Int16 { .. }
                         | spec::Literal::Int32 { .. }
+                        | spec::Literal::Int64 { .. }
                 ) {
                 let parameter = parameters
                     .next()
@@ -283,6 +285,8 @@ impl PlanResolver<'_> {
     }
 }
 
+// Int64 hint counts are a Sail extension: plans use usize and worker messages use u64.
+// Accepting the type does not guarantee that an arbitrarily large count is executable.
 fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
     match expr {
         Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => {
@@ -300,6 +304,10 @@ fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
                 PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
             })
         }
+        Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => usize::try_from(*value)
+            .map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint partition count is out of range"))
+            }),
         _ => Err(PlanError::analysis(format!(
             "{hint_name} hint partition count must be an integer"
         ))),

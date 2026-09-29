@@ -179,18 +179,46 @@ def test_coalesce_hint_rejects_zero_partitions(spark):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 
-@pytest.mark.parametrize("parameters", ["2L", "2147483648L", "2.0", "CAST(2 AS INT)"])
+@pytest.mark.parametrize("parameters", ["2.0", "CAST(2 AS INT)"])
 def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
     with pytest.raises(AnalysisException):
         spark.sql(f"SELECT /*+ COALESCE({parameters}) */ id FROM range(6)").collect()  # noqa: S608
 
 
-def test_coalesce_dataframe_hint_rejects_long_partition_count(spark):
-    with pytest.raises(AnalysisException):
-        spark.range(6).hint("COALESCE", 2**31).collect()
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE(2L)", "REPARTITION(2L)", "REPARTITION(2L, id)"])
+def test_sql_hint_accepts_int64_partition_count(spark, hint):
+    result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(0, 12, 1, 4)")  # noqa: S608
+    assert partition_count(result) == 2  # noqa: PLR2004
+    assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "2147483648", "2.5"])
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
+def test_sql_hint_rejects_zero_int64_partition_count(spark, hint):
+    with pytest.raises(IllegalArgumentException):
+        spark.sql(f"SELECT /*+ {hint}(0L) */ id FROM range(6)").collect()  # noqa: S608
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
+def test_dataframe_hint_rejects_negative_int64_partition_count(spark, hint):
+    with pytest.raises(IllegalArgumentException):
+        spark.range(6).hint(hint, -(2**31) - 1).collect()
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
+@pytest.mark.parametrize("count", [2**31, 2**63 - 1])
+def test_dataframe_hint_accepts_large_partition_count(spark, hint, count):
+    source = spark.range(6)
+    # Resolve the schema without executing an enormous repartition.
+    assert source.hint(hint, count).schema == source.schema
+    if hint == "REPARTITION":
+        assert source.hint(hint, count, "id").schema == source.schema
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "9223372036854775808", "2.5"])
 def test_shuffle_partitions_rejects_invalid_config(spark, value):
     previous = spark.conf.get("spark.sql.shuffle.partitions")
     try:
@@ -201,8 +229,9 @@ def test_shuffle_partitions_rejects_invalid_config(spark, value):
         spark.conf.set("spark.sql.shuffle.partitions", previous)
 
 
-@pytest.mark.parametrize("value", ["1", "2147483647"])
-def test_shuffle_partitions_accepts_int32_bounds(spark, value):
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("value", ["1", "2147483648", "9223372036854775807"])
+def test_shuffle_partitions_accepts_int64_bounds(spark, value):
     previous = spark.conf.get("spark.sql.shuffle.partitions")
     try:
         spark.conf.set("spark.sql.shuffle.partitions", value)
@@ -312,7 +341,6 @@ def test_sql_hint_delimiters_in_comments_and_strings(spark):
         (("missing",), AnalysisException),
         ((0, "id"), IllegalArgumentException),
         ((-1, "id"), IllegalArgumentException),
-        ((2**31, "id"), AnalysisException),
     ],
 )
 def test_repartition_column_hint_rejects_invalid_parameters(spark, parameters, error):
@@ -320,7 +348,7 @@ def test_repartition_column_hint_rejects_invalid_parameters(spark, parameters, e
         spark.range(12).hint("REPARTITION", *parameters).collect()
 
 
-@pytest.mark.parametrize("parameters", ["2L, id", "id, 3"])
+@pytest.mark.parametrize("parameters", ["id, 3"])
 def test_repartition_sql_hint_rejects_invalid_parameters(spark, parameters):
     with pytest.raises(AnalysisException):
         spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id FROM range(12)").collect()  # noqa: S608

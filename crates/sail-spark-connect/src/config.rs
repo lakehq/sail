@@ -146,10 +146,12 @@ impl SparkRuntimeConfig {
         // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
         // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
+        // Spark limits this setting to Int32; Sail accepts positive Int64 counts,
+        // matching its partitioning hints. Plan conversion checks the usize limit.
         if key == SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS {
-            let partitions = value.trim().parse::<i32>().map_err(|_| {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
                 SparkError::invalid(
-                    "spark.sql.shuffle.partitions must be a positive 32-bit integer",
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
                 )
             })?;
             if partitions <= 0 {
@@ -236,9 +238,9 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         let mut output = PlanConfig::new()?;
 
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS) {
-            let partitions = value.trim().parse::<i32>().map_err(|_| {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
                 SparkError::invalid(
-                    "spark.sql.shuffle.partitions must be a positive 32-bit integer",
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
                 )
             })?;
             if partitions <= 0 {
@@ -246,7 +248,9 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
                     "spark.sql.shuffle.partitions must be positive",
                 ));
             }
-            output.shuffle_partitions = partitions as usize;
+            output.shuffle_partitions = usize::try_from(partitions).map_err(|_| {
+                SparkError::invalid("spark.sql.shuffle.partitions exceeds the platform limit")
+            })?;
         }
 
         if let Some(value) = config
