@@ -468,6 +468,14 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_create_global_temp_view"],
+        reason=(
+            "Creates a Sail view but checks its existence on a separate JVM server; same-server session visibility "
+            "and lifecycle are covered in catalog/test_temp_view.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
         reason="Not available in Spark Connect until Spark 4",
         spark_major_version_less_than=4,
