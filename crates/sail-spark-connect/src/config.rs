@@ -224,6 +224,19 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         let mut output = PlanConfig::new()?;
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS)
+            .map(|x| x.trim().parse::<usize>())
+            .transpose()?
+        {
+            if value == 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+            output.shuffle_partitions = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
             .map(|x| x.to_string())
         {

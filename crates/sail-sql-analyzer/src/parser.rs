@@ -151,6 +151,8 @@ mod tests {
 
     #[test]
     fn test_unparse() -> SqlResult<()> {
+        let hint_sql = "SELECT /*+ REPARTITION ( 3 , id ) , COALESCE ( 2 ) */ id FROM t ";
+        assert_eq!(parse_one_statement(hint_sql)?.text(), hint_sql);
         assert_eq!(
             parse_one_statement("/* */ SELECT 1+1")?.text(),
             "SELECT 1 + 1 "

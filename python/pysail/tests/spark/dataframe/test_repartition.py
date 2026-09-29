@@ -2,7 +2,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.errors import AnalysisException
+from pyspark.errors import AnalysisException, IllegalArgumentException
 from pyspark.sql import Row
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
@@ -202,6 +202,103 @@ def test_repartition_hint_rejects_invalid_parameters(spark, parameters):
     """Reject invalid REPARTITION hint parameter values and combinations."""
     with pytest.raises(AnalysisException):
         spark.range(0, 10, 1, 2).hint("REPARTITION", *parameters).collect()
+
+
+@pytest.mark.parametrize("with_count", [False, True])
+@pytest.mark.parametrize("columns", [("group",), ("group", "bucket"), ("s.key", "`a.b`")])
+def test_repartition_hint_by_columns(spark, with_count, columns):
+    old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
+    old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        source = spark.range(0, 60, 1, 4).selectExpr(
+            "id", "id % 3 AS `group`", "id % 2 AS bucket", "named_struct('key', id % 3) AS s", "id % 2 AS `a.b`"
+        )
+        count = 5 if with_count else 3
+        parameters = (count, *columns) if with_count else columns
+        result = source.hint("REPARTITION", *parameters)
+        expected = source.repartition(count, *columns)
+        assert partition_count(result.select("id")) == count
+        assert result.schema == source.schema
+        assert sorted(result.collect()) == sorted(source.collect())
+        assert sorted(partition_groups(result, "id").values()) == sorted(partition_groups(expected, "id").values())
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", old_partitions)
+        spark.conf.set("spark.sql.adaptive.enabled", old_adaptive)
+
+
+@pytest.mark.parametrize("parameters", ["3, id", "3, r.id"])
+def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
+    result = spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id + 1 AS value FROM range(12) r")  # noqa: S608
+    assert result.columns == ["value"]
+    assert partition_count(result) == 3  # noqa: PLR2004
+    assert sorted(result.collect()) == [Row(value=i) for i in range(1, 13)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT /*+ REPARTITION(3, id), COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ REPARTITION(3, id) COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ REPARTITION(3, id) */ /*+ COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ UNKNOWN_HINT(id) REPARTITION(3, id) */ id FROM range(12)",
+    ],
+)
+def test_repartition_sql_hint_precedence(spark, query):
+    result = spark.sql(query)
+    assert partition_count(result) == 3  # noqa: PLR2004
+    assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
+
+
+@pytest.mark.parametrize("hint", ["REPARTITION(id)", "REPARTITION"])
+def test_repartition_sql_hint_default_partition_count(spark, hint):
+    old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
+    old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(12)")  # noqa: S608
+        assert partition_count(result) == 3  # noqa: PLR2004
+        assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", old_partitions)
+        spark.conf.set("spark.sql.adaptive.enabled", old_adaptive)
+
+
+def test_sql_hint_delimiters_in_comments_and_strings(spark):
+    result = spark.sql("SELECT /* REPARTITION(99) */ '/*+ REPARTITION(99) */' AS value")
+    assert partition_count(result) == 1
+    assert result.collect() == [Row(value="/*+ REPARTITION(99) */")]
+
+
+@pytest.mark.parametrize(
+    ("parameters", "error"),
+    [
+        ((2.5, "id"), AnalysisException),
+        ((2, "id", 3), AnalysisException),
+        (("missing",), AnalysisException),
+        ((0, "id"), IllegalArgumentException),
+        ((-1, "id"), IllegalArgumentException),
+        ((2**31, "id"), AnalysisException),
+    ],
+)
+def test_repartition_column_hint_rejects_invalid_parameters(spark, parameters, error):
+    with pytest.raises(error):
+        spark.range(12).hint("REPARTITION", *parameters).collect()
+
+
+@pytest.mark.parametrize("parameters", ["2L, id", "id, 3"])
+def test_repartition_sql_hint_rejects_invalid_parameters(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id FROM range(12)").collect()  # noqa: S608
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_repartition_column_hint_plan(spark, snapshot):
+    result = spark.sql("SELECT /*+ REPARTITION(3, id) */ id + 1 AS value FROM range(12)")
+    assert normalize_plan_text(result._explain_string(extended=True)) == snapshot  # noqa: SLF001
 
 
 def test_explicit_coalesce_preserves_rows(spark):
