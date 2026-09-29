@@ -6,11 +6,10 @@ use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{Result, plan_err};
-use futures::StreamExt;
+use datafusion_common::{DataFusionError, Result, plan_err};
+use futures::TryStreamExt;
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
@@ -25,9 +24,8 @@ impl ConsoleSinkExec {
             Partitioning::UnknownPartitioning(
                 input.properties().output_partitioning().partition_count(),
             ),
-            EmissionType::Final,
-            // The node returns no data, so it is bounded.
-            Boundedness::Bounded,
+            input.properties().emission_type,
+            input.properties().boundedness,
         ));
         Self { input, properties }
     }
@@ -91,30 +89,19 @@ impl ExecutionPlan for ConsoleSinkExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.input.execute(partition, context)?;
+        let mut stream = self.input.execute(partition, context)?;
         let output = futures::stream::once(async move {
-            stream
-                .enumerate()
-                .for_each(|(i, batch)| async move {
-                    let text = match batch {
-                        Ok(batch) => match pretty_format_batches(&[batch]) {
-                            Ok(batch) => format!("{batch}"),
-                            Err(e) => {
-                                format!("error formatting batch: {e}")
-                            }
-                        },
-                        Err(e) => {
-                            format!("error: {e}")
-                        }
-                    };
-                    let mut stdout = std::io::stdout().lock();
-                    let _ = writeln!(stdout, "partition {partition} batch {i}");
-                    let _ = writeln!(stdout, "{text}");
-                })
-                .await;
-            futures::stream::empty()
+            let mut i = 0;
+            while let Some(batch) = stream.try_next().await? {
+                let text = pretty_format_batches(&[batch])?.to_string();
+                let mut stdout = std::io::stdout().lock();
+                writeln!(stdout, "partition {partition} batch {i}")?;
+                writeln!(stdout, "{text}")?;
+                i += 1;
+            }
+            Ok::<_, DataFusionError>(futures::stream::empty())
         })
-        .flatten();
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,

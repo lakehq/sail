@@ -10,7 +10,6 @@ use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{
     EquivalenceProperties, Partitioning, PhysicalExpr, RangePartitioning,
 };
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -127,10 +126,8 @@ impl ShuffleWriteExec {
             // These output streams are written to locations managed by the worker,
             // while the return value of `.execute()` is always an empty stream.
             Partitioning::UnknownPartitioning(plan.output_partitioning().partition_count()),
-            EmissionType::Final,
-            Boundedness::Unbounded {
-                requires_infinite_memory: false,
-            },
+            plan.pipeline_behavior(),
+            plan.boundedness(),
         ));
         Self {
             plan,

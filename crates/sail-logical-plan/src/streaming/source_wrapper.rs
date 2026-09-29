@@ -6,6 +6,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::{arc_ptr_hash, arc_ptr_partial_cmp, partial_cmp_by_equality};
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
@@ -15,10 +16,10 @@ use sail_common_datafusion::streaming::source::StreamSource;
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialOrd)]
 pub struct StreamSourceWrapperNode {
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(arc_ptr_partial_cmp)))]
     source: Arc<dyn StreamSource>,
     names: Option<Vec<String>>,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -27,7 +28,8 @@ pub struct StreamSourceWrapperNode {
 
 impl PartialEq for StreamSourceWrapperNode {
     fn eq(&self, other: &Self) -> bool {
-        self.names == other.names
+        Arc::ptr_eq(&self.source, &other.source)
+            && self.names == other.names
             && self.schema == other.schema
             && self.projection == other.projection
             && self.filters == other.filters
@@ -39,6 +41,7 @@ impl Eq for StreamSourceWrapperNode {}
 
 impl Hash for StreamSourceWrapperNode {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        arc_ptr_hash(&self.source, state);
         self.names.hash(state);
         self.schema.hash(state);
         self.projection.hash(state);
@@ -121,7 +124,7 @@ impl UserDefinedLogicalNodeCore for StreamSourceWrapperNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![]
+        self.filters.clone()
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -129,12 +132,20 @@ impl UserDefinedLogicalNodeCore for StreamSourceWrapperNode {
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
-        if !exprs.is_empty() {
-            return plan_err!("{} does not take any expressions", self.name());
+        if exprs.len() != self.filters.len() {
+            return plan_err!(
+                "{} expects {} filters, got {}",
+                self.name(),
+                self.filters.len(),
+                exprs.len()
+            );
         }
         if !inputs.is_empty() {
             return plan_err!("{} does not take any inputs", self.name());
         }
-        Ok(self.clone())
+        Ok(Self {
+            filters: exprs,
+            ..self.clone()
+        })
     }
 }

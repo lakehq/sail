@@ -4,7 +4,6 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, plan_err};
@@ -23,8 +22,8 @@ impl NoopSinkExec {
             Partitioning::UnknownPartitioning(
                 input.properties().output_partitioning().partition_count(),
             ),
-            EmissionType::Final,
-            Boundedness::Bounded,
+            input.properties().emission_type,
+            input.properties().boundedness,
         ));
         Self { input, properties }
     }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -28,7 +28,8 @@ impl StreamSourceAdapterExec {
         let schema = Arc::new(to_flow_event_schema(&input.schema()));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            input.output_partitioning().clone(),
+            // Event columns and marker rows invalidate the input partition expressions.
+            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             input.pipeline_behavior(),
             input.boundedness(),
         ));
