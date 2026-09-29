@@ -235,8 +235,8 @@ pub struct HintItem {
 #[parser(dependency = "Expr")]
 pub struct HintParameters {
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)).or_not())]
-    pub items: Option<Sequence<Expr, Comma>>,
+    #[parser(function = |e, o| sequence(e, unit(o)))]
+    pub items: Sequence<Expr, Comma>,
     pub right: RightParenthesis,
 }
 

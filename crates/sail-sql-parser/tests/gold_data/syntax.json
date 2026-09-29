@@ -3740,7 +3740,7 @@
                     "nonTerminal": "Operator(LeftParenthesis)"
                   },
                   {
-                    "nonTerminal": "Option(Sequence(Expression, Operator(Comma)))"
+                    "nonTerminal": "Sequence(Expression, Operator(Comma))"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"

@@ -146,6 +146,18 @@ impl SparkRuntimeConfig {
         // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
         // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
+        if key == SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS {
+            let partitions = value.trim().parse::<i32>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 32-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+        }
         self.config.insert(key, value);
         Ok(())
     }
@@ -223,17 +235,18 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
 
-        if let Some(value) = config
-            .get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS)
-            .map(|x| x.trim().parse::<usize>())
-            .transpose()?
-        {
-            if value == 0 {
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS) {
+            let partitions = value.trim().parse::<i32>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 32-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
                 return Err(SparkError::invalid(
                     "spark.sql.shuffle.partitions must be positive",
                 ));
             }
-            output.shuffle_partitions = value;
+            output.shuffle_partitions = partitions as usize;
         }
 
         if let Some(value) = config

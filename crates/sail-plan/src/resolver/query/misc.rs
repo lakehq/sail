@@ -300,17 +300,6 @@ fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
                 PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
             })
         }
-        Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => usize::try_from(*value)
-            .map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
-            }),
-        Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as usize),
-        Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as usize),
-        Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as usize),
-        Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => usize::try_from(*value)
-            .map_err(|_| {
-                PlanError::analysis(format!("{hint_name} hint partition count is too large"))
-            }),
         _ => Err(PlanError::analysis(format!(
             "{hint_name} hint partition count must be an integer"
         ))),

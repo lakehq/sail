@@ -150,6 +150,15 @@ mod tests {
     }
 
     #[test]
+    fn test_hint_requires_parameters_inside_parentheses() {
+        for hint in ["REPARTITION", "COALESCE", "UNKNOWN_HINT"] {
+            let sql = format!("SELECT /*+ {hint}() */ 1");
+            assert!(parse_one_statement(&sql).is_err(), "{sql}");
+        }
+        assert!(parse_one_statement("SELECT /*+ REPARTITION */ 1").is_ok());
+    }
+
+    #[test]
     fn test_unparse() -> SqlResult<()> {
         let hint_sql = "SELECT /*+ REPARTITION ( 3 , id ) , COALESCE ( 2 ) */ id FROM t ";
         assert_eq!(parse_one_statement(hint_sql)?.text(), hint_sql);

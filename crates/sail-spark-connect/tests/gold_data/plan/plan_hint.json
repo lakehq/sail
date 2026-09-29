@@ -500,49 +500,7 @@
       "input": "SELECT /*+ HINT() */ * FROM t",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 16)\n\n== SQL ==\nSELECT /*+ HINT() */ * FROM t\n----------------^^^\n",
       "output": {
-        "success": {
-          "query": {
-            "hint": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "name": "HINT",
-              "parameters": []
-            },
-            "planId": null
-          }
-        }
+        "failure": "invalid argument: found ) at 16:17 expected expression"
       }
     },
     {

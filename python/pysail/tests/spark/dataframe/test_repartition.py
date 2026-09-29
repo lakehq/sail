@@ -179,6 +179,38 @@ def test_coalesce_hint_rejects_zero_partitions(spark):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 
+@pytest.mark.parametrize("parameters", ["2L", "2147483648L", "2.0", "CAST(2 AS INT)"])
+def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ COALESCE({parameters}) */ id FROM range(6)").collect()  # noqa: S608
+
+
+def test_coalesce_dataframe_hint_rejects_long_partition_count(spark):
+    with pytest.raises(AnalysisException):
+        spark.range(6).hint("COALESCE", 2**31).collect()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "2147483648", "2.5"])
+def test_shuffle_partitions_rejects_invalid_config(spark, value):
+    previous = spark.conf.get("spark.sql.shuffle.partitions")
+    try:
+        with pytest.raises(IllegalArgumentException):
+            spark.conf.set("spark.sql.shuffle.partitions", value)
+        assert spark.conf.get("spark.sql.shuffle.partitions") == previous
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", previous)
+
+
+@pytest.mark.parametrize("value", ["1", "2147483647"])
+def test_shuffle_partitions_accepts_int32_bounds(spark, value):
+    previous = spark.conf.get("spark.sql.shuffle.partitions")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", value)
+        assert spark.conf.get("spark.sql.shuffle.partitions") == value
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", previous)
+
+
 def test_repartition_hint(spark):
     """Apply an integer REPARTITION hint without changing the rows."""
     df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))

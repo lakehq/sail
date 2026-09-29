@@ -342,7 +342,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
     hints.into_iter().rev().try_fold(plan, |input, hint| {
         let parameters = hint
             .parameters
-            .and_then(|parameters| parameters.items)
+            .map(|parameters| parameters.items)
             .map(|items| {
                 items
                     .into_items()
