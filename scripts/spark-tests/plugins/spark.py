@@ -427,6 +427,14 @@ SKIPPED_SPARK_TESTS = [
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
     TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.createTable"],
+        reason=(
+            "Reuses table names leaked by earlier failed catalog doctests; managed/external table creation "
+            "with isolated names and cleanup is covered in catalog/test_table.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.explain"],
         reason=(
             "Asserts Spark-specific EXPLAIN rendering; API coverage is in dataframe/test_explain.py "
