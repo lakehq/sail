@@ -352,10 +352,8 @@ impl PlanResolver<'_> {
         let mut qualifiers = Vec::with_capacity(visible.len());
         let mut expr = Vec::with_capacity(visible.len());
         for (column, name) in visible {
-            // The alias name replaces the name of the column that it matches, and a `Filter`
-            // (or `Sort`, etc.) over this projection can still recover the replaced column:
-            // `MissingInputBoundaries`/`add_missing_inputs` pull it back up from the input it
-            // was read from.
+            // A `Filter`/`Sort` above can still recover the column the alias replaced, via
+            // `MissingInputBoundaries`/`add_missing_inputs` pulling it back up from the input.
             match aliases
                 .iter()
                 .find(|(alias, ..)| self.match_identifier(alias, &name))
@@ -399,10 +397,8 @@ impl PlanResolver<'_> {
             }
         }
         let expr = self.rewrite_multi_expr(expr)?;
-        // An aggregate turns the projection into an aggregation without grouping, as it does for
-        // `select`, so the columns passed through are refused there unless they are aggregated.
-        // Every column it outputs is then an aggregate rather than a column of the input, so none
-        // of them keeps a qualifier either.
+        // As for `select`, this turns into an aggregation without grouping; every output column
+        // is then an aggregate rather than a passed-through input column, so none keeps a qualifier.
         if Self::contains_aggregate(&expr) {
             return self.rewrite_aggregate(input, expr, vec![], None, false, state);
         }
@@ -549,10 +545,8 @@ impl PlanResolver<'_> {
                         vec![]
                     });
                 }
-                // A longer name is resolved in full before anything decides what to do with it,
-                // so the leading part is tried as a qualifier before it is tried as a column. Only
-                // a top-level column can be replaced, so a name that reaches anything else is
-                // rejected on its own condition.
+                // Resolved in full first (qualifier before column); only a top-level column can
+                // be replaced, so anything else this reaches is rejected on its own condition.
                 match self.resolve_column_reference(&object, hidden.schema(), state)? {
                     Some((_, Expr::Column(column))) => {
                         let info = state.get_field_info(column.name())?;

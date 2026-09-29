@@ -196,10 +196,8 @@ impl PlanResolver<'_> {
         }
     }
 
-    /// Finds the struct field with the given name. The name is matched with the resolver, and
-    /// more than one match is an error, which is why the field cannot simply be looked up.
-    /// A field that matches no name is not an error here, since the caller may be considering
-    /// more than one candidate for the same expression.
+    /// Finds the struct field with the given name; more than one match is an error, but no
+    /// match is not, since the caller may be considering more than one candidate expression.
     pub(super) fn resolve_struct_field<'a>(
         &self,
         fields: &'a Fields,

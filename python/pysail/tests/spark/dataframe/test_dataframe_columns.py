@@ -2069,9 +2069,7 @@ def _repeated_input_cases(spark):
 
 @pytest.mark.parametrize("case_sensitive", ["false", "true"])
 @pytest.mark.parametrize(("case", "columns", "rows"), _REPEATED_INPUT_RESULTS)
-def test_a_repeated_input_name_is_replaced_dropped_and_renamed_everywhere(
-    spark, case, case_sensitive, columns, rows
-):
+def test_a_repeated_input_name_is_replaced_dropped_and_renamed_everywhere(spark, case, case_sensitive, columns, rows):
     _configure(spark, case_sensitive)
     try:
         result = _repeated_input_cases(spark)[case]()
@@ -2091,9 +2089,7 @@ def test_a_repeated_input_name_is_replaced_dropped_and_renamed_everywhere(
         ("true", ["a", "a", "b", "A"], [(1, 1, "x", 9)]),
     ],
 )
-def test_a_repeated_input_name_is_replaced_by_the_case_the_resolver_matches(
-    spark, case_sensitive, columns, rows
-):
+def test_a_repeated_input_name_is_replaced_by_the_case_the_resolver_matches(spark, case_sensitive, columns, rows):
     _configure(spark, case_sensitive)
     try:
         result = _repeated(spark).withColumn("A", lit(9))
@@ -2235,12 +2231,8 @@ def _pulled_up_filter_cases(spark):
 
     return {
         # The condition names one column the projection dropped and one it kept.
-        "reads_a_column_the_projection_kept_too": lambda: replaced.filter(
-            (df["a"] == _SELECTED) & (col("b") == "y")
-        ),
-        "two_filters_each_pulling_up": lambda: replaced.filter(df["a"] >= _SELECTED).filter(
-            df["a"] <= _SELECTED
-        ),
+        "reads_a_column_the_projection_kept_too": lambda: replaced.filter((df["a"] == _SELECTED) & (col("b") == "y")),
+        "two_filters_each_pulling_up": lambda: replaced.filter(df["a"] >= _SELECTED).filter(df["a"] <= _SELECTED),
         # The column the condition needed must not reach the output, under a star either.
         "a_star_after_the_filter": lambda: replaced.filter(df["a"] == _SELECTED).select("*"),
         # An aggregate under the filter instead of a projection.
@@ -2288,7 +2280,7 @@ def test_a_filter_pulls_a_column_through_the_operators_that_output_what_they_rea
     result = _pull_up_depth_cases(spark)[case]()
 
     assert result.columns[0] == "A"
-    assert [tuple(row)[0] for row in result.collect()] == [-_SELECTED]
+    assert [next(iter(row)) for row in result.collect()] == [-_SELECTED]
 
 
 def test_a_filter_over_an_aggregate_reads_a_grouping_key_the_projection_dropped(spark):
@@ -2346,13 +2338,11 @@ def _pull_up_refused_cases(spark):
 def test_a_filter_that_the_pull_up_does_not_reach(spark, case, rows):
     result = _pull_up_refused_cases(spark)[case]()
 
-    assert [tuple(row)[0] for row in result.collect()] == rows
+    assert [next(iter(row)) for row in result.collect()] == rows
 
 
 @_SPARK_4
-@pytest.mark.parametrize(
-    "case", ["a_subquery_alias_in_between", "an_attribute_the_aggregate_does_not_output"]
-)
+@pytest.mark.parametrize("case", ["a_subquery_alias_in_between", "an_attribute_the_aggregate_does_not_output"])
 def test_a_filter_that_neither_engine_resolves(spark, case):
     with pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
         _pull_up_refused_cases(spark)[case]().collect()

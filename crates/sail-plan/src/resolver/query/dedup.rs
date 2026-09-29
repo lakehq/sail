@@ -30,10 +30,8 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            // The name selects output columns, so it is matched with the resolver alone, and
-            // every column that matches becomes a key.
-            // A column that is named more than once is a key only once, since the same
-            // expression cannot be repeated in the plan.
+            // Every matching column becomes a key, but a column named more than once is a
+            // key only once, since the same expression cannot be repeated in the plan.
             let mut on_expr: Vec<Expr> = Vec::new();
             for name in &column_names {
                 for column in self.resolve_columns_by_resolver(schema, name.as_ref(), state)? {

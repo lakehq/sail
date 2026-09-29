@@ -78,12 +78,9 @@ impl CteInfo {
             return Ok(None);
         }
         let mut renewed = datafusion_common::HashMap::with_capacity(self.origins.len());
-        // Two fields of one instance that already led to the same root (selecting one column
-        // twice inside the CTE's own definition) must keep leading to one root after renewal
-        // too, or they turn into two unrelated attributes and a plain reference to the name
-        // becomes ambiguous on its own, before a self-join even comes into it. The sharing is
-        // local to this one renewal: each repeated reference renews independently, so `a` and
-        // `b` never point at each other's roots, only at their own.
+        // Two fields that already shared a root (one column selected twice) must keep sharing
+        // one after renewal too, or a plain reference to the name becomes ambiguous on its own.
+        // Sharing is local to this renewal: `a` and `b` never point at each other's roots.
         let mut renewed_roots: datafusion_common::HashMap<String, String> =
             datafusion_common::HashMap::with_capacity(self.origins.len());
         let mut names = Vec::with_capacity(self.origins.len());
@@ -101,13 +98,9 @@ impl CteInfo {
                 CteKind::ParameterView => self.bindings.get(&original).cloned().unwrap_or_default(),
             };
             let field_id = state.register_field_with_origin(name, hidden, origin, plan_ids);
-            // A parameter view's renewed reference still carries its DataFrame plan IDs, so
-            // `matches_plan_attribute` must be able to trace it back to the schema frozen for
-            // that plan ID. Its fresh origin cannot do that on its own; the root can, the same
-            // way a pass-through projection keeps one (`rewrite_named_expressions`). A CTE
-            // definition's reference carries no plan ID and must stay its own root relative to
-            // the ORIGINAL instance, or a self-join of the CTE would collapse into one attribute
-            // instead of staying two: it only shares a root with a sibling of this same renewal.
+            // A parameter view keeps its plan ID, so its root must trace back to the frozen
+            // schema. A CTE definition carries no plan ID, so it stays its own root relative to
+            // the original instance, or a self-join of the CTE would collapse into one attribute.
             if self.kind == CteKind::ParameterView {
                 state.register_root_for_field(&field_id, field.name())?;
             } else {

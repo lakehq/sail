@@ -1,5 +1,5 @@
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import parsers, scenarios, then, when
 
 scenarios("features/with_column_generators.feature")
@@ -46,11 +46,11 @@ def add_column(spark, api, expression):
 @then("the column query rejects a nested generator")
 def nested_generator_error(column_query):
     with pytest.raises(Exception, match=r"\[UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS\].*nested in expressions"):
-        column_query()._show_string(truncate=False)
+        column_query()._show_string(truncate=False)  # noqa: SLF001
 
 
 @then("the column query returns its elements")
 def generator_result(column_query):
-    assert column_query()._show_string(truncate=False) == (
+    assert column_query()._show_string(truncate=False) == (  # noqa: SLF001
         "+------+---+\n|a     |x  |\n+------+---+\n|[1, 2]|1  |\n|[1, 2]|2  |\n+------+---+\n"
     )

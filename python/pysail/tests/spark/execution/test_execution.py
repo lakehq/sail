@@ -466,8 +466,7 @@ _REPEATED_FIELD_NAMES_IN_CLUSTER = [
         ["{0, 1}"],
     ),
     (
-        "SELECT CAST(named_struct('s', named_struct('a', 1, 'a', 2))"
-        " AS STRUCT<s: STRUCT<a: BIGINT, a: BIGINT>>) AS x",
+        "SELECT CAST(named_struct('s', named_struct('a', 1, 'a', 2)) AS STRUCT<s: STRUCT<a: BIGINT, a: BIGINT>>) AS x",
         ["{{1, 2}}"],
     ),
     (
@@ -485,6 +484,4 @@ _REPEATED_FIELD_NAMES_IN_CLUSTER = [
 def test_a_cast_of_a_repeated_struct_field_in_cluster_mode(spark, query, rows):
     printed = spark.sql(query)._show_string(truncate=False)  # noqa: SLF001
 
-    assert sorted(
-        line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))
-    ) == rows
+    assert sorted(line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))) == rows

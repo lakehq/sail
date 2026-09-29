@@ -147,10 +147,8 @@ impl UpdateStructField {
         };
         let mut new_arrays = Vec::with_capacity(new_fields.len());
 
-        // The columns are walked by POSITION, not by name: the return type keeps the order of the
-        // input and appends at most one field at the end, and a name the resolver matched may
-        // have been rewritten to the spelling that was asked for, so looking it up by name in the
-        // input would miss it.
+        // Walked by POSITION: a matched name may have been rewritten to a different spelling,
+        // so looking it up by name in the input would miss it.
         for (index, field) in struct_array.fields().iter().enumerate() {
             let column = struct_array.column(index);
             if matches(field.name(), current_field_name, case_sensitive) {

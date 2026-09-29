@@ -13,7 +13,7 @@ import contextlib
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import pyspark_version
 
 pytest.importorskip("pyarrow")
 

@@ -143,6 +143,28 @@ Feature: NATURAL and USING joins
         | k |
         | 1 |
 
+    Scenario: the key of a right semi join is reachable through the qualifier of the side that is kept
+      When query
+        """
+        SELECT r.k FROM (VALUES (1, 'a')) AS l(k, lv) RIGHT SEMI JOIN (VALUES (1, 'x')) AS r(k, rv) USING (k)
+        """
+      Then query result
+        | k |
+        | 1 |
+
+    Scenario: an unresolved name after a semi join is suggested against the qualifier that survived
+      # Measured on the Spark JVM: the suggestion list is `[`l`.`k`, `l`.`lv`]` for both candidates,
+      # since Spark's semi-join output keeps the surviving side's qualifier on every column,
+      # including the USING key. Sail's semi/anti/mark branch aliases the key without a qualifier
+      # (`resolver/query/join.rs`), unlike the Inner/Left/Right branch a few lines above it, so the
+      # key loses its qualifier in the suggestion while `lv` (an ordinary pass-through column) keeps
+      # it.
+      When query
+        """
+        SELECT l.nope FROM (VALUES (1, 'a')) AS l(k, lv) LEFT SEMI JOIN (VALUES (1, 'x')) AS r(k, rv) USING (k)
+        """
+      Then query error Did you mean one of the following\? \[`l`\.`k`, `l`\.`lv`\]
+
     Scenario: the key is still reachable without a qualifier
       When query
         """

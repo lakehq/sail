@@ -3,9 +3,10 @@
 import re
 
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
 
 @pytest.fixture(params=["true", "false"], ids=["ansi", "non-ansi"])
 def explicit_column_settings(spark, request):
@@ -29,12 +30,12 @@ def explicit_column_settings(spark, request):
 
 
 @pytest.mark.skipif(pyspark_version() < (4, 2), reason="Non-strict column resolution requires Spark 4.2")
-def test_with_column_non_strict_shadowed_reference(spark, explicit_column_settings):
+def test_with_column_non_strict_shadowed_reference(spark, explicit_column_settings):  # noqa: ARG001
     spark.conf.set("spark.sql.analyzer.strictDataFrameColumnResolution", "false")
     original = spark.sql("SELECT 123 AS c")
     result = original.withColumn("c", F.col("c").cast("string")).select(original.c)
 
-    assert result._show_string(truncate=False) == "+---+\n|c  |\n+---+\n|123|\n+---+\n"
+    assert result._show_string(truncate=False) == "+---+\n|c  |\n+---+\n|123|\n+---+\n"  # noqa: SLF001
     assert result.schema.simpleString() == "struct<c:string>"
 
 
@@ -44,22 +45,21 @@ def test_with_column_non_strict_shadowed_reference(spark, explicit_column_settin
     reason="Sail cannot decorrelate outer references in a scalar-subquery projection",
     strict=True,
 )
-def test_with_column_correlated_scalar_projection(spark, explicit_column_settings):
+def test_with_column_correlated_scalar_projection(spark, explicit_column_settings):  # noqa: ARG001
     original = spark.sql("SELECT 1 AS c1, 2 AS c2")
     scalar = spark.range(1).select(F.col("c1").outer() + F.col("c2").outer()).scalar()
     result = original.withColumn("scalar", scalar)
 
-    assert result._show_string(truncate=False) == (
-        "+---+---+------+\n"
-        "|c1 |c2 |scalar|\n"
-        "+---+---+------+\n"
-        "|1  |2  |3     |\n"
-        "+---+---+------+\n"
+    assert result._show_string(truncate=False) == (  # noqa: SLF001
+        "+---+---+------+\n|c1 |c2 |scalar|\n+---+---+------+\n|1  |2  |3     |\n+---+---+------+\n"
     )
 
 
 @pytest.mark.skipif(pyspark_version() < (4, 0), reason="DataFrame scalar subqueries require Spark 4")
-def test_a_plan_id_column_that_reaches_a_correlated_subquery_is_an_outer_reference(spark, explicit_column_settings):
+def test_a_plan_id_column_that_reaches_a_correlated_subquery_is_an_outer_reference(
+    spark,
+    explicit_column_settings,  # noqa: ARG001
+):
     # The plan ID of `outer.a` belongs to the surrounding query, not to the scalar subquery. When
     # the subquery cannot resolve it locally, Spark keeps the attribute unresolved and resolves it
     # as an outer reference instead of treating the DataFrame column as unrelated.
@@ -69,7 +69,6 @@ def test_a_plan_id_column_that_reaches_a_correlated_subquery_is_an_outer_referen
     result = outer.select(outer.a, count.alias("c"))
 
     assert sorted(tuple(row) for row in result.collect()) == [(0, 1), (1, 1), (2, 1)]
-
 
 
 # A name in a `GROUP BY` is matched against the aliases of the projection by the same comparison

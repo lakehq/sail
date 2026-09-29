@@ -1974,6 +1974,7 @@ def test_a_set_operation_of_a_decimal_and_an_integral_keeps_the_metadata_it_does
     finally:
         spark.conf.unset("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
 
+
 # A struct whose field names repeat is read by position: the client cannot turn one into a
 # dictionary, so the rows are read off what `show` prints. Measured on the Spark JVM.
 _REPEATED_FIELD_VALUES = "(SELECT named_struct('a', CAST(id AS INT), 'a', CAST(id + 1 AS INT)) AS s FROM range(1))"
@@ -1986,17 +1987,17 @@ _REPEATED_FIELD_VALUES = "(SELECT named_struct('a', CAST(id AS INT), 'a', CAST(i
 # source child of a struct cast with `column_by_name`, and a union reaches that cast as soon as its
 # inputs are widened.
 _REPEATED_FIELD_NAMES = [
-    (f"SELECT s AS x FROM {_REPEATED_FIELD_VALUES}", ["{0, 1}"]),
+    (f"SELECT s AS x FROM {_REPEATED_FIELD_VALUES}", ["{0, 1}"]),  # noqa: S608
     (
-        f"SELECT CAST(s AS STRUCT<a: INT, a: INT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        f"SELECT CAST(s AS STRUCT<a: INT, a: INT>) AS x FROM {_REPEATED_FIELD_VALUES}",  # noqa: S608
         ["{0, 1}"],
     ),
     (
-        f"SELECT CAST(s AS STRUCT<a: BIGINT, a: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        f"SELECT CAST(s AS STRUCT<a: BIGINT, a: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",  # noqa: S608
         ["{0, 1}"],
     ),
     (
-        f"SELECT CAST(s AS STRUCT<p: BIGINT, q: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",
+        f"SELECT CAST(s AS STRUCT<p: BIGINT, q: BIGINT>) AS x FROM {_REPEATED_FIELD_VALUES}",  # noqa: S608
         ["{0, 1}"],
     ),
     (
@@ -2030,9 +2031,9 @@ _REPEATED_FIELD_NAMES = [
 def test_a_cast_of_a_struct_reads_each_field_by_position(spark, query, rows):
     printed = spark.sql(query)._show_string(truncate=False)  # noqa: SLF001
 
-    assert sorted(
-        line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))
-    ) == rows
+    assert sorted(line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))) == rows
+
+
 def _field(name, data_type, nullable):
     return {"metadata": {}, "name": name, "nullable": nullable, "type": data_type}
 

@@ -229,14 +229,9 @@ pub(in crate::resolver) fn unresolved_column_error(
         .iter()
         .flat_map(|x| x.name.iter())
         .collect::<Vec<_>>();
-    // The filter that carries the `HAVING` reads the OUTPUT of the aggregate, which is its SELECT
-    // list, so a column of its input that the list does not carry through is not a name there and
-    // must not reach the suggestion. A grouping expression is only one when it is selected too.
-    // Outside a `HAVING` the schema is the input itself and every column is a name.
-    //
-    // A wildcard in that list is not a name of its own: it has not been expanded yet, so it is
-    // still called `*`, and what it contributes to the output are the columns of what it targets.
-    // It must neither become a candidate nor take the real ones away.
+    // `HAVING` reads the aggregate's SELECT list, so only names it carries through are candidates.
+    // A wildcard there has not been expanded yet, so it must neither become a candidate itself
+    // nor take away the real ones its expansion would contribute.
     let is_wildcard = |x: &NamedExpr| x.name.as_slice() == ["*"];
     let wildcards = state
         .get_projections_for_having()
@@ -413,11 +408,8 @@ impl PlanResolver<'_> {
         {
             self.resolve_field_or_nested_field(&name, plan_id, &plan_schema, state)?;
         }
-        // Missing-input resolution type-checks against a combined schema, but names must bind
-        // to the nearest output first. Resolving directly against that combined schema would
-        // make a visible alias and an older input column of the same name ambiguous.
-        // For sorts, a failed local binding can be discarded and the next retry must begin at
-        // the newly nearest output. Other consumers keep their original local schema.
+        // Names bind to the nearest output first, not the combined type-checking schema, or a
+        // visible alias would collide with an older input column of the same name.
         let local_schema = state
             .missing_input(schema)
             .and_then(|input| input.schemas().first().cloned())
@@ -666,19 +658,9 @@ impl PlanResolver<'_> {
         Ok(None)
     }
 
-    /// A plan ID identifies a DataFrame output, not every later expression that happened to read
-    /// from that DataFrame. A field belongs to the plan ID when either the field itself, or the
-    /// field it ultimately passes a value on from (its root, itself when it computes one), is a
-    /// direct output of some instance of that plan ID. The field itself matches the plan ID that
-    /// was attached to the very node that output it (e.g. a later DataFrame's own plan ID). The
-    /// root matches an OLDER plan ID that a pass-through chain still descends from: a fresh,
-    /// independent read of the same DataFrame (as a self-join gives) is one such instance in its
-    /// own right, so `value` still resolves through a chain of pass-through projections down to
-    /// whichever side's read registered it, and two independent reads stay two candidates rather
-    /// than collapsing into one. A field that computes a new value is its own root and was never
-    /// registered as a direct output of an older plan ID, so `source.b` is not `b` after
-    /// `withColumn("b", col("a"))`, even though that `b` inherited the plan ID by being passed
-    /// through a projection (`rewrite_named_expressions`).
+    /// A field belongs to a plan ID when it, or its root, is a direct output of some instance of
+    /// that ID — covering both a later DataFrame's own output and an independent re-read (a
+    /// self-join), but not a field that only inherited the ID via a pass-through projection.
     fn matches_plan_attribute(
         &self,
         field_id: &str,

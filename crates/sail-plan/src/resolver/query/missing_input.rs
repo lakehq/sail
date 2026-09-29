@@ -146,11 +146,9 @@ impl MissingInputBoundaries {
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Unnest(_) => true,
-            // `dropDuplicates` with a subset states the columns it reads (`on_expr`), separately
-            // from the columns it outputs (`select_expr`), so widening `select_expr` alone (in
-            // `add_missing_inputs`) carries a column through without changing which rows survive.
-            // Plain `dropDuplicates`/`distinct` (`Distinct::All`) reads every column it outputs,
-            // so one more column would change which rows survive, and it stays a boundary.
+            // A subset's `on_expr` (read) is separate from `select_expr` (output), so widening
+            // only the latter carries a column through without changing which rows survive;
+            // plain `Distinct::All` reads every output column, so it stays a boundary.
             LogicalPlan::Distinct(Distinct::On(_)) => true,
             LogicalPlan::Extension(extension) => {
                 let node = extension.node.as_any();

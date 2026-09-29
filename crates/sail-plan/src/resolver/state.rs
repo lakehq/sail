@@ -88,18 +88,11 @@ pub(super) struct PlanResolverState {
     next_origin: usize,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
-    /// An output schema of each DataFrame plan ID, for checking references against it. A plan
-    /// can be reachable even when none of its output fields survive to the expression being
-    /// resolved, so the schema (rather than just the field set) is kept. Only the first instance
-    /// resolved is kept here, to compare roots against.
+    /// The output schema of the FIRST instance resolved for each DataFrame plan ID, to compare
+    /// roots against; kept even when no output field survives to the resolved expression.
     plan_schemas: HashMap<i64, DFSchemaRef>,
-    /// Every field that is a direct output of some instance of a plan ID, across every instance
-    /// resolved so far (not only the first, unlike `plan_schemas`). A later, independent
-    /// reference to the same DataFrame (a self-join) resolves its own output fresh, with no root
-    /// chain back to the first instance, so root comparison alone would wrongly reject it; being
-    /// a direct output of any instance is enough on its own. A field that only inherited the plan
-    /// ID by being passed through a projection (`rewrite_named_expressions`) is not direct, and
-    /// still needs the root/origin comparison in `matches_plan_attribute`.
+    /// Every field that is a direct output of ANY instance of a plan ID (not only the first),
+    /// since a self-join's independent re-read has no root chain back to the first instance.
     direct_plan_fields: HashMap<i64, HashSet<String>>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,

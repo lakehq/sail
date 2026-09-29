@@ -471,10 +471,8 @@ impl PlanResolver<'_> {
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
-                // The field is matched the way every other name is, so it folds the case
-                // unless the analysis is case sensitive, and a name that matches more than one
-                // field is ambiguous rather than missing. Either failure discards the tentative
-                // binding the same way, so a retry can recover an older, unambiguous struct.
+                // Ambiguous (matches more than one field) or missing, either discards the
+                // tentative binding the same way, so a retry can recover an older struct.
                 let field = match self.resolve_struct_field(&fields, &name) {
                     Ok(Some(field)) => field,
                     Ok(None) => {
@@ -563,10 +561,8 @@ impl PlanResolver<'_> {
                     .call(vec![expr]),
             )
         };
-        // Every level of the path but the last is read before it is rebuilt, and reading it
-        // checks the input of `update_fields`, so a level that is not a struct is refused here
-        // rather than by the function. The message names the expression that reads the level and
-        // writes its type the way SQL writes it, neither of which the function can do.
+        // Checks the input of `update_fields` before rebuilding, so a level that is not a struct
+        // is refused here, with the message naming the reading expression and its SQL type.
         self.check_update_fields_input(&data_type, &name, &levels, &op)?;
 
         // Spark collapses chained `withField`/`dropFields` into a single

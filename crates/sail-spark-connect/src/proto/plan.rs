@@ -691,10 +691,8 @@ impl TryFrom<RelType> for RelationNode {
                         return Err(SparkError::invalid("conflicting column renames"));
                     }
                     (false, true) => {
-                        // The renames are applied in order, and the order of the deprecated map
-                        // field is the one on the wire, but it is decoded into a hash map whose
-                        // iteration order is arbitrary, so we sort the entries to at least get a
-                        // deterministic result.
+                        // Applied in order, but the deprecated map field decodes into a hash map
+                        // with arbitrary iteration order, so sort for a deterministic result.
                         let mut renames = rename_columns_map.into_iter().collect::<Vec<_>>();
                         renames.sort();
                         renames
