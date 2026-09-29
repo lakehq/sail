@@ -149,13 +149,13 @@ jobs:
           - runner: ubuntu-24.04-x64-8-core
             target: aarch64
             os: linux
-          - runner: macos-26-intel
+          - runner: macos-26-large
             target: x86_64
             os: macos
-          - runner: macos-26
+          - runner: macos-26-xlarge
             target: aarch64
             os: macos
-          - runner: windows-2025
+          - runner: windows-2025-x64-8-core
             target: x64
             os: windows
     steps:
@@ -283,6 +283,10 @@ jobs:
       - name: Install Package
         shell: bash
         env:
+          # Make the build faster and less memory-intensive by enabling thin LTO,
+          # so that we can verify installation from source using small GitHub runners.
+          # For the wheel build we still use the default LTO setting to maximize performance.
+          CARGO_PROFILE_RELEASE_LTO: thin
           TEST_SDIST_RUNS_ON: ${{ matrix.platform.runner }}
         # Building native dependencies (e.g. using CMake) may fail on Windows due to long paths.
         # We mitigate this by making the temporary directory shorter, though this workaround
