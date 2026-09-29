@@ -431,6 +431,22 @@ SKIPPED_SPARK_TESTS = [
         ),
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["test_artifact.py", "ArtifactTests", "test_add_file"],
+        reason=(
+            "Resolves worker files through the reference JVM JobArtifactSet directory; worker-local SparkFiles "
+            "and session isolation are covered in session/test_artifacts.py, retaining the AddArtifacts gap"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_artifact.py", "ArtifactTests", "test_add_archive"],
+        reason=(
+            "Resolves archives through the reference JVM JobArtifactSet directory; worker-local SparkFiles, "
+            "archive aliases and session isolation are covered in session/test_artifacts.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
