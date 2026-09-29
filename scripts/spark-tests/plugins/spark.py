@@ -364,6 +364,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.functions.reflect"],
         reason="JVM-dependent test",
     ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectSessionTests", "test_error_stack_trace"],
+        reason="Asserts JVM/Catalyst stack frames and JVM stacktrace configuration, which do not apply to Sail",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
