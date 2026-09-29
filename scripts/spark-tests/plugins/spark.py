@@ -419,6 +419,13 @@ SKIPPED_SPARK_TESTS = [
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.explain"],
+        reason=(
+            "Asserts Spark-specific EXPLAIN rendering; API coverage is in dataframe/test_explain.py "
+            "and Sail plan snapshots are in analyzer/features/explain.feature"
+        ),
+    ),
+    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
         reason="Not available in Spark Connect until Spark 4",
         spark_major_version_less_than=4,
