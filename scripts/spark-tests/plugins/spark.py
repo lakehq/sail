@@ -15,6 +15,11 @@ from typing import Any
 
 import pytest
 
+from pysail.testing.spark.utils.parity import (
+    normalize_datetime_dtypes,
+    normalize_pandas_data_frame,
+)
+
 
 def _is_spark_testing():
     return os.environ.get("SPARK_TESTING") == "1"
@@ -121,29 +126,6 @@ def spark_doctest_session(doctest_namespace, request):
 # Here we patch test utilities to ignore row order in PySpark tests.
 # This may result in false positives in some tests where the result is expected to be sorted.
 # Such tests should be ported to the PySail test suite where the patch is not applied.
-
-
-def normalize_pandas_data_frame(df):
-    from pandas.api.types import is_hashable
-
-    columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
-    return df.sort_values(by=columns, ignore_index=True)
-
-
-def normalize_datetime_dtypes(df):
-    """Normalize datetime column dtypes from nanosecond to microsecond resolution.
-
-    Sail uses microsecond precision for timestamps (per Spark specification).
-    In Pandas 2.0-2.1, Python datetime objects and ``pd.Timestamp.apply()``
-    produce ``datetime64[ns]`` dtype, while Sail's ``toPandas()`` returns
-    ``datetime64[us]``. This normalization ensures that dtype comparisons in
-    ``assert_frame_equal`` do not fail due to this precision difference.
-    """
-    result = df.copy()
-    for col in result.columns:
-        if str(result[col].dtype) == "datetime64[ns]":
-            result[col] = result[col].astype("datetime64[us]")
-    return result
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
