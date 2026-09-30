@@ -1,4 +1,3 @@
-# ruff: noqa: S608
 """Lakehouse DDL with Glue schema and metadata-pointer verification."""
 
 import pytest

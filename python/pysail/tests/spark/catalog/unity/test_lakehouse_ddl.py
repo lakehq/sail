@@ -1,4 +1,3 @@
-# ruff: noqa: S608
 """DDL on managed Delta and external lakehouse registrations in Unity."""
 
 import json

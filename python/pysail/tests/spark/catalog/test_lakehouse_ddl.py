@@ -1,4 +1,3 @@
-# ruff: noqa: S608
 """Delta and Iceberg DDL in the default memory catalog."""
 
 import pytest
