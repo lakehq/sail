@@ -122,10 +122,14 @@ impl PlanResolver<'_> {
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
-            DataType::Time32 { time_unit } => {
+            // `precision` (Spark's declared TIME precision) is not representable in
+            // `arrow::DataType` at all -- it is threaded through separately as Field
+            // metadata (`SAIL_SPARK_TIME_PRECISION_METADATA_KEY`) wherever a `Field`
+            // is being built, the same way day-time interval field metadata is.
+            DataType::Time32 { time_unit, .. } => {
                 Ok(adt::DataType::Time32(Self::resolve_time_unit(time_unit)?))
             }
-            DataType::Time64 { time_unit } => {
+            DataType::Time64 { time_unit, .. } => {
                 Ok(adt::DataType::Time64(Self::resolve_time_unit(time_unit)?))
             }
             DataType::Duration { time_unit } => {

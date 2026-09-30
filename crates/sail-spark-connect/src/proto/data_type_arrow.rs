@@ -111,10 +111,33 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
-        } else if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        } else if let Some(metadata) = field
+            .metadata()
+            .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+            .filter(|_| {
+                matches!(
+                    field.data_type(),
+                    adt::DataType::Duration(adt::TimeUnit::Microsecond)
+                        | adt::DataType::Interval(adt::IntervalUnit::YearMonth)
+                )
+            })
         {
+            // Metadata attached to a nested cast's own Field can leak through a
+            // later "type-only" cast to an unrelated type (DataFusion's
+            // `cast_output_field` propagates source metadata for those), so this
+            // guards against acting on stale metadata whose Arrow type no
+            // longer matches -- fall through to the generic conversion instead.
             let metadata = spec::SparkIntervalMetadata::from_json(metadata)?;
             spark_interval_data_type(field.data_type(), metadata)?
+        } else if let Some(precision) = field
+            .metadata()
+            .get(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+            .filter(|_| matches!(field.data_type(), adt::DataType::Time32(_) | adt::DataType::Time64(_)))
+        {
+            let precision: u8 = precision.parse().map_err(|_| {
+                SparkError::invalid(format!("invalid TIME precision metadata: {precision}"))
+            })?;
+            spark_time_data_type(field.data_type(), precision)?
         } else {
             field.data_type().clone().try_into()?
         };
@@ -161,6 +184,32 @@ fn spark_interval_data_type(
         }
     };
     Ok(DataType { kind: Some(kind) })
+}
+
+/// Builds the Spark Connect TIME type from the declared precision carried in
+/// `SAIL_SPARK_TIME_PRECISION_METADATA_KEY` field metadata, rather than
+/// reducing it from the physical Arrow `TimeUnit` alone (which cannot tell
+/// TIME(1)/(2)/(4)/(5) apart from TIME(3)/(6) -- see the generic
+/// `TryFrom<adt::DataType>` match arms below, used when this metadata is
+/// absent).
+fn spark_time_data_type(arrow_type: &adt::DataType, precision: u8) -> SparkResult<DataType> {
+    let matches_arrow_type = matches!(
+        (arrow_type, precision),
+        (adt::DataType::Time32(adt::TimeUnit::Second), 0)
+            | (adt::DataType::Time32(adt::TimeUnit::Millisecond), 1..=3)
+            | (adt::DataType::Time64(adt::TimeUnit::Microsecond), 4..=6)
+    );
+    if !matches_arrow_type {
+        return Err(SparkError::invalid(format!(
+            "Sail TIME precision metadata {precision} does not match Arrow type {arrow_type}"
+        )));
+    }
+    Ok(DataType {
+        kind: Some(sdt::Kind::Time(sdt::Time {
+            precision: Some(i32::from(precision)),
+            type_variation_reference: 0,
+        })),
+    })
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala

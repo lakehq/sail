@@ -1240,8 +1240,8 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
                 spec::TimestampType::WithoutTimeZone => None,
             },
         )),
-        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
-        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
+        SDT::Time32 { time_unit: u, .. } => Ok(DataType::Time32(to_time_unit(u))),
+        SDT::Time64 { time_unit: u, .. } => Ok(DataType::Time64(to_time_unit(u))),
         SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
         SDT::Interval { interval_unit, .. } => match interval_unit {
             spec::IntervalUnit::YearMonth => Ok(DataType::Interval(IntervalUnit::YearMonth)),

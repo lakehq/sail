@@ -55,19 +55,36 @@ fn from_ast_timestamp_precision(
     }
 }
 
+/// Spark's TIME has 7 declared precisions (0-6 fractional-second digits;
+/// `TimeType.scala:51-53`), unlike Arrow's `TimeUnit`, which only has 4
+/// discrete values. Returns the declared precision alongside the *minimal*
+/// Arrow storage width that can hold it without losing digits: P0 fits in
+/// whole seconds, P1-P3 need millisecond resolution, P4-P6 need microsecond
+/// resolution. `time_unit` is a physical storage detail; `precision` is the
+/// Spark-visible contract and must be threaded through as Field metadata
+/// (`SAIL_SPARK_TIME_PRECISION_METADATA_KEY`) wherever it matters (CAST,
+/// schema, `.show()`).
 fn from_ast_time_precision(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
-) -> SqlResult<spec::TimeUnit> {
+) -> SqlResult<(spec::TimeUnit, u8)> {
     let precision = precision.as_ref().map(|(_, p, _)| p.value);
-    match precision {
-        Some(0) => Ok(spec::TimeUnit::Second),
-        Some(3) => Ok(spec::TimeUnit::Millisecond),
-        None | Some(6) => Ok(spec::TimeUnit::Microsecond), // Default to microsecond
-        Some(9) => Ok(spec::TimeUnit::Nanosecond),
-        Some(p) => Err(SqlError::invalid(format!(
-            "[UNSUPPORTED_TIME_PRECISION] The seconds precision {p} of the TIME data type is out of the supported range [0, 6]."
-        )))?,
-    }
+    let precision = match precision {
+        None => 6,
+        Some(p) if (0..=6).contains(&p) => p,
+        Some(p) => {
+            return Err(SqlError::invalid(format!(
+                "[UNSUPPORTED_TIME_PRECISION] The seconds precision {p} of the TIME data type is out of the supported range [0, 6]."
+            )));
+        }
+    };
+    let time_unit = match precision {
+        0 => spec::TimeUnit::Second,
+        1..=3 => spec::TimeUnit::Millisecond,
+        4..=6 => spec::TimeUnit::Microsecond,
+        _ => unreachable!("guarded by the range check above"),
+    };
+    #[expect(clippy::unwrap_used, reason = "precision is checked to be in [0, 6]")]
+    Ok((time_unit, u8::try_from(precision).unwrap()))
 }
 
 pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
@@ -180,13 +197,19 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
             })
         }
         DataType::Time(_, precision) => {
-            let time_unit = from_ast_time_precision(precision)?;
+            let (time_unit, precision) = from_ast_time_precision(precision)?;
             match time_unit {
                 spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {
-                    Ok(spec::DataType::Time32 { time_unit })
+                    Ok(spec::DataType::Time32 {
+                        time_unit,
+                        precision,
+                    })
                 }
                 spec::TimeUnit::Microsecond | spec::TimeUnit::Nanosecond => {
-                    Ok(spec::DataType::Time64 { time_unit })
+                    Ok(spec::DataType::Time64 {
+                        time_unit,
+                        precision,
+                    })
                 }
             }
         }

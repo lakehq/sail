@@ -123,6 +123,24 @@ impl PlanResolver<'_> {
             .map(|metadata| (metadata.start_field(), metadata.end_field())),
             _ => None,
         };
+        // Spark's TIME has 7 declared precisions (0-6); Arrow's `TimeUnit` only
+        // has 4 discrete values, so the target's exact precision (not just its
+        // storage width) must be threaded through as Field metadata the same
+        // way the day-time interval field range is above -- but only for the
+        // 4 precisions {1, 2, 4, 5} that a `TimeUnit` cannot already imply on
+        // its own. Attaching it for {0, 3, 6, 9} too would make every plain
+        // TIME literal (which never goes through this metadata-attaching CAST
+        // path) inconsistent with an explicit `CAST(... AS TIME)` of the same
+        // natural precision, which DataFusion's VALUES-list field-metadata
+        // check rejects outright when they're mixed in the same list.
+        let time_precision = match &cast_to_type {
+            spec::DataType::Time32 { precision, .. } | spec::DataType::Time64 { precision, .. }
+                if !matches!(precision, 0 | 3 | 6 | 9) =>
+            {
+                Some(*precision)
+            }
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
@@ -287,6 +305,11 @@ impl PlanResolver<'_> {
             {
                 ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![expr])
             }
+            (
+                DataType::Time32(from_unit) | DataType::Time64(from_unit),
+                to @ (DataType::Time32(_) | DataType::Time64(_)),
+                _,
+            ) => truncate_time_to_precision(expr, from_unit, &to, time_precision)?,
             (
                 DataType::Time32(unit) | DataType::Time64(unit),
                 to @ (DataType::Decimal32(precision, scale)
@@ -581,13 +604,13 @@ impl PlanResolver<'_> {
                 to @ (DataType::Time32(_) | DataType::Time64(_)),
                 is_try,
             ) => {
-                // Always parses to Time64(Microsecond); a further cast truncates to the
-                // requested precision the same way an existing TIME -> TIME(p) cast does.
+                // Always parses to Time64(Microsecond); truncate to the requested
+                // precision the same way an existing TIME -> TIME(p) cast does.
                 let parsed = ScalarUDF::new_from_impl(SparkStringToTime::new(
                     is_try || !self.config.ansi_mode,
                 ))
                 .call(vec![expr]);
-                cast(parsed, to)
+                truncate_time_to_precision(parsed, TimeUnit::Microsecond, &to, time_precision)?
             }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
@@ -658,16 +681,26 @@ impl PlanResolver<'_> {
         } else {
             expr
         };
-        Ok(match spark_interval_metadata {
-            Some(metadata) => {
+        // Interval field-range metadata and TIME precision metadata are
+        // mutually exclusive (a CAST target is never both), so at most one of
+        // these is ever `Some`.
+        let extra_metadata = spark_interval_metadata
+            .map(|metadata| (spec::SAIL_SPARK_INTERVAL_METADATA_KEY, metadata))
+            .or_else(|| {
+                time_precision.map(|precision| {
+                    (
+                        spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY,
+                        precision.to_string(),
+                    )
+                })
+            });
+        Ok(match extra_metadata {
+            Some((key, metadata)) => {
                 // Nested expressions consume the Expr without its NamedExpr metadata.
                 // Keep the target qualifier on the cast field as well as the projection.
                 let field = expr.to_field(schema)?.1;
                 let mut field_metadata = field.metadata().clone();
-                field_metadata.insert(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata.clone(),
-                );
+                field_metadata.insert(key.to_string(), metadata.clone());
                 let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
                 let expr = match expr {
                     expr::Expr::Cast(cast) => {
@@ -678,14 +711,50 @@ impl PlanResolver<'_> {
                     }
                     expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
                 };
-                NamedExpr::new(name, expr).with_metadata(vec![(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata,
-                )])
+                NamedExpr::new(name, expr).with_metadata(vec![(key.to_string(), metadata)])
             }
             None => NamedExpr::new(name, expr),
         })
     }
+}
+
+/// Truncates a TIME value toward zero to `target_precision`'s exact declared
+/// digit count (Spark's `DateTimeUtils.truncateTimeToPrecision`), not merely to
+/// whichever Arrow `TimeUnit` the target physically uses -- e.g. TIME(6) ->
+/// TIME(1) must drop to whole tenths of a second, even though both are backed
+/// by `Time64(Microsecond)`/`Time32(Millisecond)`-class storage today. Works in
+/// nanoseconds so any (from, to) `TimeUnit` pair is exact.
+fn truncate_time_to_precision(
+    expr: expr::Expr,
+    from_unit: TimeUnit,
+    to: &DataType,
+    target_precision: Option<u8>,
+) -> PlanResult<expr::Expr> {
+    let to_unit = match to {
+        DataType::Time32(unit) | DataType::Time64(unit) => *unit,
+        _ => {
+            return Err(PlanError::internal(format!(
+                "expected TIME data type, got {to}"
+            )));
+        }
+    };
+    let target_precision = target_precision.unwrap_or(match to {
+        DataType::Time32(TimeUnit::Second) => 0,
+        DataType::Time32(_) => 3,
+        DataType::Time64(TimeUnit::Nanosecond) => 9,
+        DataType::Time64(_) => 6,
+        _ => unreachable!("guarded above"),
+    });
+    let nanos_per_from_unit = 1_000_000_000_i64 / time_unit_to_multiplier(&from_unit);
+    let raw_nanos = cast(expr, DataType::Int64).mul(lit(nanos_per_from_unit));
+    let granularity = 10_i64.pow(u32::from(9 - target_precision.min(9)));
+    let truncated_nanos = raw_nanos.div(lit(granularity)).mul(lit(granularity));
+    let nanos_per_to_unit = 1_000_000_000_i64 / time_unit_to_multiplier(&to_unit);
+    let value_in_to_unit = truncated_nanos.div(lit(nanos_per_to_unit));
+    Ok(match to {
+        DataType::Time32(_) => cast(cast(value_in_to_unit, DataType::Int32), to.clone()),
+        _ => cast(value_in_to_unit, to.clone()),
+    })
 }
 
 fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {
