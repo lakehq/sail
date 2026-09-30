@@ -763,6 +763,20 @@ fn truncate_time_to_precision(
         DataType::Time64(_) => 6,
         _ => unreachable!("guarded above"),
     });
+    // The common case today: every declared-precision TIME is physically
+    // `Time64(Microsecond)` (see `spec::DataType::Time32`/`Time64`), so `from`
+    // and `to` already agree and the nanosecond round-trip below buys nothing
+    // -- it is exactly `micros / granularity * granularity` either way. Kept as
+    // a fast path rather than replacing the general version, which still
+    // handles a `from`/`to` pair with genuinely different units (e.g. a plain
+    // Arrow/Parquet `Time32` column with no declared-precision metadata).
+    if from_unit == TimeUnit::Microsecond && to_unit == TimeUnit::Microsecond {
+        let granularity = 10_i64.pow(u32::from(6 - target_precision.min(6)));
+        let value = cast(expr, DataType::Int64)
+            .div(lit(granularity))
+            .mul(lit(granularity));
+        return Ok(cast(value, to.clone()));
+    }
     let nanos_per_from_unit = 1_000_000_000_i64 / time_unit_to_multiplier(&from_unit);
     let raw_nanos = cast(expr, DataType::Int64).mul(lit(nanos_per_from_unit));
     let granularity = 10_i64.pow(u32::from(9 - target_precision.min(9)));
