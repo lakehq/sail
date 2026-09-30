@@ -370,7 +370,8 @@
 - key: user_metadata
   description: |
     User-defined string stored in the `commitInfo.userMetadata` field of the
-    next Delta commit produced by this write.
+    next Delta commit produced by this write. Overrides the session default
+    `spark.databricks.delta.commitInfo.userMetadata`, including when empty.
   default:
     value: ""
     parser: crate::options::parsers::parse_optional_string
@@ -383,7 +384,7 @@
       keys:
         - user_metadata
         - userMetadata
-      parser: crate::options::parsers::parse_optional_string
+      parser: crate::options::parsers::parse_user_metadata
 
 - key: optimize_write
   description: |

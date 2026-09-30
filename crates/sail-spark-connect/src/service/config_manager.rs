@@ -1,11 +1,16 @@
+use std::sync::Arc;
+
 use datafusion::prelude::SessionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::delta::DeltaSessionConfig;
 
 use crate::config::ConfigKeyValue;
 use crate::error::SparkResult;
 use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
+
+const DELTA_USER_METADATA_CONFIG: &str = "spark.databricks.delta.commitInfo.userMetadata";
 
 pub(crate) fn handle_config_get(
     ctx: &SessionContext,
@@ -34,7 +39,20 @@ pub(crate) fn handle_config_set(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         kv.iter().any(|pair| pair.key == key)
     };
+    let delta_user_metadata = kv
+        .iter()
+        .rev()
+        .find(|pair| pair.key == DELTA_USER_METADATA_CONFIG)
+        .and_then(|pair| pair.value.clone());
     spark.set_config(kv)?;
+    if let Some(user_metadata) = delta_user_metadata {
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(DeltaSessionConfig {
+                user_metadata: Some(user_metadata),
+            }));
+    }
     if sets_session_timezone {
         // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
         // listing-table schema inference reads `execution.time_zone` to reconcile mixed-timezone
@@ -115,7 +133,14 @@ pub(crate) fn handle_config_unset(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         keys.iter().any(|k| k == &key)
     };
+    let unsets_delta_user_metadata = keys.iter().any(|key| key == DELTA_USER_METADATA_CONFIG);
     spark.unset_config(keys)?;
+    if unsets_delta_user_metadata {
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(DeltaSessionConfig::default()));
+    }
     if unsets_session_timezone {
         // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
         // `execution.time_zone` to the now-effective session zone instead of leaving the last
