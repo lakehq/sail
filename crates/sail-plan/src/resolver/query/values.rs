@@ -135,14 +135,33 @@ impl PlanResolver<'_> {
                     {
                         case.when_then_expr[0].1.as_ref()
                     }
+                    // Sail's non-ANSI `STRING -> <numeric>` empty-string handling
+                    // (`resolve_expression_cast` in the cast resolver) wraps the real cast
+                    // in `CASE WHEN expr = '' THEN NULL ELSE CAST(expr AS T) END`. Look
+                    // inside that `else` branch the same way, so a NaN-string literal cast
+                    // is still detected under this wrapper too.
+                    Expr::Case(case) if case.expr.is_none() && case.else_expr.is_some() => {
+                        match &case.else_expr {
+                            Some(else_expr) => else_expr.as_ref(),
+                            None => expr,
+                        }
+                    }
                     _ => expr,
                 };
-                if let Expr::Cast(cast) = expr
-                    && let Expr::Literal(sv, _) = cast.expr.as_ref()
+                // `TryCast` alongside `Cast`: Sail's non-ANSI `STRING -> <numeric>` empty-
+                // string handling (see the `else`-branch comment above) uses `TRY_CAST` for
+                // the real conversion, not `CAST`.
+                let cast_parts = match expr {
+                    Expr::Cast(cast) => Some((cast.expr.as_ref(), cast.field.data_type())),
+                    Expr::TryCast(cast) => Some((cast.expr.as_ref(), cast.field.data_type())),
+                    _ => None,
+                };
+                if let Some((cast_expr, cast_type)) = cast_parts
+                    && let Expr::Literal(sv, _) = cast_expr
                     && let Some(true) = sv
                         .try_as_str()
                         .flatten()
-                        .map(|s| s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric())
+                        .map(|s| s.to_uppercase() == "NAN" && cast_type.is_numeric())
                 {
                     nan_positions.insert(idx);
                 }

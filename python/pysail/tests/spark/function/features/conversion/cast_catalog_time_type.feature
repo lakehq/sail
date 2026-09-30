@@ -99,6 +99,27 @@ Feature: Additional CAST coverage from time_type
         | r            |
         | [12:34:56.9] |
 
+    # Same as above, but across multiple rows from a real column (not a folded
+    # constant): this exercises `array()`'s non-scalar `Array` evaluation path,
+    # separate from the all-scalar path the previous scenario folds through.
+    Scenario: time_type catalog: an array element keeps the declared TIME precision across rows
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT array(CAST(t AS TIME(1))) AS r FROM VALUES
+          (TIME '10:20:30.987654'), (TIME '01:02:03.111111') AS x(t)
+        """
+      Then query schema
+        """
+        root
+         |-- r: array (nullable = false)
+         |    |-- element: time(1) (containsNull = false)
+        """
+      And query result ordered
+        | r            |
+        | [10:20:30.9] |
+        | [01:02:03.1] |
+
     # TIME to integral is the whole seconds of the day; to decimal keeps the fraction.
 
     Scenario: time_type catalog: CAST of a TIME literal to numbers counts seconds since midnight

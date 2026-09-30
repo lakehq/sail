@@ -99,6 +99,20 @@ Feature: Additional CAST coverage from interval_type_fields
         | struct containing an array  | SELECT named_struct('items', array(INTERVAL '02:00:00' HOUR TO SECOND), 'tag', 7) AS v                                                                       | {[INTERVAL '02:00:00' HOUR TO SECOND], 7}           |
         | array struct array struct   | SELECT array(named_struct('items', array(named_struct('leaf', INTERVAL '02:00:00' HOUR TO SECOND)), 'tag', 7)) AS v                                          | [{[{INTERVAL '02:00:00' HOUR TO SECOND}], 7}]        |
 
+    # Same field-range metadata, but across multiple rows from a real column (not a
+    # folded constant): exercises `array()`'s non-scalar `Array` evaluation path,
+    # separate from the all-scalar path the examples above fold through.
+    Scenario: interval_type_fields catalog: show preserves nested interval fields across rows
+      When query
+        """
+        SELECT array(CAST(iv AS INTERVAL HOUR TO SECOND)) AS v FROM VALUES
+          (INTERVAL '01:00:00' HOUR TO SECOND), (INTERVAL '02:00:00' HOUR TO SECOND) AS t(iv)
+        """
+      Then query result ordered
+        | v                                    |
+        | [INTERVAL '01:00:00' HOUR TO SECOND] |
+        | [INTERVAL '02:00:00' HOUR TO SECOND] |
+
     Scenario Outline: interval_type_fields catalog: Cast truncates a year-month value: <case>
       When query
         """

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn::lpad;
+use datafusion::functions::math::expr_fn::isnan;
 use datafusion::functions::string::expr_fn::concat;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
@@ -455,8 +456,80 @@ impl PlanResolver<'_> {
                 ScalarUDF::from(SparkDayTimeIntervalFromInt64::new(multiplier, is_try))
                     .call(vec![cast(expr, DataType::Int64)])
             }
-            (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
-                if from.is_numeric() =>
+            // Spark's legacy (non-ANSI) numeric casts (`castToByte`/`castToShort`/`castToInt`'s
+            // `case x: NumericType =>` branch, Cast.scala) reuse Java's/Scala's saturating
+            // `.toInt`/`.toLong` float-to-integral conversion: NaN becomes `0`, and anything
+            // too large or too small saturates to the target's own extreme instead of erroring
+            // or returning NULL. TINYINT/SMALLINT/INT all share Int32::MAX/MIN as the
+            // saturation point (`.toInt` runs first; TINYINT/SMALLINT then narrow that further
+            // via the same two's-complement truncation as `wrap_narrow_integer` below); BIGINT
+            // saturates directly via `.toLong` (Int64::MAX/MIN), never through Int32.
+            (DataType::Float32 | DataType::Float64, to, is_try)
+                if !is_try && !self.config.ansi_mode && to.is_integer() =>
+            {
+                let saturated = saturating_double_to_i64(expr, !matches!(to, DataType::Int64))?;
+                if matches!(to, DataType::Int8 | DataType::Int16) {
+                    wrap_narrow_integer(saturated, &to)?
+                } else {
+                    cast(saturated, to.clone())
+                }
+            }
+            (DataType::Float32 | DataType::Float64, DataType::Timestamp(time_unit, Some(_)), is_try)
+                if !is_try && !self.config.ansi_mode =>
+            {
+                let multiplier = time_unit_to_multiplier(&time_unit);
+                datafusion_expr::when(
+                    isnan(expr.clone()),
+                    lit(ScalarValue::try_from(&cast_to_type)?),
+                )
+                .otherwise(try_cast(expr.mul(lit(multiplier)), cast_to_type.clone()))?
+            }
+            // Spark's `castToTimestamp`/`castToBoolean` for BOOLEAN (Cast.scala:743-744,725)
+            // treat the boolean as the raw microsecond value itself (0 or 1), not as a count
+            // of seconds like the general NumericType rule below -- and only under the
+            // legacy/non-ANSI rule (`canAnsiCast` has no BooleanType <-> TimestampType case at
+            // all, only `canCast` does, Cast.scala:237,243).
+            (DataType::Boolean, to @ DataType::Timestamp(_, Some(_)), is_try) => {
+                if !is_try && self.config.ansi_mode {
+                    return Err(PlanError::invalid(format!("cannot cast boolean to {to}")));
+                }
+                cast(cast(expr, DataType::Int64), to.clone())
+            }
+            (from @ DataType::Timestamp(_, Some(_)), DataType::Boolean, is_try) => {
+                if !is_try && self.config.ansi_mode {
+                    return Err(PlanError::invalid(format!("cannot cast {from} to boolean")));
+                }
+                cast(expr, DataType::Int64).not_eq(lit(0_i64))
+            }
+            // Spark's `castToDecimal` for TIMESTAMP (Cast.scala:1121-1123) can overflow the
+            // target precision; under ANSI this throws (handled by the plain `cast` below,
+            // matching Spark's CAST_OVERFLOW), but under non-ANSI Spark returns NULL instead
+            // of propagating the overflow as an error.
+            (from, to @ (DataType::Decimal32(..) | DataType::Decimal64(..) | DataType::Decimal128(..) | DataType::Decimal256(..)), is_try)
+                if matches!(from, DataType::Timestamp(_, Some(_))) && (is_try || !self.config.ansi_mode) =>
+            {
+                let DataType::Timestamp(time_unit, _) = from else {
+                    unreachable!("guarded above")
+                };
+                let multiplier = time_unit_to_multiplier(&time_unit);
+                try_cast(
+                    lit(1.0).div(lit(multiplier)).mul(cast(expr, DataType::Int64)),
+                    to.clone(),
+                )
+            }
+            // Spark's `canCast`/`canAnsiCast` allow NumericType -> TimestampType (with a
+            // timezone) but never NumericType -> TimestampNTZType -- only STRING, DATE, and
+            // TIMESTAMP itself may become TIMESTAMP_NTZ (Cast.scala:112-114). The `Some(_)`
+            // here (vs. the bare `_` this used to be) is what excludes TIMESTAMP_NTZ.
+            (from, DataType::Timestamp(time_unit, Some(_)), _) if from.is_numeric() => {
+                let multiplier = time_unit_to_multiplier(&time_unit);
+                cast(expr.mul(lit(multiplier)), cast_to_type)
+            }
+            // Spark's day-time interval cast rule is `(IntegralType | DecimalType,
+            // AnsiIntervalType) => true` (Cast.scala:265) -- FloatType/DoubleType are
+            // deliberately excluded, unlike the broader NumericType rule for TIMESTAMP above.
+            (from, DataType::Duration(time_unit), _)
+                if from.is_integer() || from.is_decimal() =>
             {
                 // DECIMAL (and any other non-integral numeric) keeps the fractional
                 // part through the multiply -- Spark's `decimalToDayTimeInterval`
@@ -516,9 +589,12 @@ impl PlanResolver<'_> {
                 let truncated = micros.clone().div(lit(unit_micros)).mul(lit(unit_micros));
                 cast(truncated, DataType::Duration(TimeUnit::Microsecond))
             }
-            (DataType::Duration(TimeUnit::Microsecond), to, is_try) if to.is_integer() => {
-                // Spark IntervalUtils.dayTimeIntervalToLong divides by the
-                // interval's end field, truncating toward zero. Keep integer
+            (DataType::Duration(TimeUnit::Microsecond), to, is_try)
+                if to.is_integer() || to.is_decimal() =>
+            {
+                // Spark's `dayTimeIntervalToLong`/`dayTimeIntervalToDecimal` both divide by
+                // the interval's end field (Cast.scala:1141-1144), NOT a fixed unit -- e.g.
+                // a plain `INTERVAL DAY` becomes `5.00`, not `432000.00` seconds. Keep integer
                 // arithmetic: f64 loses precision near whole-second boundaries.
                 let divisor = match spark_interval_metadata_for_expression(&expr, schema)? {
                     Some(spec::SparkIntervalMetadata::DayTime { end_field, .. }) => match end_field
@@ -537,9 +613,15 @@ impl PlanResolver<'_> {
                     cast(value, to)
                 }
             }
-            (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
-                if to.is_numeric() =>
-            {
+            // `Some(_)` (not the bare `_` this used to be) excludes TIMESTAMP_NTZ: Spark has
+            // `(TimestampType, _: NumericType) => true` but no equivalent rule for
+            // TimestampNTZType at all (Cast.scala:135,272) -- see the TIMESTAMP_NTZ ->
+            // NumericType rejection arm above, which this would otherwise pre-empt. Duration
+            // (day-time interval) is handled by its own dedicated arm above -- Spark's
+            // day-time interval cast rule (`AnsiIntervalType -> IntegralType | DecimalType`,
+            // Cast.scala:266) excludes FloatType/DoubleType, unlike TimestampType's broader
+            // NumericType rule, so it cannot share this arm.
+            (DataType::Timestamp(time_unit, Some(_)), to, _) if to.is_numeric() => {
                 cast(
                     lit(1.0)
                         .div(lit(time_unit_to_multiplier(&time_unit)))
@@ -547,7 +629,15 @@ impl PlanResolver<'_> {
                     to,
                 )
             }
-            (DataType::Interval(IntervalUnit::YearMonth), to, is_try) if to.is_integer() => {
+            // See the comment above: FloatType/DoubleType are excluded from Spark's day-time
+            // interval cast rule, but Arrow's own numeric cast kernel would otherwise accept
+            // this natively.
+            (DataType::Duration(_), to @ (DataType::Float32 | DataType::Float64), _) => {
+                return Err(PlanError::invalid(format!("cannot cast interval day to {to}")));
+            }
+            (DataType::Interval(IntervalUnit::YearMonth), to, is_try)
+                if to.is_integer() || to.is_decimal() =>
+            {
                 let interval_metadata = expr_field
                     .metadata()
                     .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
@@ -644,6 +734,88 @@ impl PlanResolver<'_> {
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
+            // Spark has no TIMESTAMP_NTZ -> NumericType rule at all (Cast.scala only lists
+            // STRING/DATE/TIMESTAMP -> TIMESTAMP_NTZ, never the reverse into a number); unlike
+            // the DATE -> numeric case above, this is invalid for every ANSI setting, not just
+            // ANSI on. Arrow's own cast kernel treats Timestamp(_, None) as a plain integer of
+            // its unit and would otherwise silently allow this.
+            (DataType::Timestamp(_, None), to, _) if to.is_numeric() => {
+                return Err(PlanError::invalid(format!("cannot cast timestamp_ntz to {to}")));
+            }
+            // Same rule, the other direction: no NumericType -> TIMESTAMP_NTZ either (Spark
+            // only allows NumericType -> the tz-aware TIMESTAMP, Cast.scala:110,244). Arrow's
+            // own cast kernel treats Timestamp(_, None) as a plain integer of its unit and
+            // would otherwise silently allow this too.
+            (from, DataType::Timestamp(_, None), _) if from.is_numeric() => {
+                return Err(PlanError::invalid(format!("cannot cast {from} to timestamp_ntz")));
+            }
+            // Arrow's own cast kernel supports BOOLEAN <-> every other numeric type
+            // natively, but not <-> Decimal; Spark's `castToDecimal`/`castToBoolean`
+            // (Cast.scala:1116-1118,725-726) treat it the same as any other numeric type
+            // (true/false <-> 1/0, and any nonzero decimal is truthy), so route through a
+            // plain Int8 for the BOOLEAN side rather than leaving this unsupported.
+            (
+                DataType::Boolean,
+                DataType::Decimal32(..) | DataType::Decimal64(..) | DataType::Decimal128(..)
+                | DataType::Decimal256(..),
+                _,
+            ) => cast(cast(expr, DataType::Int8), cast_to_type),
+            (
+                DataType::Decimal32(..) | DataType::Decimal64(..) | DataType::Decimal128(..)
+                | DataType::Decimal256(..),
+                DataType::Boolean,
+                _,
+            ) => {
+                // A decimal is zero iff its underlying integer is zero, regardless of
+                // scale, so comparing directly to the `0` literal (which DataFusion
+                // coerces to match) is exact -- unlike casting through Int8 first, which
+                // would truncate/overflow for a value outside Int8's range.
+                expr.not_eq(lit(0_i64))
+            }
+            // Spark's day-time interval cast rule (`IntegralType | DecimalType ->
+            // AnsiIntervalType`, Cast.scala:265) excludes FloatType/DoubleType, but Arrow's own
+            // numeric-to-duration cast kernel accepts them, so this needs an explicit
+            // rejection -- the arms above only *narrow* which numeric types build a value via
+            // the multiply UDF, they do not reject what falls through.
+            (from @ (DataType::Float32 | DataType::Float64), to @ DataType::Duration(_), _) => {
+                return Err(PlanError::invalid(format!("cannot cast {from} to {to}")));
+            }
+            // Spark has no NumericType -> DateType rule at all (only STRING/TIMESTAMP/
+            // TIMESTAMP_NTZ -> DATE, Cast.scala:127-130). Arrow's own cast kernel natively
+            // supports Int32/Int64 -> Date32 (interpreting the number as days since the
+            // epoch) but not Int8/Int16, which is why only the narrower integer widths were
+            // already failing (with an unrelated Arrow-native message) before this arm.
+            (from, to @ (DataType::Date32 | DataType::Date64), _) if from.is_numeric() => {
+                return Err(PlanError::invalid(format!("cannot cast {from} to {to}")));
+            }
+            // Spark's `canCast`/`canAnsiCast` only ever allow `ArrayType -> ArrayType`
+            // (element-wise) or `NullType -> anything`; a scalar can never become an ARRAY.
+            // Arrow's own cast kernel disagrees: it wraps ANY source into a length-1 list by
+            // casting each value to the list's element type (`cast_values_to_list` in
+            // arrow-cast), so e.g. `CAST(some_timestamp AS ARRAY<INT>)` silently succeeds or
+            // fails with an unrelated "Can't cast value ... to type Int32" depending on
+            // whether the timestamp's raw micros happen to fit in an Int32 -- never Spark's
+            // clean, value-independent rejection.
+            (
+                from,
+                to @ (DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)),
+                _,
+            ) if !matches!(
+                from,
+                DataType::Null
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::ListView(_)
+                    | DataType::LargeListView(_)
+            ) =>
+            {
+                return Err(PlanError::invalid(format!("cannot cast {from} to {to}")));
+            }
             (
                 from @ (DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64),
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
@@ -660,6 +832,52 @@ impl PlanResolver<'_> {
                 }
                 ScalarUDF::new_from_impl(SparkIntegralToBinary::new()).call(vec![expr])
             }
+            // Spark's non-ANSI integral cast (`Cast.scala` integral `case`s under
+            // `castToByte`/`castToShort`/`castToInt`) reuses Java's narrowing primitive
+            // conversion: keep the target's low-order bits, sign-extended (`v.toByte`/
+            // `.toShort`/`.toInt` in Scala) -- e.g. `CAST(-2147483648 AS SMALLINT)` wraps to
+            // `0`, it does not overflow. Under ANSI this instead throws CAST_OVERFLOW (handled
+            // by the plain `cast` in the generic fallback below), so this only applies when
+            // ANSI is off; Arrow/DataFusion's own cast kernel errors on the overflow either way.
+            (
+                _from @ (DataType::Int16 | DataType::Int32 | DataType::Int64),
+                to @ DataType::Int8,
+                is_try,
+            )
+            | (_from @ (DataType::Int32 | DataType::Int64), to @ DataType::Int16, is_try)
+            | (_from @ DataType::Int64, to @ DataType::Int32, is_try)
+                if !is_try && !self.config.ansi_mode =>
+            {
+                wrap_narrow_integer(expr, &to)?
+            }
+            // Spark's non-ANSI string parsing for a primitive (`castToBooleanCode`/
+            // `castToIntegralType`/`castToDecimal`/`castToFloat`/`castToDouble` for
+            // `StringType` in Cast.scala) returns NULL for an empty string rather than
+            // throwing. The `otherwise` branch uses `try_cast`, not `cast`: constant folding
+            // may still visit it (e.g. to evaluate a `WHEN` condition that turns out false),
+            // and a plain `cast('', Int8)` throws even when unselected, same reasoning as the
+            // `RaiseError` guards elsewhere in this file. `resolve_values_nan_types`
+            // (sail-plan's VALUES resolver) is taught to see through both this wrapper and
+            // `TryCast` so a `CAST('NaN' AS ...)` literal is still detected. `STRING -> INT`
+            // is excluded: it already has its own dedicated lenient parser above.
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                to @ (DataType::Int8
+                | DataType::Int16
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal32(..)
+                | DataType::Decimal64(..)
+                | DataType::Decimal128(..)
+                | DataType::Decimal256(..)
+                | DataType::Boolean),
+                false,
+            ) if !self.config.ansi_mode => datafusion_expr::when(
+                expr.clone().eq(lit("")),
+                lit(ScalarValue::try_from(&to)?),
+            )
+            .otherwise(try_cast(expr, to))?,
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
                 // Pre-rename the source struct fields positionally so the cast
                 // becomes a no-op or a valid name-matched one (see
@@ -787,6 +1005,56 @@ fn truncate_time_to_precision(
         DataType::Time32(_) => cast(cast(value_in_to_unit, DataType::Int32), to.clone()),
         _ => cast(value_in_to_unit, to.clone()),
     })
+}
+
+/// Java's/Scala's saturating `double`/`float` -> `int`/`long` conversion (`.toInt`/`.toLong`):
+/// NaN becomes `0`, and a value outside the target width saturates to its extreme instead of
+/// wrapping, erroring, or becoming NULL. Always returns an `Int64` expression; the caller casts
+/// (or, for a width narrower than the `thirty_two_bit` target itself, further truncates via
+/// [`wrap_narrow_integer`]) down to the real target afterward.
+fn saturating_double_to_i64(expr: expr::Expr, thirty_two_bit: bool) -> PlanResult<expr::Expr> {
+    let (max_value, min_value): (i64, i64) = if thirty_two_bit {
+        (i64::from(i32::MAX), i64::from(i32::MIN))
+    } else {
+        (i64::MAX, i64::MIN)
+    };
+    let safe_type = if thirty_two_bit {
+        DataType::Int32
+    } else {
+        DataType::Int64
+    };
+    // `try_cast` is NULL exactly when the value is NaN or genuinely out of range for
+    // `safe_type` -- reusing it here avoids re-deriving Java's exact floating-point boundary
+    // comparisons (which safe/try-cast already implements correctly) by hand.
+    let safe = cast(try_cast(expr.clone(), safe_type), DataType::Int64);
+    let saturated = datafusion_expr::when(expr.clone().gt(lit(0.0_f64)), lit(max_value))
+        .otherwise(lit(min_value))?;
+    Ok(datafusion_expr::when(isnan(expr.clone()), lit(0_i64))
+        .when(safe.clone().is_null(), saturated)
+        .otherwise(safe)?)
+}
+
+/// Truncates to `to`'s low-order bits, sign-extended -- Java/Scala's narrowing primitive
+/// conversion (`.toByte`/`.toShort`/`.toInt`), which Spark's non-ANSI integral casts reuse
+/// (`Cast.scala`'s plain `castToByte`/`castToShort`/`castToInt` for an `IntegralType` source).
+/// An in-range value passes through unchanged; this only changes the result for a value that
+/// would otherwise overflow the target.
+fn wrap_narrow_integer(expr: expr::Expr, to: &DataType) -> PlanResult<expr::Expr> {
+    let (modulus, half): (i64, i64) = match to {
+        DataType::Int8 => (1_i64 << 8, 1_i64 << 7),
+        DataType::Int16 => (1_i64 << 16, 1_i64 << 15),
+        DataType::Int32 => (1_i64 << 32, 1_i64 << 31),
+        _ => {
+            return Err(PlanError::internal(format!(
+                "expected a narrower integer type, got {to}"
+            )));
+        }
+    };
+    let wide = cast(expr, DataType::Int64);
+    let unsigned = ((wide.clone() % lit(modulus)) + lit(modulus)) % lit(modulus);
+    let wrapped = datafusion_expr::when(unsigned.clone().gt_eq(lit(half)), unsigned.clone() - lit(modulus))
+        .otherwise(unsigned)?;
+    Ok(cast(wrapped, to.clone()))
 }
 
 fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {
