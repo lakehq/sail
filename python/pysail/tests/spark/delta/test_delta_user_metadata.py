@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from time import monotonic, sleep
 from typing import TYPE_CHECKING
 
 import pytest
+from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.connect import proto
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_session_factory
@@ -124,6 +129,118 @@ def test_session_user_metadata_write_lifecycle(spark, tmp_path, mode):
         else:
             assert commit["userMetadata"] == metadata
     assert spark.read.format("delta").load(str(path)).count() == (4 if mode == "append" else 1)
+
+
+def test_session_user_metadata_config_registry(spark):
+    spark.conf.unset(USER_METADATA_CONFIG)
+    assert spark.conf.isModifiable(USER_METADATA_CONFIG)
+    assert spark.conf.get(USER_METADATA_CONFIG) is None
+    assert spark.conf.get(USER_METADATA_CONFIG, "fallback") == "fallback"
+
+    for value in ["registered-setting", ""]:
+        spark.conf.set(USER_METADATA_CONFIG, value)
+        assert spark.conf.get(USER_METADATA_CONFIG) == value
+        response = spark.client.config(proto.ConfigRequest.Operation(get_all=proto.ConfigRequest.GetAll()))
+        assert dict(response.pairs)[USER_METADATA_CONFIG] == value
+
+    spark.conf.unset(USER_METADATA_CONFIG)
+    assert spark.conf.get(USER_METADATA_CONFIG) is None
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [(["new", None], "new"), ([None, "new"], "old"), (["new", None, "ignored"], "new")],
+)
+def test_session_user_metadata_after_failed_config_batch(spark, tmp_path, values, expected):
+    spark.conf.set(USER_METADATA_CONFIG, "old")
+    pairs = [
+        proto.KeyValue(key=USER_METADATA_CONFIG, value=value)
+        if value is not None
+        else proto.KeyValue(key="spark.sql.ansi.strictIndexOperator", value="false")
+        for value in values
+    ]
+    with pytest.raises(SparkConnectGrpcException, match="configuration has been removed"):
+        spark.client.config(proto.ConfigRequest.Operation(set=proto.ConfigRequest.Set(pairs=pairs)))
+    assert spark.conf.get(USER_METADATA_CONFIG) == expected
+
+    path = tmp_path / "failed_batch"
+    spark.range(1).write.format("delta").save(str(path))
+    assert _read_latest_commit_info(path)["userMetadata"] == expected
+    ddl_path = tmp_path / "failed_batch_ddl"
+    table = "delta_metadata_failed_batch"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING DELTA LOCATION '{ddl_path}'")
+        assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
+        spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('label' = 'after-failure')")
+        assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_session_user_metadata_after_concurrent_config_updates(spark, tmp_path):
+    writers = 4
+    barrier = Barrier(writers)
+
+    def update_config(index):
+        barrier.wait(timeout=30)
+        for iteration in range(20):
+            if (index + iteration) % 2:
+                spark.conf.set(USER_METADATA_CONFIG, f"{index}-{iteration}")
+            else:
+                spark.conf.unset(USER_METADATA_CONFIG)
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        for attempt in range(4):
+            futures = [pool.submit(update_config, index) for index in range(writers)]
+            for future in futures:
+                future.result(timeout=30)
+            expected = spark.conf.get(USER_METADATA_CONFIG, None)
+            path = tmp_path / f"concurrent_{attempt}"
+            spark.range(1).write.format("delta").save(str(path))
+            assert _read_latest_commit_info(path).get("userMetadata") == expected
+
+
+@pytest.mark.parametrize("next_metadata", ["next-operation", None])
+def test_session_user_metadata_is_captured_before_execution(spark, tmp_path, next_metadata):
+    started = tmp_path / "started"
+    released = tmp_path / "released"
+    path = tmp_path / "snapshot"
+
+    @F.udf("long", useArrow=False)
+    def wait_for_release(value):
+        started.touch()
+        deadline = monotonic() + 30
+        while not released.exists():
+            if monotonic() > deadline:
+                msg = "timed out waiting for configuration update"
+                raise TimeoutError(msg)
+            sleep(0.01)
+        return value
+
+    spark.conf.set(USER_METADATA_CONFIG, "running-operation")
+    df = spark.range(1).select(wait_for_release("id").alias("id"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(lambda: df.write.format("delta").save(str(path)))
+        try:
+            deadline = monotonic() + 30
+            while not started.exists():
+                if future.done():
+                    future.result()
+                    pytest.fail("write completed without executing its UDF")
+                assert monotonic() < deadline, "timed out waiting for the write to start"
+                sleep(0.01)
+            if next_metadata is None:
+                spark.conf.unset(USER_METADATA_CONFIG)
+            else:
+                spark.conf.set(USER_METADATA_CONFIG, next_metadata)
+        finally:
+            released.touch()
+        future.result(timeout=30)
+
+    assert _read_latest_commit_info(path)["userMetadata"] == "running-operation"
+    spark.range(1).write.format("delta").mode("append").save(str(path))
+    assert _read_latest_commit_info(path).get("userMetadata") == next_metadata
+    assert spark.read.format("delta").load(str(path)).collect() == [(0,), (0,)]
 
 
 @pytest.mark.parametrize("alias", ["userMetadata", "user_metadata"])

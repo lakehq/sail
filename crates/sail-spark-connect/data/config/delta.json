@@ -1,0 +1,6 @@
+[
+  {
+    "key": "spark.databricks.delta.commitInfo.userMetadata",
+    "doc": "Optional user-defined metadata to include in Delta commitInfo."
+  }
+]
