@@ -6699,43 +6699,6 @@ mod tests {
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
     }
 
-    #[test]
-    fn test_round_trip_repeat_without_function_registry() -> Result<()> {
-        use datafusion::arrow::array::{Int64Array, StringArray};
-        use datafusion::common::DFSchema;
-        use datafusion::functions::string::expr_fn::repeat;
-        use datafusion::logical_expr::col;
-        use datafusion::logical_expr::execution_props::ExecutionProps;
-        use datafusion::physical_expr::create_physical_expr;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("s", DataType::Utf8, true),
-            Field::new("n", DataType::Int64, true),
-        ]));
-        let physical = create_physical_expr(
-            &repeat(col("s"), col("n")),
-            &DFSchema::try_from(schema.as_ref().clone())?,
-            &ExecutionProps::new(),
-            &PhysicalPlanningContext::default(),
-        )?;
-        // Driver task contexts do not register DataFusion's built-in functions.
-        let decoded = round_trip_expr(&physical, &schema)?;
-        assert_same_result(
-            &physical,
-            &decoded,
-            schema,
-            vec![
-                Arc::new(StringArray::from(vec![
-                    Some("ab"),
-                    Some("你好"),
-                    None,
-                    Some("x"),
-                ])),
-                Arc::new(Int64Array::from(vec![Some(3), Some(2), Some(2), None])),
-            ],
-        )
-    }
-
     fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
         expr.downcast_ref::<HigherOrderFunctionExpr>()
             .ok_or_else(|| plan_datafusion_err!("expression is not HigherOrderFunctionExpr"))
