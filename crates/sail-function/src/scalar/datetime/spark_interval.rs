@@ -16,7 +16,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_sql_analyzer::literal::interval::IntervalValue;
+use sail_sql_analyzer::literal::interval::{IntervalValue, parse_year_month_interval_string};
 use sail_sql_analyzer::parser::parse_interval;
 
 macro_rules! define_interval_udf {
@@ -166,6 +166,192 @@ impl ScalarUDFImpl for YearMonthIntervalMonths {
     }
 }
 
+/// Casts an `Int64` (already widened by the resolver so the multiply below cannot
+/// overflow `i64`) into `Interval(YearMonth)`, applying `IntervalUtils.longToYearMonthInterval`'s
+/// overflow check (`Math.multiplyExact`/`toIntExact`, unconditional regardless of ANSI mode).
+///
+/// A dedicated UDF -- rather than a `CASE WHEN overflow THEN raise_error(..) ELSE CAST(..)`
+/// expression -- is required to get nullability right: DataFusion derives a `Case`'s
+/// nullability from its branches, and `raise_error` always declares itself nullable, which
+/// would make the whole cast nullable even though Spark's `Cast.forceNullable` does not list
+/// numeric -> YearMonthIntervalType (so it should stay exactly as nullable as the input).
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkYearMonthIntervalFromInt64 {
+    signature: Signature,
+    multiplier: i64,
+    is_try: bool,
+}
+
+impl SparkYearMonthIntervalFromInt64 {
+    pub fn new(multiplier: i64, is_try: bool) -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            multiplier,
+            is_try,
+        }
+    }
+
+    pub fn multiplier(&self) -> i64 {
+        self.multiplier
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
+    }
+
+    fn convert(&self, value: i64) -> Result<Option<i32>> {
+        match value
+            .checked_mul(self.multiplier)
+            .and_then(|months| i32::try_from(months).ok())
+        {
+            Some(months) => Ok(Some(months)),
+            None if self.is_try => Ok(None),
+            None => exec_err!(
+                "[CAST_OVERFLOW] The value '{value}' cannot be cast to \"INTERVAL YEAR TO MONTH\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead."
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkYearMonthIntervalFromInt64 {
+    fn name(&self) -> &str {
+        "spark_year_month_interval_from_int64"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Interval(IntervalUnit::YearMonth))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [field] = take_function_args(self.name(), args.arg_fields)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Interval(IntervalUnit::YearMonth),
+            self.is_try || field.is_nullable(),
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.one()? {
+            ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
+                let months = value.map(|v| self.convert(v)).transpose()?.flatten();
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
+                    months,
+                )))
+            }
+            ColumnarValue::Array(array) => {
+                let array = array
+                    .as_primitive::<datafusion::arrow::datatypes::Int64Type>()
+                    .iter()
+                    .map(|value| {
+                        value
+                            .map(|v| self.convert(v))
+                            .transpose()
+                            .map(Option::flatten)
+                    })
+                    .collect::<Result<PrimitiveArray<IntervalYearMonthType>>>()?;
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            _ => exec_err!("expected Int64"),
+        }
+    }
+}
+
+/// Casts an `Int64` into `Duration(Microsecond)`, applying
+/// `IntervalUtils.longToDayTimeInterval`'s overflow check (`Math.multiplyExact`,
+/// unconditional regardless of ANSI mode).
+///
+/// A dedicated UDF for the same nullability reason as `SparkYearMonthIntervalFromInt64`:
+/// a `CASE WHEN overflow THEN raise_error(..) ELSE CAST(..)` would force the whole
+/// expression nullable (`raise_error` always declares itself nullable), but Spark's
+/// `Cast.forceNullable` does not list numeric -> DayTimeIntervalType.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkDayTimeIntervalFromInt64 {
+    signature: Signature,
+    multiplier: i64,
+    is_try: bool,
+}
+
+impl SparkDayTimeIntervalFromInt64 {
+    pub fn new(multiplier: i64, is_try: bool) -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            multiplier,
+            is_try,
+        }
+    }
+
+    pub fn multiplier(&self) -> i64 {
+        self.multiplier
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
+    }
+
+    fn convert(&self, value: i64) -> Result<Option<i64>> {
+        match value.checked_mul(self.multiplier) {
+            Some(micros) => Ok(Some(micros)),
+            None if self.is_try => Ok(None),
+            None => exec_err!(
+                "[CAST_OVERFLOW] The value '{value}' cannot be cast to \"INTERVAL DAY TO SECOND\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead."
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkDayTimeIntervalFromInt64 {
+    fn name(&self) -> &str {
+        "spark_day_time_interval_from_int64"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Duration(TimeUnit::Microsecond))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [field] = take_function_args(self.name(), args.arg_fields)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Duration(TimeUnit::Microsecond),
+            self.is_try || field.is_nullable(),
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.one()? {
+            ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
+                let micros = value.map(|v| self.convert(v)).transpose()?.flatten();
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
+                    micros,
+                )))
+            }
+            ColumnarValue::Array(array) => {
+                let array = array
+                    .as_primitive::<datafusion::arrow::datatypes::Int64Type>()
+                    .iter()
+                    .map(|value| {
+                        value
+                            .map(|v| self.convert(v))
+                            .transpose()
+                            .map(Option::flatten)
+                    })
+                    .collect::<Result<PrimitiveArray<DurationMicrosecondType>>>()?;
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            _ => exec_err!("expected Int64"),
+        }
+    }
+}
+
 define_interval_udf!(
     SparkDayTimeInterval,
     "spark_day_time_interval",
@@ -265,13 +451,7 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
 //   in Arrow, and we cannot distinguish `[+|-]d` from `[+|-]h`.
 
 fn string_to_year_month_interval(value: &str) -> Result<i32> {
-    let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
-    match interval {
-        IntervalValue::YearMonth { months, .. } => Ok(months),
-        IntervalValue::Microsecond { .. } | IntervalValue::MonthDayNanosecond { .. } => {
-            exec_err!("expected year month interval, but got: {value}")
-        }
-    }
+    parse_year_month_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))
 }
 
 fn string_to_day_time_interval(value: &str) -> Result<i64> {

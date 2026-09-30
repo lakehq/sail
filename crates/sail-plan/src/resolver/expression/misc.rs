@@ -14,6 +14,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
@@ -402,10 +403,15 @@ impl PlanResolver<'_> {
                     )));
                 };
                 let index_expr = lit(ScalarValue::Int64(index));
+                let interval_metadata = array_call_interval_metadata(&expr, schema)?;
                 let element = array_element(
                     expr.clone(),
                     lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
                 );
+                let element = match interval_metadata {
+                    Some(metadata) => attach_interval_metadata(element, schema, metadata)?,
+                    None => element,
+                };
                 if self.config.ansi_mode {
                     let length = cast(array_length(expr.clone()), DataType::Int64);
                     let message = datafusion_fn::concat(vec![
@@ -538,4 +544,73 @@ impl PlanResolver<'_> {
         };
         Ok(expr.transform(rewrite).data()?)
     }
+}
+
+/// The combined Spark interval field range shared by every argument of an
+/// `array(...)` call, if `array_expr` is one and every argument is an interval
+/// type carrying Sail's interval field metadata.
+///
+/// `array()`'s own logical return type does not carry this metadata (fixing
+/// that at the source runs into DataFusion's constant folding: a fully
+/// literal `array(INTERVAL '2' DAY)` gets folded to a bare `ScalarValue`
+/// *before* `array()`'s `return_field_from_args` is asked again for the
+/// folded, metadata-less child, so the type promised at the original planning
+/// pass would no longer match what the fold step actually returns, and Sail's
+/// physical-plan assertion trips). Reading the metadata directly off the
+/// unfolded `array()` call's own arguments -- available here, at resolution
+/// time, before any folding happens -- sidesteps that entirely: this never
+/// changes what `array()` itself promises or returns, it only enriches the
+/// *separate* `array_element(...)` extraction with a metadata-carrying `Cast`
+/// wrapper, the same technique already used for a `CAST ... AS INTERVAL`.
+/// Relabels `value`'s field with Sail's interval field metadata, mirroring the
+/// `CAST ... AS INTERVAL` pattern in `cast.rs`: a (possibly no-op) `Cast`
+/// carries the metadata without changing the underlying data or data type.
+fn attach_interval_metadata(
+    value: expr::Expr,
+    schema: &DFSchemaRef,
+    metadata: spec::SparkIntervalMetadata,
+) -> PlanResult<expr::Expr> {
+    let metadata_json = metadata.to_json()?;
+    let field = value.to_field(schema)?.1;
+    let mut field_metadata = field.metadata().clone();
+    field_metadata.insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata_json);
+    let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+    Ok(match value {
+        expr::Expr::Cast(cast) => expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field)),
+        expr::Expr::TryCast(cast) => {
+            expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+        }
+        value => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(value), field)),
+    })
+}
+
+fn array_call_interval_metadata(
+    array_expr: &expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<spec::SparkIntervalMetadata>> {
+    let expr::Expr::ScalarFunction(expr::ScalarFunction { func, args }) = array_expr else {
+        return Ok(None);
+    };
+    if func.inner().downcast_ref::<SparkArray>().is_none() {
+        return Ok(None);
+    }
+    let mut combined: Option<spec::SparkIntervalMetadata> = None;
+    for arg in args {
+        let field = arg.to_field(schema)?.1;
+        if matches!(field.data_type(), DataType::Null) {
+            continue;
+        }
+        let Some(raw) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            return Ok(None);
+        };
+        let parsed = spec::SparkIntervalMetadata::from_json(raw)?;
+        combined = Some(match combined {
+            Some(existing) => match existing.wider(parsed) {
+                Some(wider) => wider,
+                None => return Ok(None),
+            },
+            None => parsed,
+        });
+    }
+    Ok(combined)
 }

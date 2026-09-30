@@ -64,7 +64,9 @@ fn from_ast_time_precision(
         Some(3) => Ok(spec::TimeUnit::Millisecond),
         None | Some(6) => Ok(spec::TimeUnit::Microsecond), // Default to microsecond
         Some(9) => Ok(spec::TimeUnit::Nanosecond),
-        _ => Err(SqlError::invalid("invalid TIME precision"))?,
+        Some(p) => Err(SqlError::invalid(format!(
+            "[UNSUPPORTED_TIME_PRECISION] The seconds precision {p} of the TIME data type is out of the supported range [0, 6]."
+        )))?,
     }
 }
 

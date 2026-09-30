@@ -13,7 +13,7 @@ import contextlib
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import pyspark_version
 
 pytest.importorskip("pyarrow")
 
@@ -88,14 +88,6 @@ def test_to_arrow_rejects_year_month_interval(arrow_spark):
         df.toArrow()
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail loses the non-nullable flag on a struct field built by named_struct: "
-    "Spark emits struct<a: int32 not null, b: int32>, Sail emits struct<a: int32, b: int32>. "
-    "The root cause is upstream of the Arrow mapping — the literal itself is already typed "
-    "nullable in Sail — so this is a field-nullability gap, not a conversion bug.",
-    strict=True,
-)
 def test_to_arrow_struct_field_nullability(arrow_spark):
     table = arrow_spark.sql("SELECT named_struct('a',1,'b',CAST(NULL AS INT)) AS c").toArrow()
     assert str(table.schema.field(0).type) == "struct<a: int32 not null, b: int32>"

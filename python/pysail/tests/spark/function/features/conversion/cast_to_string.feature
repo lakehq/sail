@@ -42,7 +42,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | just below the upper threshold  | CAST(9999999.0 AS DOUBLE)        | 9999999.0 |
         | at the lower threshold          | 1e-3                             | 0.001     |
 
-    @sail-bug
     Scenario Outline: DOUBLE rendering Sail gets wrong: <case>
       When query
         """
@@ -77,7 +76,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | result |
         | NaN    |
 
-    @sail-bug
     Scenario Outline: FLOAT uses the SAME thresholds as DOUBLE: <case>
       # Float.toString switches to scientific at the identical 1e-3 / 1e7 boundaries, so a
       # renderer that special-cases only f64 diverges here.
@@ -99,12 +97,10 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
   Rule: A NULL nested in a container renders lowercase under CAST and uppercase under show
     # This is the sharpest CAST-vs-show split. Cast overrides nullString to "null" and
     # ToPrettyString to "NULL", so the SAME value has two spellings depending on the path.
-    # Sail emits the show() spelling from the CAST path.
     #
     # Note the position asymmetry Spark keeps in both modes: the element at index 0 gets no
     # leading space, later ones get one from the separator — hence "[null, null]".
 
-    @sail-bug
     Scenario Outline: NULL inside a container cast to string: <case>
       When query
         """
@@ -147,7 +143,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | result |
         | Spark  |
 
-    @sail-bug
     Scenario: binary nested in an array casts to its bytes too
       # The nested case is what discriminates: an implementation can get the top level
       # right by special-casing it and still hand the container branch a hex formatter.

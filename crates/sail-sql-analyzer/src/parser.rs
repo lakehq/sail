@@ -132,6 +132,36 @@ mod tests {
     use sail_sql_parser::ast::statement::Statement;
     use sail_sql_parser::tree::TreeText;
 
+    use super::{parse_expression, parse_one_statement};
+
+    #[test]
+    fn debug_cast_string_as_interval() {
+        for s in [
+            "CAST('abc' AS INTERVAL DAY TO SECOND)",
+            "CAST(2 AS INTERVAL DAY TO SECOND)",
+            "CAST(col AS INTERVAL DAY TO SECOND)",
+            "TRY_CAST('abc' AS INTERVAL DAY TO SECOND)",
+        ] {
+            match parse_expression(s) {
+                Ok(expr) => println!("OK {s} => {expr:#?}"),
+                Err(e) => println!("ERR {s} => {e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn debug_cast_string_as_interval_statement() {
+        for s in [
+            "SELECT CAST('abc' AS INTERVAL DAY TO SECOND) AS result",
+            "SELECT CAST(s AS INTERVAL DAY TO SECOND) AS result FROM VALUES ('abc'), ('1 02:03:04') AS t(s)",
+        ] {
+            match parse_one_statement(s) {
+                Ok(_) => println!("OK {s}"),
+                Err(e) => println!("ERR {s} => {e}"),
+            }
+        }
+    }
+
     use crate::error::SqlResult;
     use crate::parser::{parse_one_statement, parse_statements};
 

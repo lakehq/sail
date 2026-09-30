@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
@@ -120,6 +120,23 @@ impl PlanResolver<'_> {
         let mut nan_positions = HashSet::new();
         for value in values.iter() {
             value.iter().enumerate().for_each(|(idx, expr)| {
+                // CAST may carry a constant CASE to preserve Spark's analyzed
+                // nullability. Inspect its value without removing that wrapper
+                // from the actual VALUES expression or changing its schema.
+                let expr = match expr {
+                    Expr::Case(case)
+                        if case.expr.is_none()
+                            && case.else_expr.is_none()
+                            && case.when_then_expr.len() == 1
+                            && matches!(
+                                case.when_then_expr[0].0.as_ref(),
+                                Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+                            ) =>
+                    {
+                        case.when_then_expr[0].1.as_ref()
+                    }
+                    _ => expr,
+                };
                 if let Expr::Cast(cast) = expr
                     && let Expr::Literal(sv, _) = cast.expr.as_ref()
                     && let Some(true) = sv

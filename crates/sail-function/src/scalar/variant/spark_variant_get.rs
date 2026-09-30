@@ -8,8 +8,9 @@ use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusi
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use parquet_variant::{VariantPath, VariantPathElement};
-use parquet_variant_compute::{GetOptions, VariantType, variant_get};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
+use parquet_variant_compute::{GetOptions, VariantArray, VariantType, variant_get};
+use parquet_variant_json::VariantToJson;
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -154,6 +155,17 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
         ColumnarValue::Scalar(s) => s.to_array()?,
     };
 
+    if let Some(DataType::Timestamp(TimeUnit::Microsecond, timezone)) = &final_type {
+        let result = cast_variant_timestamp(&variant_arr, variant_path, timezone.clone(), safe)?;
+        return if matches!(&args.args[0], ColumnarValue::Scalar(_)) {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &result, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(result))
+        };
+    }
+
     // Execute
     let result = variant_get(&variant_arr, options)
         .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
@@ -228,6 +240,37 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     } else {
         result
     };
+
+    // `variant_get` silently returns NULL when the value's runtime type cannot be
+    // extracted as the requested type (e.g. an integer variant cast to TIME/DATE/
+    // BINARY/ARRAY/MAP/STRUCT), rather than raising. Only a genuine JSON null
+    // (`Variant::Null`) or an absent/Arrow-null source should produce a legitimate
+    // NULL; anything else is a cast failure Spark reports as `INVALID_VARIANT_CAST`.
+    // Scoped to the root path (`$`) of a `CAST ... AS <type>`, which is the shape
+    // this divergence was found in; a sub-path lookup already has its own,
+    // separately-verified null semantics that this must not disturb.
+    if !needs_post_cast
+        && type_str.is_some()
+        && variant_path.is_empty()
+        && let Some(dt) = &final_type
+    {
+        let variant_array = VariantArray::try_new(variant_arr.as_ref())?;
+        for i in 0..result.len() {
+            if result.is_null(i) && !variant_array.is_null(i) {
+                let value = variant_array.value(i);
+                if !matches!(value, Variant::Null) {
+                    if safe {
+                        continue;
+                    }
+                    let json = value.to_json_string()?;
+                    let target = dt.to_string().to_ascii_uppercase();
+                    return Err(exec_datafusion_err!(
+                        "[INVALID_VARIANT_CAST] The variant value `{json}` cannot be cast into `\"{target}\"`. Please use `try_variant_get` instead."
+                    ));
+                }
+            }
+        }
+    }
 
     // If input was scalar, return scalar
     if matches!(&args.args[0], ColumnarValue::Scalar(_)) {
@@ -462,6 +505,114 @@ fn spark_variant_path_parser<'src>()
         )
         .then_ignore(end())
         .map(|segments| segments.into_iter().collect())
+}
+
+/// Spark VariantGet uses seconds for numeric values, with stricter overflow
+/// checks than an ordinary numeric-to-timestamp cast (variantExpressions.scala:545).
+fn decimal_timestamp_micros(integer: i128, scale: u8) -> Option<i64> {
+    let micros = if scale <= 6 {
+        integer.checked_mul(10_i128.checked_pow(u32::from(6 - scale))?)?
+    } else {
+        // Integer division truncates toward zero, as BigDecimal.toBigInteger does.
+        integer / 10_i128.checked_pow(u32::from(scale - 6))?
+    };
+    i64::try_from(micros).ok()
+}
+
+fn float_timestamp_micros(seconds: f64) -> Option<i64> {
+    let micros = seconds * 1_000_000.0;
+    // Spark DoubleExactNumeric compares floating floor/ceil with long bounds.
+    // The subsequent JVM conversion saturates at the rounded upper boundary.
+    (micros.floor() <= i64::MAX as f64 && micros.ceil() >= i64::MIN as f64).then_some(micros as i64)
+}
+
+fn cast_variant_timestamp(
+    input: &arrow::array::ArrayRef,
+    path: VariantPath<'_>,
+    timezone: Option<Arc<str>>,
+    safe: bool,
+) -> Result<arrow::array::ArrayRef> {
+    use arrow::array::{Array, AsArray, TimestampMicrosecondArray};
+    use arrow::datatypes::TimestampMicrosecondType;
+    use parquet_variant::Variant;
+    use parquet_variant_compute::VariantArray;
+    use parquet_variant_json::VariantToJson;
+
+    let extracted = variant_get(input, GetOptions::new_with_path(path))?;
+    let variants = VariantArray::try_new(extracted.as_ref())?;
+    let target = DataType::Timestamp(TimeUnit::Microsecond, timezone.clone());
+    // Keep the existing text parser for string/date/timestamp variants. Numeric
+    // values are converted below without going through floating point or text.
+    let strings = variant_get(
+        &extracted,
+        GetOptions::new().with_as_type(Some(Arc::new(Field::new("value", DataType::Utf8, true)))),
+    )?;
+    let fallback = arrow::compute::cast_with_options(
+        &strings,
+        &target,
+        &arrow::compute::CastOptions {
+            safe: true,
+            ..Default::default()
+        },
+    )?;
+    let fallback = fallback.as_primitive::<TimestampMicrosecondType>();
+    let mut builder = TimestampMicrosecondArray::builder(variants.len());
+    for (index, value) in variants.iter().enumerate() {
+        let Some(value) = value else {
+            builder.append_null();
+            continue;
+        };
+        if value == Variant::Null {
+            builder.append_null();
+            continue;
+        }
+        let numeric = match &value {
+            Variant::Int8(value) => Some(i64::from(*value).checked_mul(1_000_000)),
+            Variant::Int16(value) => Some(i64::from(*value).checked_mul(1_000_000)),
+            Variant::Int32(value) => Some(i64::from(*value).checked_mul(1_000_000)),
+            Variant::Int64(value) => Some(value.checked_mul(1_000_000)),
+            Variant::Decimal4(value) => Some(decimal_timestamp_micros(
+                i128::from(value.integer()),
+                value.scale(),
+            )),
+            Variant::Decimal8(value) => Some(decimal_timestamp_micros(
+                i128::from(value.integer()),
+                value.scale(),
+            )),
+            Variant::Decimal16(value) => {
+                Some(decimal_timestamp_micros(value.integer(), value.scale()))
+            }
+            Variant::Float(value) => Some(float_timestamp_micros(f64::from(*value))),
+            Variant::Double(value) => Some(float_timestamp_micros(*value)),
+            _ => None,
+        };
+        let micros = match numeric {
+            // Cast.canAnsiCast forbids numeric -> TIMESTAMP_NTZ.
+            Some(value) if timezone.is_some() => value,
+            Some(_) => None,
+            None => {
+                if fallback.is_null(index) {
+                    None
+                } else {
+                    Some(fallback.value(index))
+                }
+            }
+        };
+        if micros.is_none() && !safe {
+            let target = if timezone.is_some() {
+                "TIMESTAMP"
+            } else {
+                "TIMESTAMP_NTZ"
+            };
+            return Err(exec_datafusion_err!(
+                "[INVALID_VARIANT_CAST] The variant value `{}` cannot be cast into `\"{}\"`. Please use `try_variant_get` instead.",
+                value.to_json_string()?,
+                target
+            ));
+        }
+        builder.append_option(micros);
+    }
+    Ok(Arc::new(builder.finish().with_timezone_opt(timezone)))
 }
 
 #[cfg(test)]

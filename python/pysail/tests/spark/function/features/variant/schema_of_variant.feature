@@ -19,7 +19,6 @@ Feature: schema_of_variant
         | schema_of_variant boolean | 'true'    | BOOLEAN |
 
     # parquet-variant-json parses 3.14 as f64 (DOUBLE) instead of Decimal like Spark
-    @sail-bug
     Scenario: schema_of_variant double
       When query
         """
@@ -158,7 +157,6 @@ Feature: schema_of_variant
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to schema_of_variant yields the schema Spark declares
       When query
         """

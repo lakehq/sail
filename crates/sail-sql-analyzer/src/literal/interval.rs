@@ -234,22 +234,26 @@ fn parse_interval_day_time_string(
     let minutes: i64 = extract_match(&captures, "minute", error)?.unwrap_or(0);
     let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
     let microseconds: i64 = extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-    let delta = TimeDelta::try_days(days)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_minutes(minutes).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_seconds(seconds).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::microseconds(microseconds))
-        .ok_or_else(error)?;
-    let microseconds = delta.num_microseconds().ok_or_else(error)?;
-    let n = if negated {
-        microseconds.checked_mul(-1).ok_or_else(error)?
-    } else {
-        microseconds
-    };
+    // Keep the calculation signed in i128 until the final range check.  The
+    // negative endpoint has one more representable value than the positive
+    // endpoint: `i64::MIN` has a magnitude of `i64::MAX + 1`.  Building a
+    // positive `TimeDelta` and negating it afterwards therefore rejects an
+    // otherwise valid negative interval at exactly that endpoint.
+    let sign = if negated { -1_i128 } else { 1_i128 };
+    let n = [
+        (days, 86_400_000_000_i128),
+        (hours, 3_600_000_000_i128),
+        (minutes, 60_000_000_i128),
+        (seconds, 1_000_000_i128),
+        (microseconds, 1_i128),
+    ]
+    .into_iter()
+    .try_fold(0_i128, |total, (value, unit)| {
+        total.checked_add((value as i128).checked_mul(unit)?)
+    })
+    .and_then(|total| total.checked_mul(sign))
+    .and_then(|total| i64::try_from(total).ok())
+    .ok_or_else(error)?;
     Ok(IntervalValue::Microsecond {
         microseconds: n,
         start_field,
@@ -582,6 +586,30 @@ fn extend_interval_fields(
     fields.1 = (start != end).then_some(end);
 }
 
+/// Parses a runtime year-month interval string produced by e.g. `CAST(s AS INTERVAL YEAR TO MONTH)`
+/// where `s` is a plain string value (not a SQL `INTERVAL` literal).
+///
+/// Spark accepts the bare `[+|-]y-m` form (see `IntervalUtils.castStringToYMInterval` in Spark)
+/// in addition to the qualified forms handled by [`parse_unqualified_interval_string`]
+/// (e.g. `INTERVAL '1-2' YEAR TO MONTH` or `1 year 2 months`).
+pub fn parse_year_month_interval_string(s: &str) -> SqlResult<i32> {
+    if let Ok(IntervalValue::YearMonth { months, .. }) = parse_interval_year_month_string(
+        s,
+        false,
+        &INTERVAL_YEAR_TO_MONTH_REGEX,
+        spec::IntervalFieldType::Year,
+        Some(spec::IntervalFieldType::Month),
+    ) {
+        return Ok(months);
+    }
+    match parse_unqualified_interval_string(s, false)? {
+        IntervalValue::YearMonth { months, .. } => Ok(months),
+        IntervalValue::Microsecond { .. } | IntervalValue::MonthDayNanosecond { .. } => {
+            Err(SqlError::invalid(format!("interval: {s}")))
+        }
+    }
+}
+
 pub(crate) fn parse_unqualified_interval_string(
     s: &str,
     negated: bool,
@@ -653,6 +681,15 @@ mod tests {
         assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_err());
         assert!(parse("-'106751991 04:00:54.775808' day to second", true).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", false).is_err());
+
+        assert_eq!(
+            parse("'-9223372036854.775808' second", false)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Second,
+                end_field: None,
+            }
+        );
         assert!(parse("-'106751991 04:00:54.775809' day to second", true).is_err());
 
         assert_eq!(

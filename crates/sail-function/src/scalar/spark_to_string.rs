@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, DurationMicrosecondArray, GenericStringBuilder, IntervalYearMonthArray,
-    OffsetSizeTrait, StringViewBuilder,
+    Array, ArrayRef, DurationMicrosecondArray, FixedSizeListArray, GenericBinaryArray,
+    GenericListArray, GenericStringArray, GenericStringBuilder, IntervalYearMonthArray, MapArray,
+    OffsetSizeTrait, StringViewBuilder, StructArray,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::common::{DataFusionError, Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -38,7 +39,8 @@ macro_rules! define_to_string_udf {
                         vec![TypeSignature::Any(1), TypeSignature::Any(2)],
                         Volatility::Immutable,
                     ),
-                    options: FormatOptions::default(),
+                    // CAST uses lowercase nested nulls; show() keeps its own default.
+                    options: FormatOptions::default().with_null("null"),
                 }
             }
         }
@@ -134,6 +136,16 @@ fn value_to_string<O: OffsetSizeTrait>(
     if let Some(interval) = spark_interval_metadata(field)? {
         return interval_value_to_string::<O>(array, interval);
     }
+    if let Some(binary) = binary_to_string_unchecked::<O>(array)? {
+        return Ok(binary);
+    }
+    let owned;
+    let array = if has_nested_binary(array.data_type()) {
+        owned = reinterpret_nested_binary_as_string_unchecked(array)?;
+        owned.as_ref()
+    } else {
+        array
+    };
     let mut builder = GenericStringBuilder::<O>::new();
     let formatter = ArrayFormatter::try_new(array, options)?;
     let nulls = array.nulls();
@@ -158,6 +170,16 @@ fn value_to_string_view(
     if let Some(interval) = spark_interval_metadata(field)? {
         return interval_value_to_string_view(array, interval);
     }
+    if let Some(binary) = binary_view_to_string_view_unchecked(array)? {
+        return Ok(binary);
+    }
+    let owned;
+    let array = if has_nested_binary(array.data_type()) {
+        owned = reinterpret_nested_binary_as_string_unchecked(array)?;
+        owned.as_ref()
+    } else {
+        array
+    };
     let mut builder = StringViewBuilder::with_capacity(array.len());
     let formatter = ArrayFormatter::try_new(array, options)?;
     let nulls = array.nulls();
@@ -176,6 +198,209 @@ fn value_to_string_view(
         }
     }
     Ok(Arc::new(builder.finish()))
+}
+
+/// Spark's `Cast.castToString` for BinaryType is `UTF8String.fromBytes`, which wraps
+/// the raw bytes with no UTF-8 validation at all (unlike Arrow's `cast` kernel, which
+/// rejects invalid sequences). Binary and Utf8 share the same offsets+values layout,
+/// so this is a reinterpretation, not a copy.
+fn binary_to_string_unchecked<O: OffsetSizeTrait>(array: &dyn Array) -> Result<Option<ArrayRef>> {
+    let is_matching_binary_type = match array.data_type() {
+        DataType::Binary => !O::IS_LARGE,
+        DataType::LargeBinary => O::IS_LARGE,
+        _ => return Ok(None),
+    };
+    if !is_matching_binary_type {
+        return Ok(None);
+    }
+    let (offsets, values, nulls) = array
+        .as_any()
+        .downcast_ref::<GenericBinaryArray<O>>()
+        .ok_or_else(|| DataFusionError::Execution("expected binary array".to_string()))?
+        .clone()
+        .into_parts();
+    // SAFETY: the bytes are not validated as UTF-8, matching Spark's lenient cast.
+    let array = unsafe { GenericStringArray::<O>::new_unchecked(offsets, values, nulls) };
+    Ok(Some(Arc::new(array)))
+}
+
+/// Same lenient reinterpretation as `binary_to_string_unchecked`, for any binary
+/// array being cast into a `Utf8View` (Sail's `StringViewBuilder` path).
+/// True if `data_type` is, or contains at any depth (List/LargeList/FixedSizeList/
+/// Struct/Map), a Binary/LargeBinary/BinaryView leaf that needs the same lenient
+/// (non-UTF-8-validating) reinterpretation as the top-level binary-to-string cast.
+/// `ArrayFormatter`'s own per-element formatting for these leaves is a hex display
+/// (Spark's `.show()` convention), not Spark's `Cast.castToString` convention, so a
+/// nested binary value needs to be converted before it ever reaches that formatter.
+fn has_nested_binary(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => true,
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            has_nested_binary(field.data_type())
+        }
+        DataType::Struct(fields) => fields.iter().any(|f| has_nested_binary(f.data_type())),
+        DataType::Map(field, _) => has_nested_binary(field.data_type()),
+        _ => false,
+    }
+}
+
+/// Recursively rewrites every Binary/LargeBinary/BinaryView leaf reachable through
+/// List/LargeList/FixedSizeList/Struct/Map into the matching Utf8/LargeUtf8/Utf8View
+/// array via the same unchecked byte reinterpretation as `binary_to_string_unchecked`.
+fn reinterpret_nested_binary_as_string_unchecked(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type().clone() {
+        DataType::Binary => binary_to_string_unchecked::<i32>(array)?
+            .ok_or_else(|| DataFusionError::Execution("expected a binary array".to_string())),
+        DataType::LargeBinary => binary_to_string_unchecked::<i64>(array)?
+            .ok_or_else(|| DataFusionError::Execution("expected a binary array".to_string())),
+        DataType::BinaryView => binary_view_to_string_view_unchecked(array)?
+            .ok_or_else(|| DataFusionError::Execution("expected a binary array".to_string())),
+        DataType::List(field) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<GenericListArray<i32>>()
+                .ok_or_else(|| DataFusionError::Execution("expected a list array".to_string()))?;
+            let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
+            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            Ok(Arc::new(GenericListArray::<i32>::try_new(
+                field,
+                array.offsets().clone(),
+                values,
+                array.nulls().cloned(),
+            )?))
+        }
+        DataType::LargeList(field) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<GenericListArray<i64>>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("expected a large list array".to_string())
+                })?;
+            let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
+            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            Ok(Arc::new(GenericListArray::<i64>::try_new(
+                field,
+                array.offsets().clone(),
+                values,
+                array.nulls().cloned(),
+            )?))
+        }
+        DataType::FixedSizeList(field, size) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("expected a fixed-size list array".to_string())
+                })?;
+            let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
+            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            Ok(Arc::new(FixedSizeListArray::try_new(
+                field,
+                size,
+                values,
+                array.nulls().cloned(),
+            )?))
+        }
+        DataType::Struct(fields) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DataFusionError::Execution("expected a struct array".to_string()))?;
+            let mut new_fields = Vec::with_capacity(fields.len());
+            let mut new_columns = Vec::with_capacity(fields.len());
+            for (field, column) in fields.iter().zip(array.columns()) {
+                let column = reinterpret_nested_binary_as_string_unchecked(column.as_ref())?;
+                new_fields.push(Arc::new(
+                    field.as_ref().clone().with_data_type(column.data_type().clone()),
+                ));
+                new_columns.push(column);
+            }
+            Ok(Arc::new(StructArray::try_new(
+                Fields::from(new_fields),
+                new_columns,
+                array.nulls().cloned(),
+            )?))
+        }
+        DataType::Map(field, sorted) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .ok_or_else(|| DataFusionError::Execution("expected a map array".to_string()))?;
+            let entries = reinterpret_nested_binary_as_string_unchecked(array.entries())?;
+            let entries = entries
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("expected map entries to stay a struct".to_string())
+                })?
+                .clone();
+            let field = Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Struct(entries.fields().clone())),
+            );
+            Ok(Arc::new(MapArray::try_new(
+                field,
+                array.offsets().clone(),
+                entries,
+                array.nulls().cloned(),
+                sorted,
+            )?))
+        }
+        _ => {
+            // No binary anywhere in this subtree: `has_nested_binary` already
+            // filtered the top-level call, so this only happens for an untouched
+            // sibling field/element; hand the array back unchanged.
+            Ok(array.slice(0, array.len()))
+        }
+    }
+}
+
+fn binary_view_to_string_view_unchecked(array: &dyn Array) -> Result<Option<ArrayRef>> {
+    if !matches!(
+        array.data_type(),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) {
+        return Ok(None);
+    }
+    let bytes_at = |i: usize| -> Option<&[u8]> {
+        match array.data_type() {
+            DataType::Binary => Some(
+                array
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<i32>>()?
+                    .value(i),
+            ),
+            DataType::LargeBinary => Some(
+                array
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<i64>>()?
+                    .value(i),
+            ),
+            DataType::BinaryView => Some(
+                array
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::BinaryViewArray>()?
+                    .value(i),
+            ),
+            _ => None,
+        }
+    };
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+    let nulls = array.nulls();
+    for i in 0..array.len() {
+        if nulls.map(|n| n.is_null(i)).unwrap_or_default() {
+            builder.append_null();
+        } else {
+            let bytes = bytes_at(i).ok_or_else(|| {
+                DataFusionError::Execution("expected a binary array row".to_string())
+            })?;
+            // SAFETY: the bytes are not validated as UTF-8, matching Spark's lenient cast.
+            builder.append_value(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
+    }
+    Ok(Some(Arc::new(builder.finish())))
 }
 
 fn spark_interval_metadata(field: &Field) -> Result<Option<SparkIntervalMetadata>> {
