@@ -7,14 +7,6 @@ rank: 5
 
 The OneLake catalog provider in Sail allows you to connect to [Microsoft Fabric OneLake](https://learn.microsoft.com/en-us/fabric/onelake/onelake-overview).
 
-## Table DDL
-
-The OneLake [Iceberg Table API](https://learn.microsoft.com/en-us/fabric/onelake/table-apis/iceberg-table-apis-overview)
-and [Delta Table API](https://learn.microsoft.com/en-us/fabric/onelake/table-apis/delta-table-apis-overview)
-provide read access to metadata. Sail rejects CREATE, ALTER, and DROP through this
-provider before modifying storage. Use a Fabric endpoint that supports writes to
-manage these tables.
-
 ## Options
 
 OneLake catalog can be configured using the following options.

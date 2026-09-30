@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sail_catalog::credentials::CatalogCredentials;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::CatalogResult;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
@@ -233,12 +233,11 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn create_database(
         &self,
-        _database: &Namespace,
-        _options: CreateDatabaseOptions,
+        database: &Namespace,
+        options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        let status = self.inner.create_database(database, options).await?;
+        Ok(self.normalize_database_status(status))
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
@@ -256,32 +255,27 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn drop_database(
         &self,
-        _database: &Namespace,
-        _options: DropDatabaseOptions,
+        database: &Namespace,
+        options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner.drop_database(database, options).await
     }
 
     async fn create_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: CreateTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        let status = self.inner.create_table(database, table, options).await?;
+        Ok(self.normalize_table_status(status))
     }
 
     fn create_table_metadata_requirement(
         &self,
-        _options: &CreateTableOptions,
+        options: &CreateTableOptions,
     ) -> CatalogResult<CreateTableMetadataRequirement> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner.create_table_metadata_requirement(options)
     }
 
     fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
@@ -301,13 +295,13 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn plan_lakehouse_create(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _request: LakehouseCreateRequest,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
     ) -> CatalogResult<LakehouseCreatePlan> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner
+            .plan_lakehouse_create(database, table, request)
+            .await
     }
 
     async fn begin_table_access(
@@ -366,41 +360,30 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn drop_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: DropTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: DropTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
-    }
-
-    fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner.drop_table(database, table, options).await
     }
 
     async fn alter_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: AlterTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner.alter_table(database, table, options).await
     }
 
     async fn create_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: CreateViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        let status = self.inner.create_view(database, view, options).await?;
+        Ok(self.normalize_table_status(status))
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
@@ -415,92 +398,17 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn drop_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: DropViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: DropViewOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake Table APIs are read-only; table DDL is not supported".to_string(),
-        ))
+        self.inner.drop_view(database, view, options).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::normalize_onelake_location;
-
-    #[tokio::test]
-    async fn readonly_ddl_fails_before_contacting_onelake() -> sail_catalog::error::CatalogResult<()>
-    {
-        use sail_catalog::provider::{CatalogProvider, CreateTableMode};
-
-        use super::*;
-        for api in [OneLakeApiKind::Delta, OneLakeApiKind::Iceberg] {
-            let catalog = OneLakeCatalogProvider::new(
-                "onelake".into(),
-                "workspace".into(),
-                "item".into(),
-                None,
-                api,
-                Some("test".into()),
-            )?;
-            let options = CreateTableOptions {
-                columns: vec![],
-                comment: None,
-                constraints: vec![],
-                location: Some("file:///should-not-be-created".into()),
-                format: "delta".into(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                mode: CreateTableMode::default(),
-                properties: vec![],
-                is_external: true,
-                is_write_precondition: false,
-            };
-            assert!(matches!(
-                catalog.create_table_metadata_requirement(&options),
-                Err(CatalogError::NotSupported(_))
-            ));
-            let database = Namespace {
-                head: "dbo".into(),
-                tail: vec![],
-            };
-            assert!(matches!(
-                catalog
-                    .plan_lakehouse_create(
-                        &database,
-                        "t",
-                        LakehouseCreateRequest {
-                            catalog_table: vec!["onelake".into(), "dbo".into(), "t".into()],
-                            options,
-                        }
-                    )
-                    .await,
-                Err(CatalogError::NotSupported(_))
-            ));
-            assert!(matches!(
-                catalog.validate_alter_table(&AlterTableOptions::SetTableProperties {
-                    properties: vec![]
-                }),
-                Err(CatalogError::NotSupported(_))
-            ));
-            assert!(matches!(
-                catalog
-                    .drop_table(
-                        &database,
-                        "t",
-                        DropTableOptions {
-                            if_exists: true,
-                            purge: false
-                        }
-                    )
-                    .await,
-                Err(CatalogError::NotSupported(_))
-            ));
-        }
-        Ok(())
-    }
 
     #[test]
     fn normalize_onelake_location_handles_each_form() {

@@ -197,8 +197,7 @@ registration applies to external Delta tables; native Iceberg DDL uses an Iceber
 REST catalog connection instead of the Unity table API.
 
 Memory and HMS drop table registrations without deleting the data, including when
-`PURGE` is supplied. Glue and Unity reject `PURGE`. OneLake exposes read-only table
-APIs, so Sail rejects table DDL before changing storage.
+`PURGE` is supplied. Glue and Unity reject `PURGE`.
 
 HMS publishes Iceberg metadata pointers and schema updates under a metastore lock;
 Glue uses version-checked updates. Iceberg REST publishes schema and property
