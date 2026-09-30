@@ -80,6 +80,25 @@ Feature: Additional CAST coverage from time_type
         """
       Then query error UNSUPPORTED_TIME_PRECISION
 
+    # A narrowed TIME's declared precision must survive becoming an array element,
+    # not just a top-level column: `array()` builds its own value Field, separate
+    # from the CAST's, and must propagate the precision metadata onto it.
+    Scenario: time_type catalog: an array element keeps the declared TIME precision
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT array(CAST(TIME '12:34:56.987654' AS TIME(1))) AS r
+        """
+      Then query schema
+        """
+        root
+         |-- r: array (nullable = false)
+         |    |-- element: time(1) (containsNull = false)
+        """
+      And query result
+        | r            |
+        | [12:34:56.9] |
+
     # TIME to integral is the whole seconds of the day; to decimal keeps the fraction.
 
     Scenario: time_type catalog: CAST of a TIME literal to numbers counts seconds since midnight
@@ -209,6 +228,38 @@ Feature: Additional CAST coverage from time_type
       And query result
         | r            |
         | 12:34:56.123 |
+
+    # Unlike a TIME -> TIME(n) cast (which truncates the value, see "CAST of TIME to
+    # every sub-microsecond precision truncates" above), Spark's `Cast.castToTime`
+    # parses a STRING straight to microsecond resolution and does NOT truncate the
+    # value to the target's declared precision -- only the schema's declared
+    # precision narrows. Measured on the Spark 4.2 JVM: every precision 0-6 keeps
+    # the full parsed value.
+    Scenario Outline: time_type catalog: CAST of STRING to TIME(<precision>) keeps the full value
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('12:34:56.9876549' AS TIME(<precision>)) AS r
+        """
+      Then query schema
+        """
+        root
+         |-- r: time(<precision>) (nullable = true)
+        """
+      And query result
+        | r               |
+        | 12:34:56.987654 |
+
+      Examples:
+        | precision |
+        | 0         |
+        | 1         |
+        | 2         |
+        | 3         |
+        | 4         |
+        | 5         |
+        | 6         |
 
     Scenario Outline: time_type catalog: CAST of a malformed STRING to TIME fails under ANSI: <case>
       Given config spark.sql.timeType.enabled = true

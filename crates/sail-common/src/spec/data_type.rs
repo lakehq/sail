@@ -159,11 +159,17 @@ pub enum DataType {
     /// Corresponds to [`arrow_schema::DataType::Time32`].
     ///
     /// `precision` is Spark's declared TIME precision (0-6 fractional-second
-    /// digits), which `time_unit` alone cannot always represent exactly:
-    /// Arrow's `TimeUnit` only has 4 discrete values, but Spark has 7 declared
-    /// precisions. `precision` is the source of truth for anything
-    /// Spark-visible (schema, `CAST(TIME AS STRING)`, `.show()`); `time_unit`
-    /// is only the physical storage width.
+    /// digits). Spark stores every TIME value as a microsecond-resolution
+    /// `Long` internally regardless of the declared precision -- precision is
+    /// a schema/display-only contract, enforced on the VALUE only by an
+    /// explicit `CAST(TIME AS TIME(n))`, never by how the value is physically
+    /// stored -- so `time_unit` alone cannot represent every Spark precision
+    /// and `precision` is the source of truth for anything Spark-visible
+    /// (schema, `CAST(TIME AS STRING)`, `.show()`). A declared TIME with a
+    /// `precision` always uses [`DataType::Time64`] with
+    /// `TimeUnit::Microsecond`; this variant only appears without declared
+    /// precision (e.g. a plain Arrow/Parquet `Time32` column with no Spark
+    /// TIME contract attached).
     Time32 {
         time_unit: TimeUnit,
         precision: u8,

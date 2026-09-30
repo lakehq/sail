@@ -273,35 +273,21 @@ impl TryFrom<DataType> for spec::DataType {
                 type_variation_reference: _,
             }) => {
                 let precision = precision.unwrap_or(6); // Default to microsecond if not specified
-                // Spark's TIME has 7 declared precisions (0-6); pick the minimal
-                // Arrow storage that can hold it exactly, matching
-                // `from_ast_time_precision` in sail-sql-analyzer.
-                let time_unit = match precision {
-                    0 => spec::TimeUnit::Second,
-                    1..=3 => spec::TimeUnit::Millisecond,
-                    4..=6 => spec::TimeUnit::Microsecond,
-                    _ => {
-                        return Err(SparkError::invalid(format!(
-                            "unsupported TIME precision: {precision}. Only [0, 6] is supported"
-                        )));
-                    }
-                };
+                if !(0..=6).contains(&precision) {
+                    return Err(SparkError::invalid(format!(
+                        "unsupported TIME precision: {precision}. Only [0, 6] is supported"
+                    )));
+                }
                 #[expect(clippy::unwrap_used, reason = "precision is checked to be in [0, 6]")]
                 let precision = u8::try_from(precision).unwrap();
-                match time_unit {
-                    spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {
-                        Ok(spec::DataType::Time32 {
-                            time_unit,
-                            precision,
-                        })
-                    }
-                    spec::TimeUnit::Microsecond | spec::TimeUnit::Nanosecond => {
-                        Ok(spec::DataType::Time64 {
-                            time_unit,
-                            precision,
-                        })
-                    }
-                }
+                // Spark stores every TIME value as a microsecond-resolution `Long`
+                // internally regardless of the declared precision -- precision is
+                // schema/display-only, matching `from_ast_time_precision` in
+                // sail-sql-analyzer.
+                Ok(spec::DataType::Time64 {
+                    time_unit: spec::TimeUnit::Microsecond,
+                    precision,
+                })
             }
         }
     }
@@ -434,7 +420,8 @@ mod tests {
     fn test_time_proto_to_spec() -> SparkResult<()> {
         use crate::spark::connect::data_type::{Kind, Time};
 
-        // TIME(0) -> Time32 Second
+        // TIME(0) -> Time64 Microsecond (Spark stores TIME as microsecond-resolution
+        // regardless of declared precision; `precision` alone carries the contract).
         let proto = crate::spark::connect::DataType {
             kind: Some(Kind::Time(Time {
                 precision: Some(0),
@@ -443,14 +430,13 @@ mod tests {
         };
         assert_eq!(
             spec::DataType::try_from(proto)?,
-            spec::DataType::Time32 {
-                time_unit: spec::TimeUnit::Second,
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
                 precision: 0,
             }
         );
 
-        // TIME(1) -> Time32 Millisecond (precision 1/2/4/5 have no dedicated
-        // Arrow TimeUnit; `precision` alone carries the exact Spark contract).
+        // TIME(1) -> Time64 Microsecond
         let proto = crate::spark::connect::DataType {
             kind: Some(Kind::Time(Time {
                 precision: Some(1),
@@ -459,13 +445,13 @@ mod tests {
         };
         assert_eq!(
             spec::DataType::try_from(proto)?,
-            spec::DataType::Time32 {
-                time_unit: spec::TimeUnit::Millisecond,
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
                 precision: 1,
             }
         );
 
-        // TIME(3) -> Time32 Millisecond
+        // TIME(3) -> Time64 Microsecond
         let proto = crate::spark::connect::DataType {
             kind: Some(Kind::Time(Time {
                 precision: Some(3),
@@ -474,8 +460,8 @@ mod tests {
         };
         assert_eq!(
             spec::DataType::try_from(proto)?,
-            spec::DataType::Time32 {
-                time_unit: spec::TimeUnit::Millisecond,
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
                 precision: 3,
             }
         );

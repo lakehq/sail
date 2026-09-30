@@ -123,19 +123,19 @@ impl PlanResolver<'_> {
             .map(|metadata| (metadata.start_field(), metadata.end_field())),
             _ => None,
         };
-        // Spark's TIME has 7 declared precisions (0-6); Arrow's `TimeUnit` only
-        // has 4 discrete values, so the target's exact precision (not just its
-        // storage width) must be threaded through as Field metadata the same
-        // way the day-time interval field range is above -- but only for the
-        // 4 precisions {1, 2, 4, 5} that a `TimeUnit` cannot already imply on
-        // its own. Attaching it for {0, 3, 6, 9} too would make every plain
-        // TIME literal (which never goes through this metadata-attaching CAST
-        // path) inconsistent with an explicit `CAST(... AS TIME)` of the same
-        // natural precision, which DataFusion's VALUES-list field-metadata
-        // check rejects outright when they're mixed in the same list.
+        // Spark's TIME has 7 declared precisions (0-6), all physically stored as
+        // `Time64(Microsecond)` (see `spec::DataType::Time32`/`Time64`), so the
+        // declared precision must be threaded through as Field metadata the same
+        // way the day-time interval field range is above -- but only when it is
+        // not 6, the "natural" precision a plain TIME literal already has with
+        // no metadata at all. Attaching it for 6 too would make every plain TIME
+        // literal (which never goes through this metadata-attaching CAST path)
+        // inconsistent with an explicit `CAST(... AS TIME)` of the same natural
+        // precision, which DataFusion's VALUES-list field-metadata check rejects
+        // outright when they're mixed in the same list.
         let time_precision = match &cast_to_type {
             spec::DataType::Time32 { precision, .. } | spec::DataType::Time64 { precision, .. }
-                if !matches!(precision, 0 | 3 | 6 | 9) =>
+                if *precision != 6 =>
             {
                 Some(*precision)
             }
@@ -601,16 +601,17 @@ impl PlanResolver<'_> {
                 .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-                to @ (DataType::Time32(_) | DataType::Time64(_)),
+                DataType::Time32(_) | DataType::Time64(_),
                 is_try,
             ) => {
-                // Always parses to Time64(Microsecond); truncate to the requested
-                // precision the same way an existing TIME -> TIME(p) cast does.
-                let parsed = ScalarUDF::new_from_impl(SparkStringToTime::new(
-                    is_try || !self.config.ansi_mode,
-                ))
-                .call(vec![expr]);
-                truncate_time_to_precision(parsed, TimeUnit::Microsecond, &to, time_precision)?
+                // Spark's `Cast.castToTime` parses a STRING directly to microsecond
+                // resolution and does NOT truncate the value to the target's declared
+                // precision -- only an explicit TIME -> TIME(n) cast truncates the
+                // value (see `truncate_time_to_precision` below). The declared
+                // precision is still attached separately as Field metadata further
+                // down via `time_precision`.
+                ScalarUDF::new_from_impl(SparkStringToTime::new(is_try || !self.config.ansi_mode))
+                    .call(vec![expr])
             }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,

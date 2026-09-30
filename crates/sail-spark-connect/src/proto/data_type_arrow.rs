@@ -132,7 +132,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else if let Some(precision) = field
             .metadata()
             .get(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
-            .filter(|_| matches!(field.data_type(), adt::DataType::Time32(_) | adt::DataType::Time64(_)))
+            .filter(|_| {
+                matches!(
+                    field.data_type(),
+                    adt::DataType::Time64(adt::TimeUnit::Microsecond)
+                )
+            })
         {
             let precision: u8 = precision.parse().map_err(|_| {
                 SparkError::invalid(format!("invalid TIME precision metadata: {precision}"))
@@ -189,16 +194,14 @@ fn spark_interval_data_type(
 /// Builds the Spark Connect TIME type from the declared precision carried in
 /// `SAIL_SPARK_TIME_PRECISION_METADATA_KEY` field metadata, rather than
 /// reducing it from the physical Arrow `TimeUnit` alone (which cannot tell
-/// TIME(1)/(2)/(4)/(5) apart from TIME(3)/(6) -- see the generic
+/// TIME(0)-TIME(5) apart from TIME(6) -- see the generic
 /// `TryFrom<adt::DataType>` match arms below, used when this metadata is
-/// absent).
+/// absent). Spark stores every TIME value as a microsecond-resolution `Long`
+/// internally regardless of the declared precision, so the Arrow type is
+/// always `Time64(Microsecond)`.
 fn spark_time_data_type(arrow_type: &adt::DataType, precision: u8) -> SparkResult<DataType> {
-    let matches_arrow_type = matches!(
-        (arrow_type, precision),
-        (adt::DataType::Time32(adt::TimeUnit::Second), 0)
-            | (adt::DataType::Time32(adt::TimeUnit::Millisecond), 1..=3)
-            | (adt::DataType::Time64(adt::TimeUnit::Microsecond), 4..=6)
-    );
+    let matches_arrow_type =
+        matches!((arrow_type, precision), (adt::DataType::Time64(adt::TimeUnit::Microsecond), 0..=6));
     if !matches_arrow_type {
         return Err(SparkError::invalid(format!(
             "Sail TIME precision metadata {precision} does not match Arrow type {arrow_type}"

@@ -15,33 +15,41 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
-use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
+use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_TIME_PRECISION_METADATA_KEY};
 
 use crate::functions_nested_utils::make_scalar_function;
 
-/// Reads the Sail-only interval field-range metadata off every non-null argument field and
-/// returns it only when it is present and identical across all of them. `array()`'s coerced
-/// element type is a single Arrow `DataType`, so a narrowed interval range (e.g. `HOUR TO
-/// SECOND`) can only be attached to the list's value `Field` -- not the array's own field --
-/// when every element agrees on that range; otherwise fall back to the default range, same
-/// as a plain untagged value would.
-fn uniform_interval_metadata(arg_fields: &[FieldRef]) -> Option<String> {
-    let mut metadata: Option<SparkIntervalMetadata> = None;
+/// Reads a Sail-only metadata value (interval field range, TIME precision, ...) off every
+/// non-null argument field and returns it only when it is present and byte-identical across
+/// all of them. `array()`'s coerced element type is a single Arrow `DataType`, so a narrowed
+/// value range can only be attached to the list's value `Field` -- not the array's own field
+/// -- when every element agrees on it; otherwise fall back to the default range, same as a
+/// plain untagged value would.
+fn uniform_metadata_value(arg_fields: &[FieldRef], key: &str) -> Option<String> {
+    let mut value: Option<String> = None;
     for field in arg_fields {
         if field.data_type().is_null() {
             continue;
         }
-        let field_metadata = field
-            .metadata()
-            .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
-            .and_then(|value| SparkIntervalMetadata::from_json(value).ok());
-        match (&metadata, field_metadata) {
-            (None, Some(m)) => metadata = Some(m),
-            (Some(existing), Some(m)) if *existing == m => {}
+        let field_value = field.metadata().get(key).cloned();
+        match (&value, field_value) {
+            (None, Some(v)) => value = Some(v),
+            (Some(existing), Some(v)) if *existing == v => {}
             _ => return None,
         }
     }
-    metadata.and_then(|m| m.to_json().ok())
+    value
+}
+
+/// A cast target's Field never carries both the interval-range and TIME-precision metadata
+/// keys at once, so at most one of these is ever `Some`.
+fn uniform_element_metadata(arg_fields: &[FieldRef]) -> Option<(&'static str, String)> {
+    uniform_metadata_value(arg_fields, SAIL_SPARK_INTERVAL_METADATA_KEY)
+        .map(|v| (SAIL_SPARK_INTERVAL_METADATA_KEY, v))
+        .or_else(|| {
+            uniform_metadata_value(arg_fields, SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+                .map(|v| (SAIL_SPARK_TIME_PRECISION_METADATA_KEY, v))
+        })
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -102,13 +110,13 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
-        let interval_metadata = uniform_interval_metadata(args.arg_fields);
+        let element_metadata = uniform_element_metadata(args.arg_fields);
         let return_type = match self.return_type(&data_types)? {
             DataType::List(field) => {
                 let mut value_field = field.as_ref().clone().with_nullable(contains_null);
-                if let Some(metadata) = interval_metadata {
+                if let Some((key, metadata)) = element_metadata {
                     let mut field_metadata = value_field.metadata().clone();
-                    field_metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata);
+                    field_metadata.insert(key.to_string(), metadata);
                     value_field = value_field.with_metadata(field_metadata);
                 }
                 DataType::List(Arc::new(value_field))
