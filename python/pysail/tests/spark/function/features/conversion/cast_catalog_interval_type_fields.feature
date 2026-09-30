@@ -78,17 +78,27 @@ Feature: Additional CAST coverage from interval_type_fields
         | to minute         | 1 02:03:04  | MINUTE | 1 day, 2:03:00    |
         | negative to hour  | -1 02:03:04 | HOUR   | -2 days, 22:00:00 |
 
-    # TODO: display only (see the comment after this scenario for the confirmed-correct
-    #   value, verified via hex()). Sail's `.show()`/`query result` path formats a
-    #   year-month interval straight from the raw Arrow array, with no access to the
-    #   Sail-only field metadata (`SAIL::spark::interval`) that narrows the printed
-    #   range; it always prints the full YEAR-TO-MONTH range regardless of the CAST's
-    #   narrower target field. Same root cause as the `.show()`/ArrayFormatter gap
-    #   deprioritized elsewhere this session -- fixing it means threading that
-    #   metadata into `sail-common-datafusion`'s `ArrayFormatter`/`DisplayIndex`,
-    #   which is a separate display engine from the `CAST ... AS STRING` path
-    #   (`SparkToUtf8` family) that already reads the metadata correctly.
-    @sail-bug
+  Rule: show renders an interval using its field range at every nesting depth
+
+    # Spark's ToPrettyString recursively formats containers while retaining the
+    # DayTimeIntervalType(startField, endField) of every child. These three
+    # shapes are deliberately cumulative: array, struct<array>, then
+    # array<struct<array<struct>>>.
+    Scenario Outline: interval_type_fields catalog: show preserves nested interval fields: <case>
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | v       |
+        | <shown> |
+
+      Examples:
+        | case                       | query                                                                                                                                                           | shown                                               |
+        | array                       | SELECT array(INTERVAL '02:00:00' HOUR TO SECOND) AS v                                                                                                        | [INTERVAL '02:00:00' HOUR TO SECOND]                |
+        | struct containing an array  | SELECT named_struct('items', array(INTERVAL '02:00:00' HOUR TO SECOND), 'tag', 7) AS v                                                                       | {[INTERVAL '02:00:00' HOUR TO SECOND], 7}           |
+        | array struct array struct   | SELECT array(named_struct('items', array(named_struct('leaf', INTERVAL '02:00:00' HOUR TO SECOND)), 'tag', 7)) AS v                                          | [{[{INTERVAL '02:00:00' HOUR TO SECOND}], 7}]        |
+
     Scenario Outline: interval_type_fields catalog: Cast truncates a year-month value: <case>
       When query
         """
@@ -104,12 +114,9 @@ Feature: Additional CAST coverage from interval_type_fields
         | negative to year | -10-8 | YEAR  | INTERVAL '-10' YEAR |
         | to month         | 10-8  | MONTH | INTERVAL '128' MONTH |
 
-    # The scenario above shows the display bug: Sail's `show()`/`query result` path
-    # formats a year-month interval from the raw array alone (no field metadata), so
-    # it always prints the full YEAR-TO-MONTH range regardless of the narrower field
-    # the CAST declared. The scenarios below isolate the *value* (via the interval's
-    # underlying month count, read through CAST(... AS INT) and displayed as a
-    # collision-free hex string) to show the truncation itself is already correct.
+    # The scenarios below isolate the *value* (via the interval's underlying month
+    # count, read through CAST(... AS INT) and displayed as a collision-free hex
+    # string) as a second angle on the same truncation, independent of display.
     Scenario Outline: interval_type_fields catalog: Cast truncates a year-month value (checked via its raw integer, not display): <case>
       When query
         """
@@ -125,10 +132,8 @@ Feature: Additional CAST coverage from interval_type_fields
         | negative to year | -10-8 | YEAR  | FFFFFFFFFFFFFFF6   |
         | to month         | 10-8  | MONTH | 80                 |
 
-    # `typeof()` and `query schema` both read the narrowed field metadata correctly
-    # (only the raw `show()`/`query result` rendering path above does not), so this
-    # is a second angle confirming the narrowing itself -- not just the value --
-    # actually took effect, without depending on the still-broken display.
+    # `typeof()` and `query schema` also read the narrowed field metadata, confirming
+    # the narrowing itself -- not just the value -- actually took effect.
     Scenario Outline: interval_type_fields catalog: Cast truncates a year-month value (checked via typeof, not display): <case>
       When query
         """

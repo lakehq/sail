@@ -15,8 +15,34 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
 
 use crate::functions_nested_utils::make_scalar_function;
+
+/// Reads the Sail-only interval field-range metadata off every non-null argument field and
+/// returns it only when it is present and identical across all of them. `array()`'s coerced
+/// element type is a single Arrow `DataType`, so a narrowed interval range (e.g. `HOUR TO
+/// SECOND`) can only be attached to the list's value `Field` -- not the array's own field --
+/// when every element agrees on that range; otherwise fall back to the default range, same
+/// as a plain untagged value would.
+fn uniform_interval_metadata(arg_fields: &[FieldRef]) -> Option<String> {
+    let mut metadata: Option<SparkIntervalMetadata> = None;
+    for field in arg_fields {
+        if field.data_type().is_null() {
+            continue;
+        }
+        let field_metadata = field
+            .metadata()
+            .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
+            .and_then(|value| SparkIntervalMetadata::from_json(value).ok());
+        match (&metadata, field_metadata) {
+            (None, Some(m)) => metadata = Some(m),
+            (Some(existing), Some(m)) if *existing == m => {}
+            _ => return None,
+        }
+    }
+    metadata.and_then(|m| m.to_json().ok())
+}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
@@ -76,10 +102,17 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
+        let interval_metadata = uniform_interval_metadata(args.arg_fields);
         let return_type = match self.return_type(&data_types)? {
-            DataType::List(field) => DataType::List(Arc::new(
-                field.as_ref().clone().with_nullable(contains_null),
-            )),
+            DataType::List(field) => {
+                let mut value_field = field.as_ref().clone().with_nullable(contains_null);
+                if let Some(metadata) = interval_metadata {
+                    let mut field_metadata = value_field.metadata().clone();
+                    field_metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata);
+                    value_field = value_field.with_metadata(field_metadata);
+                }
+                DataType::List(Arc::new(value_field))
+            }
             data_type => data_type,
         };
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
@@ -89,14 +122,24 @@ impl ScalarUDFImpl for SparkArray {
         let ScalarFunctionArgs {
             args, return_field, ..
         } = args;
-        let value_nullable = match return_field.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
-            _ => true,
+        let value_field: FieldRef = match return_field.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+            _ => Arc::new(Field::new_list_field(DataType::Null, true)),
         };
-        let func = make_scalar_function(move |arrays| {
-            make_array_inner_with_nullable(arrays, value_nullable)
-        });
-        func(args.as_slice())
+        // `ScalarValue::List` round-trips a list array through a fresh, metadata-less
+        // Field, so folding an all-scalar call (e.g. constant folding a literal argument)
+        // into a `ColumnarValue::Scalar` would silently drop the interval-range metadata
+        // that `return_field_from_args` just promised the planner. Skip that fold -- and
+        // keep the plain `Array` result -- whenever the value field carries metadata.
+        if value_field.metadata().is_empty() {
+            let func = make_scalar_function(move |arrays| {
+                make_array_inner_with_field(arrays, Arc::clone(&value_field))
+            });
+            func(args.as_slice())
+        } else {
+            let arrays = ColumnarValue::values_to_arrays(&args)?;
+            make_array_inner_with_field(&arrays, value_field).map(ColumnarValue::Array)
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -169,10 +212,10 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    make_array_inner_with_nullable(arrays, true)
+    make_array_inner_with_field(arrays, Arc::new(Field::new_list_field(DataType::Null, true)))
 }
 
-fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> Result<ArrayRef> {
+fn make_array_inner_with_field(arrays: &[ArrayRef], value_field: FieldRef) -> Result<ArrayRef> {
     if arrays.is_empty() {
         let array = new_empty_array(&DataType::Null);
         return Ok(Arc::new(
@@ -188,6 +231,10 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
         .find(|arr_type| !arr_type.is_null())
         .unwrap_or(&DataType::Null)
         .clone();
+    // `value_field` comes from `return_field_from_args` (via `ScalarFunctionArgs::return_field`),
+    // so it already carries the correct nullability and any Sail-only interval-range metadata;
+    // only the data type needs to be pinned to what the coerced runtime arrays actually are.
+    let value_field = Arc::new(value_field.as_ref().clone().with_data_type(data_type.clone()));
 
     match data_type {
         // Array or all nulls:
@@ -197,14 +244,14 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
             let offsets =
                 OffsetBuffer::from_lengths(std::iter::repeat_n(arrays.len(), arrays[0].len()));
             Ok(Arc::new(GenericListArray::<i32>::try_new(
-                Arc::new(Field::new_list_field(DataType::Null, value_nullable)),
+                value_field,
                 offsets,
                 array,
                 None,
             )?))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
-        _ => array_array::<i32>(arrays, data_type, value_nullable),
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_field),
+        _ => array_array::<i32>(arrays, data_type, value_field),
     }
 }
 
@@ -251,7 +298,7 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
 fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
-    value_nullable: bool,
+    value_field: FieldRef,
 ) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
@@ -291,7 +338,7 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, value_nullable)),
+        value_field,
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,

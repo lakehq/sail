@@ -8,12 +8,12 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal32Type,
     Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalYearMonthType, RunEndIndexType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type, UnionMode,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field, Float16Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, RunEndIndexType, TimeUnit,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionMode,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::temporal_conversions::{
@@ -24,14 +24,19 @@ use datafusion::arrow::temporal_conversions::{
 use lexical_core::FormattedSize;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
+use sail_common::spec::{
+    DayTimeIntervalField, SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata,
+    YearMonthIntervalField,
+};
 
 use crate::formatter::{
     BinaryFormatter, Date32Formatter, Date64Formatter, DurationMicrosecondFormatter,
     DurationMillisecondFormatter, DurationNanosecondFormatter, DurationSecondFormatter,
     IntervalDayTimeFormatter, IntervalMonthDayNanoFormatter, IntervalYearMonthFormatter,
-    Time32MillisecondFormatter, Time32SecondFormatter, Time64MicrosecondFormatter,
-    Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
-    TimestampNanosecondFormatter, TimestampSecondFormatter,
+    SparkDayTimeIntervalFormatter, SparkYearMonthIntervalFormatter, Time32MillisecondFormatter,
+    Time32SecondFormatter, Time64MicrosecondFormatter, Time64NanosecondFormatter,
+    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
+    TimestampSecondFormatter,
 };
 use crate::variant::is_marked_variant_storage_type;
 
@@ -264,8 +269,22 @@ impl<'a> ArrayFormatter<'a> {
     ///
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
+        Self::try_new_with_field(array, None, options)
+    }
+
+    /// Like [`Self::try_new`], but also accepts the [`Field`] that describes `array`.
+    ///
+    /// Some Sail-only value ranges (e.g. a day-time interval narrowed to `HOUR TO SECOND`)
+    /// are carried as Arrow [`Field`] metadata rather than in the [`DataType`] itself, since
+    /// Arrow has no native representation for them. Passing the field lets the formatter
+    /// read that metadata; without it, such values fall back to their default range.
+    pub fn try_new_with_field(
+        array: &'a dyn Array,
+        field: Option<&'a Field>,
+        options: &FormatOptions<'a>,
+    ) -> Result<Self, ArrowError> {
         Ok(Self {
-            format: make_formatter(array, options)?,
+            format: make_formatter(array, field, options)?,
             safe: options.safe,
         })
     }
@@ -280,10 +299,137 @@ impl<'a> ArrayFormatter<'a> {
     }
 }
 
+/// Reads the Sail-only interval field-range metadata (`SAIL::spark::interval`) off `field`,
+/// if present and well-formed.
+fn spark_interval_metadata(field: &Field) -> Option<SparkIntervalMetadata> {
+    let value = field.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY)?;
+    SparkIntervalMetadata::from_json(value).ok()
+}
+
+/// Builds a formatter for `array` when `field` carries Sail's day-time/year-month interval
+/// field-range metadata, matching the range read by the `CAST ... AS STRING` path
+/// (`spark_to_string.rs`). Returns `Ok(None)` when there is no such metadata, or when it
+/// does not match `array`'s actual Arrow type (defensively, since this metadata can leak
+/// through an unrelated plain `cast()` -- see the equivalent guard for TIME precision
+/// metadata in `data_type_arrow.rs`), so the caller falls back to the default formatter.
+fn make_spark_interval_formatter<'a>(
+    array: &'a dyn Array,
+    field: Option<&'a Field>,
+    options: &FormatOptions<'a>,
+) -> Result<Option<Box<dyn DisplayIndex + 'a>>, ArrowError> {
+    let Some(metadata) = field.and_then(spark_interval_metadata) else {
+        return Ok(None);
+    };
+    let null = options.null;
+    match (array.data_type(), metadata) {
+        (
+            DataType::Duration(TimeUnit::Microsecond),
+            SparkIntervalMetadata::DayTime {
+                start_field,
+                end_field,
+            },
+        ) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<PrimitiveArray<DurationMicrosecondType>>()
+                .ok_or_else(|| {
+                    ArrowError::CastError(
+                        "expected DurationMicrosecondArray in make_formatter".to_string(),
+                    )
+                })?;
+            Ok(Some(Box::new(SparkDayTimeIntervalArrayFormat {
+                array,
+                start_field,
+                end_field,
+                null,
+            })))
+        }
+        (
+            DataType::Interval(IntervalUnit::YearMonth),
+            SparkIntervalMetadata::YearMonth {
+                start_field,
+                end_field,
+            },
+        ) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
+                .ok_or_else(|| {
+                    ArrowError::CastError(
+                        "expected IntervalYearMonthArray in make_formatter".to_string(),
+                    )
+                })?;
+            Ok(Some(Box::new(SparkYearMonthIntervalArrayFormat {
+                array,
+                start_field,
+                end_field,
+                null,
+            })))
+        }
+        _ => Ok(None),
+    }
+}
+
+struct SparkDayTimeIntervalArrayFormat<'a> {
+    array: &'a PrimitiveArray<DurationMicrosecondType>,
+    start_field: DayTimeIntervalField,
+    end_field: DayTimeIntervalField,
+    null: &'a str,
+}
+
+impl DisplayIndex for SparkDayTimeIntervalArrayFormat<'_> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        if self.array.is_null(idx) {
+            if !self.null.is_empty() {
+                f.write_str(self.null)?
+            }
+            return Ok(());
+        }
+        write!(
+            f,
+            "{}",
+            SparkDayTimeIntervalFormatter(self.array.value(idx), self.start_field, self.end_field)
+        )?;
+        Ok(())
+    }
+}
+
+struct SparkYearMonthIntervalArrayFormat<'a> {
+    array: &'a PrimitiveArray<IntervalYearMonthType>,
+    start_field: YearMonthIntervalField,
+    end_field: YearMonthIntervalField,
+    null: &'a str,
+}
+
+impl DisplayIndex for SparkYearMonthIntervalArrayFormat<'_> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        if self.array.is_null(idx) {
+            if !self.null.is_empty() {
+                f.write_str(self.null)?
+            }
+            return Ok(());
+        }
+        write!(
+            f,
+            "{}",
+            SparkYearMonthIntervalFormatter(
+                self.array.value(idx),
+                self.start_field,
+                self.end_field
+            )
+        )?;
+        Ok(())
+    }
+}
+
 fn make_formatter<'a>(
     array: &'a dyn Array,
+    field: Option<&'a Field>,
     options: &FormatOptions<'a>,
 ) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError> {
+    if let Some(formatter) = make_spark_interval_formatter(array, field, options)? {
+        return Ok(formatter);
+    }
     downcast_primitive_array! {
         array => array_format(array, options),
         DataType::Null => array_format(as_null_array(array), options),
@@ -806,7 +952,7 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
     type State = Box<dyn DisplayIndex + 'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        make_formatter(self.values().as_ref(), None, options)
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -819,7 +965,7 @@ impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
     type State = Box<dyn DisplayIndex + 'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        make_formatter(self.values().as_ref(), None, options)
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -849,7 +995,11 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
     type State = Box<dyn DisplayIndex + 'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        let field = match (*self).data_type() {
+            DataType::List(f) | DataType::LargeList(f) => Some(f.as_ref()),
+            _ => None,
+        };
+        make_formatter(self.values().as_ref(), field, options)
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -864,7 +1014,11 @@ impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
     type State = (usize, Box<dyn DisplayIndex + 'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let field = match (*self).data_type() {
+            DataType::FixedSizeList(f, _) => Some(f.as_ref()),
+            _ => None,
+        };
+        let values = make_formatter(self.values().as_ref(), field, options)?;
         let length = self.value_length();
         Ok((length as usize, values))
     }
@@ -892,7 +1046,7 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
             .iter()
             .zip(fields)
             .map(|(a, f)| {
-                let format = make_formatter(a.as_ref(), options)?;
+                let format = make_formatter(a.as_ref(), Some(f.as_ref()), options)?;
                 Ok((f.name().as_str(), format))
             })
             .collect()
@@ -917,8 +1071,17 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
     type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let keys = make_formatter(self.keys().as_ref(), options)?;
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let (key_field, value_field) = match (*self).data_type() {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    (Some(fields[0].as_ref()), Some(fields[1].as_ref()))
+                }
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+        let keys = make_formatter(self.keys().as_ref(), key_field, options)?;
+        let values = make_formatter(self.values().as_ref(), value_field, options)?;
         Ok((keys, values))
     }
 
@@ -961,7 +1124,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         let max_id = fields.iter().map(|(id, _)| id).max().unwrap_or_default() as usize;
         let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
         for (i, field) in fields.iter() {
-            let formatter = make_formatter(self.child(i).as_ref(), options)?;
+            let formatter = make_formatter(self.child(i).as_ref(), Some(field.as_ref()), options)?;
             out[i as usize] = Some((field.name().as_str(), formatter))
         }
         Ok((out, *mode))
