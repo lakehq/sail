@@ -217,6 +217,7 @@ def cast_time_type(spark, _name):
     finally:
         spark.conf.set(key, previous)
 
+
 @pytest.mark.usefixtures("local_timezone", "cast_time_type")
 @pytest.mark.parametrize("local_timezone", ["UTC"], indirect=True)
 @pytest.mark.parametrize(
