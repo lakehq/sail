@@ -9,6 +9,10 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    #[expect(
+        clippy::double_must_use,
+        reason = "async_recursion adds a redundant #[must_use] to the generated boxed future"
+    )]
     #[async_recursion]
     pub(super) async fn resolve_command_explain(
         &self,

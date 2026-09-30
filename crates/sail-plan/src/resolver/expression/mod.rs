@@ -92,6 +92,10 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
+    #[expect(
+        clippy::double_must_use,
+        reason = "async_recursion adds a redundant #[must_use] to the generated boxed future"
+    )]
     #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///
