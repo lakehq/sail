@@ -116,6 +116,11 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                // Spark Connect treats Union as a leaf for DataFrame plan IDs.
+                // WithCTE restores separately reachable definition bindings.
+                for field in left.schema().fields() {
+                    state.clear_field_plan_ids(field.name())?;
+                }
                 self.resolve_union(left, right, is_all, by_name)
             }
             SetOpType::Except => {
@@ -142,8 +147,9 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>();
 
                 let plan = if is_all {
-                    let left_row_number_alias = state.register_field_name("row_num");
-                    let right_row_number_alias = state.register_field_name("row_num");
+                    // The row numbers are internal and must not be referenceable by name.
+                    let left_row_number_alias = state.next_field_id();
+                    let right_row_number_alias = state.next_field_id();
                     let left_row_number_window =
                         Expr::WindowFunction(Box::new(expr::WindowFunction {
                             fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),

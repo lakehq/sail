@@ -212,6 +212,23 @@ def test_with_metadata(spark):
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
 
 
+def test_column_projections_keep_input_fields(spark):
+    df = (
+        spark.createDataFrame([(1, "x", None)], "a int not null, b string, c double")
+        .withMetadata("a", {"m": "x"})
+        .withMetadata("b", {"n": "y"})
+    )
+
+    def fields(df):
+        return [(f.name, f.dataType.simpleString(), f.nullable, f.metadata) for f in df.schema.fields]
+
+    a, b, c = ("int", False, {"m": "x"}), ("string", True, {"n": "y"}), ("double", True, {})
+    assert fields(df.withColumn("z", lit(1))) == [("a", *a), ("b", *b), ("c", *c), ("z", "int", False, {})]
+    assert fields(df.withColumn("b", lit("v"))) == [("a", *a), ("b", "string", False, {}), ("c", *c)]
+    assert fields(df.withColumnsRenamed({"a": "aa", "c": "cc"})) == [("aa", *a), ("b", *b), ("cc", *c)]
+    assert fields(df.toDF("p", "q", "r")) == [("p", *a), ("q", *b), ("r", *c)]
+
+
 def reverse_sorted_map_in_pandas(df):
     def reverse_batches(iterator):
         for pdf in iterator:

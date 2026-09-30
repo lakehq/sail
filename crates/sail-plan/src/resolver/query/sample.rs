@@ -195,7 +195,7 @@ impl PlanResolver<'_> {
         // same seed for every Arrow batch in every partition.
         // TODO: Use a physical sampling boundary. At replacement fraction zero,
         //  Spark's `SampleExec` skips a child's deferred projection evaluation.
-        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_column_name: String = state.next_field_id();
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
@@ -273,7 +273,7 @@ impl PlanResolver<'_> {
             .iter()
             .map(|col| Expr::Column(col.clone()))
             .collect();
-        let array_column_name: String = state.register_field_name("array_value");
+        let array_column_name: String = state.next_field_id();
         let arr_expr =
             expr_fn::array_repeat(lit(1_i64), col(rand_column_name)).alias(&array_column_name);
         let plan = LogicalPlanBuilder::from(plan_with_rand)

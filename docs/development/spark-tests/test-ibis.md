@@ -7,8 +7,6 @@ rank: 25
 
 You can run Ibis unit tests with the Spark backend connected to the Sail server.
 
-<!--@include: ../_common/server-issue.md-->
-
 ## Running the Spark Connect Server
 
 Use the following command to build and run the Sail Spark Connect server in the `test-ibis` environment.

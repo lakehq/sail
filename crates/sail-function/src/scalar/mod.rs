@@ -8,6 +8,7 @@ pub mod drop_struct_field;
 pub mod explode;
 pub mod geo;
 pub mod hash;
+pub mod jev;
 pub mod json;
 pub mod map;
 pub mod math;

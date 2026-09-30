@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2024"
 homepage = "https://lakesail.com"
@@ -32,6 +32,10 @@ pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
 educe = "0.6.0"
 tower = { version = "0.5.3", features = ["full"] }
+hyper = { version = "1.11.0", features = ["client", "http2"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "http2", "tokio"] }
+hyper-rustls = { version = "0.27.9", default-features = false, features = ["http2", "native-tokio", "ring", "tls12"] }
+h2 = "0.4.15"
 uuid = { version = "1.23.2", features = ["serde", "v4"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
@@ -71,7 +75,6 @@ phf = { version = "0.13.1", features = ["macros"] }
 ryu = "1.0.23"
 either = "1.16.0"
 num-bigint = "0.4.6"
-mimalloc = { version = "0.1.52", default-features = false }
 rand = "0.10.1"
 rand_chacha = "0.10.0"
 rand_distr = "0.6.0"
@@ -144,6 +147,11 @@ volo-thrift = "0.12.4"
 ######
 # The versions of the following dependencies are managed manually.
 ######
+
+# Only mimalloc v3 is supported.
+# rustfs-mimalloc-sys 0.5.6 contains C sources matching microsoft/mimalloc v3.5.3.
+# Before updating, verify which version of microsoft/mimalloc the C sources exactly match.
+rustfs-mimalloc-sys = { version = "=0.5.6", default-features = false }
 
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
