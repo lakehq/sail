@@ -22,6 +22,7 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
@@ -642,6 +643,22 @@ impl PlanResolver<'_> {
                     return Err(PlanError::invalid(format!("cannot cast date to {to}")));
                 }
                 lit(ScalarValue::try_from(&to)?)
+            }
+            (
+                from @ (DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64),
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                is_try,
+            ) => {
+                // Spark's `canAnsiCast` does not allow integral -> BINARY (only
+                // `canCast`, the legacy/non-ANSI rule, does); under ANSI it is
+                // rejected with a "turning off ANSI would allow it" hint.
+                // `NumberConverter.toBinary` (Cast.scala:688-694) then produces
+                // fixed-width BIG-ENDIAN bytes, unlike Arrow's own numeric-to-binary
+                // cast kernel, which uses native (little-endian) byte order.
+                if !is_try && self.config.ansi_mode {
+                    return Err(PlanError::invalid(format!("cannot cast {from} to binary")));
+                }
+                ScalarUDF::new_from_impl(SparkIntegralToBinary::new()).call(vec![expr])
             }
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
                 // Pre-rename the source struct fields positionally so the cast
