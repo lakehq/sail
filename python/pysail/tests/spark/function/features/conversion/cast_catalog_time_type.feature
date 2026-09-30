@@ -176,6 +176,36 @@ Feature: Additional CAST coverage from time_type
         """
       Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
+    # `changePrecision` (Decimal.scala:387-476) rounds the exact value to the target
+    # scale FIRST (ROUND_HALF_UP), THEN checks precision -- so a rounding carry that
+    # pushes the value past the target's capacity must still raise, even though the
+    # TRUNCATED value (before rounding) would have fit.
+    Scenario: time_type catalog: CAST of TIME to DECIMAL raises when rounding (not truncating) overflows
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(TIME '00:00:09.6' AS DECIMAL(1, 0)) AS r
+        """
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
+
+    # Symmetric to the TIMESTAMP->DECIMAL case in cast.feature: a wide-scale target
+    # (precision - scale >= 19) whose overflow bound would itself overflow `i64` if
+    # computed naively -- this is the one input that would catch a regression back to
+    # that bug, for the TIME source specifically (a raw TIME value is bounded by a
+    # single day, ~86400 seconds, so this cast is always valid; there is no reachable
+    # true-overflow case at this width from a TIME source).
+    Scenario: time_type catalog: CAST of TIME to a wide-scale DECIMAL whose overflow bound itself would overflow i64
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(TIME '23:59:59.999999' AS DECIMAL(38, 19)) AS r
+        """
+      Then query result
+        | r                          |
+        | 86399.9999990000000000000  |
+
     Scenario: time_type catalog: CAST of TIME to a too narrow number is NULL without ANSI
       Given config spark.sql.timeType.enabled = true
       And config spark.sql.ansi.enabled = false

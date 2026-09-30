@@ -65,7 +65,12 @@ _UNCASTABLE_PAIR_ALIASES = (
 # native message instead of Spark's own class string.
 _ERROR_CLASS_ALIASES = {
     "CAST_INVALID_INPUT": (r"invalid \w+:",),
-    "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION": (r"is too large to store in a Decimal",),
+    "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION": (
+        r"is too large to store in a Decimal",
+        # Sail's own explicit `RaiseError` guard for this class (matching the sibling
+        # TIME->Decimal arm's convention) omits the `.WITH_SUGGESTION` subclass suffix.
+        r"\[NUMERIC_VALUE_OUT_OF_RANGE\] value out of range for",
+    ),
 }
 
 

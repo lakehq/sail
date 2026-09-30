@@ -163,14 +163,29 @@ Feature: CAST expressions
     # Java's `TimeUnit` conversions -- these saturate to `Long.MAX_VALUE`/`MIN_VALUE` on
     # overflow instead of throwing or silently wrapping, and unconditionally (no ANSI or
     # TRY_CAST branch in `castToTimestamp`'s integral arms at all).
-    Scenario: TRY_CAST of an overflowing BIGINT to TIMESTAMP saturates like Spark
+    Scenario Outline: TRY_CAST of an overflowing BIGINT to TIMESTAMP saturates like Spark: <case>
       When query
         """
-        SELECT CAST(TRY_CAST(CAST(9223372036854775807 AS BIGINT) AS TIMESTAMP) AS BIGINT) AS result
+        SELECT CAST(TRY_CAST(CAST(<value> AS BIGINT) AS TIMESTAMP) AS BIGINT) AS result
         """
       Then query result
-        | result        |
-        | 9223372036854 |
+        | result         |
+        | <result>       |
+
+      Examples:
+        | case                    | value                | result          |
+        | positive (i64::MAX)     | 9223372036854775807  | 9223372036854   |
+        | negative (i64::MIN)     | -9223372036854775808 | -9223372036855  |
+
+    # Spark's `TimeUnit.SECONDS.toMicros` saturation is a SIGNED-integer-only Java API --
+    # Spark itself has no unsigned types at all -- which is why `saturating_seconds_to_micros`'s
+    # call site above guards on `is_signed_integer()`, not the broader `is_integer()` (which
+    # also matches UInt8/16/32/64; an earlier round of this branch used it by mistake and then
+    # fixed it). No regression test pins this distinction: for every UInt64 value large enough
+    # to actually differ from a signed i64 (i.e. > i64::MAX), the seconds-to-micros product
+    # already overflows i64 on ITS OWN, before either code path's saturation/non-saturation
+    # logic can matter -- both the saturating and the non-saturating arm error identically on
+    # such a value, so no SQL-observable case exists that discriminates the guard.
 
     # `decimalToTimestamp` (`Cast.scala:791-793`) is `(d.toBigDecimal * MICROS_PER_SECOND)
     # .longValue`, and `BigDecimal.longValue` WRAPS (returns only the low-order 64 bits) on
@@ -186,6 +201,118 @@ Feature: CAST expressions
       Then query result
         | result |
         | -1     |
+
+    # `doubleToTimestamp` (`DateTimeUtils.scala:794-796`) is `if (d.isNaN || d.isInfinite)
+    # null else (d * MICROS_PER_SECOND).toLong` -- the NaN/Infinite check is on `d` itself,
+    # not on the product, so a FINITE `d` whose product overflows still reaches the
+    # saturating `.toLong` narrowing (the same Java/Scala saturation the sibling
+    # `castToByte/Short/Int/Long` arms already reproduce via `saturating_double_to_i64`),
+    # not NULL.
+    Scenario: Legacy CAST of an overflowing DOUBLE to TIMESTAMP saturates like Spark
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(CAST(CAST('1e20' AS DOUBLE) AS TIMESTAMP) AS BIGINT) AS result
+        """
+      Then query result
+        | result        |
+        | 9223372036854 |
+
+  Rule: TIMESTAMP to DECIMAL preserves exact microsecond precision
+
+    # `castToDecimal`'s TIMESTAMP case (`Cast.scala:1119-1121`) is `Decimal.apply(t, 19, 6)`,
+    # which treats the raw microsecond `Long` as an EXACT unscaled BigDecimal -- no floating
+    # point at all ("19 digits is enough to represent any TIMESTAMP value in Long", per the
+    # comment there).
+    Scenario: A near-year-9999 TIMESTAMP casts to DECIMAL without float rounding
+      When query
+        """
+        SELECT CAST(CAST(TIMESTAMP '9999-12-31 23:59:59.999999' AS DECIMAL(19,6)) AS STRING) AS result
+        """
+      Then query result
+        | result               |
+        | 253402300799.999999  |
+
+    # A pre-1970 (negative raw microsecond) TIMESTAMP: the sign-handling arithmetic this
+    # exact-decimal construction needs is new and unprecedented in this file (the sibling
+    # TIME->Decimal arm never needed it, since TIME is never negative), so this is its own
+    # scenario rather than folded into the positive case above.
+    Scenario: A pre-1970 TIMESTAMP casts to DECIMAL with the correct sign
+      When query
+        """
+        SELECT CAST(TIMESTAMP '1969-12-31 23:59:58.999999' AS DECIMAL(19,6)) AS result
+        """
+      Then query result
+        | result     |
+        | -1.000001  |
+
+    # The smallest-magnitude negative case: `raw = -1` microsecond, where truncating
+    # division gives `whole = 0` even though the value is still negative -- the sign
+    # flag is derived from `raw` directly (not from `whole`), so this is the one input
+    # that would catch a regression to deriving it from `whole` instead.
+    Scenario: A TIMESTAMP one microsecond before 1970 casts to DECIMAL without losing the sign
+      When query
+        """
+        SELECT CAST(TIMESTAMP '1969-12-31 23:59:59.999999' AS DECIMAL(19,6)) AS result
+        """
+      Then query result
+        | result     |
+        | -0.000001  |
+
+    # `saturating_seconds_to_micros` (see the Rule above) can produce exactly `i64::MIN`
+    # as a raw microsecond value -- negating THAT value directly (rather than negating
+    # only the much-smaller whole/fraction parts obtained after dividing it) would itself
+    # overflow `i64` and corrupt the decimal string; this is the one input that would
+    # catch a regression back to that bug.
+    Scenario: The most negative representable TIMESTAMP casts to DECIMAL without corrupting the sign
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT TRY_CAST(CAST(-9223372036854775808 AS TIMESTAMP) AS DECIMAL(38,6)) AS result
+        """
+      Then query result
+        | result                  |
+        | -9223372036854.775808   |
+
+    # Spark's decimal-target overflow is always `NUMERIC_VALUE_OUT_OF_RANGE`
+    # (`QueryExecutionErrors.cannotChangeDecimalPrecisionError`, reached through
+    # `changePrecision`), regardless of source type -- the same class the sibling
+    # TIME->Decimal arm already raises, verified against the Spark 4.2 JVM.
+    Scenario: A TIMESTAMP that overflows the target DECIMAL raises NUMERIC_VALUE_OUT_OF_RANGE under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(TIMESTAMP '9999-12-31 23:59:59.999999' AS DECIMAL(5,2)) AS result
+        """
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
+
+    # `changePrecision` (Decimal.scala:387-476) rounds the exact value to the target
+    # scale FIRST (ROUND_HALF_UP), THEN checks precision -- so a rounding carry that
+    # pushes the value past the target's capacity must still raise, even though the
+    # TRUNCATED value (before rounding) would have fit. Verified against the Spark 4.2
+    # JVM, which raises here (not "9.99", the truncated-then-fit value).
+    Scenario: A TIMESTAMP whose rounded (not truncated) DECIMAL value overflows raises NUMERIC_VALUE_OUT_OF_RANGE
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(TIMESTAMP '1970-01-01 00:00:09.999999' AS DECIMAL(3,2)) AS result
+        """
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
+
+    # The ANSI overflow guard's bound is `10^(precision - scale)`, computed as `i64::pow`.
+    # For a target where `precision - scale >= 19` (e.g. DECIMAL(38,19)), that bound itself
+    # exceeds `i64::MAX` and overflows the `i64` computing it -- this is the one case that
+    # would catch a regression back to that bug (a value this size is always valid, since
+    # a raw microsecond TIMESTAMP's whole-seconds part never reaches 19 digits).
+    Scenario: A valid TIMESTAMP casts to a wide-scale DECIMAL whose overflow bound itself would overflow i64
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(TIMESTAMP '9999-12-31 23:59:59.999999' AS DECIMAL(38,19)) AS result
+        """
+      Then query result
+        | result                             |
+        | 253402300799.9999990000000000000   |
 
   Rule: Decimal to double rounds once, from the exact value
 

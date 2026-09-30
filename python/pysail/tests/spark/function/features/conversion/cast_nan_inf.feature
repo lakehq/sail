@@ -129,6 +129,29 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | ANSI off  | false |
         | ANSI on   | true  |
 
+    # `doubleToTimestampAnsi` (DateTimeUtils.scala:74-80) throws `CAST_INVALID_INPUT`
+    # for NaN/Infinite under ANSI, rather than returning NULL (only TRY_CAST/non-ANSI
+    # return NULL for this pair). Verified against the Spark 4.2 JVM.
+    Scenario: CAST NaN DOUBLE to TIMESTAMP raises CAST_INVALID_INPUT under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(CAST('NaN' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
+    # A finite DOUBLE that overflows once multiplied by MICROS_PER_SECOND throws
+    # `CAST_OVERFLOW` under ANSI (from the intermediate Double->Long conversion,
+    # `DoubleExactNumeric.toLong`, numerics.scala:168-174) rather than saturating
+    # (only the non-ANSI path saturates). Verified against the Spark 4.2 JVM.
+    Scenario: CAST an overflowing DOUBLE to TIMESTAMP raises CAST_OVERFLOW under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(CAST('1e20' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query error CAST_OVERFLOW
+
   Rule: NaN arithmetic
 
     Scenario Outline: NaN arithmetic: <case>
