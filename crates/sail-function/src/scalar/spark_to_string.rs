@@ -17,6 +17,7 @@ use sail_common_datafusion::formatter::{
     SparkDayTimeIntervalFormatter, SparkYearMonthIntervalFormatter,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 macro_rules! define_to_string_udf {
     ($udf:ident, $name:expr_2021, $return_type:expr_2021, $func:expr_2021 $(,)?) => {
@@ -238,6 +239,10 @@ fn has_nested_binary(data_type: &DataType) -> bool {
         DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
             has_nested_binary(field.data_type())
         }
+        // A Variant's own `value`/`metadata` Binary fields are not raw BinaryType --
+        // they need `ArrayFormatter`'s variant-aware JSON rendering (`array_format_variant`),
+        // not the unchecked byte reinterpretation below, which would corrupt them.
+        DataType::Struct(_) if is_marked_variant_storage_type(data_type) => false,
         DataType::Struct(fields) => fields.iter().any(|f| has_nested_binary(f.data_type())),
         DataType::Map(field, _) => has_nested_binary(field.data_type()),
         _ => false,
@@ -261,7 +266,12 @@ fn reinterpret_nested_binary_as_string_unchecked(array: &dyn Array) -> Result<Ar
                 .downcast_ref::<GenericListArray<i32>>()
                 .ok_or_else(|| DataFusionError::Execution("expected a list array".to_string()))?;
             let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
-            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            let field = Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(values.data_type().clone()),
+            );
             Ok(Arc::new(GenericListArray::<i32>::try_new(
                 field,
                 array.offsets().clone(),
@@ -277,7 +287,12 @@ fn reinterpret_nested_binary_as_string_unchecked(array: &dyn Array) -> Result<Ar
                     DataFusionError::Execution("expected a large list array".to_string())
                 })?;
             let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
-            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            let field = Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(values.data_type().clone()),
+            );
             Ok(Arc::new(GenericListArray::<i64>::try_new(
                 field,
                 array.offsets().clone(),
@@ -293,7 +308,12 @@ fn reinterpret_nested_binary_as_string_unchecked(array: &dyn Array) -> Result<Ar
                     DataFusionError::Execution("expected a fixed-size list array".to_string())
                 })?;
             let values = reinterpret_nested_binary_as_string_unchecked(array.values().as_ref())?;
-            let field = Arc::new(field.as_ref().clone().with_data_type(values.data_type().clone()));
+            let field = Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(values.data_type().clone()),
+            );
             Ok(Arc::new(FixedSizeListArray::try_new(
                 field,
                 size,
@@ -309,9 +329,19 @@ fn reinterpret_nested_binary_as_string_unchecked(array: &dyn Array) -> Result<Ar
             let mut new_fields = Vec::with_capacity(fields.len());
             let mut new_columns = Vec::with_capacity(fields.len());
             for (field, column) in fields.iter().zip(array.columns()) {
+                // Leave a Variant field's own binary storage untouched -- see the
+                // matching guard in `has_nested_binary`.
+                if is_marked_variant_storage_type(field.data_type()) {
+                    new_fields.push(field.clone());
+                    new_columns.push(column.clone());
+                    continue;
+                }
                 let column = reinterpret_nested_binary_as_string_unchecked(column.as_ref())?;
                 new_fields.push(Arc::new(
-                    field.as_ref().clone().with_data_type(column.data_type().clone()),
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(column.data_type().clone()),
                 ));
                 new_columns.push(column);
             }

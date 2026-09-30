@@ -573,7 +573,10 @@ fn attach_interval_metadata(
     let metadata_json = metadata.to_json()?;
     let field = value.to_field(schema)?.1;
     let mut field_metadata = field.metadata().clone();
-    field_metadata.insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata_json);
+    field_metadata.insert(
+        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+        metadata_json,
+    );
     let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
     Ok(match value {
         expr::Expr::Cast(cast) => expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field)),

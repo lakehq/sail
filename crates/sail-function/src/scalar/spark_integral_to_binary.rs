@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::Result;
 use datafusion_common::cast::{as_int8_array, as_int16_array, as_int32_array, as_int64_array};
-use datafusion_common::internal_err;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -31,10 +30,7 @@ impl Default for SparkIntegralToBinary {
 impl SparkIntegralToBinary {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::Any(1)],
-                Volatility::Immutable,
-            ),
+            signature: Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Immutable),
         }
     }
 }
@@ -49,14 +45,16 @@ impl ScalarUDFImpl for SparkIntegralToBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "return_type should not be called; return_field_from_args is used instead"
-        )
+        internal_err!("return_type should not be called; return_field_from_args is used instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), DataType::Binary, nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Binary,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -263,8 +263,11 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::UnaryOperator(UnaryOperator::Minus(_), expr)
             if matches!(expr.as_ref(), Expr::Atom(AtomExpr::NumberLiteral(_))) =>
         {
-            let Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral { span, value, suffix })) =
-                *expr
+            let Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+                span,
+                value,
+                suffix,
+            })) = *expr
             else {
                 unreachable!("guarded above")
             };

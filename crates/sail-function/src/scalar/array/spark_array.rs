@@ -220,7 +220,10 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    make_array_inner_with_field(arrays, Arc::new(Field::new_list_field(DataType::Null, true)))
+    make_array_inner_with_field(
+        arrays,
+        Arc::new(Field::new_list_field(DataType::Null, true)),
+    )
 }
 
 fn make_array_inner_with_field(arrays: &[ArrayRef], value_field: FieldRef) -> Result<ArrayRef> {
@@ -242,7 +245,12 @@ fn make_array_inner_with_field(arrays: &[ArrayRef], value_field: FieldRef) -> Re
     // `value_field` comes from `return_field_from_args` (via `ScalarFunctionArgs::return_field`),
     // so it already carries the correct nullability and any Sail-only interval-range metadata;
     // only the data type needs to be pinned to what the coerced runtime arrays actually are.
-    let value_field = Arc::new(value_field.as_ref().clone().with_data_type(data_type.clone()));
+    let value_field = Arc::new(
+        value_field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type.clone()),
+    );
 
     match data_type {
         // Array or all nulls:

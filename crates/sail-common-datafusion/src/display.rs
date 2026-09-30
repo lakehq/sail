@@ -10,8 +10,8 @@ use datafusion::arrow::datatypes::{
     Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field, Float16Type,
     Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, RunEndIndexType, TimeUnit,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, RunEndIndexType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionMode,
 };

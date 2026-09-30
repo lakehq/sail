@@ -200,8 +200,10 @@ fn spark_interval_data_type(
 /// internally regardless of the declared precision, so the Arrow type is
 /// always `Time64(Microsecond)`.
 fn spark_time_data_type(arrow_type: &adt::DataType, precision: u8) -> SparkResult<DataType> {
-    let matches_arrow_type =
-        matches!((arrow_type, precision), (adt::DataType::Time64(adt::TimeUnit::Microsecond), 0..=6));
+    let matches_arrow_type = matches!(
+        (arrow_type, precision),
+        (adt::DataType::Time64(adt::TimeUnit::Microsecond), 0..=6)
+    );
     if !matches_arrow_type {
         return Err(SparkError::invalid(format!(
             "Sail TIME precision metadata {precision} does not match Arrow type {arrow_type}"

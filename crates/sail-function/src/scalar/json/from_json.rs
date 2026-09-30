@@ -1481,22 +1481,25 @@ mod tests {
             parse_schema_to_data_type(r#""time""#, "UTC")?,
             DataType::Time64(TimeUnit::Microsecond)
         );
+        // Spark's TIME declared precision (0-6 fractional-second digits) is a schema/
+        // display-only contract -- every TIME value is stored as microsecond-resolution
+        // regardless of declared precision (see `from_ast_time_precision` in
+        // `sail-sql-analyzer`), so the Arrow physical type is always Time64(Microsecond).
         assert_eq!(
             parse_schema_to_data_type(r#""time(0)""#, "UTC")?,
-            DataType::Time32(TimeUnit::Second)
+            DataType::Time64(TimeUnit::Microsecond)
         );
         assert_eq!(
             parse_schema_to_data_type(r#""time(3)""#, "UTC")?,
-            DataType::Time32(TimeUnit::Millisecond)
+            DataType::Time64(TimeUnit::Microsecond)
         );
         assert_eq!(
             parse_schema_to_data_type(r#""time(6)""#, "UTC")?,
             DataType::Time64(TimeUnit::Microsecond)
         );
-        assert_eq!(
-            parse_schema_to_data_type(r#""time(9)""#, "UTC")?,
-            DataType::Time64(TimeUnit::Nanosecond)
-        );
+        // Spark's TIME only supports 0-6 fractional-second digits of precision
+        // (`TimeType.scala:51-53`); precision 9 is out of range and must be rejected.
+        assert!(parse_schema_to_data_type(r#""time(9)""#, "UTC").is_err());
         assert_eq!(
             parse_schema_to_data_type(r#""char(10)""#, "UTC")?,
             DataType::Utf8

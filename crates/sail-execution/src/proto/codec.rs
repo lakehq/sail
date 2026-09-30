@@ -173,9 +173,9 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
-use sail_function::scalar::datetime::spark_string_to_time::SparkStringToTime;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_string_to_time::SparkStringToTime;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -214,8 +214,8 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
-use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::force_nullable::SparkForceNullable;
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -3156,9 +3156,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkYearMonthIntervalFromInt64::new(multiplier, is_try);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkDayTimeIntervalFromInt64(
-                r#gen::SparkDayTimeIntervalFromInt64Udf { multiplier, is_try },
-            ) => {
+            UdfKind::SparkDayTimeIntervalFromInt64(r#gen::SparkDayTimeIntervalFromInt64Udf {
+                multiplier,
+                is_try,
+            }) => {
                 let udf = SparkDayTimeIntervalFromInt64::new(multiplier, is_try);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
@@ -3169,11 +3170,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf { qualifier, is_try }) => {
                 let metadata = sail_common::spec::SparkIntervalMetadata::from_json(&qualifier)
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
-                let udf = SparkDayTimeInterval::new(
-                    metadata.start_field(),
-                    metadata.end_field(),
-                    is_try,
-                );
+                let udf =
+                    SparkDayTimeInterval::new(metadata.start_field(), metadata.end_field(), is_try);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
@@ -3658,16 +3656,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 is_try: func.is_try(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeInterval>() {
-            let metadata = sail_common::spec::SparkIntervalMetadata::DayTime {
-                start_field: func
-                    .start_field()
-                    .try_into()
-                    .map_err(|e: sail_common::error::CommonError| plan_datafusion_err!("{e}"))?,
-                end_field: func
-                    .end_field()
-                    .try_into()
-                    .map_err(|e: sail_common::error::CommonError| plan_datafusion_err!("{e}"))?,
-            };
+            let metadata =
+                sail_common::spec::SparkIntervalMetadata::DayTime {
+                    start_field: func.start_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                    end_field: func.end_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                };
             let qualifier = metadata
                 .to_json()
                 .map_err(|e| plan_datafusion_err!("{e}"))?;

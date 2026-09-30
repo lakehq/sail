@@ -85,11 +85,12 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     });
     let schema = function_context.schema;
     let spark_nullable = has_unreachable_literal_condition
-        && (when_then_expr.iter().any(|(_, value)| {
-            value.nullable(schema).unwrap_or(true)
-        }) || else_expr
-            .as_ref()
-            .is_none_or(|value| value.nullable(schema).unwrap_or(true)));
+        && (when_then_expr
+            .iter()
+            .any(|(_, value)| value.nullable(schema).unwrap_or(true))
+            || else_expr
+                .as_ref()
+                .is_none_or(|value| value.nullable(schema).unwrap_or(true)));
     let case_expr = expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr,

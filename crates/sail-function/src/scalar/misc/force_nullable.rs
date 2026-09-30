@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion_common::Result;
 use datafusion_common::utils::take_function_args;
 use datafusion_expr::ReturnFieldArgs;
@@ -61,10 +63,7 @@ impl ScalarUDFImpl for SparkForceNullable {
         )))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [arg] = take_function_args(self.name(), args.args)?;
         Ok(arg)
     }

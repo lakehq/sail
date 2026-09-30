@@ -476,10 +476,7 @@ impl ScalarUDFImpl for SparkDayTimeInterval {
             }
             ColumnarValue::Scalar(scalar) => {
                 let value = match scalar.try_as_str() {
-                    Some(x) => x
-                        .map(|x| self.convert(x))
-                        .transpose()?
-                        .flatten(),
+                    Some(x) => x.map(|x| self.convert(x)).transpose()?.flatten(),
                     _ => return exec_err!("expected string scalar for intervals"),
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
@@ -582,7 +579,6 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
 fn string_to_year_month_interval(value: &str) -> Result<i32> {
     parse_year_month_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))
 }
-
 
 fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;

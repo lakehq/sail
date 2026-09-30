@@ -5,8 +5,8 @@ use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Field, FieldRef, TimeUnit,
 };
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };

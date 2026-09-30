@@ -194,7 +194,13 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (
                 Ok(left_type @ (DataType::Time32(_) | DataType::Time64(_))),
                 Ok(right_type @ (DataType::Time32(_) | DataType::Time64(_))),
-            ) => spark_subtract_times(left, right, &left_type, &right_type, function_context.schema)?,
+            ) => spark_subtract_times(
+                left,
+                right,
+                &left_type,
+                &right_type,
+                function_context.schema,
+            )?,
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
             (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left - right,
@@ -288,10 +294,11 @@ fn spark_time_add_interval(
     let message = lit(
         "[DATETIME_OVERFLOW] Datetime operation overflow: time value out of range [00:00:00, 24:00:00).".to_string(),
     );
-    Ok(
-        when(overflow, ScalarUDF::from(RaiseError::new()).call(vec![message]))
-            .otherwise(value)?,
+    Ok(when(
+        overflow,
+        ScalarUDF::from(RaiseError::new()).call(vec![message]),
     )
+    .otherwise(value)?)
 }
 
 /// Spark's `SubtractTimes` (timeExpressions.scala): exact microsecond

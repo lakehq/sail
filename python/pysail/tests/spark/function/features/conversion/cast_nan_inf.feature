@@ -110,6 +110,25 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | TRY_CAST NaN to INT returns NULL  | INT   | NULL   |
         | TRY_CAST NaN to FLOAT returns NaN | FLOAT | NaN    |
 
+    # A DOUBLE/FLOAT NaN source cast to TIMESTAMP takes a different resolver arm than a
+    # STRING source (the numeric-to-timestamp path multiplies by a microsecond unit and
+    # NaN-guards the result), so it needs its own scenario, under both ANSI settings since
+    # TRY_CAST must return NULL regardless of `spark.sql.ansi.enabled`.
+    Scenario Outline: TRY_CAST NaN DOUBLE to TIMESTAMP returns NULL: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TRY_CAST(CAST('NaN' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case      | ansi  |
+        | ANSI off  | false |
+        | ANSI on   | true  |
+
   Rule: NaN arithmetic
 
     Scenario Outline: NaN arithmetic: <case>

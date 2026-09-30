@@ -121,7 +121,9 @@ fn parse_spark_time(input: &str) -> Option<i64> {
         }
     }
     let time_str = if has_suffix {
-        std::str::from_utf8(&bytes[..bytes.len() - 2]).ok()?.trim_end()
+        std::str::from_utf8(&bytes[..bytes.len() - 2])
+            .ok()?
+            .trim_end()
     } else {
         trimmed
     };
@@ -199,7 +201,7 @@ fn parse_spark_time(input: &str) -> Option<i64> {
         idx += 1;
     }
     match i {
-        3 | 4 | 5 => {
+        3..=5 => {
             if !(1..=2).contains(&current_digits) {
                 return None;
             }
@@ -245,7 +247,10 @@ mod tests {
     #[test]
     fn accepts_spark_lenient_forms() {
         assert_eq!(parse_spark_time("00:00:00"), Some(0));
-        assert_eq!(parse_spark_time("9:5:3.5"), Some((9 * 3600 + 5 * 60 + 3) * 1_000_000 + 500_000));
+        assert_eq!(
+            parse_spark_time("9:5:3.5"),
+            Some((9 * 3600 + 5 * 60 + 3) * 1_000_000 + 500_000)
+        );
         assert_eq!(
             parse_spark_time(" 23:59:59.999999 "),
             Some((23 * 3600 + 59 * 60 + 59) * 1_000_000 + 999_999)

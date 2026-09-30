@@ -32,8 +32,9 @@ TODO: this file grew case by case (fixing `cast.rs` bugs one at a time, each one
 removed from the table) rather than by design, so it now holds two plain literal tables
 (`MATRIX`, `ANSI_OFF`) as positional tuples. A structured record per case (e.g. a small
 dataclass or namedtuple carrying src/dst/ansi/expected) would make future edits less fragile
-than positional tuples, though it is no longer urgent now that only one known bug remains
-(see `_known_hostile_bugs` below) instead of the hundreds this file once tracked.
+than positional tuples, though it is no longer urgent now that no known bug remains (every row
+that once diverged has been fixed and folded back into the plain tables) instead of the
+hundreds this file once tracked.
 """
 
 import contextlib
@@ -1352,3 +1353,44 @@ def test_legacy_double_infinity_to_timestamp_is_null(spark):
     for source in ("Infinity", "-Infinity"):
         row = spark.sql(f"SELECT CAST(CAST('{source}' AS DOUBLE) AS TIMESTAMP) AS v").collect()[0]
         assert row["v"] is None
+
+
+# `saturating_double_to_i64` must distinguish an out-of-range non-null value (which Spark
+# saturates) from a NULL input (which every Spark CAST propagates). In particular, treating the
+# NULL returned by TRY_CAST as the overflow sentinel would turn NULL into the lower bound.
+@pytest.mark.parametrize("target", ["TINYINT", "SMALLINT", "INT", "BIGINT"])
+def test_legacy_null_double_to_integral_is_null(spark, target):
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    row = spark.sql(f"SELECT CAST(CAST(NULL AS DOUBLE) AS {target}) AS v").collect()[0]
+    assert row["v"] is None
+
+
+# Spark's castToDecimal uses toPrecision, which returns NULL in legacy mode on overflow; TRY_CAST
+# likewise returns NULL. The BOOLEAN -> DECIMAL resolver arm must not bypass that behaviour.
+def test_legacy_boolean_to_overflowing_decimal_returns_null(spark):
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    row = spark.sql("SELECT CAST(true AS DECIMAL(1,1)) AS v").collect()[0]
+    assert row["v"] is None
+
+
+def test_try_cast_boolean_to_overflowing_decimal_returns_null(spark):
+    row = spark.sql("SELECT TRY_CAST(true AS DECIMAL(1,1)) AS v").collect()[0]
+    assert row["v"] is None
+
+
+# TryCast checks Cast.canTryCast, which delegates scalar pairs to canAnsiCast. These pairs are
+# legacy-only: they are legal under CAST with ANSI off, but TRY_CAST must still reject them during
+# analysis rather than execute their legacy conversion or return a typed NULL.
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT TRY_CAST(true AS TIMESTAMP)",
+        "SELECT TRY_CAST(TIMESTAMP '2024-03-05 06:07:08' AS BOOLEAN)",
+        "SELECT TRY_CAST(DATE '2024-03-05' AS INT)",
+        "SELECT TRY_CAST(DATE '2024-03-05' AS BOOLEAN)",
+        "SELECT TRY_CAST(1 AS BINARY)",
+    ],
+)
+def test_try_cast_rejects_legacy_only_type_pairs(spark, sql):
+    with pytest.raises(Exception):
+        spark.sql(sql).collect()

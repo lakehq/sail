@@ -23,7 +23,9 @@ use sail_common_datafusion::formatter::{
 /// `1.0E10`, and `-0e0` loses its sign instead of staying `-0.0`. Everything
 /// else here matches the upstream crate's `to_json` exactly (same formats,
 /// same recursive structure) -- only the two float branches differ.
-fn spark_variant_to_json_string(value: &Variant<'_, '_>) -> std::result::Result<String, ArrowError> {
+fn spark_variant_to_json_string(
+    value: &Variant<'_, '_>,
+) -> std::result::Result<String, ArrowError> {
     let mut buffer = String::new();
     write_variant_json(value, &mut buffer)?;
     Ok(buffer)
@@ -33,7 +35,10 @@ fn fmt_error(error: std::fmt::Error) -> ArrowError {
     ArrowError::InvalidArgumentError(format!("JSON encoding error: {error}"))
 }
 
-fn write_variant_json(value: &Variant<'_, '_>, buffer: &mut String) -> std::result::Result<(), ArrowError> {
+fn write_variant_json(
+    value: &Variant<'_, '_>,
+    buffer: &mut String,
+) -> std::result::Result<(), ArrowError> {
     use std::fmt::Write;
     match value {
         Variant::Null => buffer.push_str("null"),
@@ -48,7 +53,9 @@ fn write_variant_json(value: &Variant<'_, '_>, buffer: &mut String) -> std::resu
         Variant::Decimal4(decimal) => write!(buffer, "{decimal}").map_err(fmt_error)?,
         Variant::Decimal8(decimal) => write!(buffer, "{decimal}").map_err(fmt_error)?,
         Variant::Decimal16(decimal) => write!(buffer, "{decimal}").map_err(fmt_error)?,
-        Variant::Date(date) => write!(buffer, "\"{}\"", date.format("%Y-%m-%d")).map_err(fmt_error)?,
+        Variant::Date(date) => {
+            write!(buffer, "\"{}\"", date.format("%Y-%m-%d")).map_err(fmt_error)?
+        }
         Variant::TimestampMicros(ts) | Variant::TimestampNanos(ts) => {
             write!(buffer, "\"{}\"", ts.to_rfc3339()).map_err(fmt_error)?
         }
@@ -58,21 +65,27 @@ fn write_variant_json(value: &Variant<'_, '_>, buffer: &mut String) -> std::resu
         Variant::TimestampNtzNanos(ts) => {
             write!(buffer, "\"{}\"", format_timestamp_ntz_string(ts, 9)).map_err(fmt_error)?
         }
-        Variant::Time(time) => write!(buffer, "\"{}\"", format_time_ntz_string(time)).map_err(fmt_error)?,
+        Variant::Time(time) => {
+            write!(buffer, "\"{}\"", format_time_ntz_string(time)).map_err(fmt_error)?
+        }
         Variant::Binary(bytes) => {
-            let base64_str = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-            let json_str = serde_json::to_string(&base64_str)
-                .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}")))?;
+            let base64_str =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+            let json_str = serde_json::to_string(&base64_str).map_err(|e| {
+                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+            })?;
             buffer.push_str(&json_str);
         }
         Variant::String(s) => {
-            let json_str = serde_json::to_string(s)
-                .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}")))?;
+            let json_str = serde_json::to_string(s).map_err(|e| {
+                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+            })?;
             buffer.push_str(&json_str);
         }
         Variant::ShortString(s) => {
-            let json_str = serde_json::to_string(s.as_str())
-                .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}")))?;
+            let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
+                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+            })?;
             buffer.push_str(&json_str);
         }
         Variant::Uuid(uuid) => write!(buffer, "\"{uuid}\"").map_err(fmt_error)?,

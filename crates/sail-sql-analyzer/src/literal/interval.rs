@@ -334,9 +334,13 @@ pub fn parse_day_time_interval_value_string(
         && let Some(inner) = captures.get(2)
     {
         let negated = captures.get(1).map(|m| m.as_str()) == Some("-");
-        if let Ok(value) =
-            parse_interval_day_time_string(inner.as_str(), negated, regex, start_field, Some(end_field))
-        {
+        if let Ok(value) = parse_interval_day_time_string(
+            inner.as_str(),
+            negated,
+            regex,
+            start_field,
+            Some(end_field),
+        ) {
             return Ok(extract_micros(value));
         }
     }
@@ -791,8 +795,31 @@ mod tests {
         assert!(parse("'106751991 04:00:54.775807' day to second", false).is_ok());
         assert!(parse("'106751991 04:00:54.775807' day to second", true).is_ok());
         assert!(parse("'106751991 04:00:54.775808' day to second", false).is_err());
-        assert!(parse("'106751991 04:00:54.775808' day to second", true).is_err());
-        assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_err());
+        // The negative endpoint has one more representable value than the positive
+        // endpoint (`i64::MIN`'s magnitude is `i64::MAX + 1`, see the comment above):
+        // negating this exact magnitude via the grammar-level sign (the `negated` param
+        // here, or an embedded `-` right before the quote, matching `INTERVAL -'...'
+        // DAY TO SECOND`) lands on `i64::MIN`, a valid value -- verified against the
+        // Spark 4.2 JVM, which also succeeds here (`toDTInterval` applies the sign
+        // per-field during summation, not by negating an already-built positive value).
+        assert_eq!(
+            parse("'106751991 04:00:54.775808' day to second", true)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Day,
+                end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        assert_eq!(
+            parse("-'106751991 04:00:54.775808' day to second", false)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Day,
+                end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        // A second, unrelated negation (the `negated` param, on top of the embedded
+        // `-`) flips the sign back positive, so this exact magnitude overflows again.
         assert!(parse("-'106751991 04:00:54.775808' day to second", true).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", false).is_err());
 

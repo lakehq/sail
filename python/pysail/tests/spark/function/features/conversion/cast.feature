@@ -157,6 +157,36 @@ Feature: CAST expressions
         | 1  | NULL   |
         | 2  | NULL   |
 
+  Rule: Numeric to TIMESTAMP matches Spark's per-source-type overflow rule
+
+    # Spark's `longToTimestamp` (`Cast.scala:745-752,799`) is `SECONDS.toMicros(t)`, one of
+    # Java's `TimeUnit` conversions -- these saturate to `Long.MAX_VALUE`/`MIN_VALUE` on
+    # overflow instead of throwing or silently wrapping, and unconditionally (no ANSI or
+    # TRY_CAST branch in `castToTimestamp`'s integral arms at all).
+    Scenario: TRY_CAST of an overflowing BIGINT to TIMESTAMP saturates like Spark
+      When query
+        """
+        SELECT CAST(TRY_CAST(CAST(9223372036854775807 AS BIGINT) AS TIMESTAMP) AS BIGINT) AS result
+        """
+      Then query result
+        | result        |
+        | 9223372036854 |
+
+    # `decimalToTimestamp` (`Cast.scala:791-793`) is `(d.toBigDecimal * MICROS_PER_SECOND)
+    # .longValue`, and `BigDecimal.longValue` WRAPS (returns only the low-order 64 bits) on
+    # overflow rather than saturating -- a different, decimal-specific overflow rule from the
+    # integral case above, not yet implemented. Pre-existing (also reproduces on `main`), not
+    # introduced by the CAST-parity work in this branch -- left as a known gap.
+    @sail-bug
+    Scenario: TRY_CAST of an overflowing DECIMAL to TIMESTAMP wraps like Spark
+      When query
+        """
+        SELECT CAST(TRY_CAST(CAST('9223372036854775807' AS DECIMAL(19,0)) AS TIMESTAMP) AS BIGINT) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
   Rule: Decimal to double rounds once, from the exact value
 
     # Decimal.toDouble converts the exact decimal in one rounding step
