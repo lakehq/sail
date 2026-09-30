@@ -1,0 +1,86 @@
+# serializer version: 1
+---
+name: "test_a_scalar_subquery_filter_is_left_for_execution_to_resolve"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_off.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_off.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#3)]]
+                Projection: partition_bounds_off.id AS #2, partition_bounds_off.dt AS #3
+                  TableScan: partition_bounds_off
+          Projection: partition_bounds_off.id AS #0, partition_bounds_off.dt AS #1
+            TableScan: partition_bounds_off
+  
+    == Analyzed Logical Plan ==
+    #5: Int64
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_off.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_off.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#3)]]
+                Projection: partition_bounds_off.id AS #2, partition_bounds_off.dt AS #3
+                  TableScan: partition_bounds_off
+          Projection: partition_bounds_off.id AS #0, partition_bounds_off.dt AS #1
+            TableScan: partition_bounds_off
+  
+    == Optimized Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Projection:
+          Filter: partition_bounds_off.dt = (<subquery>)
+            Subquery:
+              Projection: max(partition_bounds_off.#3) AS #4
+                Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#3)]]
+                  Projection: partition_bounds_off.dt AS #3
+                    TableScan: partition_bounds_off projection=[dt]
+            TableScan: partition_bounds_off projection=[dt]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as count(1)]
+      ScalarSubqueryExec: subqueries=1
+        ProjectionExec: expr=[count(Int64(1))@0 as #5]
+          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                FilterExec: dt@0 = scalar_subquery(<pending>), projection=[]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_off/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-04/<id>.zst.parquet]]}, projection=[dt], file_type=parquet, predicate=dt@1 = scalar_subquery(<pending>), pruning_predicate=dt_null_count@2 != row_count@3 AND dt_min@0 <= scalar_subquery(<pending>) AND scalar_subquery(<pending>) <= dt_max@1, required_guarantees=[]
+        ProjectionExec: expr=[max(partition_bounds_off.#3)@0 as #4]
+          AggregateExec: mode=Final, gby=[], aggr=[max(partition_bounds_off.#3)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_off.#3)]
+                DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_off/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-04/<id>.zst.parquet]]}, projection=[dt@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ]
+---
+name: "test_max_over_the_partition_column_reads_the_files"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: max(partition_bounds_off.#1) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#1)]]
+        Projection: partition_bounds_off.id AS #0, partition_bounds_off.dt AS #1
+          TableScan: partition_bounds_off
+  
+    == Analyzed Logical Plan ==
+    #2: Utf8
+    Projection: max(partition_bounds_off.#1) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#1)]]
+        Projection: partition_bounds_off.id AS #0, partition_bounds_off.dt AS #1
+          TableScan: partition_bounds_off
+  
+    == Optimized Logical Plan ==
+    Projection: max(partition_bounds_off.#1) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_off.#1)]]
+        Projection: partition_bounds_off.dt AS #1
+          TableScan: partition_bounds_off projection=[dt]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as max(dt)]
+      ProjectionExec: expr=[max(partition_bounds_off.#1)@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[max(partition_bounds_off.#1)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_off.#1)]
+              DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_off/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_off/dt=2025-10-04/<id>.zst.parquet]]}, projection=[dt@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ]

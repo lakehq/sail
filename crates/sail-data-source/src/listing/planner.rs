@@ -80,7 +80,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                 .map(Some);
         }
         if let Some(node) = node.as_any().downcast_ref::<PartitionBoundsNode>() {
-            return plan_partition_bounds(session_state, node).await.map(Some);
+            return plan_partition_bounds(session, node).await.map(Some);
         }
         Ok(None)
     }

@@ -133,8 +133,41 @@ def test_table_without_any_partition_has_null_bounds(spark, tmp_path):
     try:
         # No partition directory exists at all, so there is no bound to report.
         assert spark.sql("SELECT max(dt), min(dt) FROM pb_void").collect()[0] == (None, None)
+
+        # The bound is NULL, so the filter it feeds matches nothing. This walks the
+        # inlining with a NULL literal, which then reaches the scan as a partition
+        # filter, and must come back empty rather than error or match everything.
+        rows = spark.sql(
+            "SELECT count(*) AS n FROM pb_void WHERE dt = (SELECT max(dt) FROM pb_void)"
+        ).collect()
+        assert rows[0][0] == 0
     finally:
         spark.sql("DROP TABLE IF EXISTS pb_void")
+
+
+def test_null_bound_filter_over_a_table_that_has_rows(spark, tmp_path):
+    location = tmp_path / "null_bound"
+    _create(
+        spark,
+        "pb_null_bound",
+        location,
+        "id INT, dt STRING",
+        "dt",
+        "(1, '2025-10-01'), (2, '2025-10-04')",
+    )
+    try:
+        for day in ("2025-10-01", "2025-10-04"):
+            _empty(location / f"dt={day}")
+
+        # Every partition is empty, so the bound is NULL while the directories are
+        # still there. Comparing against NULL matches nothing.
+        rows = spark.sql(
+            "SELECT count(*) AS n FROM pb_null_bound "
+            "WHERE dt = (SELECT max(dt) FROM pb_null_bound)"
+        ).collect()
+        assert rows[0][0] == 0
+    finally:
+        spark.sql("DROP TABLE IF EXISTS pb_null_bound")
 
 
 def test_every_partition_emptied_has_null_bounds(spark, tmp_path):

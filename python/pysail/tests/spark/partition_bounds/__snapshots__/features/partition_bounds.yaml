@@ -5,15 +5,12 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#5@0 as count(1)]
-      ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[count(Int64(1))@0 as #5]
-          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-            CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-                FilterExec: dt@0 = scalar_subquery(<pending>), projection=[]
-                  DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_flat/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, projection=[dt], file_type=parquet, predicate=dt@1 = scalar_subquery(<pending>), pruning_predicate=dt_null_count@2 != row_count@3 AND dt_min@0 <= scalar_subquery(<pending>) AND scalar_subquery(<pending>) <= dt_max@1, required_guarantees=[]
-        ProjectionExec: expr=[2025-10-04 as #4]
-          PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, file_type=parquet
 ---
 name: "test_a_range_filter_on_the_partition_column_is_not_a_pinned_prefix"
 data:
@@ -67,6 +64,53 @@ data:
       ProjectionExec: expr=[2025-10-01 as #2, 2025-10-04 as #3]
         PlaceholderRowExec
 ---
+name: "test_only_the_inner_half_of_a_scalar_subquery_filter_is_resolved_from_directories"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Analyzed Logical Plan ==
+    #5: Int64
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Optimized Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Projection:
+          Filter: partition_bounds_flat.dt = (<subquery>)
+            Subquery:
+              Projection: max(partition_bounds_flat.#3) AS #4
+                PartitionBounds: column=dt, bounds=[Max], path=file://<tmp>/partition_bounds_flat/
+            TableScan: partition_bounds_flat projection=[dt]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as count(1)]
+      ProjectionExec: expr=[count(Int64(1))@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, file_type=parquet
+---
 name: "test_the_aggregate_is_replaced_by_a_partitionbounds_node"
 data:
   |-
@@ -91,6 +135,53 @@ data:
     ProjectionExec: expr=[#2@0 as max(dt)]
       ProjectionExec: expr=[2025-10-04 as #2]
         PlaceholderRowExec
+---
+name: "test_the_logical_plan_keeps_the_subquery_while_the_physical_plan_reads_one_file"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Analyzed Logical Plan ==
+    #5: Int64
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Optimized Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Projection:
+          Filter: partition_bounds_flat.dt = (<subquery>)
+            Subquery:
+              Projection: max(partition_bounds_flat.#3) AS #4
+                PartitionBounds: column=dt, bounds=[Max], path=file://<tmp>/partition_bounds_flat/
+            TableScan: partition_bounds_flat projection=[dt]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as count(1)]
+      ProjectionExec: expr=[count(Int64(1))@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, file_type=parquet
 ---
 name: "test_the_node_is_absent_when_the_aggregate_is_not_resolvable_from_directories"
 data:
@@ -121,3 +212,62 @@ data:
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_flat.#0)]
               DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_flat/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, projection=[id@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ]
+---
+name: "test_the_subquery_is_inlined_and_only_its_partition_is_listed"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as count(1)]
+      ProjectionExec: expr=[count(Int64(1))@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, file_type=parquet
+---
+name: "test_the_whole_filter_is_moved_into_the_scan"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Analyzed Logical Plan ==
+    #5: Int64
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: partition_bounds_flat.#1 = (<subquery>)
+          Subquery:
+            Projection: max(partition_bounds_flat.#3) AS #4
+              Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#3)]]
+                Projection: partition_bounds_flat.id AS #2, partition_bounds_flat.dt AS #3
+                  TableScan: partition_bounds_flat
+          Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+            TableScan: partition_bounds_flat
+  
+    == Optimized Logical Plan ==
+    Projection: count(Int64(1)) AS #5
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Projection:
+          Filter: partition_bounds_flat.dt = (<subquery>)
+            Subquery:
+              Projection: max(partition_bounds_flat.#3) AS #4
+                PartitionBounds: column=dt, bounds=[Max], path=file://<tmp>/partition_bounds_flat/
+            TableScan: partition_bounds_flat projection=[dt]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as count(1)]
+      ProjectionExec: expr=[count(Int64(1))@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, file_type=parquet

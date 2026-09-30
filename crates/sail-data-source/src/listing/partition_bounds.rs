@@ -1,11 +1,10 @@
 //! Resolves `min`/`max` aggregates over a partition column of a listing table from
 //! directory listings alone.
 //!
-//! The usual way to find the latest partition of a table (`SELECT max(dt) FROM t`,
-//! or a window function over `dt`) makes the scan open every file in the table.
-//! When the aggregate only reads a partition column, the answer is fully determined
-//! by the names of the directories at that level of the tree, so a single
-//! `list_with_delimiter` request is enough and no data file is ever opened.
+//! Finding the latest partition with `SELECT max(dt) FROM t` makes the scan open
+//! every file in the table. When the aggregate only reads a partition column, the
+//! answer is fully determined by the names of the directories at that level of the
+//! tree, so a single `list_with_delimiter` request is enough.
 //!
 //! Reaching a level below the first one requires every partition column above it to
 //! be pinned by an equality filter, so that exactly one directory has to be listed.
@@ -31,12 +30,11 @@
 //!
 //! - Spark rewrites the *relation* into a `LocalRelation` of partition values, so it
 //!   must require that every scanned column be a partition column. This rule rewrites
-//!   the *aggregate* instead, and the result of `min`/`max` depends only on the set of
-//!   values of the aggregated column, so no such guard is needed. Whatever else the
-//!   scan would have read cannot change the answer.
-//! - Spark covers more shapes: `GROUP BY partition_col`, and any aggregate that is
-//!   insensitive to duplicates. This rule covers only `min` and `max` for now; the
-//!   others need a node producing one row per partition rather than a single row.
+//!   the *aggregate*, whose result depends only on the aggregated column, so whatever
+//!   else the scan would have read cannot change the answer and no such guard is needed.
+//! - Spark covers `GROUP BY partition_col` and any aggregate insensitive to duplicates.
+//!   Those need a node producing one row per partition rather than a single row, so
+//!   this rule covers only `min` and `max` for now.
 //! - Both accept `DISTINCT`, since it cannot change `min` or `max`.
 //!
 //! This is opt-in because it changes the result for partitions whose files contain
@@ -52,7 +50,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
-use datafusion::execution::SessionState;
+use datafusion::catalog::Session;
 use datafusion::logical_expr::expr::{AggregateFunction, Alias, BinaryExpr};
 use datafusion::logical_expr::{
     Aggregate, Expr, Extension, LogicalPlan, Operator, TableScan, UserDefinedLogicalNode,
@@ -109,6 +107,12 @@ pub struct PartitionBoundsNode {
     schema: DFSchemaRef,
 }
 
+impl PartitionBoundsNode {
+    pub(crate) fn bounds(&self) -> &[PartitionBound] {
+        &self.bounds
+    }
+}
+
 impl UserDefinedLogicalNodeCore for PartitionBoundsNode {
     fn name(&self) -> &str {
         "PartitionBounds"
@@ -145,10 +149,9 @@ impl UserDefinedLogicalNodeCore for PartitionBoundsNode {
     }
 }
 
-/// Rewrites `min`/`max` over the leading partition column into a [`PartitionBoundsNode`].
+/// Rewrites `min`/`max` over a partition column into a [`PartitionBoundsNode`],
+/// leaving anything it does not fully understand to be planned the usual way.
 ///
-/// The rule is deliberately conservative: anything it does not fully understand is
-/// left alone and planned the usual way.
 /// Registered only when `execution.partition_bounds_from_listing` is on, so that a
 /// disabled rule leaves no trace in `EXPLAIN` output.
 #[derive(Debug, Default)]
@@ -177,8 +180,8 @@ impl OptimizerRule for ResolvePartitionBounds {
         };
         match rewrite_aggregate(aggregate) {
             Some(node) => {
-                // Spark's `OptimizeMetadataOnlyQuery` warns on every rewrite for the
-                // same reason, so that a surprising result has a trail to follow.
+                // Spark's `OptimizeMetadataOnlyQuery` warns on every rewrite too, so
+                // that a surprising result has a trail to follow.
                 warn!(
                     "Answering {:?} over partition column `{}` from directory names \
                      because `execution.partition_bounds_from_listing` is enabled. \
@@ -250,10 +253,9 @@ fn rewrite_aggregate(aggregate: &Aggregate) -> Option<PartitionBoundsNode> {
     };
     let field = config.schema.table_schema().fields().get(table_index)?;
 
-    // Only string partition columns for now. A directory name is text, so comparing it
-    // as text needs no conversion and cannot disagree with how the scan would have
-    // ordered the values. Numeric and date columns can follow once the parsing and
-    // ordering of their directory names is covered by tests.
+    // Only string columns for now: a directory name is text, so comparing it as text
+    // cannot disagree with how the scan would have ordered the values. Numeric and
+    // date columns can follow once their parsing and ordering are covered by tests.
     if !matches!(
         field.data_type(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
@@ -261,10 +263,8 @@ fn rewrite_aggregate(aggregate: &Aggregate) -> Option<PartitionBoundsNode> {
         return None;
     }
 
-    // The directory names at one level of the tree only determine the aggregate when
-    // every partition column above that level is pinned to a single value, so that
-    // exactly one directory has to be listed. Without those filters, the maximum over
-    // the table spans every branch of the tree and a single listing does not see it.
+    // Without every column above it pinned, the aggregate spans every branch of the
+    // tree at that level, which a single listing does not see.
     let partition_columns = config.schema.table_partition_cols();
     let depth = partition_columns
         .iter()
@@ -369,11 +369,13 @@ struct PartitionCandidate {
 /// cost one request per emptied partition.
 const MAX_INDIVIDUAL_PROBES: usize = 8;
 
-pub(crate) async fn plan_partition_bounds(
-    session_state: &SessionState,
+/// Reads the directory names and returns one value per bound the node asks for, in
+/// the order the node lists them.
+pub(crate) async fn resolve_partition_bounds(
+    ctx: &dyn Session,
     node: &PartitionBoundsNode,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let store = session_state.runtime_env().object_store(&node.table_url)?;
+) -> Result<Vec<ScalarValue>> {
+    let store = ctx.runtime_env().object_store(&node.table_url)?;
     let prefix = search_prefix(node);
 
     let mut candidates = list_partition_candidates(store.as_ref(), node, &prefix).await?;
@@ -396,12 +398,24 @@ pub(crate) async fn plan_partition_bounds(
     let min = min.unwrap_or_else(|| null.clone());
     let max = max.unwrap_or_else(|| null.clone());
 
-    let mut expressions = Vec::with_capacity(node.bounds.len());
-    for (index, bound) in node.bounds.iter().enumerate() {
-        let value = match bound {
+    Ok(node
+        .bounds
+        .iter()
+        .map(|bound| match bound {
             PartitionBound::Min => min.clone(),
             PartitionBound::Max => max.clone(),
-        };
+        })
+        .collect())
+}
+
+pub(crate) async fn plan_partition_bounds(
+    session: &dyn Session,
+    node: &PartitionBoundsNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let values = resolve_partition_bounds(session, node).await?;
+
+    let mut expressions = Vec::with_capacity(values.len());
+    for (index, value) in values.into_iter().enumerate() {
         let Some(field) = node.schema.fields().get(index) else {
             return internal_err!("partition bounds output has no field at index {index}");
         };

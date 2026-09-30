@@ -87,6 +87,61 @@ Feature: min and max reach a nested partition level when its ancestors are pinne
         """
       Then query plan matches snapshot
 
+  Rule: subqueries chained one level per partition column
+
+    Pinning each level with a subquery over the level above is the natural way to ask
+    for the latest partition of a nested layout in one statement. Only the outermost
+    subquery is resolved from directory names: the ones below it are filtered by a
+    subquery rather than a literal, which the rule does not recognise. They must still
+    answer correctly, and the rewriter must not hand the scan a predicate it cannot
+    evaluate.
+
+    Scenario: one level pinned by a subquery
+      When query
+        """
+        SELECT count(*) AS result FROM partition_bounds_nested
+        WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: two levels chained
+      When query
+        """
+        SELECT count(*) AS result FROM partition_bounds_nested
+        WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+          AND month = (
+            SELECT max(month) FROM partition_bounds_nested
+            WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+          )
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: three levels chained give the latest partition
+      When query
+        """
+        SELECT id FROM partition_bounds_nested
+        WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+          AND month = (
+            SELECT max(month) FROM partition_bounds_nested
+            WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+          )
+          AND day = (
+            SELECT max(day) FROM partition_bounds_nested
+            WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+              AND month = (
+                SELECT max(month) FROM partition_bounds_nested
+                WHERE year = (SELECT max(year) FROM partition_bounds_nested)
+              )
+          )
+        """
+      Then query result
+        | id |
+        | 4  |
+
   Rule: a level whose ancestors are not pinned still scans the files
 
     # Every month of every year would have to be listed to answer this.
@@ -104,6 +159,26 @@ Feature: min and max reach a nested partition level when its ancestors are pinne
         EXPLAIN SELECT max(day) FROM partition_bounds_nested WHERE year = '2025'
         """
       Then query plan matches snapshot
+
+    # Two bounds over different partition columns cannot come from one listing, since
+    # each lives at a different level of the tree.
+    Scenario: bounds over two different partition columns
+      When query
+        """
+        SELECT max(year) AS y, max(day) AS d FROM partition_bounds_nested
+        """
+      Then query result
+        | y    | d  |
+        | 2025 | 31 |
+
+    Scenario: a bound over one column and a count
+      When query
+        """
+        SELECT max(year) AS y, count(*) AS rows FROM partition_bounds_nested
+        """
+      Then query result
+        | y    | rows |
+        | 2025 | 4    |
 
     Scenario: the largest value of each level separately is not a partition
       When query
