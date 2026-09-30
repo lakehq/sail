@@ -43,6 +43,34 @@
 //! matches how [`pruned_partition_list`] builds the file list for a normal scan.
 //!
 //! [`pruned_partition_list`]: datafusion::datasource::listing::helpers::pruned_partition_list
+//!
+//! # Future work: the `ROW_NUMBER`/`RANK` "latest partition" idiom
+//!
+//! A common migration idiom (e.g. from Teradata) finds the latest partition with
+//! `ROW_NUMBER() OVER (ORDER BY partition_col DESC) = 1` instead of `max`, which
+//! today still triggers a real scan (see
+//! `test_a_window_function_over_the_partition_column_still_scans_every_file`),
+//! because it plans as a `WindowAggExec`/`BoundedWindowAggExec` that this rule
+//! does not look at. Whether it can reuse this same listing-only machinery
+//! depends on the `PARTITION BY` clause, if any:
+//!
+//! - **No `PARTITION BY` clause** (or one keyed by a column that is itself a
+//!   partition column at a level above `partition_col`): the whole window reduces
+//!   to keeping the rows whose `partition_col` equals the table's single overall
+//!   max, i.e. the same question `SELECT max(partition_col) FROM t` already
+//!   answers. A new rule would recognize `Filter(rn = 1) <- Window(ROW_NUMBER/RANK,
+//!   ORDER BY partition_col {ASC,DESC})` and rewrite it into the equivalent
+//!   `dt = (SELECT max(dt) FROM t)` shape, at which point `InlinePartitionBoundsSubquery`
+//!   already knows how to resolve it from a listing. Comparatively small: a
+//!   pattern-matching rule plus reuse of the existing bound resolution.
+//! - **`PARTITION BY` on a column that is *not* itself a partition column above
+//!   `partition_col`** (the "latest partition per customer" shape): not
+//!   achievable with directory listing alone. The latest `partition_col` value
+//!   can differ per group, and which groups exist inside which partition
+//!   directories is exactly the information a directory listing does not carry
+//!   (it is written in the files' data, not their paths). This case would need
+//!   either an actual scan, or a catalog that tracks partition-to-key membership
+//!   (e.g. HMS, Delta, Iceberg), which is out of scope for this listing-only rule.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;

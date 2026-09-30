@@ -9,7 +9,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[max(partition_bounds_nested.#3)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_nested.#3)]
-              DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_nested/year=2024/month=12/day=31/<id>.zst.parquet], [<tmp>/partition_bounds_nested/year=2025/month=03/day=07/<id>.zst.parquet], [<tmp>/partition_bounds_nested/year=2025/month=10/day=01/<id>.zst.parquet], [<tmp>/partition_bounds_nested/year=2025/month=10/day=04/<id>.zst.parquet]]}, projection=[day@3 as #3], file_type=parquet, predicate=DynamicFilter [ empty ]
+              DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_nested/year=2024/month=12/day=31/<id>.zst.parquet:<range>, <tmp>/partition_bounds_nested/year=2025/month=03/day=07/<id>.zst.parquet:<range>, <tmp>/partition_bounds_nested/year=2025/month=10/day=01/<id>.zst.parquet:<range>, <tmp>/partition_bounds_nested/year=2025/month=10/day=04/<id>.zst.parquet:<range>]]}, projection=[day@3 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_middle_level_with_only_its_parent_pinned"
 data:
@@ -28,8 +28,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[max(partition_bounds_nested.#3)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_nested.#3)]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-                DataSourceExec: file_groups={3 groups: [[<tmp>/partition_bounds_nested/year=2025/month=03/day=07/<id>.zst.parquet], [<tmp>/partition_bounds_nested/year=2025/month=10/day=01/<id>.zst.parquet], [<tmp>/partition_bounds_nested/year=2025/month=10/day=04/<id>.zst.parquet]]}, projection=[day@3 as #3], file_type=parquet, predicate=DynamicFilter [ empty ]
+              DataSourceExec: file_groups={1 group: [[<tmp>/partition_bounds_nested/year=2025/month=03/day=07/<id>.zst.parquet:<range>, <tmp>/partition_bounds_nested/year=2025/month=10/day=01/<id>.zst.parquet:<range>, <tmp>/partition_bounds_nested/year=2025/month=10/day=04/<id>.zst.parquet:<range>]]}, projection=[day@3 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_the_deepest_level_with_both_ancestors_pinned"
 data:
@@ -56,7 +55,7 @@ data:
         Filter: partition_bounds_nested.#1 = Utf8("2025") AND partition_bounds_nested.#2 = Utf8("10")
           Projection: partition_bounds_nested.id AS #0, partition_bounds_nested.year AS #1, partition_bounds_nested.month AS #2, partition_bounds_nested.day AS #3
             TableScan: partition_bounds_nested
-  
+
     == Analyzed Logical Plan ==
     #4: Utf8
     Projection: max(partition_bounds_nested.#3) AS #4
@@ -64,11 +63,11 @@ data:
         Filter: partition_bounds_nested.#1 = Utf8("2025") AND partition_bounds_nested.#2 = Utf8("10")
           Projection: partition_bounds_nested.id AS #0, partition_bounds_nested.year AS #1, partition_bounds_nested.month AS #2, partition_bounds_nested.day AS #3
             TableScan: partition_bounds_nested
-  
+
     == Optimized Logical Plan ==
     Projection: max(partition_bounds_nested.#3) AS #4
       PartitionBounds: column=day, bounds=[Max], path=file://<tmp>/partition_bounds_nested/, prefix=year=2025/month=10
-  
+
     == Physical Plan ==
     ProjectionExec: expr=[#4@0 as max(day)]
       ProjectionExec: expr=[04 as #4]
