@@ -25,11 +25,8 @@ MAX_INDIVIDUAL_PROBES = 8
 
 def _create(spark, name: str, location, columns: str, partition_by: str, values: str) -> None:
     spark.sql(f"DROP TABLE IF EXISTS {name}")
-    spark.sql(
-        f"CREATE TABLE {name} ({columns}) USING parquet "
-        f"PARTITIONED BY ({partition_by}) LOCATION '{location}'"
-    )
-    spark.sql(f"INSERT INTO {name} VALUES {values}")
+    spark.sql(f"CREATE TABLE {name} ({columns}) USING parquet PARTITIONED BY ({partition_by}) LOCATION '{location}'")
+    spark.sql(f"INSERT INTO {name} VALUES {values}")  # noqa: S608
 
 
 def _empty(directory) -> None:
@@ -45,9 +42,7 @@ def _empty(directory) -> None:
         ("min", "2025-10-01", "2025-10-04"),
     ],
 )
-def test_leading_level_skips_a_partition_left_without_files(
-    spark, tmp_path, bound, emptied, expected
-):
+def test_leading_level_skips_a_partition_left_without_files(spark, tmp_path, bound, emptied, expected):
     location = tmp_path / "flat"
     _create(
         spark,
@@ -62,7 +57,7 @@ def test_leading_level_skips_a_partition_left_without_files(
 
         # The directory is still listed, but it no longer holds a file a scan would
         # read, so the answer is the partition on the other side.
-        assert spark.sql(f"SELECT {bound}(dt) FROM pb_empty_flat").collect()[0][0] == expected
+        assert spark.sql(f"SELECT {bound}(dt) FROM pb_empty_flat").collect()[0][0] == expected  # noqa: S608
     finally:
         spark.sql("DROP TABLE IF EXISTS pb_empty_flat")
 
@@ -74,9 +69,7 @@ def test_leading_level_skips_a_partition_left_without_files(
         ("min", "03", "10"),
     ],
 )
-def test_middle_level_descends_past_intermediate_directories(
-    spark, tmp_path, bound, emptied, expected
-):
+def test_middle_level_descends_past_intermediate_directories(spark, tmp_path, bound, emptied, expected):
     location = tmp_path / "nested"
     _create(
         spark,
@@ -92,7 +85,7 @@ def test_middle_level_descends_past_intermediate_directories(
         # A month directory holds further directories rather than files, so deciding
         # whether it holds data at all means descending through the day below it.
         result = spark.sql(
-            f"SELECT {bound}(month) FROM pb_empty_nested WHERE year = '2025'"
+            f"SELECT {bound}(month) FROM pb_empty_nested WHERE year = '2025'"  # noqa: S608
         ).collect()
         assert result[0][0] == expected
     finally:
@@ -117,7 +110,7 @@ def test_more_empty_partitions_than_probes_falls_back_to_one_listing(spark, tmp_
         for day in drained:
             _empty(location / f"dt={day}")
 
-        assert spark.sql(f"SELECT {bound}(dt) FROM pb_many").collect()[0][0] == expected
+        assert spark.sql(f"SELECT {bound}(dt) FROM pb_many").collect()[0][0] == expected  # noqa: S608
     finally:
         spark.sql("DROP TABLE IF EXISTS pb_many")
 
@@ -126,10 +119,7 @@ def test_table_without_any_partition_has_null_bounds(spark, tmp_path):
     location = tmp_path / "void"
     location.mkdir()
     spark.sql("DROP TABLE IF EXISTS pb_void")
-    spark.sql(
-        f"CREATE TABLE pb_void (id INT, dt STRING) USING parquet "
-        f"PARTITIONED BY (dt) LOCATION '{location}'"
-    )
+    spark.sql(f"CREATE TABLE pb_void (id INT, dt STRING) USING parquet PARTITIONED BY (dt) LOCATION '{location}'")
     try:
         # No partition directory exists at all, so there is no bound to report.
         assert spark.sql("SELECT max(dt), min(dt) FROM pb_void").collect()[0] == (None, None)
@@ -137,9 +127,7 @@ def test_table_without_any_partition_has_null_bounds(spark, tmp_path):
         # The bound is NULL, so the filter it feeds matches nothing. This walks the
         # inlining with a NULL literal, which then reaches the scan as a partition
         # filter, and must come back empty rather than error or match everything.
-        rows = spark.sql(
-            "SELECT count(*) AS n FROM pb_void WHERE dt = (SELECT max(dt) FROM pb_void)"
-        ).collect()
+        rows = spark.sql("SELECT count(*) AS n FROM pb_void WHERE dt = (SELECT max(dt) FROM pb_void)").collect()
         assert rows[0][0] == 0
     finally:
         spark.sql("DROP TABLE IF EXISTS pb_void")
@@ -162,8 +150,7 @@ def test_null_bound_filter_over_a_table_that_has_rows(spark, tmp_path):
         # Every partition is empty, so the bound is NULL while the directories are
         # still there. Comparing against NULL matches nothing.
         rows = spark.sql(
-            "SELECT count(*) AS n FROM pb_null_bound "
-            "WHERE dt = (SELECT max(dt) FROM pb_null_bound)"
+            "SELECT count(*) AS n FROM pb_null_bound WHERE dt = (SELECT max(dt) FROM pb_null_bound)"
         ).collect()
         assert rows[0][0] == 0
     finally:
