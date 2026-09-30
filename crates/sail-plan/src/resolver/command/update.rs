@@ -256,6 +256,10 @@ impl PlanResolver<'_> {
             .map_err(PlanError::from)
     }
 
+    #[expect(
+        clippy::double_must_use,
+        reason = "async_recursion adds a redundant #[must_use] to the generated boxed future"
+    )]
     #[async_recursion::async_recursion]
     async fn resolve_update_assignment_value(
         &self,
