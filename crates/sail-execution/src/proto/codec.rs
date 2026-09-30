@@ -27,6 +27,7 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -3353,6 +3354,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "repeat" => Ok(Arc::new(ScalarUDF::from(RepeatFunc::new()))),
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
@@ -3516,6 +3518,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
+            || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
@@ -6694,6 +6697,43 @@ mod tests {
         let bytes = try_encode_physical_expr(&codec, expr)?;
         let ctx = TaskContext::default();
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
+    }
+
+    #[test]
+    fn test_round_trip_repeat_without_function_registry() -> Result<()> {
+        use datafusion::arrow::array::{Int64Array, StringArray};
+        use datafusion::common::DFSchema;
+        use datafusion::functions::string::expr_fn::repeat;
+        use datafusion::logical_expr::col;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::physical_expr::create_physical_expr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("n", DataType::Int64, true),
+        ]));
+        let physical = create_physical_expr(
+            &repeat(col("s"), col("n")),
+            &DFSchema::try_from(schema.as_ref().clone())?,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        // Driver task contexts do not register DataFusion's built-in functions.
+        let decoded = round_trip_expr(&physical, &schema)?;
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("ab"),
+                    Some("你好"),
+                    None,
+                    Some("x"),
+                ])),
+                Arc::new(Int64Array::from(vec![Some(3), Some(2), Some(2), None])),
+            ],
+        )
     }
 
     fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
