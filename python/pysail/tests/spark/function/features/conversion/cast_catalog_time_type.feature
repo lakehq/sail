@@ -31,7 +31,17 @@ Feature: Additional CAST coverage from time_type
         """
 
     # `Cast.castToTime` truncates a TIME to the target precision (`truncateTimeToPrecision`).
-
+    #
+    # TODO: architectural, not a quick fix. Spark's TIME has 7 precisions (0-6, one
+    #   digit each); Arrow's `TimeUnit` only has 4 discrete values (Second/
+    #   Millisecond/Microsecond/Nanosecond), so Sail's TIME(1)/TIME(2)/TIME(4)/TIME(5)
+    #   currently round up to the nearest representable Arrow unit instead of
+    #   truncating to the exact declared precision. Fixing it means storing the
+    #   declared precision separately from the physical Arrow type (the way
+    #   DECIMAL(p, s) tracks precision/scale apart from its physical width), touching
+    #   TIME type resolution end to end, not just this CAST. Same root cause as the
+    #   duplicate scenarios in datetime/time_stored_and_printed.feature ("a time at
+    #   precision 1/2/4/5").
     @sail-bug
     Scenario: time_type catalog: CAST of TIME to every sub-microsecond precision truncates
       Given config spark.sql.timeType.enabled = true

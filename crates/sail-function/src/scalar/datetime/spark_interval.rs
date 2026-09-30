@@ -15,8 +15,11 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_sql_analyzer::literal::interval::{IntervalValue, parse_year_month_interval_string};
+use sail_sql_analyzer::literal::interval::{
+    IntervalValue, parse_day_time_interval_value_string, parse_year_month_interval_string,
+};
 use sail_sql_analyzer::parser::parse_interval;
 
 macro_rules! define_interval_udf {
@@ -352,14 +355,140 @@ impl ScalarUDFImpl for SparkDayTimeIntervalFromInt64 {
     }
 }
 
-define_interval_udf!(
-    SparkDayTimeInterval,
-    "spark_day_time_interval",
-    DataType::Duration(TimeUnit::Microsecond),
-    DurationMicrosecondType,
-    string_to_day_time_interval,
-    ScalarValue::DurationMicrosecond,
-);
+/// `CAST(string AS INTERVAL <start> [TO <end>])`: parses the source string
+/// against the exact field range the target type declares (Spark's
+/// `IntervalUtils.castStringToDTInterval`), e.g. `DAY TO SECOND` accepts
+/// `"1 02:03:04"` but `HOUR` alone only accepts a signed integer.
+///
+/// A dedicated struct (not `define_interval_udf!`, whose instances carry no
+/// per-instance state) since the field range must be known at UDF-construction
+/// time, threaded in from the resolved CAST target type in `cast.rs`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkDayTimeInterval {
+    signature: Signature,
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+    is_try: bool,
+}
+
+impl SparkDayTimeInterval {
+    pub fn new(
+        start_field: spec::IntervalFieldType,
+        end_field: spec::IntervalFieldType,
+        is_try: bool,
+    ) -> Self {
+        Self {
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
+            start_field,
+            end_field,
+            is_try,
+        }
+    }
+
+    pub fn start_field(&self) -> spec::IntervalFieldType {
+        self.start_field
+    }
+
+    pub fn end_field(&self) -> spec::IntervalFieldType {
+        self.end_field
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
+    }
+
+    fn convert(&self, value: &str) -> Result<Option<i64>> {
+        match parse_day_time_interval_value_string(value, self.start_field, self.end_field) {
+            Ok(microseconds) => Ok(Some(microseconds)),
+            Err(_) if self.is_try => Ok(None),
+            Err(_) => {
+                let sql_value = value.replace('\\', "\\\\").replace('\'', "\\'");
+                let interval_str = day_time_field_range_name(self.start_field, self.end_field);
+                exec_err!(
+                    "[INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE] Interval string does not match {interval_str} format of `[+|-]d h:m:s.n` when cast to \"INTERVAL {interval_str}\": '{sql_value}'. Set `spark.sql.legacy.fromDayTimeString.enabled` to `true` to restore the behavior before Spark 3.0."
+                )
+            }
+        }
+    }
+}
+
+fn day_time_field_range_name(
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+) -> String {
+    fn name(field: spec::IntervalFieldType) -> &'static str {
+        match field {
+            spec::IntervalFieldType::Day => "DAY",
+            spec::IntervalFieldType::Hour => "HOUR",
+            spec::IntervalFieldType::Minute => "MINUTE",
+            spec::IntervalFieldType::Second => "SECOND",
+            spec::IntervalFieldType::Year | spec::IntervalFieldType::Month => {
+                unreachable!("year-month fields never appear in a day-time interval qualifier")
+            }
+        }
+    }
+    if start_field == end_field {
+        name(start_field).to_string()
+    } else {
+        format!("{} TO {}", name(start_field), name(end_field))
+    }
+}
+
+impl ScalarUDFImpl for SparkDayTimeInterval {
+    fn name(&self) -> &str {
+        "spark_day_time_interval"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Duration(TimeUnit::Microsecond))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let arg = args.one()?;
+        match arg {
+            ColumnarValue::Array(array) => {
+                let array: PrimitiveArray<DurationMicrosecondType> = match array.data_type() {
+                    DataType::Utf8 => as_string_array(&array)?
+                        .iter()
+                        .map(|x| x.map(|x| self.convert(x)).transpose().map(Option::flatten))
+                        .collect::<Result<_>>()?,
+                    DataType::LargeUtf8 => as_large_string_array(&array)?
+                        .iter()
+                        .map(|x| x.map(|x| self.convert(x)).transpose().map(Option::flatten))
+                        .collect::<Result<_>>()?,
+                    DataType::Utf8View => as_string_view_array(&array)?
+                        .iter()
+                        .map(|x| x.map(|x| self.convert(x)).transpose().map(Option::flatten))
+                        .collect::<Result<_>>()?,
+                    _ => return exec_err!("expected string array for intervals"),
+                };
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let value = match scalar.try_as_str() {
+                    Some(x) => x
+                        .map(|x| self.convert(x))
+                        .transpose()?
+                        .flatten(),
+                    _ => return exec_err!("expected string scalar for intervals"),
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
+                    value,
+                )))
+            }
+        }
+    }
+}
 
 define_interval_udf!(
     SparkCalendarInterval,
@@ -454,15 +583,6 @@ fn string_to_year_month_interval(value: &str) -> Result<i32> {
     parse_year_month_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))
 }
 
-fn string_to_day_time_interval(value: &str) -> Result<i64> {
-    let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
-    match interval {
-        IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
-        IntervalValue::YearMonth { .. } | IntervalValue::MonthDayNanosecond { .. } => {
-            exec_err!("expected day time interval, but got: {value}")
-        }
-    }
-}
 
 fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;

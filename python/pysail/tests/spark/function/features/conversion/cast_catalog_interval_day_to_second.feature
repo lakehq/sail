@@ -3,7 +3,6 @@ Feature: Additional CAST coverage from interval_day_to_second
 
   Rule: A string casts to a day-time interval
 
-    @sail-bug
     Scenario Outline: interval_day_to_second catalog: string to day-time interval cast: <case>
       When query
         """
@@ -19,7 +18,6 @@ Feature: Additional CAST coverage from interval_day_to_second
         | column                        | s                       | INTERVAL '1 02:03:04' DAY TO SECOND        | INTERVAL '-2 10:00:00.5' DAY TO SECOND     |
         | literal drops sub-micro digits | '1 02:03:04.123456789' | INTERVAL '1 02:03:04.123456' DAY TO SECOND | INTERVAL '1 02:03:04.123456' DAY TO SECOND |
 
-    @sail-bug
     Scenario Outline: interval_day_to_second catalog: a malformed string to day-time interval cast: <case>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -33,7 +31,6 @@ Feature: Additional CAST coverage from interval_day_to_second
         | ANSI on  | true  |
         | ANSI off | false |
 
-    @sail-bug
     Scenario: interval_day_to_second catalog: try_cast of a malformed string to a day-time interval returns NULL
       When query
         """

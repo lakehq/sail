@@ -72,6 +72,11 @@ Feature: a time stores and prints what Spark does
         | stored | type | shown | cast |
         | 37230000000000 | time(0) | 10:20:30 | 10:20:30 |
 
+    # TODO: architectural, not a quick fix. Arrow's `TimeUnit` only has 4 discrete
+    #   precisions (0/3/6/9); Sail can't represent TIME(1)/TIME(2)/TIME(4)/TIME(5)
+    #   at their exact declared precision (see the matching TODO in
+    #   conversion/cast_catalog_time_type.feature for the full explanation -- these
+    #   4 scenarios are duplicates of that same gap, not separate bugs).
     @sail-bug
     Scenario: time catalog: a time at precision 1
       Given config spark.sql.session.timeZone = UTC
@@ -84,6 +89,7 @@ Feature: a time stores and prints what Spark does
         | stored | type | shown | cast |
         | 37230100000000 | time(1) | 10:20:30.1 | 10:20:30.1 |
 
+    # TODO: same gap as "a time at precision 1" above -- see cast_catalog_time_type.feature.
     @sail-bug
     Scenario: time catalog: a time at precision 2
       Given config spark.sql.session.timeZone = UTC
@@ -107,6 +113,7 @@ Feature: a time stores and prints what Spark does
         | stored | type | shown | cast |
         | 37230123000000 | time(3) | 10:20:30.123 | 10:20:30.123 |
 
+    # TODO: same gap as "a time at precision 1" above -- see cast_catalog_time_type.feature.
     @sail-bug
     Scenario: time catalog: a time at precision 4
       Given config spark.sql.session.timeZone = UTC
@@ -119,6 +126,7 @@ Feature: a time stores and prints what Spark does
         | stored | type | shown | cast |
         | 37230123400000 | time(4) | 10:20:30.1234 | 10:20:30.1234 |
 
+    # TODO: same gap as "a time at precision 1" above -- see cast_catalog_time_type.feature.
     @sail-bug
     Scenario: time catalog: a time at precision 5
       Given config spark.sql.session.timeZone = UTC

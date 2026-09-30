@@ -105,6 +105,24 @@ impl PlanResolver<'_> {
                 .transpose()?,
             _ => None,
         };
+        // The exact (start, end) field range `CAST(string AS INTERVAL ...)`
+        // must parse the source string against -- e.g. `DAY TO SECOND` accepts
+        // `"1 02:03:04"` but `HOUR` alone only accepts a signed integer. Reuse
+        // `SparkIntervalMetadata`'s own default-filling (a bare `INTERVAL DAY`
+        // means `(Day, Day)`, not `(Day, None)`) rather than re-deriving it.
+        let day_time_interval_qualifier = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => spec::SparkIntervalMetadata::try_new(
+                spec::IntervalUnit::DayTime,
+                *start_field,
+                *end_field,
+            )?
+            .map(|metadata| (metadata.start_field(), metadata.end_field())),
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
@@ -537,8 +555,16 @@ impl PlanResolver<'_> {
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Duration(TimeUnit::Microsecond),
-                _,
-            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
+                is_try,
+            ) => {
+                let Some((start_field, end_field)) = day_time_interval_qualifier else {
+                    return Err(PlanError::internal(
+                        "expected day-time interval qualifier for STRING -> INTERVAL cast",
+                    ));
+                };
+                ScalarUDF::new_from_impl(SparkDayTimeInterval::new(start_field, end_field, is_try))
+                    .call(vec![expr])
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::MonthDayNano),

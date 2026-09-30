@@ -55,6 +55,13 @@ lazy_static! {
     static ref INTERVAL_SECOND_REGEX: Regex = create_regex(Regex::new(
         r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
     ));
+    // Spark's `IntervalUtils.castStringToDTInterval` tries the compact form
+    // (`"1 02:03:04"`) first, then this "literal" form -- the same text a
+    // day-time interval's own `CAST(... AS STRING)` produces -- so that
+    // casting an interval to STRING and back round-trips.
+    static ref INTERVAL_LITERAL_WRAPPER_REGEX: Regex = create_regex(Regex::new(
+        r"(?i)^\s*INTERVAL\s+([+-]?)'(.*)'\s+(\w+(?:\s+TO\s+\w+)?)\s*$"
+    ));
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -259,6 +266,113 @@ fn parse_interval_day_time_string(
         start_field,
         end_field,
     })
+}
+
+/// Parses a raw (unquoted, no SQL syntax) day-time interval value string --
+/// e.g. `"1 02:03:04"` -- against the exact field range `CAST(string AS
+/// INTERVAL <start> TO <end>)` declares, the way Spark's
+/// `IntervalUtils.castStringToDTInterval` does. This is the runtime
+/// counterpart of the interval *literal* grammar (`INTERVAL '...' <field>
+/// [TO <field>]`), which expects SQL syntax (a quoted string token, or `TO`
+/// as a keyword) and must not be reused to parse a plain runtime value: it
+/// rejects "abc" and "1 02:03:04" alike, but the failure surfaces as a
+/// confusing "error in SQL parser" instead of Spark's
+/// `INVALID_INTERVAL_FORMAT` on the malformed input.
+pub fn parse_day_time_interval_value_string(
+    s: &str,
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+) -> SqlResult<i64> {
+    let regex: &Regex = match (start_field, end_field) {
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Day) => &INTERVAL_DAY_REGEX,
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Hour) => {
+            &INTERVAL_DAY_TO_HOUR_REGEX
+        }
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_DAY_TO_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Second) => {
+            &INTERVAL_DAY_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Hour) => &INTERVAL_HOUR_REGEX,
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_HOUR_TO_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Second) => {
+            &INTERVAL_HOUR_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Minute, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Minute, spec::IntervalFieldType::Second) => {
+            &INTERVAL_MINUTE_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Second, spec::IntervalFieldType::Second) => {
+            &INTERVAL_SECOND_REGEX
+        }
+        _ => {
+            return Err(SqlError::invalid(format!(
+                "invalid day-time interval field range: {start_field:?} to {end_field:?}"
+            )));
+        }
+    };
+    let extract_micros = |value: IntervalValue| match value {
+        IntervalValue::Microsecond { microseconds, .. } => microseconds,
+        IntervalValue::YearMonth { .. } | IntervalValue::MonthDayNanosecond { .. } => {
+            unreachable!("day-time regexes only ever produce Microsecond values")
+        }
+    };
+    if let Ok(value) = parse_interval_day_time_string(s, false, regex, start_field, Some(end_field))
+    {
+        return Ok(extract_micros(value));
+    }
+    // Fall back to Spark's "literal" form: `INTERVAL [sign] '<compact>' <FIELD> [TO <FIELD>]`,
+    // the text produced by casting a day-time interval to STRING.
+    if let Some(captures) = INTERVAL_LITERAL_WRAPPER_REGEX.captures(s.trim())
+        && let Some(qualifier) = captures.get(3)
+        && day_time_qualifier_matches(qualifier.as_str(), start_field, end_field)
+        && let Some(inner) = captures.get(2)
+    {
+        let negated = captures.get(1).map(|m| m.as_str()) == Some("-");
+        if let Ok(value) =
+            parse_interval_day_time_string(inner.as_str(), negated, regex, start_field, Some(end_field))
+        {
+            return Ok(extract_micros(value));
+        }
+    }
+    Err(SqlError::invalid(format!("interval: {s}")))
+}
+
+fn day_time_field_name(field: spec::IntervalFieldType) -> &'static str {
+    match field {
+        spec::IntervalFieldType::Day => "DAY",
+        spec::IntervalFieldType::Hour => "HOUR",
+        spec::IntervalFieldType::Minute => "MINUTE",
+        spec::IntervalFieldType::Second => "SECOND",
+        spec::IntervalFieldType::Year | spec::IntervalFieldType::Month => {
+            unreachable!("year-month fields never appear in a day-time interval qualifier")
+        }
+    }
+}
+
+fn day_time_qualifier_matches(
+    text: &str,
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let start_name = day_time_field_name(start_field);
+    let end_name = day_time_field_name(end_field);
+    if start_field == end_field {
+        matches!(words.as_slice(), [field] if field.eq_ignore_ascii_case(start_name))
+    } else {
+        matches!(
+            words.as_slice(),
+            [field, to, end] if field.eq_ignore_ascii_case(start_name)
+                && to.eq_ignore_ascii_case("TO")
+                && end.eq_ignore_ascii_case(end_name)
+        )
+    }
 }
 
 enum StandardIntervalKind {

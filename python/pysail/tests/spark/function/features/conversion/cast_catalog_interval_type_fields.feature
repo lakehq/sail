@@ -78,6 +78,16 @@ Feature: Additional CAST coverage from interval_type_fields
         | to minute         | 1 02:03:04  | MINUTE | 1 day, 2:03:00    |
         | negative to hour  | -1 02:03:04 | HOUR   | -2 days, 22:00:00 |
 
+    # TODO: display only (see the comment after this scenario for the confirmed-correct
+    #   value, verified via hex()). Sail's `.show()`/`query result` path formats a
+    #   year-month interval straight from the raw Arrow array, with no access to the
+    #   Sail-only field metadata (`SAIL::spark::interval`) that narrows the printed
+    #   range; it always prints the full YEAR-TO-MONTH range regardless of the CAST's
+    #   narrower target field. Same root cause as the `.show()`/ArrayFormatter gap
+    #   deprioritized elsewhere this session -- fixing it means threading that
+    #   metadata into `sail-common-datafusion`'s `ArrayFormatter`/`DisplayIndex`,
+    #   which is a separate display engine from the `CAST ... AS STRING` path
+    #   (`SparkToUtf8` family) that already reads the metadata correctly.
     @sail-bug
     Scenario Outline: interval_type_fields catalog: Cast truncates a year-month value: <case>
       When query
