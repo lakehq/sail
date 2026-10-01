@@ -21,8 +21,6 @@ pub enum ExecutionError {
     IoError(#[from] std::io::Error),
     #[error("error in Tonic transport: {0}")]
     TonicTransportError(#[from] tonic::transport::Error),
-    #[error("error in Flight transport: {0}")]
-    FlightTransportError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error in Tonic status: {0}")]
     TonicStatusError(#[from] tonic::Status),
     #[error("error in Kubernetes: {0}")]
