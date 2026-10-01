@@ -104,7 +104,6 @@ cargo add adbc_core adbc_driver_manager arrow arrow-array
 
 :::
 
-
 ## Connecting to Sail
 
 The examples below all run `SELECT 1 + 1 AS result` against a server at `grpc://localhost:32010`.
