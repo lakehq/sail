@@ -148,6 +148,9 @@ impl ScalarUDFImpl for SparkNvl2 {
 
 /// Strict casts introduced by conditional branch and numeric argument coercion. Keeping the cast
 /// in a UDF lets DataFusion defer invalid literals in unselected CASE branches.
+// TODO: Preserve Spark's eager constant-cast errors outside conditional branches,
+// including UNION inputs consumed by a conditional filter. Shared constant folding
+// currently defers those errors too, so filtering can discard an invalid input.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkConditionalCast {
     signature: Signature,

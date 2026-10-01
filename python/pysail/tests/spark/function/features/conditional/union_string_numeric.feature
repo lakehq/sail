@@ -215,6 +215,19 @@ Feature: Numeric STRING coercion in UNION inputs
       """
     Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
 
+  # This also succeeds on the merge-base: shared constant folding loses the
+  # eager UNION cast error before the conditional filter discards its input.
+  @sail-bug
+  Scenario: ANSI UNION retains constant cast errors below a conditional filter
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT IF(id = 0, 0L, v) AS value
+      FROM (SELECT 0 AS id, 'bad' AS v UNION ALL SELECT 1 AS id, 7L AS v)
+      WHERE IF(id = 0, 0L, v) = 7
+      """
+    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
+
   Scenario: ANSI UNION retains errors from repeated compound constant producers
     Given config spark.sql.ansi.enabled = true
     When query
