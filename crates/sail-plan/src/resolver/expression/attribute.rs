@@ -671,13 +671,7 @@ impl PlanResolver<'_> {
         let Some(plan_id) = plan_id else {
             return true;
         };
-        if state.is_direct_plan_field(field_id, plan_id) {
-            return true;
-        }
-        let Ok(root) = state.get_field_root(field_id) else {
-            return false;
-        };
-        state.is_direct_plan_field(root, plan_id)
+        state.is_direct_plan_field_in_chain(field_id, plan_id)
     }
 
     /// The error for a part of the name that does not name a field of what it reached, as Spark

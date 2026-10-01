@@ -311,21 +311,47 @@ impl PlanResolverState {
     }
 
     /// Records that a field only passes `source` on, so that the two are one attribute rather
-    /// than two fields that happen to share a name. The root is resolved as it is stored, so a
-    /// column passed on through several projections still leads to the field that computed it.
+    /// than two fields that happen to share a name. The immediate source is kept rather than its
+    /// own (possibly further) root, so that a plan ID registered at an intermediate link of the
+    /// chain (e.g. the DataFrame that the passed-on column belongs to) is not skipped over by
+    /// [`Self::is_direct_plan_field_in_chain`], which walks the chain one link at a time.
     pub fn register_root_for_field(&mut self, field_id: &str, source: &str) -> PlanResult<()> {
-        let root = self.get_field_root(source)?.to_string();
         let field_info = self
             .fields
             .get_mut(field_id)
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
-        field_info.root = Some(root);
+        field_info.root = Some(source.to_string());
         Ok(())
     }
 
-    /// The field an output is an attribute of: itself, unless it only passes another one on.
+    /// The field an output is an attribute of: itself, unless it only passes another one on,
+    /// walking the chain of immediate sources to the one that computed it.
     pub fn get_field_root<'a>(&'a self, field_id: &'a str) -> PlanResult<&'a str> {
-        Ok(self.get_field_info(field_id)?.root().unwrap_or(field_id))
+        let mut current = field_id;
+        loop {
+            match self.get_field_info(current)?.root() {
+                Some(parent) => current = parent,
+                None => return Ok(current),
+            }
+        }
+    }
+
+    /// Whether the field, or any field it only passes on (walking one link of the chain at a
+    /// time, rather than jumping straight to the ultimate root), is a direct output of some
+    /// instance of the plan ID. A plan ID registered at an intermediate link -- e.g. the
+    /// DataFrame a passed-on column belongs to, sitting between the column's current alias and
+    /// the expression that originally computed it -- must still count.
+    pub fn is_direct_plan_field_in_chain(&self, field_id: &str, plan_id: i64) -> bool {
+        let mut current = field_id;
+        loop {
+            if self.is_direct_plan_field(current, plan_id) {
+                return true;
+            }
+            match self.fields.get(current).and_then(|info| info.root()) {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {
