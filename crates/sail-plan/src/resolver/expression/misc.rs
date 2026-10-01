@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
@@ -538,6 +538,7 @@ impl PlanResolver<'_> {
         // each operation is rendered as `WithField(<value name>)` (the value
         // expression's display name, not the target field name) or `dropfield()`.
         let levels = field_name.clone();
+        let is_drop = value_expression.is_none();
         let (op, new_expr) = if let Some(value_expression) = value_expression {
             let NamedExpr {
                 name: value_name,
@@ -563,16 +564,32 @@ impl PlanResolver<'_> {
         };
         // Checks the input of `update_fields` before rebuilding, so a level that is not a struct
         // is refused here, with the message naming the reading expression and its SQL type.
-        self.check_update_fields_input(&data_type, &name, &levels, &op)?;
+        let target = self.check_update_fields_input(&data_type, &name, &levels, &op)?;
 
-        // Spark collapses chained `withField`/`dropFields` into a single
-        // `update_fields(x, op1, op2, ...)`, so splice the new operation into an
-        // existing `update_fields(...)` name rather than nesting.
-        let result_name = match name.strip_suffix(')') {
-            Some(prefix) if prefix.starts_with("update_fields(") => format!("{prefix}, {op})"),
-            _ => format!("update_fields({name}, {op})"),
-        };
-        Ok(NamedExpr::new(vec![result_name], new_expr))
+        // Dropping every field of the struct is refused by the same `checkInputDataTypes`, so it
+        // is reported from here as well, naming the `update_fields` whose input the fields belong
+        // to rather than the outermost one: for `dropFields("t.a")` Spark names `s.t`, which is
+        // the base the walk above ends on.
+        if let (Some((target_name, fields)), Some(level)) = (target, levels.last())
+            && is_drop
+        {
+            let kept = fields
+                .iter()
+                .filter(|x| !self.match_identifier(x.name(), level))
+                .count();
+            if kept == 0 && !fields.is_empty() {
+                return Err(PlanError::AnalysisError(format!(
+                    "[DATATYPE_MISMATCH.CANNOT_DROP_ALL_FIELDS] Cannot resolve \"{}\" due to \
+                     data type mismatch: Cannot drop all fields in struct.",
+                    Self::update_fields_name(&target_name, &op)
+                )));
+            }
+        }
+
+        Ok(NamedExpr::new(
+            vec![Self::update_fields_name(&name, &op)],
+            new_expr,
+        ))
     }
 
     /// Checks the input of every `update_fields` a path builds. Spark rewrites `withField("a.b")`
@@ -585,7 +602,7 @@ impl PlanResolver<'_> {
         base: &str,
         levels: &[String],
         op: &str,
-    ) -> PlanResult<()> {
+    ) -> PlanResult<Option<(String, Fields)>> {
         let mut base = base.to_string();
         let mut data_type = data_type.clone();
         for level in levels.iter().take(levels.len().saturating_sub(1)) {
@@ -618,15 +635,25 @@ impl PlanResolver<'_> {
             // A level that matches nothing, or matches twice, is reported by the function, which
             // walks the same path with the same resolver.
             let Ok(Some(field)) = self.resolve_struct_field(fields, level) else {
-                return Ok(());
+                return Ok(None);
             };
             base = format!("{base}.{level}");
             data_type = field.data_type().clone();
         }
-        if !matches!(data_type, DataType::Struct(_)) {
+        let DataType::Struct(fields) = &data_type else {
             return Err(self.update_fields_input_type_error(&base, op, &data_type)?);
+        };
+        Ok(Some((base, fields.clone())))
+    }
+
+    /// Splices an operation into the name of the `update_fields` the path builds. Spark collapses
+    /// chained `withField`/`dropFields` into a single `update_fields(x, op1, op2, ...)`, so the
+    /// operation joins an existing one rather than nesting inside it.
+    fn update_fields_name(base: &str, op: &str) -> String {
+        match base.strip_suffix(')') {
+            Some(prefix) if prefix.starts_with("update_fields(") => format!("{prefix}, {op})"),
+            _ => format!("update_fields({base}, {op})"),
         }
-        Ok(())
     }
 
     /// The error `UpdateFields` raises for an input that is not a struct

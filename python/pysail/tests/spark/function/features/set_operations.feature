@@ -246,6 +246,27 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query error SET_OPERATION_ON_MAP_TYPE
 
+    Scenario: the column in the message is quoted the way Spark quotes an identifier
+      # `unsupportedSetOperationOnMapType` builds the name with `toSQLId`
+      # (`QueryCompilationErrors.scala:310`), which parses the name and quotes each part, so a
+      # name holding a dot is written as two quoted parts rather than as one quoted name.
+      When query
+        """
+        SELECT DISTINCT * FROM (SELECT map('k', 1) AS `a.b`)
+        """
+      Then query error SET_OPERATION_ON_MAP_TYPE\] .*the type of column `a`\.`b` is "MAP<STRING, INT>"
+
+    @spark-4
+    Scenario: a map column is reported before a variant column
+      # Spark looks for the two in two separate passes over the whole output, and the map one runs
+      # first (`CheckAnalysis.scala:1009-1022`), so a frame holding both reports the map whatever
+      # order the columns sit in.
+      When query
+        """
+        SELECT DISTINCT * FROM (SELECT parse_json('1') AS v, map('k', 1) AS m)
+        """
+      Then query error SET_OPERATION_ON_MAP_TYPE\] .*the type of column `m` is
+
   Rule: The type in the message is written the way Spark writes a type in SQL
 
     # Spark renders it with `toSQLType`, which is `DataType.sql`, and not with the upper cased

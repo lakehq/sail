@@ -20,7 +20,7 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::attribute::quote_identifier_name;
+use crate::resolver::expression::attribute::{quote_identifier_name, utf16_key};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -1602,8 +1602,11 @@ impl PlanResolver<'_> {
                 }
             })
             .collect::<Vec<_>>();
-        // Spark reports the first duplicate in order of the names (`checkColumnNameDuplication`).
-        normalized.sort();
+        // Spark reports the first duplicate in order of the names (`checkColumnNameDuplication`),
+        // and it orders them with `sortBy`, which compares UTF-16 code units rather than UTF-8
+        // bytes. The two disagree for a code point outside the basic plane against one in
+        // U+E000..U+FFFF, which is enough to name a different duplicate.
+        normalized.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
         match normalized.windows(2).find(|pair| pair[0] == pair[1]) {
             Some(pair) => Err(PlanError::AnalysisError(format!(
                 "[COLUMN_ALREADY_EXISTS] The column {} already exists. Choose another name or \
@@ -1693,9 +1696,9 @@ impl PlanResolver<'_> {
         for (left_field, right_field) in left.fields().iter().zip(right.fields().iter()) {
             if left_field.data_type().is_null() {
                 let widened = Arc::new(right_field.as_ref().clone().with_name(left_field.name()));
-                self.reject_map_column_in_set_operation_for_field(&widened, state)?;
+                self.reject_map_column(&widened, state)?;
             } else {
-                self.reject_map_column_in_set_operation_for_field(left_field, state)?;
+                self.reject_map_column(left_field, state)?;
             }
         }
         // A variant has no order either, and is looked for after every map

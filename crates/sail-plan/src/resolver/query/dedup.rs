@@ -8,6 +8,7 @@ use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::attribute::quote_identifier_name;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -42,13 +43,14 @@ impl PlanResolver<'_> {
                 }
             }
             // Only the columns that are compared have to be ordered, so a map elsewhere in the
-            // frame is not a problem.
+            // frame is not a problem (`Deduplicate` is checked over `d.keys`).
+            let mut key_fields: Vec<&FieldRef> = Vec::with_capacity(on_expr.len());
             for expr in &on_expr {
                 if let Expr::Column(column) = expr {
-                    let field = schema.field_from_column(column)?;
-                    self.reject_map_column_in_set_operation_for_field(field, state)?;
+                    key_fields.push(schema.field_from_column(column)?);
                 }
             }
+            self.reject_map_column_in_set_operation_for_fields(key_fields, state)?;
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
             Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
                 on_expr,
@@ -75,42 +77,74 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
-        for field in schema.fields() {
-            self.reject_map_column_in_set_operation_for_field(field, state)?;
+        self.reject_map_column_in_set_operation_for_fields(schema.fields(), state)
+    }
+
+    /// The same check over the columns a set operation compares. Spark looks for the two types in
+    /// two separate passes over the whole output and the map one runs first
+    /// (`mapColumnInSetOperation` then `variantColumnInSetOperation`, `CheckAnalysis.scala`), so a
+    /// frame holding both reports the map whatever order the columns sit in. Checking each column
+    /// for both types in turn would report whichever type comes first instead.
+    pub(in crate::resolver) fn reject_map_column_in_set_operation_for_fields<'a>(
+        &self,
+        fields: impl IntoIterator<Item = &'a FieldRef> + Clone,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        for field in fields.clone() {
+            self.reject_map_column(field, state)?;
+        }
+        for field in fields {
+            self.reject_variant_column(field, state)?;
         }
         Ok(())
     }
 
-    /// The same check for one column.
-    pub(in crate::resolver) fn reject_map_column_in_set_operation_for_field(
+    /// One column of the map pass.
+    pub(in crate::resolver) fn reject_map_column(
         &self,
         field: &FieldRef,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
         if contains_map_type(field.data_type()) {
-            // Falling back to the field id here would write the internal name (`#6`) into a message
-            // the user reads, so a missing entry is the invariant break it is.
-            let name = state.get_field_info(field.name())?.name().to_string();
-            let data_type = self.spark_type_name(field.data_type())?;
             return Err(PlanError::AnalysisError(format!(
                 "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: \
                  Cannot have MAP type columns in DataFrame which calls set operations (INTERSECT, \
-                 EXCEPT, etc.), but the type of column `{}` is \"{}\".",
-                name.replace('`', "``"),
-                data_type
-            )));
-        }
-        if contains_variant_type(field.data_type()) {
-            let name = state.get_field_info(field.name())?.name().to_string();
-            return Err(PlanError::AnalysisError(format!(
-                "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_VARIANT_TYPE] The feature is not \
-                 supported: Cannot have VARIANT type columns in DataFrame which calls set \
-                 operations (INTERSECT, EXCEPT, etc.), but the type of column `{}` is \"{}\".",
-                name.replace('`', "``"),
+                 EXCEPT, etc.), but the type of column {} is \"{}\".",
+                quote_identifier_name(&self.set_operation_column_name(field, state)?),
                 self.spark_type_name(field.data_type())?
             )));
         }
         Ok(())
+    }
+
+    /// One column of the variant pass.
+    pub(in crate::resolver) fn reject_variant_column(
+        &self,
+        field: &FieldRef,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        if contains_variant_type(field.data_type()) {
+            return Err(PlanError::AnalysisError(format!(
+                "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_VARIANT_TYPE] The feature is not \
+                 supported: Cannot have VARIANT type columns in DataFrame which calls set \
+                 operations (INTERSECT, EXCEPT, etc.), but the type of column {} is \"{}\".",
+                quote_identifier_name(&self.set_operation_column_name(field, state)?),
+                self.spark_type_name(field.data_type())?
+            )));
+        }
+        Ok(())
+    }
+
+    /// The name the message gives a column. Spark builds it with `toSQLId`, which parses the name
+    /// and quotes each part, so a name holding a dot is written as two quoted parts.
+    fn set_operation_column_name(
+        &self,
+        field: &FieldRef,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        // Falling back to the field id here would write the internal name (`#6`) into a message
+        // the user reads, so a missing entry is the invariant break it is.
+        Ok(state.get_field_info(field.name())?.name().to_string())
     }
 }
 

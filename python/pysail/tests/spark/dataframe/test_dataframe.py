@@ -427,6 +427,22 @@ def test_with_columns_reports_the_duplicate_a_java_string_orders_first(spark):
         df.withColumns({deseret: lit(1), deseret_small: lit(2), wide: lit(3), wide_small: lit(4)}).collect()
 
 
+def test_union_by_name_reports_the_duplicate_a_java_string_orders_first(spark):
+    # The twin of the `withColumns` case above, on the other side of the same rule:
+    # `checkColumnNameDuplication` is shared, and it picks the duplicate with `sortBy`, which
+    # compares UTF-16 code units. A name outside the basic plane therefore comes BEFORE one that
+    # a comparison of UTF-8 bytes would put first, and two duplicated groups are what makes
+    # either answer wrong for the other.
+    deseret, deseret_small = "\U00010400", "\U00010428"
+    wide, wide_small = "Ａ", "ａ"
+    left = spark.range(1).select(
+        lit(1).alias(deseret), lit(2).alias(deseret_small), lit(3).alias(wide), lit(4).alias(wide_small)
+    )
+
+    with pytest.raises(Exception, match=re.escape(f"The column `{deseret_small}` already exists.")):
+        left.unionByName(spark.range(1)).collect()
+
+
 def test_with_columns_rejects_two_aliases_that_fold_to_the_same_name(spark):
     # The duplicate check runs BEFORE the expansion, so two names that fold together never reach
     # the rule above: they are an error rather than one of them winning.
@@ -1724,6 +1740,39 @@ def test_an_aggregate_without_grouping_reads_no_other_column(spark, case):
             build(df).collect()
 
 
+# A window function is not an aggregate, so a projection may hold both: the aggregate is computed
+# without grouping and the window runs over its one row. What Spark refuses is the aggregate
+# reading a column OUTSIDE an aggregate, and the window's own specification counts
+# (`assertValidAggregation` recurses into the `WindowExpression`, `ExprUtils.scala:197`), so
+# `ORDER BY a` is refused while `ORDER BY 1` is not. (the expressions, the rows Spark returns or
+# the error)
+_AGGREGATE_WITH_A_WINDOW = {
+    "window over a constant": ("count(a)", "row_number() OVER (ORDER BY 1)", [(2, 1)]),
+    "window over an aggregate": ("count(a)", "sum(count(a)) OVER ()", [(2, 2)]),
+    "window reading a column": ("count(a)", "row_number() OVER (ORDER BY a)", _MISSING_GROUP_BY),
+}
+
+
+@pytest.mark.parametrize("case", list(_AGGREGATE_WITH_A_WINDOW))
+def test_an_aggregate_and_a_window_in_one_projection(spark, case):
+    # TODO: Sail refuses all three. `WindowRewriter` runs before the aggregate is built and leaves
+    #   a placeholder column in its place, which the grouping check then reads as a column the
+    #   aggregate has no group for. Telling the two apart needs the check to know what the window
+    #   SPECIFICATION reads, since that is what decides the third case, so it is not a matter of
+    #   skipping the placeholder. `main` refuses them too, with a DataFusion message
+    #   (`No field named "row_number() ORDER BY [...]"`) rather than this class.
+    left, right, expected = _AGGREGATE_WITH_A_WINDOW[case]
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)")
+
+    if isinstance(expected, list):
+        if not is_jvm_spark():
+            pytest.xfail("Sail reads a window placeholder as a column the aggregate has no group for")
+        assert sorted(tuple(row) for row in df.select(expr(left), expr(right)).collect()) == expected
+    else:
+        with pytest.raises(Exception, match=re.escape(expected)):
+            df.select(expr(left), expr(right)).collect()
+
+
 @pytest.mark.skipif(pyspark_version() < (4, 0), reason="VARIANT is a Spark 4.0 type")
 def test_a_set_operation_names_a_nested_variant_as_spark_does(spark):
     # A variant is stored as a struct, which the type in the message must not show.
@@ -2269,6 +2318,29 @@ def test_get_field_reports_a_field_that_two_names_match(spark):
         assert [tuple(row) for row in df.select(col("s").getField("X")).collect()] == [(2,)]
     finally:
         spark.conf.unset("spark.sql.caseSensitive")
+
+
+# Dropping every field of a struct is refused by `UpdateFields.checkInputDataTypes`, which Spark
+# renders as a `DataTypeMismatch`: the class, then the SQL of the expression that failed, then the
+# submessage. The expression it names is the `update_fields` whose INPUT holds the fields, so a
+# nested path names the inner struct, and chained operations collapse into one call rather than
+# nesting. (the frame, the names to drop, the expression Spark names)
+_DROP_ALL_FIELDS = [
+    ("SELECT named_struct('a', 1) AS s", ("a",), "update_fields(s, dropfield())"),
+    ("SELECT named_struct('a', 1, 'b', 2) AS s", ("A", "B"), "update_fields(s, dropfield(), dropfield())"),
+    ("SELECT named_struct('t', named_struct('a', 1)) AS s", ("t.a",), "update_fields(s.t, dropfield())"),
+]
+
+
+@pytest.mark.parametrize(("query", "names", "expression"), _DROP_ALL_FIELDS)
+def test_dropping_every_field_names_the_expression_spark_names(spark, query, names, expression):
+    expected = (
+        f'[DATATYPE_MISMATCH.CANNOT_DROP_ALL_FIELDS] Cannot resolve "{expression}" due to data '
+        "type mismatch: Cannot drop all fields in struct."
+    )
+
+    with pytest.raises(Exception, match=re.escape(expected)):
+        spark.sql(query).select(col("s").dropFields(*names)).collect()
 
 
 def test_drop_fields_matches_the_field_with_the_resolver(spark):
