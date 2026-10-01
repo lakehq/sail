@@ -110,10 +110,8 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | TRY_CAST NaN to INT returns NULL  | INT   | NULL   |
         | TRY_CAST NaN to FLOAT returns NaN | FLOAT | NaN    |
 
-    # A DOUBLE/FLOAT NaN source cast to TIMESTAMP takes a different resolver arm than a
-    # STRING source (the numeric-to-timestamp path multiplies by a microsecond unit and
-    # NaN-guards the result), so it needs its own scenario, under both ANSI settings since
-    # TRY_CAST must return NULL regardless of `spark.sql.ansi.enabled`.
+    # DOUBLE/FLOAT NaN -> TIMESTAMP takes a different resolver arm than STRING,
+    # so it needs its own scenario, under both ANSI settings.
     Scenario Outline: TRY_CAST NaN DOUBLE to TIMESTAMP returns NULL: <case>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -129,9 +127,8 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | ANSI off  | false |
         | ANSI on   | true  |
 
-    # `doubleToTimestampAnsi` (DateTimeUtils.scala:74-80) throws `CAST_INVALID_INPUT`
-    # for NaN/Infinite under ANSI, rather than returning NULL (only TRY_CAST/non-ANSI
-    # return NULL for this pair). Verified against the Spark 4.2 JVM.
+    # NaN/Infinite under ANSI raises CAST_INVALID_INPUT, not NULL (only TRY_CAST/
+    # non-ANSI return NULL). Verified against the Spark 4.2 JVM.
     Scenario: CAST NaN DOUBLE to TIMESTAMP raises CAST_INVALID_INPUT under ANSI
       Given config spark.sql.ansi.enabled = true
       When query
@@ -140,10 +137,8 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         """
       Then query error CAST_INVALID_INPUT
 
-    # A finite DOUBLE that overflows once multiplied by MICROS_PER_SECOND throws
-    # `CAST_OVERFLOW` under ANSI (from the intermediate Double->Long conversion,
-    # `DoubleExactNumeric.toLong`, numerics.scala:168-174) rather than saturating
-    # (only the non-ANSI path saturates). Verified against the Spark 4.2 JVM.
+    # A finite DOUBLE that overflows once scaled to micros raises CAST_OVERFLOW
+    # under ANSI, instead of saturating (only the non-ANSI path saturates).
     Scenario: CAST an overflowing DOUBLE to TIMESTAMP raises CAST_OVERFLOW under ANSI
       Given config spark.sql.ansi.enabled = true
       When query
@@ -151,6 +146,20 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         SELECT CAST(CAST('1e20' AS DOUBLE) AS TIMESTAMP) AS result
         """
       Then query error CAST_OVERFLOW
+
+    # `9223372036854.775 * 1_000_000` lands exactly on `2^63`, the nearest f64 to
+    # `i64::MAX` -- Spark saturates here, Java-narrowing-style, instead of raising.
+    # Read via `unix_micros`: displaying the raw TIMESTAMP hits an unrelated,
+    # pre-existing display limitation near this boundary.
+    Scenario: CAST a DOUBLE exactly at the f64-rounded Long boundary saturates like Spark under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_micros(CAST(CAST(9223372036854.775 AS DOUBLE) AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
 
   Rule: NaN arithmetic
 

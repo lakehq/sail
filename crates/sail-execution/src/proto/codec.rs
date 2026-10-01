@@ -160,6 +160,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::int64_floor_div::Int64FloorDiv;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
@@ -3167,6 +3168,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkStringToTime::new(is_try);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf { divisor }) => {
+                let udf = Int64FloorDiv::new(divisor);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf { qualifier, is_try }) => {
                 let metadata = sail_common::spec::SparkIntervalMetadata::from_json(&qualifier)
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
@@ -3544,6 +3549,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<Int64FloorDiv>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
@@ -3654,6 +3660,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node_inner.downcast_ref::<SparkStringToTime>() {
             UdfKind::SparkStringToTime(r#gen::SparkStringToTimeUdf {
                 is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<Int64FloorDiv>() {
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf {
+                divisor: func.divisor(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeInterval>() {
             let metadata =

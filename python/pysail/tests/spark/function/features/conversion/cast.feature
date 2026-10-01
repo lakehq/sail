@@ -246,10 +246,8 @@ Feature: CAST expressions
         | result     |
         | -1.000001  |
 
-    # The smallest-magnitude negative case: `raw = -1` microsecond, where truncating
-    # division gives `whole = 0` even though the value is still negative -- the sign
-    # flag is derived from `raw` directly (not from `whole`), so this is the one input
-    # that would catch a regression to deriving it from `whole` instead.
+    # `raw = -1` microsecond: truncating division gives `whole = 0` even though
+    # the value is still negative, so the sign flag must come from `raw`, not `whole`.
     Scenario: A TIMESTAMP one microsecond before 1970 casts to DECIMAL without losing the sign
       When query
         """
@@ -259,11 +257,8 @@ Feature: CAST expressions
         | result     |
         | -0.000001  |
 
-    # `saturating_seconds_to_micros` (see the Rule above) can produce exactly `i64::MIN`
-    # as a raw microsecond value -- negating THAT value directly (rather than negating
-    # only the much-smaller whole/fraction parts obtained after dividing it) would itself
-    # overflow `i64` and corrupt the decimal string; this is the one input that would
-    # catch a regression back to that bug.
+    # `i64::MIN` has no positive counterpart -- negating it directly (instead of
+    # the much smaller whole/fraction parts) would overflow and corrupt the string.
     Scenario: The most negative representable TIMESTAMP casts to DECIMAL without corrupting the sign
       Given config spark.sql.ansi.enabled = false
       When query
@@ -274,10 +269,8 @@ Feature: CAST expressions
         | result                  |
         | -9223372036854.775808   |
 
-    # Spark's decimal-target overflow is always `NUMERIC_VALUE_OUT_OF_RANGE`
-    # (`QueryExecutionErrors.cannotChangeDecimalPrecisionError`, reached through
-    # `changePrecision`), regardless of source type -- the same class the sibling
-    # TIME->Decimal arm already raises, verified against the Spark 4.2 JVM.
+    # Decimal-target overflow is always NUMERIC_VALUE_OUT_OF_RANGE, regardless
+    # of source type. Verified against the Spark 4.2 JVM.
     Scenario: A TIMESTAMP that overflows the target DECIMAL raises NUMERIC_VALUE_OUT_OF_RANGE under ANSI
       Given config spark.sql.ansi.enabled = true
       When query
@@ -286,11 +279,8 @@ Feature: CAST expressions
         """
       Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
-    # `changePrecision` (Decimal.scala:387-476) rounds the exact value to the target
-    # scale FIRST (ROUND_HALF_UP), THEN checks precision -- so a rounding carry that
-    # pushes the value past the target's capacity must still raise, even though the
-    # TRUNCATED value (before rounding) would have fit. Verified against the Spark 4.2
-    # JVM, which raises here (not "9.99", the truncated-then-fit value).
+    # Rounding (not truncating) can push the value past the target's capacity --
+    # Spark raises here, not "9.99" (the truncated-and-fit value).
     Scenario: A TIMESTAMP whose rounded (not truncated) DECIMAL value overflows raises NUMERIC_VALUE_OUT_OF_RANGE
       Given config spark.sql.ansi.enabled = true
       When query
@@ -299,11 +289,9 @@ Feature: CAST expressions
         """
       Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
-    # The ANSI overflow guard's bound is `10^(precision - scale)`, computed as `i64::pow`.
-    # For a target where `precision - scale >= 19` (e.g. DECIMAL(38,19)), that bound itself
-    # exceeds `i64::MAX` and overflows the `i64` computing it -- this is the one case that
-    # would catch a regression back to that bug (a value this size is always valid, since
-    # a raw microsecond TIMESTAMP's whole-seconds part never reaches 19 digits).
+    # `precision - scale >= 19` (e.g. DECIMAL(38,19)): `10^19` overflows `i64`,
+    # so a bound computed that way would itself overflow. Always valid here, since
+    # a raw microsecond TIMESTAMP's whole-seconds part never reaches 19 digits.
     Scenario: A valid TIMESTAMP casts to a wide-scale DECIMAL whose overflow bound itself would overflow i64
       Given config spark.sql.ansi.enabled = true
       When query

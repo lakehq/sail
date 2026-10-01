@@ -9,6 +9,11 @@ import pytest
 
 from pysail.testing.spark.utils.common import pyspark_version
 
+# `StructType.treeString()` (used by every case below) does not exist on the Spark
+# Connect client before pyspark 4.0 -- confirmed absent in pyspark 3.5.9's
+# `pyspark.sql.types` and present starting at 4.0.4.
+pytestmark = pytest.mark.skipif(pyspark_version() < (4, 0), reason="StructType.treeString() requires pyspark 4.0+")
+
 CASES = [
     (
         "variant_date",

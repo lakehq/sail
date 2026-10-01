@@ -14,6 +14,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::int64_floor_div::Int64FloorDiv;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalFromInt64,
@@ -350,16 +351,10 @@ impl PlanResolver<'_> {
                 if is_try || !self.config.ansi_mode {
                     try_cast(exact, to)
                 } else {
-                    // Spark's NUMERIC_VALUE_OUT_OF_RANGE, unlike CAST_OVERFLOW, is
-                    // decimal-precision-specific. `changePrecision` (Decimal.scala:387-476)
-                    // rounds the exact value to the target scale FIRST (`ROUND_HALF_UP`),
-                    // THEN checks the rounded value's precision -- so, like the sibling
-                    // TIMESTAMP->Decimal arm above, checking `whole` (computed BEFORE that
-                    // rounding) against a bound would miss a rounding carry that overflows
-                    // the target (e.g. `9.999999 -> DECIMAL(3,2)` rounds to `10.00`). Using
-                    // `try_cast`'s own rounded rescale result -- NULL only on overflow, since
-                    // TIME is never negative and the only NULL source here is a NULL input --
-                    // reproduces Spark's round-then-check order exactly.
+                    // `changePrecision` (Decimal.scala:387-476) rounds to the target
+                    // scale FIRST, THEN checks precision -- a rounding carry can overflow
+                    // even when the pre-rounding value fits. Inferring overflow from
+                    // `try_cast` returning NULL reproduces that order exactly.
                     let casted = try_cast(exact, to.clone());
                     let overflow = raw_is_not_null.and(casted.clone().is_null());
                     let target_name = {
@@ -393,15 +388,13 @@ impl PlanResolver<'_> {
                 let raw = cast(expr.clone(), DataType::Int64);
                 let divisor = time_unit_to_multiplier(&unit);
                 // Cast.scala timestampToLong/timeToLong use floorDiv, not a
-                // floating-point conversion or truncation toward zero.
+                // floating-point conversion or truncation toward zero (see
+                // `Int64FloorDiv` for why this is one opaque UDF call, not an
+                // expression referencing `raw` twice).
                 let seconds = if divisor == 1 {
                     raw
                 } else {
-                    let quotient = raw.clone() / lit(divisor);
-                    let adjustment =
-                        datafusion_expr::when((raw % lit(divisor)).lt(lit(0_i64)), lit(1_i64))
-                            .otherwise(lit(0_i64))?;
-                    quotient - adjustment
+                    ScalarUDF::from(Int64FloorDiv::new(divisor)).call(vec![raw])
                 };
                 let bounds = match to {
                     DataType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
@@ -411,12 +404,15 @@ impl PlanResolver<'_> {
                     }
                     _ => None,
                 };
-                if is_try || !self.config.ansi_mode {
-                    // TIMESTAMP -> BIGINT cannot overflow and Spark treats it
-                    // as an upcast, including TRY_CAST's analyzed nullability.
-                    if is_timestamp && to == DataType::Int64 {
-                        cast(seconds, to)
-                    } else if is_try || bounds.is_some() {
+                if is_timestamp && to == DataType::Int64 {
+                    // TIMESTAMP -> BIGINT cannot overflow (Spark treats it as an
+                    // upcast) regardless of TRY_CAST/ANSI, and `seconds` is already
+                    // `Int64` -- return it as-is. A redundant `cast(seconds, Int64)`
+                    // here made a window's required ordering diverge from its
+                    // `SortExec`'s actual expression and broke planning.
+                    seconds
+                } else if is_try || !self.config.ansi_mode {
+                    if is_try || bounds.is_some() {
                         try_cast(seconds, to)
                     } else {
                         cast(seconds, to)
@@ -521,20 +517,11 @@ impl PlanResolver<'_> {
                 false,
             ) if self.config.ansi_mode => {
                 // `doubleToTimestampAnsi` (DateTimeUtils.scala:74-80) throws
-                // `CAST_INVALID_INPUT` on NaN/Infinite (reported against the ORIGINAL
-                // value, source DOUBLE, target TIMESTAMP); otherwise it multiplies by
-                // `MICROS_PER_SECOND` and hands that off to `DoubleExactNumeric.toLong`
-                // (numerics.scala:168-174), which throws `CAST_OVERFLOW` if the
-                // MULTIPLIED value doesn't fit `Long` -- reported as DOUBLE -> BIGINT
-                // (the intermediate Long conversion, not the TIMESTAMP target), with
-                // the already-multiplied value in the message. FloatType takes the
-                // same path via `.toDouble` first (Cast.scala:766-770), so both source
-                // types report "DOUBLE" (matching `toSQLType(DoubleType)`), never
-                // "FLOAT". Verified against the Spark 4.2 JVM: `CAST('NaN' AS DOUBLE) AS
-                // TIMESTAMP` raises `[CAST_INVALID_INPUT] ... "DOUBLE" ... "TIMESTAMP" ...
-                // malformed ...`; `CAST('1e20' AS DOUBLE) AS TIMESTAMP` raises
-                // `[CAST_OVERFLOW] The value 1.0E26D of the type "DOUBLE" cannot be cast
-                // to "BIGINT" due to an overflow ...` (1e20 * 1e6 = 1e26).
+                // `CAST_INVALID_INPUT` on NaN/Infinite; otherwise it multiplies by
+                // `MICROS_PER_SECOND` and `DoubleExactNumeric.toLong` throws
+                // `CAST_OVERFLOW` (reported as DOUBLE -> BIGINT) if that doesn't fit.
+                // FLOAT takes the same path via `.toDouble` first, so both report
+                // "DOUBLE". Verified against the Spark 4.2 JVM.
                 let multiplier = time_unit_to_multiplier(&time_unit);
                 let double_expr = cast(expr, DataType::Float64);
                 let scaled = double_expr.clone().mul(lit(multiplier as f64));
@@ -563,6 +550,12 @@ impl PlanResolver<'_> {
                         " of the type \"DOUBLE\" cannot be cast to \"BIGINT\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead.",
                     ),
                 ]);
+                // `otherwise` runs over the whole batch, so it must be non-throwing --
+                // and `try_cast` alone is wrong at `scaled == 2^63` (the nearest f64 to
+                // `i64::MAX`): Java's narrowing saturates there, but `try_cast`'s kernel
+                // uses a strict `<` and returns NULL. Reuse `saturating_double_to_i64`
+                // (used by the non-ANSI arm above), which already saturates correctly.
+                let saturated = saturating_double_to_i64(scaled, false)?;
                 datafusion_expr::when(
                     is_invalid,
                     ScalarUDF::from(RaiseError::new()).call(vec![invalid_message]),
@@ -571,12 +564,7 @@ impl PlanResolver<'_> {
                     overflow,
                     ScalarUDF::from(RaiseError::new()).call(vec![overflow_message]),
                 )
-                // `otherwise` is evaluated over the WHOLE batch, not just the rows that
-                // select it, so it must itself be non-throwing -- a plain `cast` here
-                // would still error out on the very overflowing rows the guards above
-                // exist to catch. `try_cast` never throws; the guards above are what
-                // actually raise, per row, via the WHEN branches selecting over it.
-                .otherwise(try_cast(scaled, cast_to_type.clone()))?
+                .otherwise(cast(saturated, cast_to_type.clone()))?
             }
             // Spark's `castToTimestamp`/`castToBoolean` for BOOLEAN (Cast.scala:743-744,725)
             // treat the boolean as the raw microsecond value itself (0 or 1), not as a count
@@ -616,10 +604,9 @@ impl PlanResolver<'_> {
                     unreachable!("guarded above")
                 };
                 // `Decimal.apply(t, 19, 6)` (Cast.scala:1119-1121) treats the raw
-                // microsecond `Long` as an EXACT unscaled decimal, never floating point --
-                // build it the same way the TIME->Decimal arm above does (through a
-                // string), rather than `1.0 / multiplier * t` in Float64, which loses
-                // precision once `t` exceeds 2^53 (~year 2255).
+                // microsecond `Long` as an exact unscaled decimal -- build it through a
+                // string, like the TIME->Decimal arm, not `1.0/multiplier * t` in
+                // Float64, which loses precision past 2^53 (~year 2255).
                 let multiplier = time_unit_to_multiplier(&time_unit);
                 let digits: i32 = match time_unit {
                     TimeUnit::Second => 0,
@@ -627,12 +614,9 @@ impl PlanResolver<'_> {
                     TimeUnit::Microsecond => 6,
                     TimeUnit::Nanosecond => 9,
                 };
-                // Divide/modulo directly on `raw` (truncating division never overflows,
-                // unlike negating `raw` itself first, which panics/wraps for the one value
-                // `raw` can actually be that has no positive i64 counterpart: `i64::MIN`,
-                // reachable via `saturating_seconds_to_micros`'s own saturation above).
-                // `whole`/`fraction` are then negated separately, each already far smaller
-                // in magnitude than `raw` itself, so that negation is always safe.
+                // Divide/modulo `raw` directly, then negate `whole`/`fraction`
+                // separately -- negating `raw` itself first panics/wraps for
+                // `i64::MIN`, which has no positive i64 counterpart.
                 let raw = cast(expr, DataType::Int64);
                 let raw_is_not_null = raw.clone().is_not_null();
                 let is_negative = raw.clone().lt(lit(0_i64));
@@ -665,21 +649,11 @@ impl PlanResolver<'_> {
                 if is_try || !self.config.ansi_mode {
                     try_cast(exact, to.clone())
                 } else {
-                    // Spark's decimal-target overflow is always `NUMERIC_VALUE_OUT_OF_RANGE`
-                    // (`QueryExecutionErrors.cannotChangeDecimalPrecisionError`,
-                    // `changePrecision`'s overflow branch), regardless of source type --
-                    // the same class the TIME->Decimal arm above already raises explicitly.
-                    // `changePrecision` (Decimal.scala:387-476) rounds the exact value to the
-                    // target scale FIRST (`ROUND_HALF_UP`), THEN checks the rounded value's
-                    // precision -- so a pre-check against `whole_abs` (computed BEFORE that
-                    // rounding) misses the case where rounding carries a digit past the
-                    // target's capacity (e.g. `9.999999 -> DECIMAL(3,2)` rounds to `10.00`,
-                    // which overflows even though the truncated whole part, `9`, does not).
-                    // `try_cast` already performs that exact rounded rescale and returns NULL
-                    // on overflow, so comparing its result against non-null input reproduces
-                    // Spark's round-then-check order precisely, with no separate bound to
-                    // get right (or to overflow computing, as a prior version of this guard
-                    // did for `precision - scale >= 19`).
+                    // Spark's decimal-target overflow is always `NUMERIC_VALUE_OUT_OF_RANGE`,
+                    // and `changePrecision` (Decimal.scala:387-476) rounds to the target
+                    // scale FIRST, THEN checks precision -- so inferring overflow from
+                    // `try_cast` returning NULL (rather than a pre-rounding bound check)
+                    // reproduces that order exactly, same as the TIME->Decimal arm above.
                     let casted = try_cast(exact, to.clone());
                     let overflow = raw_is_not_null.and(casted.clone().is_null());
                     let target_name = {
@@ -741,11 +715,13 @@ impl PlanResolver<'_> {
                 };
                 cast(expr.mul(lit(multiplier)), cast_to_type)
             }
-            (from, DataType::Interval(IntervalUnit::YearMonth), is_try) if from.is_numeric() => {
-                // Spark interprets a numeric-to-YearMonthIntervalType cast using the
-                // end (or start) field: YEAR means the number counts years, so it
-                // must be scaled to months before storing (months is the only
-                // representation Catalyst/Arrow have for this interval).
+            (from, DataType::Interval(IntervalUnit::YearMonth), is_try)
+                if from.is_integer() || from.is_decimal() =>
+            {
+                // Spark's `canAnsiCast`/`canCast` (Cast.scala:117,261-262) only permit
+                // `IntegralType | DecimalType` here, never FLOAT/DOUBLE -- matching the
+                // sibling `Duration` arm above. YEAR means the number counts years, so
+                // it must be scaled to months before storing.
                 let multiplier = match year_month_interval_field {
                     Some(spec::IntervalFieldType::Year) => 12_i64,
                     _ => 1_i64,
