@@ -3,7 +3,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::conditional::{SparkConditionalCast, SparkShiftCount};
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder, ScalarFunctionInput};
@@ -53,7 +53,7 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let shift = if shift_type == DataType::Int32 {
         shift
     } else if !ansi_mode && shift_type == DataType::Int64 {
-        (shift & lit(63_i64)).cast_to(&DataType::Int32, function_context.schema)?
+        ScalarUDF::from(SparkShiftCount::default()).call(vec![shift])
     } else {
         // TODO: Match non-ANSI fractional count saturation and DECIMAL wrapping;
         // shared checked casts reject those out-of-range counts.
@@ -86,11 +86,11 @@ fn signed_shift(op: Operator) -> ScalarFunction {
         let shift = if value.get_type(function_context.schema)? != DataType::Int64
             && shift.get_type(function_context.schema)? == DataType::Int64
         {
-            // Only the low six bits select the shift, so masking first keeps the result
-            // and avoids casting a count outside the INT range.
+            // Only the low six bits select the shift. Normalize directly into INT
+            // to avoid an intermediate BIGINT masking buffer.
             // TODO: Check BIGINT-to-INT overflow before masking in ANSI mode;
             //  overflowing counts are currently accepted instead of rejected.
-            (shift & lit(63_i64)).cast_to(&DataType::Int32, function_context.schema)?
+            ScalarUDF::from(SparkShiftCount::default()).call(vec![shift])
         } else {
             shift
         };

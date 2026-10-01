@@ -158,7 +158,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
-use sail_function::scalar::conditional::{SparkConditionalCast, SparkNvl2};
+use sail_function::scalar::conditional::{SparkConditionalCast, SparkNvl2, SparkShiftCount};
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
@@ -3403,6 +3403,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
+            "spark_shift_count" => Ok(Arc::new(ScalarUDF::from(SparkShiftCount::default()))),
             "shiftrightunsigned" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right_unsigned()))),
             "spark_bitwise_not" | "bitwise_not" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
@@ -3545,6 +3546,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
+            || node_inner.is::<SparkShiftCount>()
             || (node_inner.is::<SparkBitShift>() && node.name() == "shiftrightunsigned")
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
@@ -6598,6 +6600,14 @@ mod tests {
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_shift_count_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkShiftCount::default()))?;
+        assert_eq!(decoded.name(), "spark_shift_count");
+        assert!(decoded.inner().is::<SparkShiftCount>());
         Ok(())
     }
 

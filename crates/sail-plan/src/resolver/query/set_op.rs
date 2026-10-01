@@ -512,6 +512,8 @@ fn promote_union_numeric_type(
                         !union_field_names_equal_ignore_case(field.name(), other.name())
                     }
                 });
+            // TODO: Support reordered nested fields with different case spellings.
+            // The shared struct cast still requires identical names (a/b versus B/A).
             let others_by_name = reordered
                 .then(|| {
                     others

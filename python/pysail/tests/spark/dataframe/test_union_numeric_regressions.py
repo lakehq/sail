@@ -218,3 +218,26 @@ def test_union_equal_numeric_types_preserves_left_metadata(spark):
     left = spark.sql("SELECT 7L AS v").select(F.col("v").alias("v", metadata={"source": "left"}))
     right = spark.sql("SELECT CAST(NULL AS BIGINT) AS v").select(F.col("v").alias("v", metadata={"source": "right"}))
     assert left.union(right).schema["v"].metadata == {"source": "left"}
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: reordered nested UNION fields require identical spelling", strict=True
+)
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize(("container", "field"), [("{}", "s"), ("array({})", "s[0]")])
+def test_union_by_name_promotes_case_insensitive_reordered_nested_fields(spark, ansi, container, field):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    original_case_sensitive = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    spark.conf.set("spark.sql.caseSensitive", "false")
+    try:
+        left_struct = "named_struct('a', CAST(1.25 AS FLOAT), 'b', 9007199254740993L)"
+        right_struct = "named_struct('B', CAST(9007199254740993 AS DECIMAL(20,0)), 'A', CAST(2.5 AS FLOAT))"
+        left = spark.sql(f"SELECT 0 AS id, {container.format(left_struct)} AS s")
+        right = spark.sql(f"SELECT 1 AS id, {container.format(right_struct)} AS s")
+        result = left.unionByName(right).selectExpr("id", f"{field}.a AS a", f"{field}.b AS b").orderBy("id")
+        assert result.dtypes == [("id", "int"), ("a", "float"), ("b", "decimal(20,0)")]
+        assert result.collect() == [(0, 1.25, Decimal(9007199254740993)), (1, 2.5, Decimal(9007199254740993))]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
+        spark.conf.set("spark.sql.caseSensitive", original_case_sensitive)

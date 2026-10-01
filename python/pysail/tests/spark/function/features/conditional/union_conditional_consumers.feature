@@ -274,3 +274,89 @@ Feature: Numeric STRING UNION casts stay lazy under window and grouping consumer
       | 3  | 7  |
       | 4  | 40 |
       | 5  | 50 |
+
+  Scenario Outline: UNION conditional grouping analytics <grouping> preserve lazy casts with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT CAST(CASE WHEN kind = 'n' THEN v ELSE -1L END AS BIGINT) AS r,
+             grouping(CASE WHEN kind = 'n' THEN v ELSE -1L END) AS g, count(*) AS c
+      FROM (
+        SELECT id, kind, v FROM union_conditional_source
+        UNION ALL
+        SELECT id, 'n' AS kind, id * 10 AS v FROM range(4, 6)
+      ) GROUP BY <grouping>
+      """
+    Then query result collected
+      | r    | g | c |
+      | NULL | 1 | 5 |
+      | -1   | 0 | 1 |
+      | 5    | 0 | 1 |
+      | 7    | 0 | 1 |
+      | 40   | 0 | 1 |
+      | 50   | 0 | 1 |
+
+    Examples:
+      | ansi  | grouping                                                       |
+      | true  | ROLLUP(CASE WHEN kind = 'n' THEN v ELSE -1L END)                 |
+      | false | ROLLUP(CASE WHEN kind = 'n' THEN v ELSE -1L END)                 |
+      | true  | CUBE(CASE WHEN kind = 'n' THEN v ELSE -1L END)                   |
+      | false | CUBE(CASE WHEN kind = 'n' THEN v ELSE -1L END)                   |
+      | true  | GROUPING SETS ((CASE WHEN kind = 'n' THEN v ELSE -1L END), ())    |
+      | false | GROUPING SETS ((CASE WHEN kind = 'n' THEN v ELSE -1L END), ())    |
+
+  Scenario: UNION conditional CUBE keeps multiple keys and grouping IDs
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT CASE WHEN kind = 'n' THEN v ELSE -1L END AS r, kind, grouping_id() AS g, count(*) AS c
+      FROM (
+        SELECT id, kind, v FROM union_conditional_source
+        UNION ALL
+        SELECT id, 'n' AS kind, id * 10 AS v FROM range(4, 6)
+      ) GROUP BY CUBE(CASE WHEN kind = 'n' THEN v ELSE -1L END, kind)
+      """
+    Then query result collected
+      | r    | kind | g | c |
+      | -1   | s    | 0 | 1 |
+      | 5    | n    | 0 | 1 |
+      | 7    | n    | 0 | 1 |
+      | 40   | n    | 0 | 1 |
+      | 50   | n    | 0 | 1 |
+      | -1   | NULL | 1 | 1 |
+      | 5    | NULL | 1 | 1 |
+      | 7    | NULL | 1 | 1 |
+      | 40   | NULL | 1 | 1 |
+      | 50   | NULL | 1 | 1 |
+      | NULL | n    | 2 | 4 |
+      | NULL | s    | 2 | 1 |
+      | NULL | NULL | 3 | 5 |
+
+  Scenario: UNION conditional grouping sets share a key across distinct sets
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT CAST(CASE WHEN kind = 'n' THEN v ELSE -1L END AS BIGINT) AS r,
+             kind, grouping_id() AS g, count(*) AS c
+      FROM (
+        SELECT id, kind, v FROM union_conditional_source
+        UNION ALL
+        SELECT id, 'n' AS kind, id * 10 AS v FROM range(4, 6)
+      ) GROUP BY GROUPING SETS (
+        (CASE WHEN kind = 'n' THEN v ELSE -1L END, kind),
+        (CASE WHEN kind = 'n' THEN v ELSE -1L END), ()
+      )
+      """
+    Then query result collected
+      | r    | kind | g | c |
+      | -1   | s    | 0 | 1 |
+      | 5    | n    | 0 | 1 |
+      | 7    | n    | 0 | 1 |
+      | 40   | n    | 0 | 1 |
+      | 50   | n    | 0 | 1 |
+      | -1   | NULL | 1 | 1 |
+      | 5    | NULL | 1 | 1 |
+      | 7    | NULL | 1 | 1 |
+      | 40   | NULL | 1 | 1 |
+      | 50   | NULL | 1 | 1 |
+      | NULL | NULL | 3 | 5 |

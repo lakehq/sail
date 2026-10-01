@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
@@ -131,6 +131,9 @@ fn extract_window_conditionals(
     let Some(mut extractor) = ConditionalExtractor::try_new(input, config)? else {
         return Ok(Transformed::no(plan));
     };
+    // TODO: Match Spark's eager cast errors when a composite UNION producer is
+    // shared by window arguments and select-list items. Shared projection inlining
+    // can still make these casts lazy when Spark's CollapseProject keeps them eager.
     let window_exprs = windows
         .iter()
         .map(|window| {
@@ -191,21 +194,36 @@ fn pull_out_grouping_conditionals(
     let LogicalPlan::Aggregate(aggregate) = &plan else {
         return Ok(Transformed::no(plan));
     };
-    if aggregate
-        .group_expr
-        .iter()
-        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
-        || !has_strict_union(&aggregate.input)?
-    {
+    if !has_strict_union(&aggregate.input)? {
         return Ok(Transformed::no(plan));
     }
     let Some(mut extractor) = ConditionalExtractor::try_new(&aggregate.input, config)? else {
         return Ok(Transformed::no(plan));
     };
+    let mut grouping_keys = HashMap::<Expr, Expr>::new();
     let group_expr = aggregate
         .group_expr
         .iter()
-        .map(|expr| with_name(expr, |expr| extractor.rewrite(expr)))
+        .map(|expr| {
+            if matches!(expr, Expr::GroupingSet(_)) {
+                // Grouping sets must remain grouping sets: alias their rewritten keys,
+                // not the container, so Aggregate retains its grouping ID and nullability.
+                expr.clone()
+                    .map_children(|expr| {
+                        // Reuse the same extracted column when distinct sets share a key.
+                        // Otherwise Aggregate would treat it as several output fields.
+                        if let Some(rewritten) = grouping_keys.get(&expr) {
+                            return Ok(Transformed::yes(rewritten.clone()));
+                        }
+                        let rewritten = with_name(&expr, |expr| extractor.rewrite(expr))?;
+                        grouping_keys.insert(expr, rewritten.clone());
+                        Ok(Transformed::yes(rewritten))
+                    })
+                    .map(|result| result.data)
+            } else {
+                with_name(expr, |expr| extractor.rewrite(expr))
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
     let aggr_expr = aggregate
         .aggr_expr

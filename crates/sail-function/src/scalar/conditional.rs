@@ -5,8 +5,8 @@ use datafusion::arrow::array::{
     new_empty_array,
 };
 use datafusion::arrow::buffer::NullBuffer;
-use datafusion::arrow::compute::{CastOptions, cast_with_options, nullif, take};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion::arrow::compute::{CastOptions, cast_with_options, nullif, take, unary};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type, Int64Type, TimeUnit};
 use datafusion_common::{Result, ScalarValue, internal_err, plan_datafusion_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
@@ -15,7 +15,7 @@ use datafusion_expr::{
     expr,
 };
 
-use crate::error::invalid_arg_count_exec_err;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 /// Resolve NVL2's value branches after its inputs have been analyzed, then lower
 /// to a lazy CASE. The tested argument does not participate in type coercion.
@@ -242,6 +242,80 @@ impl ScalarUDFImpl for SparkConditionalCast {
                 &self.target_type,
                 &options,
             )?)),
+        }
+    }
+}
+
+/// Retain a BIGINT shift count's low six bits directly in an INT buffer.
+/// Shifts inspect only these bits; masking then casting would allocate two buffers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SparkShiftCount {
+    signature: Signature,
+}
+
+impl Default for SparkShiftCount {
+    fn default() -> Self {
+        Self {
+            signature: Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkShiftCount {
+    fn name(&self) -> &str {
+        "spark_shift_count"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [source] = args.arg_fields else {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 1),
+                args.arg_fields.len(),
+            ));
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Int32,
+            source.is_nullable(),
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [arg] = args.args.as_slice() else {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 1),
+                args.args.len(),
+            ));
+        };
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Int64(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Int32(value.map(|count| (count & 63) as i32)),
+            )),
+            ColumnarValue::Array(array) if array.data_type() == &DataType::Int64 => {
+                Ok(ColumnarValue::Array(Arc::new(unary::<
+                    Int64Type,
+                    _,
+                    Int32Type,
+                >(
+                    array.as_primitive::<Int64Type>(),
+                    |count| (count & 63) as i32,
+                ))))
+            }
+            _ => Err(unsupported_data_type_exec_err(
+                self.name(),
+                "BIGINT",
+                &arg.data_type(),
+            )),
         }
     }
 }

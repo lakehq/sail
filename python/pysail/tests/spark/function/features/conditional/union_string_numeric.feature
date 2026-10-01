@@ -390,6 +390,23 @@ Feature: Numeric STRING coercion in UNION inputs
       | CAST(1.25 AS FLOAT)         | 'x'                        | 1.25  | x    |
       | 'x'                        | CAST(1.25 AS DECIMAL(10,2)) | x     | 1.25 |
 
+  # TODO: Keep Spark's eager cast when a composite UNION producer is reused by
+  # both the window argument and select list. This also succeeds on the merge-base.
+  @sail-bug
+  Scenario: Reused composite UNION producers retain their cast errors under a conditional window
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT id, CAST(IF(id = 1, -1L, v) AS BIGINT) AS r,
+             sum(CAST(IF(id = 1, -1L, v) AS BIGINT)) OVER (ORDER BY id) AS s
+      FROM (
+        SELECT id, IF(id = 1, 'bad', '5') AS v FROM range(3)
+        UNION ALL
+        SELECT id, id * 10 AS v FROM range(3, 5)
+      ) ORDER BY id
+      """
+    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
+
   Rule: Subquery bindings survive conditional projection pushdown
 
     # Spark 4.2's own projection rule can fail with a missing AttributeMap key
