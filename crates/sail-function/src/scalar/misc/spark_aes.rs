@@ -912,8 +912,12 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         let result = match &mode {
             EncryptionMode::GCM => {
                 // iv is prepended to the ciphertext
-                let iv = &expr[..12];
-                let expr = &expr[12..];
+                let (iv, expr) = expr.split_at_checked(12).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Spark `aes_decrypt`: Input must be at least 12 bytes long for GCM mode, got {}",
+                        expr.len()
+                    )
+                })?;
                 let nonce = Nonce::from_slice(iv);
                 let decrypted = match key.len() {
                     16 => {
@@ -972,8 +976,12 @@ impl ScalarUDFImpl for SparkAESDecrypt {
             }
             EncryptionMode::CBC => {
                 // iv is prepended to the ciphertext
-                let iv = &expr[..16];
-                let expr = &expr[16..];
+                let (iv, expr) = expr.split_at_checked(16).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Spark `aes_decrypt`: Input must be at least 16 bytes long for CBC mode, got {}",
+                        expr.len()
+                    )
+                })?;
                 let decrypted = match key.len() {
                     16 => {
                         let decryptor = cbc::Decryptor::<Aes128>::new_from_slices(key, iv)
@@ -1135,5 +1143,47 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    fn decrypt_args(expr: Vec<u8>, mode: &str) -> ScalarFunctionArgs {
+        ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(expr))),
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(b"0000111122223333".to_vec()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(mode.to_string()))),
+            ],
+            arg_fields: vec![
+                Arc::new(Field::new("expr", DataType::Binary, true)),
+                Arc::new(Field::new("key", DataType::Binary, true)),
+                Arc::new(Field::new("mode", DataType::Utf8, true)),
+            ],
+            number_rows: 1,
+            return_field: Arc::new(Field::new("result", DataType::Binary, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        }
+    }
+
+    #[test]
+    fn test_aes_decrypt_input_shorter_than_iv() -> Result<()> {
+        // The IV is prepended to the ciphertext: 12 bytes for GCM and 16 bytes for CBC.
+        for (mode, len) in [("GCM", 0), ("GCM", 11), ("CBC", 0), ("CBC", 15)] {
+            let result = SparkAESDecrypt::new().invoke_with_args(decrypt_args(vec![0; len], mode));
+            assert!(result.is_err(), "{mode} input of {len} byte(s)");
+
+            let result =
+                SparkTryAESDecrypt::new().invoke_with_args(decrypt_args(vec![0; len], mode))?;
+            assert!(
+                matches!(result, ColumnarValue::Scalar(ScalarValue::Binary(None))),
+                "{mode} input of {len} byte(s)"
+            );
+        }
+        Ok(())
     }
 }
