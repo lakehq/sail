@@ -44,6 +44,8 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .zip(branch_values)
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
+    // TODO: Preserve Spark's non-nullable result for exhaustive CASE branches.
+    // The implicit ELSE NULL still makes these results nullable in DataFusion.
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
@@ -185,6 +187,8 @@ fn coerce_numeric_values(
         {
             // Preserve DataFusion's existing coercion for nested types and
             // string/numeric branches before an enclosing numeric CASE/IF uses their type.
+            // TODO: Apply Spark's numeric widening recursively to nested branches,
+            // including ANSI integral/FLOAT, FLOAT/DECIMAL, and decimal scale limits.
             conditional_common_type(&data_types)
         } else {
             None
