@@ -240,10 +240,7 @@ impl PlanResolver<'_> {
         is_all: bool,
         by_name: bool,
     ) -> PlanResult<LogicalPlan> {
-        let ansi_mode = self
-            .config
-            .view_conditional_ansi_mode
-            .unwrap_or(self.config.ansi_mode);
+        let ansi_mode = self.config.ansi_mode;
         // Cast Spark's numeric common types, including ANSI STRING/numeric pairs,
         // before exposing the UNION type:
         // conditional consumers must not cache a narrower type than its actual values.

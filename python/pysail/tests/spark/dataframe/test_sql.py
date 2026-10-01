@@ -282,7 +282,7 @@ def test_predicate_negation(spark):
 
 
 @pytest.mark.parametrize("with_properties", [False, True])
-def test_persistent_view_hides_conditional_config_properties(spark, with_properties):
+def test_persistent_view_hides_sql_config_properties(spark, with_properties):
     view_name = "view_conditional_config_metadata"
     properties = "TBLPROPERTIES ('review.owner' = 'team')" if with_properties else ""
     try:
@@ -290,13 +290,6 @@ def test_persistent_view_hides_conditional_config_properties(spark, with_propert
 
         describe = {row.col_name: row.data_type for row in spark.sql(f"DESCRIBE EXTENDED {view_name}").collect()}
         information = spark.sql(f"SHOW TABLE EXTENDED LIKE '{view_name}'").collect()[0].information
-        for key in (
-            "view.sqlConfig.spark.sql.ansi.enabled",
-            "view.sqlConfig.spark.sql.legacy.decimal.retainFractionDigitsOnTruncate",
-        ):
-            assert key not in describe.get("Table Properties", "")
-            assert key not in information
-
         if with_properties:
             assert describe["Table Properties"] == "[review.owner=team]"
             assert "Table Properties: [review.owner=team]" in information

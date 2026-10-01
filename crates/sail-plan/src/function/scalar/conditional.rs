@@ -74,15 +74,6 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
-    // NVL2 temporal branches use the same creation-time ANSI mode as numeric branches.
-    let mut config = Arc::clone(function_context.plan_config);
-    if let Some(ansi_mode) = config.view_conditional_ansi_mode {
-        Arc::make_mut(&mut config).ansi_mode = ansi_mode;
-    }
-    let function_context = FunctionContextInput {
-        plan_config: &config,
-        ..function_context
-    };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
     let (mut if_non_null, mut if_null) = branches.two()?;
     let function = SparkNvl2::new(Arc::clone(&function_context.plan_config.session_timezone));
@@ -162,15 +153,7 @@ fn coerce_numeric_values(
     data_types: Vec<DataType>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
-    let ansi_mode = function_context
-        .plan_config
-        .view_conditional_ansi_mode
-        .unwrap_or(
-            function_context.plan_config.ansi_mode
-                && !function_context
-                    .plan_config
-                    .preserve_view_conditional_float_type,
-        );
+    let ansi_mode = function_context.plan_config.ansi_mode;
     let retain_fraction_digits = function_context
         .plan_config
         .legacy_decimal_retain_fraction_digits;

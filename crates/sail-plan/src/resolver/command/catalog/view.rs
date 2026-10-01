@@ -10,10 +10,7 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::{
-    TemporaryViewSource, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
-    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
-};
+use sail_common_datafusion::catalog::{TemporaryViewSource, VIEW_SQL_CONFIG_PREFIX};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -74,21 +71,13 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
-        // Preserve the settings used by conditional coercion.
-        properties.retain(|(key, _)| {
-            key != VIEW_CONDITIONAL_ANSI_MODE_PROPERTY
-                && key != VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY
-        });
-        properties.push((
-            VIEW_CONDITIONAL_ANSI_MODE_PROPERTY.to_string(),
-            self.config.ansi_mode.to_string(),
-        ));
-        properties.push((
-            VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY.to_string(),
+        properties.retain(|(key, _)| !key.starts_with(VIEW_SQL_CONFIG_PREFIX));
+        properties.extend(
             self.config
-                .legacy_decimal_retain_fraction_digits
-                .to_string(),
-        ));
+                .view_sql_configs()
+                .into_iter()
+                .map(|(key, value)| (format!("{VIEW_SQL_CONFIG_PREFIX}{key}"), value)),
+        );
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {

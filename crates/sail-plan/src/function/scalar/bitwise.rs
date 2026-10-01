@@ -29,10 +29,7 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let null_value = (!infallible_count && value.nullable(function_context.schema)?)
         .then(|| value.clone().is_null());
 
-    let ansi_mode = function_context
-        .plan_config
-        .view_conditional_ansi_mode
-        .unwrap_or(function_context.plan_config.ansi_mode);
+    let ansi_mode = function_context.plan_config.ansi_mode;
     let int_cast = ScalarUDF::from(SparkConditionalCast::new(DataType::Int32));
     let value = match value.get_type(function_context.schema)? {
         DataType::Decimal128(_, _) if !ansi_mode => {

@@ -13,8 +13,7 @@ use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    LakehouseOperation, TableColumnStatus, TableKind, VIEW_CONDITIONAL_ANSI_MODE_PROPERTY,
-    VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY,
+    LakehouseOperation, TableColumnStatus, TableKind, VIEW_SQL_CONFIG_PREFIX,
 };
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -228,8 +227,6 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
-    // FIXME: Capture and restore the remaining creation-time SQL configuration;
-    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
@@ -244,20 +241,14 @@ impl PlanResolver<'_> {
         let config = if self.config.legacy_use_current_configs_for_view {
             Arc::clone(&self.config)
         } else {
-            let mut config = self.config.as_ref().clone();
-            config.preserve_view_conditional_float_type = true;
-            // Older views lack the creation-time setting; retain their existing coercion.
-            config.view_conditional_ansi_mode = properties
-                .iter()
-                .find(|(key, _)| key == VIEW_CONDITIONAL_ANSI_MODE_PROPERTY)
-                .and_then(|(_, value)| value.parse::<bool>().ok());
-            // Older views retain the existing nonlegacy decimal rule.
-            config.legacy_decimal_retain_fraction_digits = properties
-                .iter()
-                .find(|(key, _)| key == VIEW_DECIMAL_RETAIN_FRACTION_DIGITS_PROPERTY)
-                .and_then(|(_, value)| value.parse::<bool>().ok())
-                .unwrap_or(false);
-            Arc::new(config)
+            let configs = properties
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
+                        .map(|key| (key.to_string(), value))
+                })
+                .collect();
+            Arc::new(self.config.with_view_sql_configs(configs)?)
         };
         let resolver = Self::new(self.ctx, config);
         let plan = match spec_plan {
