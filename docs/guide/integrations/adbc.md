@@ -41,31 +41,43 @@ go get github.com/apache/arrow-adbc/go/adbc
 ```
 
 ```xml [Java]
-<!-- Add these dependencies to your pom.xml -->
+<!-- Add these properties and dependencies to your pom.xml. -->
+<!-- Use the latest ADBC release and the Arrow version it is built against. -->
+<properties>
+  <adbc.version>0.24.0</adbc.version>
+  <arrow.version>19.0.0</arrow.version>
+</properties>
+
 <dependencies>
   <dependency>
     <groupId>org.apache.arrow.adbc</groupId>
     <artifactId>adbc-core</artifactId>
+    <version>${adbc.version}</version>
   </dependency>
   <dependency>
     <groupId>org.apache.arrow.adbc</groupId>
     <artifactId>adbc-driver-manager</artifactId>
+    <version>${adbc.version}</version>
   </dependency>
   <dependency>
     <groupId>org.apache.arrow.adbc</groupId>
     <artifactId>adbc-driver-jni</artifactId>
+    <version>${adbc.version}</version>
   </dependency>
   <dependency>
     <groupId>org.apache.arrow</groupId>
     <artifactId>arrow-memory-core</artifactId>
+    <version>${arrow.version}</version>
   </dependency>
   <dependency>
     <groupId>org.apache.arrow</groupId>
     <artifactId>arrow-memory-netty</artifactId>
+    <version>${arrow.version}</version>
   </dependency>
   <dependency>
     <groupId>org.apache.arrow</groupId>
     <artifactId>arrow-vector</artifactId>
+    <version>${arrow.version}</version>
   </dependency>
 </dependencies>
 ```
@@ -75,14 +87,18 @@ npm install @apache-arrow/adbc-driver-manager apache-arrow
 ```
 
 ```kotlin [Kotlin]
-// Add these dependencies to your build.gradle.kts
+// Add these dependencies to your build.gradle.kts.
+// Use the latest ADBC release and the Arrow version it is built against.
+val adbcVersion = "0.24.0"
+val arrowVersion = "19.0.0"
+
 dependencies {
-    implementation("org.apache.arrow.adbc:adbc-core")
-    implementation("org.apache.arrow.adbc:adbc-driver-manager")
-    implementation("org.apache.arrow.adbc:adbc-driver-jni")
-    implementation("org.apache.arrow:arrow-memory-core")
-    implementation("org.apache.arrow:arrow-memory-netty")
-    implementation("org.apache.arrow:arrow-vector")
+    implementation("org.apache.arrow.adbc:adbc-core:$adbcVersion")
+    implementation("org.apache.arrow.adbc:adbc-driver-manager:$adbcVersion")
+    implementation("org.apache.arrow.adbc:adbc-driver-jni:$adbcVersion")
+    implementation("org.apache.arrow:arrow-memory-core:$arrowVersion")
+    implementation("org.apache.arrow:arrow-memory-netty:$arrowVersion")
+    implementation("org.apache.arrow:arrow-vector:$arrowVersion")
 }
 ```
 
@@ -102,6 +118,11 @@ gem install red-adbc
 cargo add adbc_core adbc_driver_manager arrow arrow-array
 ```
 
+:::
+
+::: info
+For Java and Kotlin, Arrow requires the JVM option `--add-opens=java.base/java.nio=ALL-UNNAMED` on Java 17 or later.
+On Java 24 or later, also add `-Dio.netty.noUnsafe=false` so that the Netty memory allocator can work.
 :::
 
 ## Connecting to Sail
@@ -172,6 +193,9 @@ int main() {
 ```
 
 ```csharp [C#]
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.DriverManager;
 using Apache.Arrow.Ipc;
@@ -197,9 +221,8 @@ while (await stream.ReadNextRecordBatchAsync() is { } batch)
 {
     using (batch)
     {
-        // BatchPrinter is a small helper that formats a record batch for display.
-        // See the linked quickstart repository for its source.
-        BatchPrinter.Print(batch);
+        var columns = string.Join(", ", batch.Schema.FieldsList.Select(f => f.Name));
+        Console.WriteLine($"Received {batch.Length} row(s) with columns: {columns}");
     }
 }
 ```
