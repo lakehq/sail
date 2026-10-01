@@ -120,7 +120,21 @@ pub type ClientService = TracingClientService<Channel>;
 impl_client_builder!(DriverServiceClient<ClientService>);
 impl_client_builder!(CelebornLifecycleManagerServiceClient<ClientService>);
 impl_client_builder!(WorkerServiceClient<ClientService>);
-impl_client_builder!(FlightServiceClient<ClientService>);
+
+#[tonic::async_trait]
+impl ClientBuilder for FlightServiceClient<ClientService> {
+    async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
+        let channel = tonic::transport::Endpoint::new(options.to_url_string())?
+            .http2_max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
+            .http2_adaptive_window(true)
+            .connect()
+            .await?;
+        let channel = ServiceBuilder::new()
+            .layer(TracingClientLayer)
+            .service(channel);
+        Ok(Self::new(channel))
+    }
+}
 
 /// A handle to a gRPC client to support connection reuse.
 /// The handle can be cheaply cloned and the underlying connection is shared.
