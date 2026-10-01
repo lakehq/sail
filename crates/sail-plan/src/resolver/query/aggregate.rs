@@ -328,7 +328,34 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = x;
-                let field_id = state.register_field_name(name.one()?);
+                // An aggregate keeps the identity of the expressions it only passes on, which is
+                // what a grouping key is, so a column of the DataFrame it came from still reads
+                // it afterwards (`resolveDataFrameColumnRecursively` finds the tagged node below
+                // and resolves against this output). The same rule as in a projection.
+                let name = name.one()?;
+                // Only a column the resolver itself registered leads anywhere; an aggregate can
+                // also hold one named by the user, which the state knows nothing about.
+                let source = match &expr {
+                    Expr::Column(Column { name: field_id, .. }) => {
+                        state.get_field_info(field_id).ok().map(|info| {
+                            (
+                                field_id.clone(),
+                                info.plan_ids().collect::<Vec<_>>(),
+                                info.name() == name,
+                            )
+                        })
+                    }
+                    _ => None,
+                };
+                let field_id = state.register_field_name(name);
+                if let Some((source, plan_ids, same_name)) = source {
+                    for plan_id in plan_ids {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                    }
+                    if same_name {
+                        state.register_root_for_field(&field_id, &source)?;
+                    }
+                }
                 if metadata.is_empty() {
                     Ok(expr.alias(field_id))
                 } else {

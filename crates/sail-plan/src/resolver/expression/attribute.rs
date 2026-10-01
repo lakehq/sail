@@ -496,7 +496,14 @@ impl PlanResolver<'_> {
         // ordinary name lookup after the plan-ID lookup did not match anything
         // (`ColumnResolutionHelper.resolveExpressionByPlanOutput`).
         if let Some(plan_id) = plan_id {
+            // The fallback only applies once the plan the column belongs to has been found: a
+            // plan ID that is nowhere in this query names a DataFrame of its own, and Spark
+            // refuses that whatever the setting says (`resolveDataFrameColumn` throws
+            // `cannotResolveDataFrameColumn` before the setting is ever read). Without this, a
+            // reference to another DataFrame would quietly read the column of this one that
+            // happens to share its name.
             if !self.config.strict_dataframe_column_resolution
+                && state.has_plan_id(plan_id)
                 && let Some((name, expr)) =
                     self.resolve_field_or_nested_field(&name, None, schema, state)?
             {

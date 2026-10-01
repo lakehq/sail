@@ -24,8 +24,10 @@ in the client, so it never reaches the engine and says nothing about parity.
 # discriminate between the two case-folding rules — so the ambiguity rules are off for this file.
 # ruff: noqa: RUF001
 
+import contextlib
 import datetime
 import re
+import uuid
 
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
@@ -2457,3 +2459,194 @@ def test_a_struct_field_keeps_the_metadata_its_alias_was_given(spark):
 
     assert result.schema["st"].dataType["z"].metadata == {"m": "z"}
     assert [tuple(row[0]) for row in result.collect()] == [(1,)]
+
+
+# Reading a column through the DataFrame it came from (`df.c`) carries the plan ID of that
+# DataFrame, and Spark answers it by walking the plan for a node tagged with that ID
+# (`ColumnResolutionHelper.resolveDataFrameColumn`). What the walk finds decides everything below,
+# and `spark.sql.analyzer.strictDataFrameColumnResolution` only governs the name-based fallback
+# that runs once the node HAS been found and the column was not in its output. Every case here is
+# one PySpark's own `test_column.py` pins, measured on the Spark JVM.
+_STRICT_RESOLUTION = "spark.sql.analyzer.strictDataFrameColumnResolution"
+_RANGE_ROWS = 10
+
+
+@contextlib.contextmanager
+def _resolution(spark, strict):
+    previous = spark.conf.get(_STRICT_RESOLUTION, None)
+    try:
+        spark.conf.set(_STRICT_RESOLUTION, strict)
+        yield
+    finally:
+        if previous is None:
+            spark.conf.unset(_STRICT_RESOLUTION)
+        else:
+            spark.conf.set(_STRICT_RESOLUTION, previous)
+
+
+# (case, the rows the reference reads)
+_PLAN_ID_RESOLVES = [
+    ("through_a_filter", [(1,), (2,)]),
+    ("through_a_sort", [(1,), (2,)]),
+    ("through_a_distinct", [(1,), (2,)]),
+    ("after_a_group_by", [(1,), (2,)]),
+    ("after_a_pivot", [(1,), (2,)]),
+    ("after_an_intersect", [(2,)]),
+]
+
+
+def _plan_id_cases(spark):
+    two = spark.sql("SELECT 1 AS c UNION ALL SELECT 2 AS c")
+    pivoted = spark.sql("SELECT 1 AS c, 'a' AS k, 10 AS v UNION ALL SELECT 2 AS c, 'b' AS k, 20 AS v")
+    other = spark.sql("SELECT 2 AS c UNION ALL SELECT 3 AS c")
+
+    return {
+        # The operators that pass their input on keep the identity of what they pass.
+        "through_a_filter": lambda: two.filter(two.c > 0).select(two.c),
+        "through_a_sort": lambda: two.sort(two.c).select(two.c),
+        "through_a_distinct": lambda: two.distinct().select(two.c),
+        # An aggregate keeps the identity of its grouping key, which is the same rule.
+        "after_a_group_by": lambda: two.groupBy("c").count().select(two.c),
+        "after_a_pivot": lambda: pivoted.groupBy("c").pivot("k").sum("v").select(pivoted.c),
+        # An intersection is walked into, so its left side stays reachable.
+        "after_an_intersect": lambda: two.intersect(other).select(two.c),
+    }
+
+
+@pytest.mark.parametrize(("case", "rows"), _PLAN_ID_RESOLVES)
+def test_a_dataframe_column_resolves_through_the_operators_that_keep_its_identity(spark, case, rows):
+    result = _plan_id_cases(spark)[case]()
+
+    assert sorted(tuple(row) for row in result.collect()) == rows
+
+
+def test_a_sort_names_a_column_the_projection_dropped(spark):
+    # The reference is resolved below the projection and the column is carried up for the sort.
+    df = spark.range(_RANGE_ROWS).withColumn("v", col("id") + 1)
+
+    assert len(df.select(df.v).sort(df.id).collect()) == _RANGE_ROWS
+
+
+def test_a_self_join_through_a_rename_is_not_ambiguous(spark):
+    # The tagged node is found on both sides of the join, and the renamed side does not output
+    # `a`, which is what tells the two candidates apart.
+    df = spark.range(_RANGE_ROWS).withColumn("a", col("id"))
+    renamed = df.withColumnRenamed("a", "b")
+
+    assert len(df.join(renamed, df.a == renamed.b).select(df.a, renamed.b).collect()) == _RANGE_ROWS
+
+
+_PLAN_ID_REFUSED = [
+    "a_column_of_another_dataframe",
+    "a_column_of_another_dataframe_inside_an_expression",
+    "a_column_the_rename_took_away",
+    "a_column_that_was_dropped",
+]
+
+
+def _plan_id_refused_cases(spark):
+    other = spark.sql("SELECT 1 AS a, 2 AS b")
+    source = spark.sql("SELECT 1 AS c")
+    wider = spark.sql("SELECT 1 AS c, 2 AS d")
+
+    return {
+        "a_column_of_another_dataframe": lambda: source.select(other.a),
+        "a_column_of_another_dataframe_inside_an_expression": lambda: source.withColumn("x", other.a + 1),
+        "a_column_the_rename_took_away": lambda: source.withColumnRenamed("c", "c2").select(source.c),
+        "a_column_that_was_dropped": lambda: wider.drop("c").select(wider.c),
+    }
+
+
+@pytest.mark.parametrize("strict", ["true", "false"])
+@pytest.mark.parametrize("case", _PLAN_ID_REFUSED)
+def test_a_dataframe_column_the_plan_does_not_hold_is_refused_in_both_modes(spark, case, strict):
+    with _resolution(spark, strict), pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
+        _plan_id_refused_cases(spark)[case]().collect()
+
+
+# (case, the values the lenient mode reads off the current output)
+_SHADOWED = [
+    ("a_chain_of_with_column", [1]),
+    ("a_select_with_an_alias", ["1"]),
+    ("an_aggregate_with_an_alias", [1]),
+]
+
+
+def _shadowed_cases(spark):
+    source = spark.sql("SELECT 1 AS c")
+
+    return {
+        "a_chain_of_with_column": lambda: (
+            source.withColumn("c", col("c").cast("string")).withColumn("c", col("c").cast("int")).select(source.c)
+        ),
+        "a_select_with_an_alias": lambda: source.select(source.c.cast("string").alias("c")).select(source.c),
+        "an_aggregate_with_an_alias": lambda: source.groupBy().agg(spark_sum("c").alias("c")).select(source.c),
+    }
+
+
+@pytest.mark.parametrize(("case", "values"), _SHADOWED)
+def test_a_shadowed_dataframe_column_is_read_by_name_only_when_resolution_is_lenient(spark, case, values):
+    # The node IS found and the column it held is gone, which is the one place the setting decides.
+    with _resolution(spark, "true"), pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
+        _shadowed_cases(spark)[case]().collect()
+
+    with _resolution(spark, "false"):
+        assert [next(iter(row)) for row in _shadowed_cases(spark)[case]().collect()] == values
+
+
+# Where the plan-ID walk still differs from Spark. Each expectation below is the Spark JVM's,
+# measured in BOTH resolution modes, so the day Sail closes the gap the case reports it instead of
+# staying a note nobody reruns.
+
+
+def test_a_dataframe_column_is_refused_through_a_union(spark):
+    # Spark treats a `Union` as a leaf while walking for the plan ID
+    # (`resolveDataFrameColumnRecursively`: `case _: Union => Seq.empty`), so the node below it is
+    # never found and the reference is refused -- in both modes, since the setting only opens the
+    # fallback once the node HAS been found.
+    df1, df2 = spark.sql("SELECT 1 AS c"), spark.sql("SELECT 2 AS c")
+
+    with _resolution(spark, "true"), pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
+        df1.union(df2).select(df1.c).collect()
+
+    # TODO: Sail finds the plan ID below the union, so the lenient fallback reads the name off the
+    #   union's output and answers `[1, 2]` where Spark refuses. Telling the two apart needs the
+    #   resolver to know which plan IDs sit under a union.
+    with _resolution(spark, "false"):
+        if is_jvm_spark():
+            with pytest.raises(Exception, match=re.escape("[CANNOT_RESOLVE_DATAFRAME_COLUMN]")):
+                df1.union(df2).select(df1.c).collect()
+        else:
+            assert sorted(next(iter(row)) for row in df1.union(df2).select(df1.c).collect()) == [1, 2]
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="A temp view does not carry the plan IDs of the plan it was created from",
+    strict=True,
+)
+@pytest.mark.parametrize("strict", ["true", "false"])
+def test_a_dataframe_column_read_back_through_a_temp_view(spark, strict):
+    # The view keeps the plan it was created from, tags included, so the reference still finds its
+    # node. Sail resolves each request on its own, and the plan of `df` does not travel with the
+    # second one, so the ID is unknown there.
+    view = f"v_{uuid.uuid4().hex}"
+    df = spark.sql("SELECT 1 AS c")
+    df.createOrReplaceTempView(view)
+    try:
+        with _resolution(spark, strict):
+            assert [next(iter(row)) for row in spark.table(view).select(df.c).collect()] == [1]
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {view}")
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Sail does not implement a wildcard carrying a plan ID", strict=True)
+def test_a_dataframe_star_expands_to_the_columns_of_that_dataframe(spark):
+    # `df["*"]` is an unresolved star carrying df's plan ID, which the analyzer expands to the
+    # output of the node it names.
+    df = spark.sql("SELECT 'Books' AS c, 100 AS v UNION ALL SELECT 'Electronics' AS c, 200 AS v")
+
+    assert sorted((row.c, row.v) for row in df.select(df["*"]).collect()) == [
+        ("Books", 100),
+        ("Electronics", 200),
+    ]
