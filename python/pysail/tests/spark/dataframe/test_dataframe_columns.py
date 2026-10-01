@@ -2640,6 +2640,12 @@ def test_a_dataframe_column_read_back_through_a_temp_view(spark, strict):
         spark.sql(f"DROP VIEW IF EXISTS {view}")
 
 
+@pytest.mark.skipif(
+    pyspark_version() < (4, 0),
+    reason="`df['*']` is a star carrying a plan ID only from the Spark 4 client, which sends an "
+    "`UnresolvedStar`; the 3.5 client sends a plain column named `*` instead, so the case is a "
+    "different one there",
+)
 @pytest.mark.xfail(not is_jvm_spark(), reason="Sail does not implement a wildcard carrying a plan ID", strict=True)
 def test_a_dataframe_star_expands_to_the_columns_of_that_dataframe(spark):
     # `df["*"]` is an unresolved star carrying df's plan ID, which the analyzer expands to the
