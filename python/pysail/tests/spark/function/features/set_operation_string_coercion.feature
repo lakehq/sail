@@ -63,13 +63,31 @@ Feature: UNION common types for STRING with temporal and DataFusion-incompatible
       | true  | BOOLEAN/STRING  | false            | 'true'           |
       | false | INTERVAL/STRING | INTERVAL '1' DAY | 'x'              |
       | false | STRING/INTERVAL | 'x'              | INTERVAL '1' DAY |
+      | true  | STRING/BOOLEAN arrays | array('true') | array(false) |
+      | true  | BOOLEAN/STRING arrays | array(false) | array('true') |
+      | true  | STRING/BOOLEAN structs | named_struct('x', 'true') | named_struct('x', false) |
+      | true  | BOOLEAN/STRING structs | named_struct('x', false) | named_struct('x', 'true') |
+      | true  | STRING/BOOLEAN map values | map('k', 'true') | map('k', false) |
+      | true  | BOOLEAN/STRING map values | map('k', false) | map('k', 'true') |
+      | true  | STRING/BOOLEAN nested structs | array(named_struct('x', 'true', 'n', 1)) | array(named_struct('x', false, 'n', 2L)) |
+      | true  | STRING/BOOLEAN nested map keys | map(array('true'), 1) | map(array(false), 2) |
+      | true  | STRING/BOOLEAN maps with widened keys | map(1, 'true') | map(2L, false) |
+      | true  | STRING/BOOLEAN maps with timestamp keys | map(DATE '2020-01-01', 'true') | map(TIMESTAMP_LTZ '2020-01-02', false) |
+      | false | STRING/INTERVAL arrays | array('x') | array(INTERVAL '1' DAY) |
+      | false | INTERVAL/STRING arrays | array(INTERVAL '1' YEAR) | array('x') |
+      | false | STRING/INTERVAL structs | named_struct('x', 'x') | named_struct('x', INTERVAL '1' YEAR) |
+      | false | INTERVAL/STRING structs | named_struct('x', INTERVAL '1' DAY) | named_struct('x', 'x') |
+      | false | STRING/INTERVAL map values | map('k', 'x') | map('k', INTERVAL '1' DAY) |
+      | false | INTERVAL/STRING map values | map('k', INTERVAL '1' YEAR) | map('k', 'x') |
+      | false | STRING/INTERVAL nested structs | array(named_struct('x', 'x')) | array(named_struct('x', INTERVAL '1' YEAR)) |
+      | false | STRING/INTERVAL map keys | map('x', 1) | map(INTERVAL '1' DAY, 2) |
 
-  Scenario: A temporary view over an ANSI STRING/BOOLEAN UNION can be created without being queried
+  Scenario Outline: A temporary view over an ANSI STRING/BOOLEAN UNION of <container> can be created without being queried
     Given config spark.sql.ansi.enabled = true
     Given statement
       """
       CREATE OR REPLACE TEMPORARY VIEW union_string_boolean_view AS
-      SELECT 'true' AS c UNION ALL SELECT false
+      SELECT <first> AS c UNION ALL SELECT <second>
       """
     Given final statement
       """
@@ -82,6 +100,122 @@ Feature: UNION common types for STRING with temporal and DataFusion-incompatible
     Then query result collected
       | x |
       | 1 |
+
+    Examples:
+      | container | first | second |
+      | scalars | 'true' | false |
+      | arrays | array('true') | array(false) |
+      | structs | named_struct('x', 'true') | named_struct('x', false) |
+      | map values | map('k', 'true') | map('k', false) |
+
+  Scenario Outline: An unused UNION still rejects incompatible <pair> columns with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      WITH t AS (SELECT <first> AS c UNION ALL SELECT <second>) SELECT 1 AS x
+      """
+    Then query error (?i)(INCOMPATIBLE_COLUMN_TYPE|Incompatible inputs for Union)
+
+    Examples:
+      | ansi | pair | first | second |
+      | true | INT/ARRAY | 1 | array(1) |
+      | true | BOOLEAN/INT | true | 1 |
+      | false | STRING/BOOLEAN arrays | array('true') | array(false) |
+      | true | different struct names | named_struct('x', 'true') | named_struct('y', false) |
+      | true | nullable BOOLEAN map keys | map('true', 1) | map(false, 2) |
+      | true | nullable numeric map keys beside BOOLEAN values | map('1', 'true') | map(2, false) |
+      | true | DATE/numeric map keys | map(1, 'true') | map(DATE '2020-01-01', false) |
+      | true | DATE/TIMESTAMP_NTZ map keys | map(DATE '2020-01-01', 'true') | map(TIMESTAMP_NTZ '2020-01-02', false) |
+      | true | different interval families in map keys | map(INTERVAL '1' DAY, 'true') | map(INTERVAL '1' YEAR, false) |
+
+  Scenario Outline: Unused nested UNION accepts safe decimal map-key casts
+    Given config spark.sql.ansi.enabled = true
+    And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+    When query
+      """
+      WITH t AS (
+        SELECT map(<first>, 'true') AS c
+        UNION ALL SELECT map(CAST(.1 AS DECIMAL(38,38)), false)
+      ) SELECT 1 AS x
+      """
+    Then query result collected
+      | x |
+      | 1 |
+
+    Examples:
+      | first |
+      | CAST(1 AS DECIMAL(38,0)) |
+      | 1L |
+
+  Scenario Outline: Unused nested UNION rejects decimal map-key casts that can overflow
+    Given config spark.sql.ansi.enabled = true
+    And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+    When query
+      """
+      WITH t AS (
+        SELECT map(<first>, 'true') AS c
+        UNION ALL SELECT map(CAST(.1 AS DECIMAL(38,38)), false)
+      ) SELECT 1 AS x
+      """
+    Then query error (?i)(INCOMPATIBLE_COLUMN_TYPE|Incompatible inputs for Union)
+
+    Examples:
+      | first |
+      | CAST(1 AS DECIMAL(38,0)) |
+      | 1L |
+
+  # TODO: Coerce these nested STRING pairs when the UNION is actually used.
+  # DataFusion rejects their common types during analysis, before column pruning.
+  @sail-bug
+  Scenario Outline: A referenced UNION can prune compatible nested <pair> values
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT count(*) AS n FROM (SELECT <first> AS c UNION ALL SELECT <second>)
+      """
+    Then query result collected
+      | n |
+      | 2 |
+
+    Examples:
+      | ansi | pair | first | second |
+      | true | STRING/BOOLEAN arrays | array('true') | array(false) |
+      | true | STRING/BOOLEAN structs | named_struct('x', 'true') | named_struct('x', false) |
+      | true | STRING/BOOLEAN map values | map('k', 'true') | map('k', false) |
+      | false | STRING/INTERVAL arrays | array('x') | array(INTERVAL '1' DAY) |
+      | false | STRING/INTERVAL structs | named_struct('x', 'x') | named_struct('x', INTERVAL '1' YEAR) |
+      | false | STRING/INTERVAL map values | map('k', 'x') | map('k', INTERVAL '1' DAY) |
+
+  Scenario Outline: Unused nested UNION fallback respects case-sensitive struct names with <case_sensitive>
+    Given config spark.sql.ansi.enabled = true
+    And config spark.sql.caseSensitive = <case_sensitive>
+    When query
+      """
+      WITH t AS (
+        SELECT named_struct('x', 'true') AS c
+        UNION ALL SELECT named_struct('<field>', false)
+      ) SELECT 1 AS x
+      """
+    Then query result collected
+      | x |
+      | 1 |
+
+    Examples:
+      | case_sensitive | field |
+      | false | X |
+      | true | x |
+
+  Scenario: Unused nested UNION rejects different field case in case-sensitive mode
+    Given config spark.sql.ansi.enabled = true
+    And config spark.sql.caseSensitive = true
+    When query
+      """
+      WITH t AS (
+        SELECT named_struct('x', 'true') AS c
+        UNION ALL SELECT named_struct('X', false)
+      ) SELECT 1 AS x
+      """
+    Then query error (?i)(INCOMPATIBLE_COLUMN_TYPE|Incompatible inputs for Union)
 
   Scenario Outline: UNION of incompatible <pair> columns fails with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>

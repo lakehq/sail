@@ -6,11 +6,11 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as k, #3@1 as n]
       SortPreservingMergeExec: [#2@0 ASC]
-        ProjectionExec: expr=[#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 as #2, count(Int64(1))@1 as #3]
-          SortExec: expr=[#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 as #1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END], aggr=[count(Int64(1))]
-              RepartitionExec: partitioning=Hash([#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[#1@0 % 2 as #1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END], aggr=[count(Int64(1))]
+        ProjectionExec: expr=[__auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 as #2, count(Int64(1))@1 as #3]
+          SortExec: expr=[__auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[__auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0 as __auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=Hash([__auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#1@0 % 2 as __auto_generated_subquery_name.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END], aggr=[count(Int64(1))]
                   ProjectionExec: expr=[id@0 as #1]
                     GlobalLimitExec: skip=0, fetch=2
                       RangeExec: start=0, end=100000, step=1, num_partitions=1, projection=[0]

@@ -25,6 +25,26 @@ def test_nested_numeric_nvl2_preserves_values_and_schema(spark, depth, nullable,
     assert result.orderBy("v").collect() == expected
 
 
+@pytest.mark.parametrize("depth", [20, 80])
+@pytest.mark.parametrize("null_branch", ["then", "else", "both"])
+@pytest.mark.parametrize("null_value", ["NULL", ":default", "null_column"])
+def test_nested_nvl2_with_untyped_null_preserves_values_and_schema(spark, depth, null_branch, null_value):
+    value = null_value if null_branch == "both" else "id"
+    for _ in range(depth):
+        value = (
+            f"nvl2(nullif(id, 1), {null_value}, {value})"
+            if null_branch == "then"
+            else f"nvl2(nullif(id, 0), {value}, {null_value})"
+        )
+    result = spark.sql(
+        f"SELECT {value} AS v FROM (SELECT id, NULL AS null_column FROM range(2))",  # noqa: S608
+        args={"default": None} if null_value == ":default" else None,
+    )
+    assert result.dtypes == [("v", "void" if null_branch == "both" else "bigint")]
+    assert result.schema["v"].nullable
+    assert result.orderBy("v").collect() == ([(None,), (None,)] if null_branch == "both" else [(None,), (1,)])
+
+
 @pytest.mark.parametrize("value", [1, None])
 def test_nvl2_retains_nullable_branch_after_binding_a_cast_parameter(spark, value):
     result = spark.sql(

@@ -82,15 +82,23 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         ..function_context
     };
     let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
-    let (if_non_null, if_null) = branches.two()?;
+    let (mut if_non_null, mut if_null) = branches.two()?;
     let function = SparkNvl2::new(Arc::clone(&function_context.plan_config.session_timezone));
     // Lower branches that already have their common type, avoiding repeated
     // field derivation through nested logical NVL2 functions.
-    // Unresolved bindings and branches needing coercion retain the logical UDF.
-    let non_null_type = if_non_null.get_type(function_context.schema)?;
-    let null_type = if_null.get_type(function_context.schema)?;
-    let resolved = !null_type.is_null()
-        && non_null_type == null_type
+    // A NULL-typed branch can take its numeric sibling's type now. Leaving it untyped
+    // keeps every enclosing NVL2 as a UDF and repeatedly derives nested fields.
+    // Other branches needing coercion retain the logical UDF.
+    let mut non_null_type = if_non_null.get_type(function_context.schema)?;
+    let mut null_type = if_null.get_type(function_context.schema)?;
+    if non_null_type.is_numeric() && null_type.is_null() {
+        if_null = cast(if_null, non_null_type.clone());
+        null_type = non_null_type.clone();
+    } else if null_type.is_numeric() && non_null_type.is_null() {
+        if_non_null = cast(if_non_null, null_type.clone());
+        non_null_type = null_type.clone();
+    }
+    let resolved = non_null_type == null_type
         && function.return_type(&[DataType::Null, non_null_type, null_type.clone()])? == null_type;
     if resolved {
         return Ok(SparkNvl2::lower(tested, if_non_null, if_null));

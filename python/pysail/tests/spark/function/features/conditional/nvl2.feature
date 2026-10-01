@@ -55,6 +55,36 @@ Feature: nvl2 output schema
   @function(nullability)
   Rule: Output schema
 
+    Scenario: NVL2 with an untyped NULL default retains nullable numeric output
+      When query
+        """
+        SELECT nvl2(id, id, NULL) AS result FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | result |
+        | 0 |
+        | 1 |
+      And query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: NVL2 with two untyped NULL branches retains VOID output
+      When query
+        """
+        SELECT nvl2(id, NULL, NULL) AS result FROM range(2)
+        """
+      Then query result
+        | result |
+        | NULL |
+        | NULL |
+      And query schema
+        """
+        root
+         |-- result: void (nullable = true)
+        """
+
     @sail-bug
     Scenario: NVL2 includes DATE to TIMESTAMP_NTZ cast nullability
       # The shared DATE cast currently reports non-nullability in Sail.
@@ -231,6 +261,54 @@ Feature: nvl2 output schema
         """
 
   Rule: Row evaluation
+
+    Scenario Outline: A NULL-typed error in an unselected NVL2 branch stays lazy
+      When query
+        """
+        SELECT nvl2(<tested>, <then>, <else>) AS result FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | result |
+        | 0 |
+        | 1 |
+
+      Examples:
+        | tested | then | else |
+        | id | id | raise_error('unselected error') |
+        | NULL | raise_error('unselected error') | id |
+
+    Scenario Outline: A NULL-typed error in a selected NVL2 branch is retained
+      When query
+        """
+        SELECT nvl2(<tested>, <then>, <else>) AS result FROM range(2)
+        """
+      Then query error selected error
+
+      Examples:
+        | tested | then | else |
+        | NULL | id | raise_error('selected error') |
+        | id | raise_error('selected error') | id |
+
+    Scenario: NVL2 retains invalid constant tested casts with two NULL branches
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT nvl2(CAST('bad' AS INT), NULL, NULL) AS result FROM range(2)
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast|can't cast)
+
+    # TODO: Match Spark's elimination of deterministic tested expressions when
+    # both branches are identical; shared optimization still evaluates raise_error.
+    @sail-bug
+    Scenario: NVL2 can discard a tested error when both branches are NULL
+      When query
+        """
+        SELECT nvl2(raise_error('tested error'), NULL, NULL) AS result FROM range(2)
+        """
+      Then query result
+        | result |
+        | NULL |
+        | NULL |
 
     Scenario Outline: nvl2 projected through a view stays row dependent in IN lists
       Given final statement

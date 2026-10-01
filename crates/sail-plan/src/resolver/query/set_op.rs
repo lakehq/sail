@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, FieldRef, IntervalUnit, TimeUnit};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
@@ -248,8 +248,9 @@ impl PlanResolver<'_> {
         // before exposing the UNION type:
         // conditional consumers must not cache a narrower type than its actual values.
         let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
         let left =
-            promote_union_numeric_input(left, right.schema(), ansi_mode, &self.config, by_name)?;
+            promote_union_numeric_input(left, &right_schema, ansi_mode, &self.config, by_name)?;
         let right =
             promote_union_numeric_input(right, &left_schema, ansi_mode, &self.config, by_name)?;
         let mut union = Union::try_new_with_loose_types(vec![Arc::new(left), Arc::new(right)])?;
@@ -260,7 +261,17 @@ impl PlanResolver<'_> {
         // TODO: Coerce STRING with BOOLEAN (ANSI) and INTERVAL (non-ANSI) like Spark.
         let coerced = match coerce_union_schema(&union.inputs) {
             Ok(coerced) => Some(coerced),
-            Err(_) if has_only_spark_union_types(&union.inputs, ansi_mode) => None,
+            Err(_)
+                if has_only_spark_union_types(
+                    &left_schema,
+                    &right_schema,
+                    ansi_mode,
+                    &self.config,
+                    by_name,
+                ) =>
+            {
+                None
+            }
             Err(error) => return Err(error.into()),
         };
         if let Some(coerced) = coerced {
@@ -628,31 +639,163 @@ fn repair_union_type(data_type: &DataType, coerced_type: &DataType, ansi_mode: b
     }
 }
 
-// Spark widens these pairs, but DataFusion's UNION coercion rejects them.
-fn is_spark_only_union_pair(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
-    let other = match (left.is_string(), right.is_string()) {
-        (true, false) => right,
-        (false, true) => left,
-        _ => return false,
+fn has_spark_union_type(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+    config: &PlanConfig,
+    by_name: bool,
+) -> bool {
+    if left == right || left.is_null() || right.is_null() {
+        return true;
+    }
+    let compatible = |left: &DataType, right: &DataType| {
+        has_spark_union_type(left, right, ansi_mode, config, by_name)
     };
-    if ansi_mode {
-        matches!(other, DataType::Boolean)
-    } else {
-        matches!(other, DataType::Duration(_) | DataType::Interval(_))
+    // Spark applies its wider-type rules recursively. Deferring only scalar pairs
+    // rejects valid unused CTEs and view definitions containing those same pairs.
+    match (left, right) {
+        (
+            DataType::List(left) | DataType::LargeList(left) | DataType::FixedSizeList(left, _),
+            DataType::List(right) | DataType::LargeList(right) | DataType::FixedSizeList(right, _),
+        ) => compatible(left.data_type(), right.data_type()),
+        (DataType::Struct(left), DataType::Struct(right)) => {
+            let names_equal = |left: &FieldRef, right: &FieldRef| {
+                if config.case_sensitive {
+                    left.name() == right.name()
+                } else {
+                    union_field_names_equal_ignore_case(left.name(), right.name())
+                }
+            };
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right_field)| {
+                    let right = if by_name {
+                        right.iter().find(|right| names_equal(left, right))
+                    } else {
+                        Some(right_field).filter(|right| names_equal(left, right))
+                    };
+                    right.is_some_and(|right| compatible(left.data_type(), right.data_type()))
+                })
+        }
+        (DataType::Map(left, _), DataType::Map(right, _)) => {
+            let (DataType::Struct(left), DataType::Struct(right)) =
+                (left.data_type(), right.data_type())
+            else {
+                return false;
+            };
+            let ([left_key, left_value], [right_key, right_value]) =
+                (left.as_ref(), right.as_ref())
+            else {
+                return false;
+            };
+            let (left_key, right_key) = (left_key.data_type(), right_key.data_type());
+            // Spark excludes key casts that can introduce NULL. Inspect the original
+            // types: numeric promotion may already have narrowed a DECIMAL's range.
+            !union_key_cast_is_nullable(left_key, right_key, ansi_mode, config)
+                && !union_key_cast_is_nullable(right_key, left_key, ansi_mode, config)
+                && has_spark_union_type(left_key, right_key, ansi_mode, config, false)
+                && has_spark_union_type(
+                    left_value.data_type(),
+                    right_value.data_type(),
+                    ansi_mode,
+                    config,
+                    false,
+                )
+        }
+        _ => {
+            if wider_numeric_type(
+                left,
+                right,
+                ansi_mode,
+                config.legacy_decimal_retain_fraction_digits,
+            )
+            .is_some()
+                || (is_date_or_timestamp(left) && is_date_or_timestamp(right))
+                || (left.is_binary() && right.is_binary())
+                || matches!(
+                    (left, right),
+                    (DataType::Duration(_), DataType::Duration(_))
+                )
+            {
+                return true;
+            }
+            let other = match (left.is_string(), right.is_string()) {
+                (true, _) => right,
+                (_, true) => left,
+                _ => return false,
+            };
+            other.is_string()
+                || other.is_numeric()
+                || is_date_or_timestamp(other)
+                || if ansi_mode {
+                    other == &DataType::Boolean || other.is_binary()
+                } else {
+                    matches!(
+                        other,
+                        DataType::Duration(_) | DataType::Interval(IntervalUnit::YearMonth)
+                    )
+                }
+        }
     }
 }
 
-fn has_only_spark_union_types(inputs: &[Arc<LogicalPlan>], ansi_mode: bool) -> bool {
-    let [left, right] = inputs else {
+// The Cast.forceNullable cases relevant to Spark's wider UNION key types.
+fn union_key_cast_is_nullable(
+    source: &DataType,
+    other: &DataType,
+    ansi_mode: bool,
+    config: &PlanConfig,
+) -> bool {
+    if source == other || source.is_null() {
+        return false;
+    }
+    if source.is_string() {
+        return ansi_mode && !other.is_string() && !other.is_null() && !other.is_binary();
+    }
+    if matches!(source, DataType::Date32 | DataType::Date64)
+        && matches!(other, DataType::Timestamp(_, None))
+    {
+        return true;
+    }
+    let Some(DataType::Decimal128(precision, scale)) = wider_numeric_type(
+        source,
+        other,
+        ansi_mode,
+        config.legacy_decimal_retain_fraction_digits,
+    ) else {
         return false;
     };
-    left.schema()
-        .fields()
+    let (source_precision, source_scale) = match source {
+        DataType::Int8 => (3, 0),
+        DataType::Int16 => (5, 0),
+        DataType::Int32 => (10, 0),
+        DataType::Int64 => (20, 0),
+        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => (*p, *s),
+        _ => return false,
+    };
+    let range = i16::from(precision) - i16::from(scale);
+    let source_range = i16::from(source_precision) - i16::from(source_scale);
+    range < source_range || (range == source_range && scale < source_scale)
+}
+
+fn has_only_spark_union_types(
+    left: &DFSchema,
+    right: &DFSchema,
+    ansi_mode: bool,
+    config: &PlanConfig,
+    by_name: bool,
+) -> bool {
+    left.fields()
         .iter()
-        .zip(right.schema().fields())
+        .zip(right.fields())
         .all(|(left, right)| {
-            type_union_coercion(left.data_type(), right.data_type()).is_some()
-                || is_spark_only_union_pair(left.data_type(), right.data_type(), ansi_mode)
+            has_spark_union_type(
+                left.data_type(),
+                right.data_type(),
+                ansi_mode,
+                config,
+                by_name,
+            )
         })
 }
 
