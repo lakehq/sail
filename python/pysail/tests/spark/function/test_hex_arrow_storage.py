@@ -31,7 +31,9 @@ def ansi(spark, request):
     ("values", "expected"),
     [
         pytest.param(["a", "bb", "a", None], ["61", "6262", "61", None], id="string"),
-        pytest.param(["niño", "😀", "niño", None], ["6E69C3B16F", "F09F9880", "6E69C3B16F", None], id="string_multibyte"),
+        pytest.param(
+            ["niño", "😀", "niño", None], ["6E69C3B16F", "F09F9880", "6E69C3B16F", None], id="string_multibyte"
+        ),
         pytest.param([1, 255, 1, None], ["1", "FF", "1", None], id="bigint"),
         pytest.param([1.5, 255.9, 1.5, None], ["1", "FF", "1", None], id="double"),
     ],
@@ -43,9 +45,7 @@ def test_dictionary_encoded_column(spark, tmp_path, ansi, values, expected):  # 
 
 
 def test_dictionary_encoded_binary_column(spark, tmp_path, ansi):  # noqa: ARG001
-    table = pa.table(
-        {"n": pa.array([1, 2, 3]), "b": pa.array([b"\x00\xff", b"ab", b"\x00\xff"]).dictionary_encode()}
-    )
+    table = pa.table({"n": pa.array([1, 2, 3]), "b": pa.array([b"\x00\xff", b"ab", b"\x00\xff"]).dictionary_encode()})
     rows = _read(spark, tmp_path, table).selectExpr("n", "hex(b) AS h").orderBy("n").collect()
     assert [r["h"] for r in rows] == ["00FF", "6162", "00FF"]
 
@@ -151,6 +151,6 @@ def test_sliced_column_is_decoded_leniently(spark, tmp_path, ansi, dictionary, c
     pq.write_table(table, path, use_dictionary=dictionary)
     spark.read.parquet(path).createOrReplaceTempView("sliced_hex")
     rows = spark.sql(
-        f"SELECT hex({call}) AS h FROM (SELECT n, c FROM sliced_hex ORDER BY n LIMIT 3 OFFSET 1) ORDER BY n"
+        f"SELECT hex({call}) AS h FROM (SELECT n, c FROM sliced_hex ORDER BY n LIMIT 3 OFFSET 1) ORDER BY n"  # noqa: S608
     ).collect()
     assert [r["h"] for r in rows] == [None, None, "4142"]

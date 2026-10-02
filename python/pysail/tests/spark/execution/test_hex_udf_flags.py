@@ -1,3 +1,4 @@
+# ruff: noqa: S608
 import re
 
 import pytest
@@ -16,7 +17,8 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode 
 # lost: they assert that the query raises. The lenient cases over the same rows return a value,
 # which is what tells a lost flag apart.
 BAD_ROW = 17777
-ROWS = "range(0, 20000, 1, 8)"
+ROW_COUNT = 20000
+ROWS = f"range(0, {ROW_COUNT}, 1, 8)"
 
 
 def collect_one(spark, sql):
@@ -25,19 +27,19 @@ def collect_one(spark, sql):
 
 def test_unhex_is_lenient_on_workers(spark):
     sql = f"SELECT count(unhex(IF(id = {BAD_ROW}, 'ZZ', hex(id)))) FROM {ROWS}"
-    assert collect_one(spark, sql) == 20000 - 1
+    assert collect_one(spark, sql) == ROW_COUNT - 1
 
 
 def test_try_to_binary_is_lenient_on_workers(spark):
     sql = f"SELECT count(try_to_binary(IF(id = {BAD_ROW}, 'ZZ', hex(id)), 'hex')) FROM {ROWS}"
-    assert collect_one(spark, sql) == 20000 - 1
+    assert collect_one(spark, sql) == ROW_COUNT - 1
 
 
 @pytest.mark.parametrize("call", ["to_binary(v, 'hex')", "to_binary(v)"])
 def test_to_binary_is_strict_on_workers(spark, call):
     # The same query over valid rows runs, so the expression itself decodes on the workers.
     valid = f"SELECT count({call}) FROM (SELECT hex(id) AS v FROM {ROWS})"
-    assert collect_one(spark, valid) == 20000
+    assert collect_one(spark, valid) == ROW_COUNT
     sql = f"SELECT count({call}) FROM (SELECT IF(id = {BAD_ROW}, 'ZZ', hex(id)) AS v FROM {ROWS})"
     with pytest.raises(Exception):  # noqa: B017, PT011
         spark.sql(sql).collect()
@@ -45,14 +47,14 @@ def test_to_binary_is_strict_on_workers(spark, call):
 
 def test_try_to_binary_base64_is_lenient_per_row_on_workers(spark):
     sql = f"SELECT count(try_to_binary(IF(id = {BAD_ROW}, 'a!', 'YQ=='), 'base64')) FROM {ROWS}"
-    assert collect_one(spark, sql) == 20000 - 1
+    assert collect_one(spark, sql) == ROW_COUNT - 1
 
 
 def test_to_binary_base64_is_strict_on_workers(spark):
     # `to_binary(.., 'base64')` is not nullable for a non-null input, so `count` of it would be
     # rewritten to `count(1)` without evaluating it: `sum(length(..))` forces the evaluation.
     valid = f"SELECT sum(length(to_binary(IF(id = {BAD_ROW}, 'YQ==', 'YQ=='), 'base64'))) FROM {ROWS}"
-    assert collect_one(spark, valid) == 20000
+    assert collect_one(spark, valid) == ROW_COUNT
     sql = f"SELECT sum(length(to_binary(IF(id = {BAD_ROW}, 'a!', 'YQ=='), 'base64'))) FROM {ROWS}"
     with pytest.raises(Exception):  # noqa: B017, PT011
         spark.sql(sql).collect()

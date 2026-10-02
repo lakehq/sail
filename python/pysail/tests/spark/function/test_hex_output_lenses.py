@@ -62,7 +62,7 @@ def _frame(spark, data_type, values, nullable):
 
 
 def _expected(values, expected, nullable):
-    return [e for v, e in zip(values, expected) if nullable or v is not None]
+    return [e for v, e in zip(values, expected, strict=False) if nullable or v is not None]
 
 
 def _none(values):
@@ -71,19 +71,19 @@ def _none(values):
 
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
-def test_collect(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001, PT019
+def test_collect(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
     df = _frame(spark, data_type, values, nullable=True)
     assert [r["h"] for r in df.collect()] == expected
 
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
-def test_to_pandas(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001, PT019
+def test_to_pandas(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
     df = _frame(spark, data_type, values, nullable=True)
     assert _none(df.toPandas()["h"].tolist()) == expected
 
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
-def test_to_arrow(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001, PT019
+def test_to_arrow(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
     df = _frame(spark, data_type, values, nullable=True)
     if not hasattr(df, "toArrow"):
         pytest.skip("DataFrame.toArrow needs PySpark 4.0+")
@@ -92,7 +92,7 @@ def test_to_arrow(spark, ansi, _, data_type, values, expected, forced):  # noqa:
 
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
-def test_non_null_input_to_pandas_and_schema(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001, PT019
+def test_non_null_input_to_pandas_and_schema(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
     """A column declared non-nullable has no NULL row. Its result follows Spark: non-nullable, except
     where the cast to BIGINT can add a NULL of its own (a fractional or decimal input)."""
     df = _frame(spark, data_type, values, nullable=False)
@@ -101,7 +101,7 @@ def test_non_null_input_to_pandas_and_schema(spark, ansi, _, data_type, values, 
 
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
-def test_write_parquet_and_read_back(spark, tmp_path, ansi, _, data_type, values, expected, forced):  # noqa: ARG001, PT019
+def test_write_parquet_and_read_back(spark, tmp_path, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
     df = _frame(spark, data_type, values, nullable=True)
     path = str(tmp_path / "out")
     df.write.parquet(path)
