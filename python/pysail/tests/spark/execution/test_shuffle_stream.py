@@ -27,6 +27,7 @@ def remote(request):
     compression, connection_count, stream_window_size, connection_window_size = request.param
     if compression is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = compression
+    if connection_count is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(connection_count)
     if stream_window_size is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE"] = str(stream_window_size)
