@@ -8,15 +8,22 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
-@pytest.fixture(scope="module", params=[None, "none", "lz4", "zstd"], ids=["default", "none", "lz4", "zstd"])
+@pytest.fixture(
+    scope="module",
+    params=[(None, None, None), ("none", 1, 65535), ("lz4", 3, 1048576), ("zstd", 4, 16777216)],
+    ids=["default", "none-one-connection", "lz4-three-connections", "zstd-four-connections"],
+)
 def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
-    if request.param is not None:
-        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = request.param
+    compression, connection_count, window_size = request.param
+    if compression is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = compression
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(connection_count)
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_WINDOW_SIZE"] = str(window_size)
     with spark_connect_server(envs=envs) as server:
         yield server.remote
 

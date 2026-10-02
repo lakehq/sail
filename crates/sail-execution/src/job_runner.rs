@@ -53,6 +53,8 @@ impl JobRunner for LocalJobRunner {
             plan,
             ShuffleBackendKind::Flight {
                 compression: crate::shuffle::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_window_size: None,
             },
         )
     }

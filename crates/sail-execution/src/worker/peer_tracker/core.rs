@@ -45,6 +45,8 @@ impl PeerTracker {
                 enable_tls: self.options.enable_tls,
                 host: peer.host.clone(),
                 port: peer.port,
+                flight_connection_count: self.options.flight_connection_count,
+                flight_initial_window_size: self.options.flight_initial_window_size,
             };
             WorkerClientSet::new(options)
         });
