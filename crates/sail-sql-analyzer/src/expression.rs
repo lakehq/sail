@@ -9,6 +9,7 @@ use sail_sql_parser::ast::expression::{
     WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
+use sail_sql_parser::ast::literal::NumberLiteral;
 use sail_sql_parser::ast::query::{
     ClusterByClause, DistributeByClause, IdentList, NamedExpr, OrderByClause, PartitionByClause,
     SortByClause,
@@ -248,6 +249,34 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
 pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
+        // Spark's grammar folds a leading sign into the integer/decimal literal itself
+        // (`SqlBaseParser.g4`'s `MINUS? INTEGER_VALUE`) and picks the narrowest type for the
+        // combined text, so `-2147483648` (`Int32::MIN`) types as INT, not BIGINT: the
+        // magnitude alone (`2147483648`) overflows `Int32` and would otherwise be typed as
+        // BIGINT before the sign is applied. Sail's tokenizer never accepts a sign inside a
+        // `NumberLiteral` (unlike Spark's, doing this in the lexer risks swallowing a real
+        // subtraction like `a-5` into one literal token), so recombine sign and magnitude
+        // here instead, once the parser has already told us this really is a unary minus
+        // directly over a bare number literal (not, say, `-(2147483648)`, a parenthesized
+        // expression, which Spark also does NOT fold into the literal -- `typeof` on both
+        // gives BIGINT for that one).
+        Expr::UnaryOperator(UnaryOperator::Minus(_), expr)
+            if matches!(expr.as_ref(), Expr::Atom(AtomExpr::NumberLiteral(_))) =>
+        {
+            let Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+                span,
+                value,
+                suffix,
+            })) = *expr
+            else {
+                unreachable!("guarded above")
+            };
+            from_ast_number_literal(NumberLiteral {
+                span,
+                value: format!("-{value}"),
+                suffix,
+            })
+        }
         Expr::UnaryOperator(op, expr) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare(from_ast_unary_operator(op)?),

@@ -55,6 +55,13 @@ lazy_static! {
     static ref INTERVAL_SECOND_REGEX: Regex = create_regex(Regex::new(
         r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
     ));
+    // Spark's `IntervalUtils.castStringToDTInterval` tries the compact form
+    // (`"1 02:03:04"`) first, then this "literal" form -- the same text a
+    // day-time interval's own `CAST(... AS STRING)` produces -- so that
+    // casting an interval to STRING and back round-trips.
+    static ref INTERVAL_LITERAL_WRAPPER_REGEX: Regex = create_regex(Regex::new(
+        r"(?i)^\s*INTERVAL\s+([+-]?)'(.*)'\s+(\w+(?:\s+TO\s+\w+)?)\s*$"
+    ));
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -234,27 +241,142 @@ fn parse_interval_day_time_string(
     let minutes: i64 = extract_match(&captures, "minute", error)?.unwrap_or(0);
     let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
     let microseconds: i64 = extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-    let delta = TimeDelta::try_days(days)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_minutes(minutes).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_seconds(seconds).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::microseconds(microseconds))
-        .ok_or_else(error)?;
-    let microseconds = delta.num_microseconds().ok_or_else(error)?;
-    let n = if negated {
-        microseconds.checked_mul(-1).ok_or_else(error)?
-    } else {
-        microseconds
-    };
+    // Keep the calculation signed in i128 until the final range check.  The
+    // negative endpoint has one more representable value than the positive
+    // endpoint: `i64::MIN` has a magnitude of `i64::MAX + 1`.  Building a
+    // positive `TimeDelta` and negating it afterwards therefore rejects an
+    // otherwise valid negative interval at exactly that endpoint.
+    let sign = if negated { -1_i128 } else { 1_i128 };
+    let n = [
+        (days, 86_400_000_000_i128),
+        (hours, 3_600_000_000_i128),
+        (minutes, 60_000_000_i128),
+        (seconds, 1_000_000_i128),
+        (microseconds, 1_i128),
+    ]
+    .into_iter()
+    .try_fold(0_i128, |total, (value, unit)| {
+        total.checked_add((value as i128).checked_mul(unit)?)
+    })
+    .and_then(|total| total.checked_mul(sign))
+    .and_then(|total| i64::try_from(total).ok())
+    .ok_or_else(error)?;
     Ok(IntervalValue::Microsecond {
         microseconds: n,
         start_field,
         end_field,
     })
+}
+
+/// Parses a raw (unquoted, no SQL syntax) day-time interval value string --
+/// e.g. `"1 02:03:04"` -- against the exact field range `CAST(string AS
+/// INTERVAL <start> TO <end>)` declares, the way Spark's
+/// `IntervalUtils.castStringToDTInterval` does. This is the runtime
+/// counterpart of the interval *literal* grammar (`INTERVAL '...' <field>
+/// [TO <field>]`), which expects SQL syntax (a quoted string token, or `TO`
+/// as a keyword) and must not be reused to parse a plain runtime value: it
+/// rejects "abc" and "1 02:03:04" alike, but the failure surfaces as a
+/// confusing "error in SQL parser" instead of Spark's
+/// `INVALID_INTERVAL_FORMAT` on the malformed input.
+pub fn parse_day_time_interval_value_string(
+    s: &str,
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+) -> SqlResult<i64> {
+    let regex: &Regex = match (start_field, end_field) {
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Day) => &INTERVAL_DAY_REGEX,
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Hour) => {
+            &INTERVAL_DAY_TO_HOUR_REGEX
+        }
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_DAY_TO_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Day, spec::IntervalFieldType::Second) => {
+            &INTERVAL_DAY_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Hour) => &INTERVAL_HOUR_REGEX,
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_HOUR_TO_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Hour, spec::IntervalFieldType::Second) => {
+            &INTERVAL_HOUR_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Minute, spec::IntervalFieldType::Minute) => {
+            &INTERVAL_MINUTE_REGEX
+        }
+        (spec::IntervalFieldType::Minute, spec::IntervalFieldType::Second) => {
+            &INTERVAL_MINUTE_TO_SECOND_REGEX
+        }
+        (spec::IntervalFieldType::Second, spec::IntervalFieldType::Second) => {
+            &INTERVAL_SECOND_REGEX
+        }
+        _ => {
+            return Err(SqlError::invalid(format!(
+                "invalid day-time interval field range: {start_field:?} to {end_field:?}"
+            )));
+        }
+    };
+    let extract_micros = |value: IntervalValue| match value {
+        IntervalValue::Microsecond { microseconds, .. } => microseconds,
+        IntervalValue::YearMonth { .. } | IntervalValue::MonthDayNanosecond { .. } => {
+            unreachable!("day-time regexes only ever produce Microsecond values")
+        }
+    };
+    if let Ok(value) = parse_interval_day_time_string(s, false, regex, start_field, Some(end_field))
+    {
+        return Ok(extract_micros(value));
+    }
+    // Fall back to Spark's "literal" form: `INTERVAL [sign] '<compact>' <FIELD> [TO <FIELD>]`,
+    // the text produced by casting a day-time interval to STRING.
+    if let Some(captures) = INTERVAL_LITERAL_WRAPPER_REGEX.captures(s.trim())
+        && let Some(qualifier) = captures.get(3)
+        && day_time_qualifier_matches(qualifier.as_str(), start_field, end_field)
+        && let Some(inner) = captures.get(2)
+    {
+        let negated = captures.get(1).map(|m| m.as_str()) == Some("-");
+        if let Ok(value) = parse_interval_day_time_string(
+            inner.as_str(),
+            negated,
+            regex,
+            start_field,
+            Some(end_field),
+        ) {
+            return Ok(extract_micros(value));
+        }
+    }
+    Err(SqlError::invalid(format!("interval: {s}")))
+}
+
+fn day_time_field_name(field: spec::IntervalFieldType) -> &'static str {
+    match field {
+        spec::IntervalFieldType::Day => "DAY",
+        spec::IntervalFieldType::Hour => "HOUR",
+        spec::IntervalFieldType::Minute => "MINUTE",
+        spec::IntervalFieldType::Second => "SECOND",
+        spec::IntervalFieldType::Year | spec::IntervalFieldType::Month => {
+            unreachable!("year-month fields never appear in a day-time interval qualifier")
+        }
+    }
+}
+
+fn day_time_qualifier_matches(
+    text: &str,
+    start_field: spec::IntervalFieldType,
+    end_field: spec::IntervalFieldType,
+) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let start_name = day_time_field_name(start_field);
+    let end_name = day_time_field_name(end_field);
+    if start_field == end_field {
+        matches!(words.as_slice(), [field] if field.eq_ignore_ascii_case(start_name))
+    } else {
+        matches!(
+            words.as_slice(),
+            [field, to, end] if field.eq_ignore_ascii_case(start_name)
+                && to.eq_ignore_ascii_case("TO")
+                && end.eq_ignore_ascii_case(end_name)
+        )
+    }
 }
 
 enum StandardIntervalKind {
@@ -582,6 +704,30 @@ fn extend_interval_fields(
     fields.1 = (start != end).then_some(end);
 }
 
+/// Parses a runtime year-month interval string produced by e.g. `CAST(s AS INTERVAL YEAR TO MONTH)`
+/// where `s` is a plain string value (not a SQL `INTERVAL` literal).
+///
+/// Spark accepts the bare `[+|-]y-m` form (see `IntervalUtils.castStringToYMInterval` in Spark)
+/// in addition to the qualified forms handled by [`parse_unqualified_interval_string`]
+/// (e.g. `INTERVAL '1-2' YEAR TO MONTH` or `1 year 2 months`).
+pub fn parse_year_month_interval_string(s: &str) -> SqlResult<i32> {
+    if let Ok(IntervalValue::YearMonth { months, .. }) = parse_interval_year_month_string(
+        s,
+        false,
+        &INTERVAL_YEAR_TO_MONTH_REGEX,
+        spec::IntervalFieldType::Year,
+        Some(spec::IntervalFieldType::Month),
+    ) {
+        return Ok(months);
+    }
+    match parse_unqualified_interval_string(s, false)? {
+        IntervalValue::YearMonth { months, .. } => Ok(months),
+        IntervalValue::Microsecond { .. } | IntervalValue::MonthDayNanosecond { .. } => {
+            Err(SqlError::invalid(format!("interval: {s}")))
+        }
+    }
+}
+
 pub(crate) fn parse_unqualified_interval_string(
     s: &str,
     negated: bool,
@@ -649,10 +795,42 @@ mod tests {
         assert!(parse("'106751991 04:00:54.775807' day to second", false).is_ok());
         assert!(parse("'106751991 04:00:54.775807' day to second", true).is_ok());
         assert!(parse("'106751991 04:00:54.775808' day to second", false).is_err());
-        assert!(parse("'106751991 04:00:54.775808' day to second", true).is_err());
-        assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_err());
+        // The negative endpoint has one more representable value than the positive
+        // endpoint (`i64::MIN`'s magnitude is `i64::MAX + 1`, see the comment above):
+        // negating this exact magnitude via the grammar-level sign (the `negated` param
+        // here, or an embedded `-` right before the quote, matching `INTERVAL -'...'
+        // DAY TO SECOND`) lands on `i64::MIN`, a valid value -- verified against the
+        // Spark 4.2 JVM, which also succeeds here (`toDTInterval` applies the sign
+        // per-field during summation, not by negating an already-built positive value).
+        assert_eq!(
+            parse("'106751991 04:00:54.775808' day to second", true)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Day,
+                end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        assert_eq!(
+            parse("-'106751991 04:00:54.775808' day to second", false)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Day,
+                end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        // A second, unrelated negation (the `negated` param, on top of the embedded
+        // `-`) flips the sign back positive, so this exact magnitude overflows again.
         assert!(parse("-'106751991 04:00:54.775808' day to second", true).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", false).is_err());
+
+        assert_eq!(
+            parse("'-9223372036854.775808' second", false)?,
+            IntervalValue::Microsecond {
+                microseconds: i64::MIN,
+                start_field: spec::IntervalFieldType::Second,
+                end_field: None,
+            }
+        );
         assert!(parse("-'106751991 04:00:54.775809' day to second", true).is_err());
 
         assert_eq!(

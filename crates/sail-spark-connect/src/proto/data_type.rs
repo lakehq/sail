@@ -25,23 +25,29 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 /// Parse a Spark data type string of various forms.
 /// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
-    if let Ok(dt) = parse_data_type(schema).and_then(from_ast_data_type) {
-        Ok(dt)
-    } else {
-        match parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type) {
-            Ok(dt) => match dt {
-                spec::DataType::Struct { fields } if fields.is_empty() => {
-                    Err(SparkError::invalid("empty data type"))
-                }
-                // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-                // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-                // to parse table schema input (`name type, ...`).
-                _ => Ok(dt),
-            },
-            Err(ddl_error) => parse_spark_json_data_type(schema)
-                .and_then(|dt| dt.try_into())
-                .map_err(|_| SparkError::ParseError(ddl_error.to_string())),
+    // The input is syntactically a valid data type, but analysis rejected it (e.g.
+    // `TIME(9)`, whose precision is out of Spark's supported [0, 6] range) -- that
+    // semantic error is more specific and useful than the struct-wrapping fallback's
+    // generic parse error below, so surface it directly instead of masking it.
+    if let Ok(ast) = parse_data_type(schema) {
+        match from_ast_data_type(ast) {
+            Ok(dt) => return Ok(dt),
+            Err(semantic_error) => return Err(SparkError::ParseError(semantic_error.to_string())),
         }
+    }
+    match parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type) {
+        Ok(dt) => match dt {
+            spec::DataType::Struct { fields } if fields.is_empty() => {
+                Err(SparkError::invalid("empty data type"))
+            }
+            // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+            // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+            // to parse table schema input (`name type, ...`).
+            _ => Ok(dt),
+        },
+        Err(ddl_error) => parse_spark_json_data_type(schema)
+            .and_then(|dt| dt.try_into())
+            .map_err(|_| SparkError::ParseError(ddl_error.to_string())),
     }
 }
 
@@ -273,24 +279,21 @@ impl TryFrom<DataType> for spec::DataType {
                 type_variation_reference: _,
             }) => {
                 let precision = precision.unwrap_or(6); // Default to microsecond if not specified
-                match precision {
-                    0 => Ok(spec::DataType::Time32 {
-                        time_unit: spec::TimeUnit::Second,
-                    }),
-                    3 => Ok(spec::DataType::Time32 {
-                        time_unit: spec::TimeUnit::Millisecond,
-                    }),
-                    6 => Ok(spec::DataType::Time64 {
-                        time_unit: spec::TimeUnit::Microsecond,
-                    }),
-                    9 => Ok(spec::DataType::Time64 {
-                        time_unit: spec::TimeUnit::Nanosecond,
-                    }),
-                    _ => Err(SparkError::invalid(format!(
-                        "unsupported TIME precision: {}. Only 0, 3, 6, and 9 are supported",
-                        precision
-                    ))),
+                if !(0..=6).contains(&precision) {
+                    return Err(SparkError::invalid(format!(
+                        "unsupported TIME precision: {precision}. Only [0, 6] is supported"
+                    )));
                 }
+                #[expect(clippy::unwrap_used, reason = "precision is checked to be in [0, 6]")]
+                let precision = u8::try_from(precision).unwrap();
+                // Spark stores every TIME value as a microsecond-resolution `Long`
+                // internally regardless of the declared precision -- precision is
+                // schema/display-only, matching `from_ast_time_precision` in
+                // sail-sql-analyzer.
+                Ok(spec::DataType::Time64 {
+                    time_unit: spec::TimeUnit::Microsecond,
+                    precision,
+                })
             }
         }
     }
@@ -423,7 +426,8 @@ mod tests {
     fn test_time_proto_to_spec() -> SparkResult<()> {
         use crate::spark::connect::data_type::{Kind, Time};
 
-        // TIME(0) -> Time32 Second
+        // TIME(0) -> Time64 Microsecond (Spark stores TIME as microsecond-resolution
+        // regardless of declared precision; `precision` alone carries the contract).
         let proto = crate::spark::connect::DataType {
             kind: Some(Kind::Time(Time {
                 precision: Some(0),
@@ -432,12 +436,28 @@ mod tests {
         };
         assert_eq!(
             spec::DataType::try_from(proto)?,
-            spec::DataType::Time32 {
-                time_unit: spec::TimeUnit::Second
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 0,
             }
         );
 
-        // TIME(3) -> Time32 Millisecond
+        // TIME(1) -> Time64 Microsecond
+        let proto = crate::spark::connect::DataType {
+            kind: Some(Kind::Time(Time {
+                precision: Some(1),
+                type_variation_reference: 0,
+            })),
+        };
+        assert_eq!(
+            spec::DataType::try_from(proto)?,
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 1,
+            }
+        );
+
+        // TIME(3) -> Time64 Microsecond
         let proto = crate::spark::connect::DataType {
             kind: Some(Kind::Time(Time {
                 precision: Some(3),
@@ -446,8 +466,24 @@ mod tests {
         };
         assert_eq!(
             spec::DataType::try_from(proto)?,
-            spec::DataType::Time32 {
-                time_unit: spec::TimeUnit::Millisecond
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 3,
+            }
+        );
+
+        // TIME(4) -> Time64 Microsecond
+        let proto = crate::spark::connect::DataType {
+            kind: Some(Kind::Time(Time {
+                precision: Some(4),
+                type_variation_reference: 0,
+            })),
+        };
+        assert_eq!(
+            spec::DataType::try_from(proto)?,
+            spec::DataType::Time64 {
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 4,
             }
         );
 
@@ -461,21 +497,8 @@ mod tests {
         assert_eq!(
             spec::DataType::try_from(proto)?,
             spec::DataType::Time64 {
-                time_unit: spec::TimeUnit::Microsecond
-            }
-        );
-
-        // TIME(9) -> Time64 Nanosecond
-        let proto = crate::spark::connect::DataType {
-            kind: Some(Kind::Time(Time {
-                precision: Some(9),
-                type_variation_reference: 0,
-            })),
-        };
-        assert_eq!(
-            spec::DataType::try_from(proto)?,
-            spec::DataType::Time64 {
-                time_unit: spec::TimeUnit::Nanosecond
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 6,
             }
         );
 
@@ -489,7 +512,8 @@ mod tests {
         assert_eq!(
             spec::DataType::try_from(proto)?,
             spec::DataType::Time64 {
-                time_unit: spec::TimeUnit::Microsecond
+                time_unit: spec::TimeUnit::Microsecond,
+                precision: 6,
             }
         );
 
@@ -500,8 +524,9 @@ mod tests {
     fn test_time_proto_invalid_precision() {
         use crate::spark::connect::data_type::{Kind, Time};
 
-        // Invalid precisions: 1, 2, 4, 5, 7, 8, 10+
-        for precision in [1, 2, 4, 5, 7, 8, 10] {
+        // Spark's TIME only supports the declared range [0, 6]; 9 (Sail's old,
+        // wrong acceptance of nanosecond precision) must now be rejected too.
+        for precision in [7, 8, 9, 10] {
             let proto = crate::spark::connect::DataType {
                 kind: Some(Kind::Time(Time {
                     precision: Some(precision),

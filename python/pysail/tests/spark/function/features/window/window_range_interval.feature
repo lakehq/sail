@@ -99,3 +99,32 @@ Feature: Window RANGE frame with interval boundaries
         | 3  | 60    |
         | 5  | 80    |
         | 8  | 80    |
+
+  Rule: RANGE frame ordered by a numeric CAST of a TIMESTAMP
+
+    # Regression: a `CAST(ts AS BIGINT)` built by referencing the same value
+    # twice got rewritten differently on different plan paths, failing planning
+    # with "does not satisfy order requirements" for windows shaped like this.
+    Scenario: moving average over a TIMESTAMP cast to BIGINT in the ORDER BY
+      When query
+        """
+        SELECT key, time, value,
+          AVG(value) OVER (
+            PARTITION BY key
+            ORDER BY CAST(time AS LONG)
+            RANGE BETWEEN 3600 PRECEDING AND CURRENT ROW
+          ) AS mean
+        FROM (
+          SELECT * FROM VALUES
+            ('a', TIMESTAMP '2024-01-01 00:00:00', CAST(1.0 AS DOUBLE)),
+            ('a', TIMESTAMP '2024-01-01 01:00:00', CAST(2.0 AS DOUBLE)),
+            ('a', TIMESTAMP '2024-01-01 02:00:00', CAST(3.0 AS DOUBLE))
+          AS t(key, time, value)
+        )
+        ORDER BY time
+        """
+      Then query result ordered
+        | key | time                | value | mean |
+        | a   | 2024-01-01 00:00:00 | 1.0   | 1.0  |
+        | a   | 2024-01-01 01:00:00 | 2.0   | 1.5  |
+        | a   | 2024-01-01 02:00:00 | 3.0   | 2.5  |

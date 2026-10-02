@@ -7,6 +7,7 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::misc::force_nullable::SparkForceNullable;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
@@ -34,16 +35,76 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
-    let when_then_expr = conditions
+    let mut when_then_expr: Vec<_> = conditions
         .into_iter()
         .zip(branch_values)
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
-    Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
+    // CaseWhen.nullable ignores the missing ELSE when a branch is always
+    // true (conditionalExpressions.scala:191-200). A final true branch is an
+    // explicit ELSE; moving it preserves every branch's type checking.
+    let final_is_true = when_then_expr.last().is_some_and(|(condition, _)| {
+        matches!(
+            condition.as_ref(),
+            expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+        )
+    });
+    let else_expr = if final_is_true {
+        when_then_expr.pop().map(|(_, value)| value)
+    } else {
+        None
+    };
+    if when_then_expr.is_empty() {
+        if let Some(value) = else_expr {
+            return Ok(*value);
+        }
+        return Ok(lit(ScalarValue::Null));
+    }
+    // Spark's CaseWhen.nullable ORs every branch's nullability unconditionally
+    // (conditionalExpressions.scala:191-200) -- including a WHEN branch guarded
+    // by a literal-false condition, which can never actually be selected.
+    // DataFusion's own `nullable()` excludes such unreachable branches, which
+    // disagrees with Spark's declared schema even though both engines compute
+    // the same runtime value.
+    //
+    // Only a literal-boolean WHEN condition can make DataFusion's computation
+    // diverge from Spark's (a data-dependent condition is never excluded by
+    // either engine, so the two already agree there). Detect that narrow shape
+    // directly instead of calling `case_expr.nullable(schema)` to compare: that
+    // call also (re-)validates the whole expression tree, including any nested
+    // higher-order lambda bodies inside the WHEN conditions -- which defeats
+    // Sail's separate mechanism for discarding an unchecked, never-evaluated
+    // higher-order return type inside a provably null-typed branch (see
+    // "Null-typed predicates discard unchecked higher-order returns" in
+    // map_filter.feature) by forcing that validation to run here, too early.
+    let has_unreachable_literal_condition = when_then_expr.iter().any(|(condition, _)| {
+        matches!(
+            condition.as_ref(),
+            expr::Expr::Literal(ScalarValue::Boolean(Some(false)), _)
+        )
+    });
+    let schema = function_context.schema;
+    let spark_nullable = has_unreachable_literal_condition
+        && (when_then_expr
+            .iter()
+            .any(|(_, value)| value.nullable(schema).unwrap_or(true))
+            || else_expr
+                .as_ref()
+                .is_none_or(|value| value.nullable(schema).unwrap_or(true)));
+    let case_expr = expr::Expr::Case(expr::Case {
+        expr: None,
         when_then_expr,
-        else_expr: None,
-    }))
+        else_expr,
+    });
+    if spark_nullable {
+        // Known to disagree with DataFusion's own `nullable()` precisely
+        // because of the literal-false branch just detected -- no need to
+        // call it (and risk the same premature-validation side effect) to
+        // confirm the disagreement.
+        Ok(ScalarUDF::from(SparkForceNullable::new()).call(vec![case_expr]))
+    } else {
+        Ok(case_expr)
+    }
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

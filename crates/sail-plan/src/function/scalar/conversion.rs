@@ -1,14 +1,44 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+/// Spark's `binary(expr)` function is `Cast(expr, BinaryType)` under the hood, so it
+/// must follow the same rule as `CAST(... AS BINARY)`: see `SparkIntegralToBinary`
+/// (sail-function) for why integral input needs a dedicated big-endian UDF instead of
+/// Arrow's own (little-endian) numeric-to-binary cast kernel.
+pub(crate) fn cast_to_binary(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    let data_type = arg
+        .to_field(input.function_context.schema)?
+        .1
+        .data_type()
+        .clone();
+    if matches!(
+        data_type,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    ) {
+        if input.function_context.plan_config.ansi_mode {
+            return Err(PlanError::invalid(format!(
+                "cannot cast {data_type} to binary"
+            )));
+        }
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkIntegralToBinary::new())),
+            args: vec![arg],
+        }))
+    } else {
+        Ok(cast(arg, DataType::Binary))
+    }
+}
 
 pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
@@ -88,7 +118,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
 
     vec![
         ("bigint", F::cast(DataType::Int64)),
-        ("binary", F::cast(DataType::Binary)),
+        ("binary", F::custom(cast_to_binary)),
         ("boolean", F::cast(DataType::Boolean)),
         ("cast", F::unknown("cast")),
         ("date", F::custom(cast_to_date)),

@@ -293,12 +293,12 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         },
         spec::DataType::Date32 => Ok(Literal::Date32 { days: None }),
         spec::DataType::Date64 => Ok(Literal::Date64 { milliseconds: None }),
-        spec::DataType::Time32 { time_unit } => match time_unit {
+        spec::DataType::Time32 { time_unit, .. } => match time_unit {
             spec::TimeUnit::Second => Ok(Literal::Time32Second { seconds: None }),
             spec::TimeUnit::Millisecond => Ok(Literal::Time32Millisecond { milliseconds: None }),
             spec::TimeUnit::Microsecond | spec::TimeUnit::Nanosecond => Err(error(&data_type)),
         },
-        spec::DataType::Time64 { time_unit } => match time_unit {
+        spec::DataType::Time64 { time_unit, .. } => match time_unit {
             spec::TimeUnit::Second | spec::TimeUnit::Millisecond => Err(error(&data_type)),
             spec::TimeUnit::Microsecond => Ok(Literal::Time64Microsecond { microseconds: None }),
             spec::TimeUnit::Nanosecond => Ok(Literal::Time64Nanosecond { nanoseconds: None }),

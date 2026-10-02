@@ -157,14 +157,32 @@ pub enum DataType {
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either seconds or milliseconds.
     /// Corresponds to [`arrow_schema::DataType::Time32`].
+    ///
+    /// `precision` is Spark's declared TIME precision (0-6 fractional-second
+    /// digits). Spark stores every TIME value as a microsecond-resolution
+    /// `Long` internally regardless of the declared precision -- precision is
+    /// a schema/display-only contract, enforced on the VALUE only by an
+    /// explicit `CAST(TIME AS TIME(n))`, never by how the value is physically
+    /// stored -- so `time_unit` alone cannot represent every Spark precision
+    /// and `precision` is the source of truth for anything Spark-visible
+    /// (schema, `CAST(TIME AS STRING)`, `.show()`). A declared TIME with a
+    /// `precision` always uses [`DataType::Time64`] with
+    /// `TimeUnit::Microsecond`; this variant only appears without declared
+    /// precision (e.g. a plain Arrow/Parquet `Time32` column with no Spark
+    /// TIME contract attached).
     Time32 {
         time_unit: TimeUnit,
+        precision: u8,
     },
     /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either microseconds or nanoseconds.
     /// Corresponds to [`arrow_schema::DataType::Time64`].
+    ///
+    /// See [`DataType::Time32`] for why `precision` is tracked separately from
+    /// `time_unit`.
     Time64 {
         time_unit: TimeUnit,
+        precision: u8,
     },
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
     /// Corresponds to [`arrow_schema::DataType::Duration`].
@@ -601,6 +619,13 @@ pub enum IntervalFieldType {
 }
 
 pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "SAIL::spark::interval";
+
+/// Sail metadata key for Spark's declared TIME precision (0-6 fractional-second
+/// digits, stored as the decimal string of a `u8`) in Arrow field metadata.
+/// Arrow's `TimeUnit` alone cannot represent every Spark TIME precision (see
+/// [`DataType::Time32`]); this metadata carries the exact precision anywhere a
+/// TIME value's `Field` is accessible (schema, `CAST ... AS STRING`, `.show()`).
+pub const SAIL_SPARK_TIME_PRECISION_METADATA_KEY: &str = "SAIL::spark::time_precision";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(
