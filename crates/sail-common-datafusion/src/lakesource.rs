@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
@@ -113,9 +114,10 @@ pub trait LakeSource: DataSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
+        let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
     }
 
@@ -146,11 +148,12 @@ pub trait LakeSource: DataSource {
     async fn alter_table(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
-        let _ = lakehouse_table;
+        let _ = (config, lakehouse_table);
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)

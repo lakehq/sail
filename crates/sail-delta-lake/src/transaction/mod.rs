@@ -24,9 +24,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use datafusion::prelude::SessionConfig;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
+use sail_common_datafusion::session::delta::DeltaSessionConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
@@ -1047,6 +1049,14 @@ impl Default for CommitProperties {
 }
 
 impl CommitProperties {
+    pub(crate) fn from_session_config(config: &SessionConfig) -> Self {
+        Self::default().with_user_metadata(
+            config
+                .get_extension::<DeltaSessionConfig>()
+                .and_then(|config| config.user_metadata.clone()),
+        )
+    }
+
     /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
     /// under the `operationMetrics` key.
     pub(crate) fn with_operation_metrics(

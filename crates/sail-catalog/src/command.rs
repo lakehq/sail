@@ -501,7 +501,13 @@ impl CatalogCommand {
                         .await?
                         .execution;
                     lake_source
-                        .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
+                        .alter_table(
+                            runtime,
+                            &ctx.session_config(),
+                            &location,
+                            storage_operation,
+                            Some(lakehouse_table),
+                        )
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -882,6 +888,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     lake_source
         .create_table_metadata(
             ctx.runtime_env(),
+            &ctx.session_config(),
             LakeSourceCreateTableInfo {
                 path: location,
                 columns: columns
@@ -1337,6 +1344,7 @@ mod tests {
         async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+            _config: &SessionConfig,
             _path: &str,
             _operation: LakeSourceAlterTableOperation,
             _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,

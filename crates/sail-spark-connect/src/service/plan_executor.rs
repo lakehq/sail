@@ -120,7 +120,17 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let (operation_ctx, plan_config) = spark.operation_context(ctx)?;
+    // SET must update the persistent DataFusion session configuration.
+    let ctx = if matches!(
+        &plan,
+        spec::Plan::Command(command) if matches!(&command.node, spec::CommandNode::SetVariable { .. })
+    ) {
+        ctx
+    } else {
+        &operation_ctx
+    };
+    let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
@@ -277,8 +287,9 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
-    let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = service.runner().execute(ctx, plan).await?;
+    let (ctx, plan_config) = spark.operation_context(ctx)?;
+    let (plan, info) = resolve_and_execute_plan(&ctx, plan_config, plan).await?;
+    let stream = service.runner().execute(&ctx, plan).await?;
     let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
         query_id: Some(id.into()),

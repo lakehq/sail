@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_common_datafusion::session::delta::DeltaSessionConfig;
 use sail_plan::config::{
     DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
 };
@@ -216,6 +217,16 @@ pub(crate) fn get_pyspark_version() -> SparkResult<String> {
 
 // We must use `get_option` when extracting values from `SparkRuntimeConfig`
 // since not all configuration keys are supported in all versions of Spark.
+
+impl From<&SparkRuntimeConfig> for DeltaSessionConfig {
+    fn from(config: &SparkRuntimeConfig) -> Self {
+        Self {
+            user_metadata: config
+                .get_option(SparkConfigKey::SPARK_DATABRICKS_DELTA_COMMIT_INFO_USER_METADATA)
+                .map(str::to_owned),
+        }
+    }
+}
 
 impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;

@@ -12,6 +12,7 @@
 
 use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::session::delta::DeltaSessionConfig;
 pub(crate) use sail_data_source::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +25,12 @@ pub mod r#gen {
 pub(crate) mod parsers {
     pub(crate) use sail_data_source::options::parsers::*;
 
-    pub(crate) use super::parse_delta_log_replay_strategy;
+    pub(crate) use super::{parse_delta_log_replay_strategy, parse_user_metadata};
+}
+
+pub(crate) fn parse_user_metadata(_key: &str, value: &str) -> DataSourceResult<Option<String>> {
+    // An empty string is an explicit value that overrides the session default.
+    Ok(Some(value.to_string()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Default, Serialize, Deserialize)]
@@ -63,8 +69,11 @@ impl ResolveOptions for r#gen::DeltaReadOptions {
 }
 
 impl ResolveOptions for r#gen::DeltaWriteOptions {
-    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = r#gen::DeltaWritePartialOptions::initialize();
+        if let Some(config) = ctx.config().get_extension::<DeltaSessionConfig>() {
+            partial.user_metadata = Some(config.user_metadata.clone());
+        }
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
