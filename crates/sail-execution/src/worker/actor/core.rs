@@ -36,7 +36,12 @@ impl Actor for WorkerActor {
                 host: options.driver_host.clone(),
                 port: options.driver_port,
                 flight_connection_count: options.shuffle_backend.flight_connection_count(),
-                flight_initial_window_size: options.shuffle_backend.flight_initial_window_size(),
+                flight_initial_stream_window_size: options
+                    .shuffle_backend
+                    .flight_initial_stream_window_size(),
+                flight_initial_connection_window_size: options
+                    .shuffle_backend
+                    .flight_initial_connection_window_size(),
             },
         );
         let metrics_client = driver_client_set.core.clone();

@@ -61,7 +61,8 @@ async fn server() -> Result<
             host: address.ip().to_string(),
             port: address.port(),
             flight_connection_count: NonZeroUsize::MIN,
-            flight_initial_window_size: None,
+            flight_initial_stream_window_size: None,
+            flight_initial_connection_window_size: None,
         },
         connections,
         AbortOnDropHandle::new(server),
@@ -171,12 +172,13 @@ async fn clones_share_connection_pool_and_reconnect_one_slot() -> Result<(), Tra
 }
 
 #[tokio::test]
-async fn custom_window_size_is_advertised_for_streams_and_connection() -> Result<(), TransportError>
-{
+async fn custom_window_sizes_are_advertised_for_streams_and_connection()
+-> Result<(), TransportError> {
     tokio::time::timeout(Duration::from_secs(15), async {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
-        let window_size: u32 = 16 * 1024 * 1024;
+        let stream_window_size: u32 = 4 * 1024 * 1024;
+        let connection_window_size: u32 = 16 * 1024 * 1024;
         // Inspect the HTTP/2 preface directly so this verifies both flow-control levels.
         let server = AbortOnDropHandle::new(tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await?;
@@ -209,8 +211,8 @@ async fn custom_window_size_is_advertised_for_streams_and_connection() -> Result
                     _ => {}
                 }
             }
-            assert_eq!(stream_window, Some(window_size));
-            assert_eq!(connection_window, window_size);
+            assert_eq!(stream_window, Some(stream_window_size));
+            assert_eq!(connection_window, connection_window_size);
             Ok::<_, TransportError>(())
         }));
         let options = ClientOptions {
@@ -218,7 +220,8 @@ async fn custom_window_size_is_advertised_for_streams_and_connection() -> Result
             host: address.ip().to_string(),
             port: address.port(),
             flight_connection_count: NonZeroUsize::MIN,
-            flight_initial_window_size: Some(window_size),
+            flight_initial_stream_window_size: Some(stream_window_size),
+            flight_initial_connection_window_size: Some(connection_window_size),
         };
         let _transport = FlightTransport::connect(&options).await?;
         server.await??;
@@ -228,24 +231,30 @@ async fn custom_window_size_is_advertised_for_streams_and_connection() -> Result
 }
 
 #[tokio::test]
-async fn connect_rejects_invalid_window_size_before_opening_connection()
+async fn connect_rejects_invalid_window_sizes_before_opening_connection()
 -> Result<(), TransportError> {
-    let options = ClientOptions {
-        enable_tls: false,
-        host: "invalid host".to_string(),
-        port: 0,
-        flight_connection_count: NonZeroUsize::MIN,
-        flight_initial_window_size: Some(1 << 31),
-    };
-    let error = FlightTransport::connect(&options)
-        .await
-        .err()
-        .ok_or("invalid window size must fail")?;
-    let error = error.downcast::<std::io::Error>()?;
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "Flight initial window size must not exceed 2147483647 bytes"
-    );
+    for (name, stream_window, connection_window) in [
+        ("stream", Some(1 << 31), None),
+        ("connection", None, Some(1 << 31)),
+    ] {
+        let options = ClientOptions {
+            enable_tls: false,
+            host: "invalid host".to_string(),
+            port: 0,
+            flight_connection_count: NonZeroUsize::MIN,
+            flight_initial_stream_window_size: stream_window,
+            flight_initial_connection_window_size: connection_window,
+        };
+        let error = FlightTransport::connect(&options)
+            .await
+            .err()
+            .ok_or("invalid window size must fail")?;
+        let error = error.downcast::<std::io::Error>()?;
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            format!("Flight initial {name} window size must not exceed 2147483647 bytes")
+        );
+    }
     Ok(())
 }

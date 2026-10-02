@@ -76,7 +76,8 @@ pub struct ClientOptions {
     pub host: String,
     pub port: u16,
     pub flight_connection_count: NonZeroUsize,
-    pub flight_initial_window_size: Option<u32>,
+    pub flight_initial_stream_window_size: Option<u32>,
+    pub flight_initial_connection_window_size: Option<u32>,
 }
 
 impl ClientOptions {

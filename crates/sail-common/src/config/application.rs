@@ -322,7 +322,12 @@ pub struct FlightShuffleBackend {
         serialize_with = "serialize_non_zero",
         deserialize_with = "deserialize_non_zero"
     )]
-    pub initial_window_size: Option<u32>,
+    pub initial_stream_window_size: Option<u32>,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_connection_window_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -494,7 +499,8 @@ mod shuffle_backend {
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
                         connection_count: std::num::NonZeroUsize::MIN,
-                        initial_window_size: None,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
                     },
                     storage,
                     celeborn: super::CelebornShuffleBackend {
@@ -511,7 +517,8 @@ mod shuffle_backend {
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
                         connection_count: std::num::NonZeroUsize::MIN,
-                        initial_window_size: None,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
                     },
                     storage: super::StorageShuffleBackend {
                         path: None,
@@ -1034,7 +1041,8 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__TYPE,
         SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
         SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
-        SHUFFLE_BACKEND__FLIGHT__INITIAL_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,

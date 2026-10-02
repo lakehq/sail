@@ -52,7 +52,8 @@ struct TransportInner {
     connector: Connector,
     senders: Vec<Mutex<Option<SendRequest<Body>>>>,
     next_connection: AtomicUsize,
-    initial_window_size: Option<u32>,
+    initial_stream_window_size: Option<u32>,
+    initial_connection_window_size: Option<u32>,
 }
 
 enum Connector {
@@ -62,15 +63,17 @@ enum Connector {
 
 impl FlightTransport {
     async fn connect(options: &ClientOptions) -> Result<Self, TransportError> {
-        if options
-            .flight_initial_window_size
-            .is_some_and(|size| size > i32::MAX as u32)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Flight initial window size must not exceed 2147483647 bytes",
-            )
-            .into());
+        for (name, size) in [
+            ("stream", options.flight_initial_stream_window_size),
+            ("connection", options.flight_initial_connection_window_size),
+        ] {
+            if size.is_some_and(|size| size > i32::MAX as u32) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Flight initial {name} window size must not exceed 2147483647 bytes"),
+                )
+                .into());
+            }
         }
         let origin = options.to_url_string().parse()?;
         let mut http = HttpConnector::new();
@@ -100,7 +103,8 @@ impl FlightTransport {
                     .map(|_| Mutex::new(None))
                     .collect(),
                 next_connection: AtomicUsize::new(0),
-                initial_window_size: options.flight_initial_window_size,
+                initial_stream_window_size: options.flight_initial_stream_window_size,
+                initial_connection_window_size: options.flight_initial_connection_window_size,
             }),
         };
         transport.sender(0).await?;
@@ -134,8 +138,8 @@ impl FlightTransport {
         };
         let (new_sender, connection) = Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
-            .initial_stream_window_size(self.inner.initial_window_size)
-            .initial_connection_window_size(self.inner.initial_window_size)
+            .initial_stream_window_size(self.inner.initial_stream_window_size)
+            .initial_connection_window_size(self.inner.initial_connection_window_size)
             .max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
             // Trusted internal shuffle traffic can legitimately cancel many streams. Late frames
             // may count as internal resets; the lifetime budget must not kill unrelated streams.

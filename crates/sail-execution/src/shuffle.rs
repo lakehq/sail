@@ -14,7 +14,8 @@ pub enum ShuffleBackendKind {
     Flight {
         compression: ShuffleCompression,
         connection_count: NonZeroUsize,
-        initial_window_size: Option<u32>,
+        initial_stream_window_size: Option<u32>,
+        initial_connection_window_size: Option<u32>,
     },
     Storage {
         path: Option<String>,
@@ -43,7 +44,8 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
             sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
                 compression: flight.compression.clone().into(),
                 connection_count: flight.connection_count,
-                initial_window_size: flight.initial_window_size,
+                initial_stream_window_size: flight.initial_stream_window_size,
+                initial_connection_window_size: flight.initial_connection_window_size,
             },
             sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
@@ -97,12 +99,22 @@ impl ShuffleBackendKind {
         }
     }
 
-    pub fn flight_initial_window_size(&self) -> Option<u32> {
+    pub fn flight_initial_stream_window_size(&self) -> Option<u32> {
         match self {
             Self::Flight {
-                initial_window_size,
+                initial_stream_window_size,
                 ..
-            } => *initial_window_size,
+            } => *initial_stream_window_size,
+            Self::Storage { .. } | Self::Celeborn { .. } => None,
+        }
+    }
+
+    pub fn flight_initial_connection_window_size(&self) -> Option<u32> {
+        match self {
+            Self::Flight {
+                initial_connection_window_size,
+                ..
+            } => *initial_connection_window_size,
             Self::Storage { .. } | Self::Celeborn { .. } => None,
         }
     }
@@ -243,7 +255,8 @@ mod tests {
             ShuffleBackendKind::Flight {
                 compression: super::ShuffleCompression::None,
                 connection_count: std::num::NonZeroUsize::MIN,
-                initial_window_size: None,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
             }
             .celeborn_endpoint_overrides_string(),
             "[]"
@@ -256,7 +269,8 @@ mod tests {
             ShuffleBackendKind::Flight {
                 compression: super::ShuffleCompression::None,
                 connection_count: std::num::NonZeroUsize::MIN,
-                initial_window_size: None,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
             }
             .celeborn_master_endpoints_string(),
             "[]"

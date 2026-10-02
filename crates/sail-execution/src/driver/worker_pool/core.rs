@@ -478,9 +478,12 @@ impl WorkerPool {
                         host: host.clone(),
                         port: *port,
                         flight_connection_count: options.shuffle_backend.flight_connection_count(),
-                        flight_initial_window_size: options
+                        flight_initial_stream_window_size: options
                             .shuffle_backend
-                            .flight_initial_window_size(),
+                            .flight_initial_stream_window_size(),
+                        flight_initial_connection_window_size: options
+                            .shuffle_backend
+                            .flight_initial_connection_window_size(),
                     };
                     WorkerClientSet::new(options)
                 });

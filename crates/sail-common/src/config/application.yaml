@@ -327,12 +327,21 @@
     connections in round-robin order, and connections are opened as needed.
   experimental: true
 
-- key: cluster.shuffle_backend.flight.initial_window_size
+- key: cluster.shuffle_backend.flight.initial_stream_window_size
   type: number
   default: "0"
   description: |
-    The initial HTTP/2 receive window size in bytes for both streams and connections
-    in the Flight shuffle client. Set to `0` to use the transport defaults. The
+    The initial HTTP/2 receive window size in bytes for each stream in the Flight
+    shuffle client. Set to `0` to use the transport default. The
+    maximum value is `2147483647`.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.initial_connection_window_size
+  type: number
+  default: "0"
+  description: |
+    The initial HTTP/2 receive window size in bytes shared by all streams on each
+    connection in the Flight shuffle client. Set to `0` to use the transport default. The
     maximum value is `2147483647`.
   experimental: true
 
