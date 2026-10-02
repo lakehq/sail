@@ -19,6 +19,7 @@ chrono = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 libloading = { workspace = true }
+log = { workspace = true }
 pilota = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
