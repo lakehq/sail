@@ -197,7 +197,7 @@ async fn custom_window_sizes_are_advertised_for_streams_and_connection()
                 socket.read_exact(&mut payload).await?;
                 match header[3] {
                     4 if header[4] == 0 => {
-                        for setting in payload.chunks_exact(6) {
+                        for setting in payload.as_chunks::<6>().0 {
                             if setting[..2] == [0, 4] {
                                 stream_window = Some(u32::from_be_bytes(setting[2..].try_into()?));
                             }
