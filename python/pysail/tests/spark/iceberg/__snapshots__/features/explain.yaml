@@ -98,3 +98,44 @@ data:
       ProjectionExec: expr=[id@0 as #3, value@1 as #4, category@2 as #5]
         ProjectionExec: expr=[id@0 as id, value@1 as value, category@2 as category]
           DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_prune/data/category=1/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, category], file_type=parquet
+---
+name: "test_explain_shows_providerplanned_procedure_boundary"
+data:
+  |-
+    == Parsed Logical Plan ==
+    LakeProcedure: iceberg.ancestors_of
+      IcebergProcedure: procedure=ancestors_of, invocation_id=<invocation_id>
+
+    == Analyzed Logical Plan ==
+    snapshot_id: Int64, timestamp: Int64
+    LakeProcedure: iceberg.ancestors_of
+      IcebergProcedure: procedure=ancestors_of, invocation_id=<invocation_id>
+
+    == Optimized Logical Plan ==
+    LakeProcedure: iceberg.ancestors_of
+      IcebergProcedure: procedure=ancestors_of, invocation_id=<invocation_id>
+
+    == Physical Plan ==
+    LakeProcedureExec: lake_source=iceberg, procedure=ancestors_of, invocation_id=<invocation_id>
+      CooperativeExec
+        IcebergProcedureExec: procedure=ancestors_of, invocation_id=<invocation_id>
+---
+name: "test_metadata_files_use_a_projected_manifest_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#21@0 as file_path, #22@1 as record_count]
+      ProjectionExec: expr=[file_path@0 as #21, record_count@1 as #22]
+        CooperativeExec
+          IcebergMetadataRelationExec: relation=files, partitions=2, projection=[1, 4]
+---
+name: "test_rewrite_uses_planned_file_groups"
+data:
+  |-
+    == Physical Plan ==
+    LakeProcedureExec: lake_source=iceberg, procedure=rewrite_data_files, invocation_id=<invocation_id>
+      IcebergProcedureExec: procedure=rewrite_data_files, invocation_id=<invocation_id>
+        IcebergWriterExec(table_path=file://<tmp>/iceberg_explain_procedure/)
+          IcebergScanByDataFilesExec: table_url=file://<table_url>
+            CooperativeExec
+              IcebergFileTasksExec: groups=1, files=2

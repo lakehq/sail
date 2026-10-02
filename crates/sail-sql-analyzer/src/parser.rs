@@ -169,4 +169,17 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_call_procedure() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "CALL sail.system.rollback_to_snapshot(table => 'events', snapshot_id => 42)",
+        )?;
+        assert!(matches!(statement, Statement::CallProcedure { .. }));
+        assert_eq!(
+            statement.text(),
+            "CALL sail . system . rollback_to_snapshot ( table => 'events' , snapshot_id => 42 ) "
+        );
+        Ok(())
+    }
 }

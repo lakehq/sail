@@ -547,6 +547,24 @@ impl DataSourceRegistry {
             .cloned()
             .and_then(|source| source.as_lake_source()))
     }
+
+    pub fn lake_sources(&self) -> Result<Vec<(String, Arc<dyn LakeSource>)>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let mut lake_sources = sources
+            .iter()
+            .filter_map(|(name, source)| {
+                source
+                    .clone()
+                    .as_lake_source()
+                    .map(|source| (name.clone(), source))
+            })
+            .collect::<Vec<_>>();
+        lake_sources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        Ok(lake_sources)
+    }
 }
 
 fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError {

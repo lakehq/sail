@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -10,8 +12,22 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
+    Namespace,
 };
 use crate::utils::match_pattern;
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ResolvedCatalogTableReference {
+    catalog: Arc<str>,
+    database: Namespace,
+    table: Arc<str>,
+}
+
+impl ResolvedCatalogTableReference {
+    pub fn catalog(&self) -> &str {
+        &self.catalog
+    }
+}
 
 impl CatalogManager {
     pub async fn create_table<T: AsRef<str>>(
@@ -35,6 +51,33 @@ impl CatalogManager {
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await
+    }
+
+    /// Resolves a table reference using `catalog` when no registered catalog is named.
+    pub fn resolve_table_reference_with_default_catalog<T: AsRef<str>>(
+        &self,
+        catalog: &str,
+        table: &[T],
+    ) -> CatalogResult<ResolvedCatalogTableReference> {
+        let state = self.state()?;
+        let (catalog, database, table) =
+            state.resolve_object_reference_with_default_catalog(catalog, table)?;
+        state.get_catalog(&catalog)?;
+        Ok(ResolvedCatalogTableReference {
+            catalog,
+            database,
+            table,
+        })
+    }
+
+    pub async fn get_table_by_reference(
+        &self,
+        reference: &ResolvedCatalogTableReference,
+    ) -> CatalogResult<TableStatus> {
+        let provider = self.state()?.get_catalog(&reference.catalog)?;
+        provider
+            .get_table(&reference.database, &reference.table)
+            .await
     }
 
     pub async fn resolve_lakehouse_table<T: AsRef<str>>(
