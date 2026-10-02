@@ -805,3 +805,43 @@ def test_rest_catalog_rejects_non_iceberg_create_format(
             USING DELTA
             """
         )
+
+
+def test_show_table_properties_reads_external_rest_property_commits(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table = "show_external_properties"
+    table_fqn = f"sail.{NAMESPACE}.{table}"
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg TBLPROPERTIES ('custom.show' = 'initial')")
+    try:
+        assert [tuple(row) for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn} ('custom.show')").collect()] == [
+            ("custom.show", "initial")
+        ]
+        previous = _load_table(iceberg_rest_endpoint, table)
+        for update, expected in [
+            ({"action": "set-properties", "updates": {"custom.show": "external"}}, "external"),
+            ({"action": "remove-properties", "removals": ["custom.show"]}, None),
+        ]:
+            response = requests.post(
+                f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table}",
+                json={
+                    "requirements": [{"type": "assert-table-uuid", "uuid": previous["metadata"]["table-uuid"]}],
+                    "updates": [update],
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            committed = _load_table(iceberg_rest_endpoint, table)
+            assert committed["metadata-location"] != previous["metadata-location"]
+            assert committed["metadata"]["properties"].get("custom.show") == expected
+            rows = spark.sql(f"SHOW TBLPROPERTIES {table_fqn} ('custom.show')").collect()
+            assert len(rows) == 1
+            assert rows[0].key == "custom.show"
+            if expected is None:
+                assert "does not have property: custom.show" in rows[0].value
+            else:
+                assert rows[0].value == expected
+            previous = committed
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")

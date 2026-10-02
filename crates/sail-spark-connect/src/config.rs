@@ -222,6 +222,12 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
+            output.redaction_options_regex = value.to_string();
+        }
+        if let Some(value) = config.get_option("spark.redaction.regex") {
+            output.redaction_regex = value.to_string();
+        }
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)

@@ -156,6 +156,16 @@ impl DataSource for DeltaLakeSource {
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    async fn table_properties(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Vec<(String, String)>> {
+        let table_url = Self::parse_table_url(ctx, info.paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, info.options)?;
+        crate::table::delta_table_properties(ctx, table_url, options, info.lakehouse_table).await
+    }
+
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,
