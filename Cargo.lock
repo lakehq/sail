@@ -7989,6 +7989,7 @@ dependencies = [
  "log",
  "sail-common-datafusion",
  "sail-physical-plan",
+ "tokio",
 ]
 
 [[package]]
