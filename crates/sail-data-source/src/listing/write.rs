@@ -5,6 +5,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::{arc_ptr_eq, arc_ptr_hash, arc_ptr_partial_cmp};
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
@@ -14,7 +15,11 @@ use crate::listing::source::WriteFormat;
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
-    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
+    #[educe(
+        PartialEq(method(arc_ptr_eq)),
+        Hash(method(arc_ptr_hash)),
+        PartialOrd(method(arc_ptr_partial_cmp))
+    )]
     pub format: Arc<dyn WriteFormat>,
     pub url: Url,
     pub overwrite: bool,
@@ -59,7 +64,11 @@ impl UserDefinedLogicalNodeCore for FileWriteNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![]
+        self.options
+            .sort_by
+            .iter()
+            .map(|sort| sort.expr.clone())
+            .collect()
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -72,10 +81,20 @@ impl UserDefinedLogicalNodeCore for FileWriteNode {
         exprs: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
-        exprs.zero()?;
+        if exprs.len() != self.options.sort_by.len() {
+            return datafusion_common::plan_err!(
+                "FileWrite expects {} sort expressions, got {}",
+                self.options.sort_by.len(),
+                exprs.len()
+            );
+        }
+        let mut options = self.options.clone();
+        for (sort, expr) in options.sort_by.iter_mut().zip(exprs) {
+            sort.expr = expr;
+        }
         Ok(Self {
             input: Arc::new(inputs.one()?),
-            options: self.options.clone(),
+            options,
             schema: self.schema.clone(),
         })
     }

@@ -9,7 +9,9 @@ use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{
+    LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
@@ -553,6 +555,22 @@ impl ExecutionPlan for ExplicitRepartitionExec {
                     new_partitions.push(new_partition);
                 }
                 Partitioning::Hash(new_partitions, *size)
+            }
+            Partitioning::Range(range) => {
+                let mut ordering = Vec::with_capacity(range.ordering().len());
+                for sort in range.ordering() {
+                    let Some(expr) = update_expr(&sort.expr, projection.expr(), false)? else {
+                        return Ok(None);
+                    };
+                    ordering.push(PhysicalSortExpr::new(expr, sort.options));
+                }
+                let Some(ordering) = LexOrdering::new(ordering) else {
+                    return Ok(None);
+                };
+                Partitioning::Range(RangePartitioning::try_new(
+                    ordering,
+                    range.split_points().to_vec(),
+                )?)
             }
             other => other.clone(),
         };

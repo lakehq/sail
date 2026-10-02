@@ -6,16 +6,15 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::partial_cmp_by_equality;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
 pub struct SchemaPivotNode {
     input: Arc<LogicalPlan>,
-    // names is part of schema so we skip it in PartialOrd
-    #[educe(PartialOrd(ignore))]
     names: Vec<String>,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
     exprs: Vec<Expr>,
 }

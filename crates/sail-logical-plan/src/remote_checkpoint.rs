@@ -5,12 +5,13 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_datafusion_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::partial_cmp_by_equality;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Educe)]
 #[educe(PartialOrd)]
 pub struct RemoteCheckpointRelationNode {
     relation_id: String,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
 }
 
@@ -67,7 +68,7 @@ impl UserDefinedLogicalNodeCore for RemoteCheckpointRelationNode {
 pub struct RemoteCheckpointCommandNode {
     relation_id: String,
     input: Arc<LogicalPlan>,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     logical_schema: SchemaRef,
 }
 

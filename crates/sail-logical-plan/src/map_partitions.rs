@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::partial_cmp_by_equality;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -14,7 +15,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
     udf: Arc<dyn StreamUDF>,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
 }
 

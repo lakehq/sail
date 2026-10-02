@@ -175,16 +175,8 @@ impl ExecutionPlan for StreamLimitExec {
         input_stats: &[Arc<Statistics>],
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        let stats = input_stats[0].as_ref().clone();
-        Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
-    }
-
-    fn supports_limit_pushdown(&self) -> bool {
-        true
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.fetch
+        // Statistics count encoded rows, including markers; skip/fetch count only data rows.
+        Ok(Arc::new(input_stats[0].as_ref().clone().to_inexact()))
     }
 }
 

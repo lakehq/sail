@@ -143,6 +143,6 @@ impl ExecutionPlan for StreamFilterExec {
         input_stats: &[Arc<Statistics>],
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        Ok(Arc::clone(&input_stats[0]))
+        Ok(Arc::new(input_stats[0].as_ref().clone().to_inexact()))
     }
 }
