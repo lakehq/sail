@@ -174,6 +174,11 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Validates catalog restrictions before lakehouse storage metadata is changed.
+    fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
+        Ok(())
+    }
+
     /// Alters a table in the catalog.
     async fn alter_table(
         &self,
@@ -181,6 +186,18 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
+
+    /// Applies all changes in one catalog mutation, including metadata-pointer preconditions.
+    async fn alter_table_atomically(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "Atomic table alterations are not supported by this catalog".to_string(),
+        ))
+    }
 
     /// Creates a view in the catalog.
     async fn create_view(

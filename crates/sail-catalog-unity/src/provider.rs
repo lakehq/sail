@@ -22,9 +22,9 @@ use sail_catalog::lakehouse::{
     LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
 };
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    LakeSourceCreateMetadataMode, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
@@ -521,50 +521,21 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        self.create_table_metadata_requirement(&options)?;
         let CreateTableOptions {
             columns,
             comment,
-            constraints,
+            constraints: _,
             location,
             format,
             partition_by,
-            sort_by,
-            bucket_by,
+            sort_by: _,
+            bucket_by: _,
             mode,
             properties,
             is_external,
             is_write_precondition,
         } = options;
-
-        if mode.is_replace() {
-            return Err(CatalogError::NotSupported(
-                "Open source Unity Catalog does not support REPLACE option".to_string(),
-            ));
-        }
-
-        if !sort_by.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Open source Unity Catalog does not support SORT BY option".to_string(),
-            ));
-        }
-
-        if bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Open source Unity Catalog does not support BUCKET BY option".to_string(),
-            ));
-        }
-
-        if !constraints.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Open source Unity Catalog does not support CONSTRAINT option".to_string(),
-            ));
-        }
-
-        if partition_by.iter().any(|f| f.transform.is_some()) {
-            return Err(CatalogError::NotSupported(
-                "partition transforms are not supported by Unity catalog".to_string(),
-            ));
-        }
 
         let client = self
             .get_client()
@@ -810,11 +781,9 @@ impl CatalogProvider for UnityCatalogProvider {
         _table: &str,
         _options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        // The Unity catalog does not currently propagate ALTER TABLE property changes to
-        // the Unity REST API. However, returning `NotSupported` here would abort a Delta
-        // storage-side commit that has already succeeded. Treat this as a no-op so the
-        // on-disk Delta table remains the source of truth until the REST integration
-        // is wired up.
+        // External Delta tables use their transaction log as metadata authority.
+        // The Unity table API has no schema/property update endpoint. Managed Delta
+        // updates arrive through commit_lakehouse_table instead.
         Ok(())
     }
 
@@ -823,6 +792,61 @@ impl CatalogProvider for UnityCatalogProvider {
             LakehouseCapability::CatalogCommit,
             LakehouseCapability::DeltaRatifiedCommits,
         ]
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        if options.mode.is_replace() {
+            return Err(CatalogError::NotSupported(
+                "Open source Unity Catalog does not support REPLACE option".to_string(),
+            ));
+        }
+
+        if !options.sort_by.is_empty() {
+            return Err(CatalogError::NotSupported(
+                "Open source Unity Catalog does not support SORT BY option".to_string(),
+            ));
+        }
+
+        if options.bucket_by.is_some() {
+            return Err(CatalogError::NotSupported(
+                "Open source Unity Catalog does not support BUCKET BY option".to_string(),
+            ));
+        }
+
+        if !options.constraints.is_empty() {
+            return Err(CatalogError::NotSupported(
+                "Open source Unity Catalog does not support CONSTRAINT option".to_string(),
+            ));
+        }
+
+        if options
+            .partition_by
+            .iter()
+            .any(|f| f.transform.is_some() && f.transform != Some(PartitionTransform::Identity))
+        {
+            return Err(CatalogError::NotSupported(
+                "partition transforms are not supported by Unity catalog".to_string(),
+            ));
+        }
+
+        if options.format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(
+                "Native Iceberg table DDL requires an Iceberg REST catalog; the Unity Catalog table API does not support it".to_string(),
+            ));
+        }
+        if options.is_external
+            && !options.is_write_precondition
+            && options.format.eq_ignore_ascii_case("delta")
+        {
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::PathManaged,
+            })
+        } else {
+            Ok(CreateTableMetadataRequirement::None)
+        }
     }
 
     async fn plan_lakehouse_create(
@@ -835,7 +859,7 @@ impl CatalogProvider for UnityCatalogProvider {
             self.get_name(),
             request.catalog_table,
             &request.options,
-            sail_catalog::provider::CreateTableMetadataRequirement::None,
+            self.create_table_metadata_requirement(&request.options)?,
             &self.lakehouse_capabilities(),
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {

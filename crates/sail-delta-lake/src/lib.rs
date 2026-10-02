@@ -15,6 +15,7 @@ mod catalog_managed;
 mod checkpoint;
 pub mod conversion;
 pub mod datasource;
+mod ddl;
 pub mod deletion_vector;
 mod delta_log;
 pub mod error;

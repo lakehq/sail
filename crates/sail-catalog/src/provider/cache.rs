@@ -394,6 +394,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         Ok(())
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        self.inner.validate_alter_table(options)
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -401,6 +405,22 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
         self.inner.alter_table(database, table, options).await?;
+        if let Some(c) = self.table_cache.as_ref() {
+            let c: &Cache<Namespace, Vec<TableStatus>> = c;
+            c.invalidate(database).await;
+        }
+        Ok(())
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        self.inner
+            .alter_table_atomically(database, table, options)
+            .await?;
         if let Some(c) = self.table_cache.as_ref() {
             let c: &Cache<Namespace, Vec<TableStatus>> = c;
             c.invalidate(database).await;

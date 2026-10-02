@@ -760,11 +760,11 @@ def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
     assert [(row.id, row.name) for row in rows] == [(1, "base"), (2, "fast")]
 
 
-def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
+def test_rest_catalog_commits_catalog_managed_iceberg_alter(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
-    table_name = "alter_reject_t"
+    table_name = "alter_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
     spark.sql(
@@ -778,16 +778,18 @@ def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
 
-    with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
-        spark.sql(
-            f"""
-            ALTER TABLE {table_fqn}
-            SET TBLPROPERTIES ('owner' = 'alice')
-            """
-        )
+    spark.sql(
+        f"""
+        ALTER TABLE {table_fqn}
+        SET TBLPROPERTIES ('owner' = 'alice')
+        """
+    )
 
     after = _load_table(iceberg_rest_endpoint, table_name)
-    assert after["metadata-location"] == before_location
+    assert after["metadata-location"] != before_location
+    assert after["metadata"]["table-uuid"] == before["metadata"]["table-uuid"]
+    assert after["metadata"]["properties"]["owner"] == "alice"
+    assert after["metadata"]["schemas"] == before["metadata"]["schemas"]
 
 
 def test_rest_catalog_rejects_non_iceberg_create_format(

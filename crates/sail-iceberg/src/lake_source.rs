@@ -187,7 +187,17 @@ impl LakeSource for IcebergLakeSource {
         let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
             Ok(metadata_file) if columns.is_empty() && !replace => {
                 let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
+                let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
+                let metadata = TableMetadata::from_json(&bytes)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                let schema = metadata
+                    .current_schema()
+                    .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".to_string()))?;
                 return Ok(LakeSourceCreateTableResult {
+                    schema: Some(Arc::new(
+                        crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?,
+                    )),
+                    partition_by: Some(partition_columns_from_table_metadata(&metadata)?),
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),
@@ -272,40 +282,31 @@ impl LakeSource for IcebergLakeSource {
                     .to_string(),
                 metadata_location,
             )],
+            ..Default::default()
         })
     }
 
     async fn alter_table(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
-        match operation {
-            LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
-            }
-            op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let Some(context) = lakehouse_table.as_ref()
+            && context.commit != CommitAuthority::Filesystem
+        {
+            crate::ddl::alter_catalog_table(ctx, path, &operation, context).await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                },
+            );
         }
+        self.alter_path_table(ctx.runtime_env(), path, &operation)
+            .await?;
+        Ok(Default::default())
     }
-}
-
-fn reject_catalog_managed_iceberg_alter(
-    lakehouse_table: Option<&LakehouseExecutionContext>,
-) -> Result<()> {
-    let Some(context) = lakehouse_table else {
-        return Ok(());
-    };
-    if context.commit != CommitAuthority::Filesystem {
-        return not_impl_err!(
-            "ALTER TABLE is not yet supported for catalog-managed Iceberg tables: {}",
-            context.catalog_table().join(".")
-        );
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -579,12 +580,11 @@ pub(crate) async fn plan_iceberg_write(
 }
 
 impl IcebergLakeSource {
-    async fn alter_table_properties(
+    async fn alter_path_table(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
-        changes: Vec<(String, Option<String>)>,
-        if_exists: bool,
+        operation: &LakeSourceAlterTableOperation,
     ) -> Result<()> {
         let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
         let object_store = runtime_env
@@ -608,7 +608,16 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
-            crate::properties::apply_table_property_changes(&mut table_meta, &changes, if_exists)?;
+            match operation {
+                LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                    crate::properties::apply_table_property_changes(
+                        &mut table_meta,
+                        changes,
+                        *if_exists,
+                    )?;
+                }
+                _ => crate::ddl::apply_operation(&mut table_meta, operation)?,
+            }
 
             let current_version =
                 metadata_file_version_from_path(&latest_metadata_file).unwrap_or(0);
