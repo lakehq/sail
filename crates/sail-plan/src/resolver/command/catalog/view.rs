@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion_common::TableReference;
@@ -32,7 +33,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             replace,
             comment,
-            mut properties,
+            properties,
         } = definition;
         // Resolve the query plan to register fields in state and extract column types.
         let resolved_input = self.resolve_query_plan(*input, state).await?;
@@ -71,21 +72,21 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
+        let mut properties = properties.into_iter().collect::<BTreeMap<_, _>>();
         // FIXME: Capture all eligible creation-time SQL settings, as Spark does.
-        // For now, preserve only the settings used by conditional coercion.
-        properties.retain(|(key, _)| !key.starts_with(VIEW_SQL_CONFIG_PREFIX));
-        properties.push((
+        // For now, capture only the settings used by conditional coercion.
+        properties.insert(
             format!("{VIEW_SQL_CONFIG_PREFIX}spark.sql.ansi.enabled"),
             self.config.ansi_mode.to_string(),
-        ));
-        properties.push((
+        );
+        properties.insert(
             format!(
                 "{VIEW_SQL_CONFIG_PREFIX}spark.sql.legacy.decimal.retainFractionDigitsOnTruncate"
             ),
             self.config
                 .legacy_decimal_retain_fraction_digits
                 .to_string(),
-        ));
+        );
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {
@@ -94,7 +95,7 @@ impl PlanResolver<'_> {
                 comment,
                 if_not_exists,
                 replace,
-                properties,
+                properties: properties.into_iter().collect(),
             },
         };
         self.resolve_catalog_command(command)
