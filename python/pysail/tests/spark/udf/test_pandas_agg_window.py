@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Window
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.functions import PandasUDFType, pandas_udf
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -48,8 +49,6 @@ def test_registered_pandas_scalar_udf_rejected_as_window_function(spark):
 
 @pytest.mark.parametrize("frame_type", ["rows", "range"])
 def test_pandas_window_retraction_preserves_nulls_and_multiple_arguments(spark, frame_type):
-    from pyspark.sql import functions as F  # noqa: N812
-
     @pandas_udf("double", PandasUDFType.GROUPED_AGG)
     def paired_sum(a, b):
         return float((a.fillna(0) + b.fillna(0)).sum())
@@ -71,8 +70,6 @@ def test_pandas_window_retraction_preserves_nulls_and_multiple_arguments(spark, 
 
 @pytest.mark.parametrize("invocation", ["inline", "registered"])
 def test_pandas_window_retracts_to_an_empty_range(spark, invocation):
-    from pyspark.sql import functions as F  # noqa: N812
-
     @pandas_udf("long", PandasUDFType.GROUPED_AGG)
     def frame_size(values):
         return len(values)
@@ -86,4 +83,79 @@ def test_pandas_window_retracts_to_an_empty_range(spark, invocation):
         value = frame_size("id").over(window)
     actual = df.select("id", value.alias("n")).orderBy("id").collect()
     expected = df.select("id", F.count("id").over(window).alias("n")).orderBy("id").collect()
+    assert actual == expected
+
+
+def _base_df(spark):
+    return spark.range(3).toDF("id").withColumn("v", F.col("id") * 1.0).withColumn("w", F.lit(1.0))
+
+
+def test_chained_with_column_window_udfs_over_distinct_derived_columns(spark):
+    """A plan-ID lookup for a column added two `withColumn`s earlier (not at the DataFrame's
+    own creation point) must still find it, even once a later step references a different
+    derived column from the same DataFrame."""
+    df = _base_df(spark)
+    window = Window.partitionBy("id").orderBy("v").rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def mean_udf(v):
+        return v.mean()
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def max_udf(v):
+        return v.max()
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def min_udf(v):
+        return v.min()
+
+    actual = (
+        df.withColumn("mean_v", mean_udf(df["v"]).over(window))
+        .withColumn("max_v", max_udf(df["v"]).over(window))
+        .withColumn("min_w", min_udf(df["w"]).over(window))
+        .orderBy("id")
+        .collect()
+    )
+    expected = (
+        df.withColumn("mean_v", F.mean(df["v"]).over(window))
+        .withColumn("max_v", F.max(df["v"]).over(window))
+        .withColumn("min_w", F.min(df["w"]).over(window))
+        .orderBy("id")
+        .collect()
+    )
+    assert actual == expected
+
+
+def test_chained_select_window_udfs_over_distinct_derived_columns(spark):
+    """The `select` analog of the `withColumn` case above: it never shared the bug, and this
+    pins that down so a future change cannot regress it the same way."""
+    df = _base_df(spark)
+    window = Window.partitionBy("id").orderBy("v").rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def mean_udf(v):
+        return v.mean()
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def max_udf(v):
+        return v.max()
+
+    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
+    def min_udf(v):
+        return v.min()
+
+    step1 = df.select("*", mean_udf(df["v"]).over(window).alias("mean_v"))
+    step2 = step1.select("*", max_udf(step1["v"]).over(window).alias("max_v"))
+    actual = step2.select("*", min_udf(step2["w"]).over(window).alias("min_w")).orderBy("id").collect()
+
+    expected = (
+        df.select(
+            "*",
+            F.mean(df["v"]).over(window).alias("mean_v"),
+            F.max(df["v"]).over(window).alias("max_v"),
+            F.min(df["w"]).over(window).alias("min_w"),
+        )
+        .orderBy("id")
+        .collect()
+    )
     assert actual == expected

@@ -152,7 +152,12 @@ impl ScalarUDFImpl for ArrayStructField {
         };
         let field_name = self.field_name(args.scalar_arguments.get(1).copied().flatten())?;
         let data_type = self.return_type_for_list(array_field.data_type(), field_name)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        // The result is NULL only where the array is (`GetArrayStructFields.nullable`).
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            array_field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

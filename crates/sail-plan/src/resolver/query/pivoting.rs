@@ -435,7 +435,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
 
         let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
         // Spark's Expand cannot expose input columns removed by UNPIVOT.

@@ -1,0 +1,73 @@
+# serializer version: 1
+---
+name: "test_the_plan_of_with_column_over_an_aliased_input"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: q.#0 AS #2, q.#1 AS #3, Int32(9) AS #4
+      SubqueryAlias: q
+        Projection: Int32(1) AS a AS #0, Int32(2) AS b AS #1
+          EmptyRelation: rows=1
+
+    == Analyzed Logical Plan ==
+    #2: Int32, #3: Int32, #4: Int32
+    Projection: q.#0 AS #2, q.#1 AS #3, Int32(9) AS #4
+      SubqueryAlias: q
+        Projection: Int32(1) AS a AS #0, Int32(2) AS b AS #1
+          EmptyRelation: rows=1
+
+    == Optimized Logical Plan ==
+    Projection: q.#0 AS #2, q.#1 AS #3, Int32(9) AS #4
+      SubqueryAlias: q
+        Projection: Int32(1) AS #0, Int32(2) AS #1
+          EmptyRelation: rows=1
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as a, #3@1 as b, #4@2 as c]
+      ProjectionExec: expr=[1 as #2, 2 as #3, 9 as #4]
+        PlaceholderRowExec
+---
+name: "test_the_plan_of_with_column_reading_a_key_the_join_hid"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: l.#6 AS #7, l.#1 AS #8, r.#3 AS #9, #5 AS #10
+      Projection: l.#0 AS #6, l.#0 AS #4, l.#1, r.#2 AS #5, r.#3
+        Inner Join: l.#0 = r.#2
+          SubqueryAlias: l
+            Projection: Int32(1) AS a AS #0, Int32(11) AS b AS #1
+              EmptyRelation: rows=1
+          SubqueryAlias: r
+            Projection: Int32(1) AS a AS #2, Int32(22) AS c AS #3
+              EmptyRelation: rows=1
+
+    == Analyzed Logical Plan ==
+    #7: Int32, #8: Int32, #9: Int32, #10: Int32
+    Projection: l.#6 AS #7, l.#1 AS #8, r.#3 AS #9, #5 AS #10
+      Projection: l.#0 AS #6, l.#0 AS #4, l.#1, r.#2 AS #5, r.#3
+        Inner Join: l.#0 = r.#2
+          SubqueryAlias: l
+            Projection: Int32(1) AS a AS #0, Int32(11) AS b AS #1
+              EmptyRelation: rows=1
+          SubqueryAlias: r
+            Projection: Int32(1) AS a AS #2, Int32(22) AS c AS #3
+              EmptyRelation: rows=1
+
+    == Optimized Logical Plan ==
+    Projection: l.#0 AS #7, l.#1 AS #8, r.#3 AS #9, r.#2 AS #10
+      Inner Join: l.#0 = r.#2
+        SubqueryAlias: l
+          Projection: Int32(1) AS #0, Int32(11) AS #1
+            EmptyRelation: rows=1
+        SubqueryAlias: r
+          Projection: Int32(1) AS #2, Int32(22) AS #3
+            EmptyRelation: rows=1
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as a, #8@1 as b, #9@2 as c, #10@3 as z]
+      ProjectionExec: expr=[#0@0 as #7, #1@1 as #8, #3@3 as #9, #2@2 as #10]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #2@0)]
+          ProjectionExec: expr=[1 as #0, 11 as #1]
+            PlaceholderRowExec
+          ProjectionExec: expr=[1 as #2, 22 as #3]
+            PlaceholderRowExec

@@ -453,3 +453,35 @@ def test_coalesce_hint_rejects_non_positive_partition_count_in_cluster_mode(spar
     df = spark.range(0, 10, 1, 2).hint("COALESCE", partition_count)
     with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
         df.count()
+
+
+# A struct whose field names repeat is cast under names taken from each field's position, so the
+# rename it needs travels to the worker as the target type of a UDF. Those bytes are what the codec
+# encodes, and a repeated name is exactly what an encoding keyed by name would collapse. Measured
+# on the Spark JVM; the rows are read off `show` because the column cannot become a dictionary.
+_REPEATED_FIELD_NAMES_IN_CLUSTER = [
+    (
+        "SELECT CAST(s AS STRUCT<a: BIGINT, a: BIGINT>) AS x"
+        " FROM (SELECT named_struct('a', CAST(id AS INT), 'a', CAST(id + 1 AS INT)) AS s FROM range(1))",
+        ["{0, 1}"],
+    ),
+    (
+        "SELECT CAST(named_struct('s', named_struct('a', 1, 'a', 2)) AS STRUCT<s: STRUCT<a: BIGINT, a: BIGINT>>) AS x",
+        ["{{1, 2}}"],
+    ),
+    (
+        "SELECT CAST(array(named_struct('a', 1, 'a', 2)) AS ARRAY<STRUCT<a: BIGINT, a: BIGINT>>) AS x",
+        ["[{1, 2}]"],
+    ),
+    (
+        "SELECT named_struct('a', 1, 'a', 2) AS x UNION ALL SELECT named_struct('a', 3L, 'a', 4L) AS x",
+        ["{1, 2}", "{3, 4}"],
+    ),
+]
+
+
+@pytest.mark.parametrize(("query", "rows"), _REPEATED_FIELD_NAMES_IN_CLUSTER)
+def test_a_cast_of_a_repeated_struct_field_in_cluster_mode(spark, query, rows):
+    printed = spark.sql(query)._show_string(truncate=False)  # noqa: SLF001
+
+    assert sorted(line.strip("| ") for line in printed.splitlines() if line.startswith(("|{", "|["))) == rows

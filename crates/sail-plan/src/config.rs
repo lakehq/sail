@@ -48,6 +48,10 @@ pub struct PlanConfig {
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
     pub legacy_size_of_null: bool,
+    /// Whether two decimals that widen past the maximum precision keep the digits of the fraction
+    /// rather than those of the integral part
+    /// (`spark.sql.legacy.decimal.retainFractionDigitsOnTruncate`, default false).
+    pub legacy_retain_fraction_digits: bool,
     /// Type coercion policy for values written into table columns.
     pub store_assignment_policy: StoreAssignmentPolicy,
     /// Policy for duplicate keys created by map functions.
@@ -57,6 +61,9 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    /// Whether a DataFrame column carrying a Spark Connect plan ID must resolve by that ID. When
+    /// disabled, Spark falls back to resolving the attribute by name.
+    pub strict_dataframe_column_resolution: bool,
     /// The maximum number of distinct values collected for a pivot without an explicit
     /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
     pub pivot_max_values: usize,
@@ -92,10 +99,12 @@ impl Default for PlanConfig {
             ansi_mode: true,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
+            legacy_retain_fraction_digits: false,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            strict_dataframe_column_resolution: true,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,

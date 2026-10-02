@@ -12,15 +12,14 @@ data:
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
           Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CASE WHEN Int32(4) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(4) END AS #12
-            Projection: #8, #2, #5
-              Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
-                Inner Join: #1 = #4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
-                    Projection: #0 AS k AS #1, #0 * Int32(2) AS v1 AS #2
-                      Range: start=0, end=64, step=1, num_partitions=4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
-                    Projection: #3 AS k AS #4, #3 + Int32(1) AS v2 AS #5
-                      Range: start=0, end=64, step=1, num_partitions=4
+            Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
+              Inner Join: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS k AS #1, #0 * Int32(2) AS v1 AS #2
+                    Range: start=0, end=64, step=1, num_partitions=4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS k AS #4, #3 + Int32(1) AS v2 AS #5
+                    Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -33,15 +32,14 @@ data:
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
           Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(4) END AS Int64) AS #12
-            Projection: #8, #2, #5
-              Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
-                Inner Join: #1 = #4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
-                    Projection: #0 AS k AS #1, #0 * CAST(Int32(2) AS Int64) AS v1 AS #2
-                      Range: start=0, end=64, step=1, num_partitions=4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
-                    Projection: #3 AS k AS #4, #3 + CAST(Int32(1) AS Int64) AS v2 AS #5
-                      Range: start=0, end=64, step=1, num_partitions=4
+            Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
+              Inner Join: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS k AS #1, #0 * CAST(Int32(2) AS Int64) AS v1 AS #2
+                    Range: start=0, end=64, step=1, num_partitions=4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS k AS #4, #3 + CAST(Int32(1) AS Int64) AS v2 AS #5
+                    Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -66,15 +64,14 @@ data:
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
           Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % Int64(4) AS #12
-            Projection: #8, #2, #5
-              Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
-                Inner Join: #1 = #4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
-                    Projection: #0 AS k AS #1, #0 * Int64(2) AS v1 AS #2
-                      Range: start=0, end=64, step=1, num_partitions=4
-                  ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
-                    Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
-                      Range: start=0, end=64, step=1, num_partitions=4
+            Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
+              Inner Join: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS k AS #1, #0 * Int64(2) AS v1 AS #2
+                    Range: start=0, end=64, step=1, num_partitions=4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
+                    Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE

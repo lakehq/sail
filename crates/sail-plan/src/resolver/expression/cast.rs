@@ -1,7 +1,7 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
@@ -9,7 +9,7 @@ use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant_storage_field};
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
@@ -82,8 +82,6 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_field = expr.to_field(schema)?.1;
-        let expr_type = expr_field.data_type().clone();
-        let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
@@ -98,6 +96,65 @@ impl PlanResolver<'_> {
         } else {
             name
         };
+        let expr = self.cast_to_spark_type(
+            expr,
+            &expr_field,
+            cast_to_type,
+            is_try,
+            day_time_interval_field,
+            schema,
+        )?;
+        Ok(match spark_interval_metadata {
+            Some(metadata) => {
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
+            }
+            None => NamedExpr::new(name, expr),
+        })
+    }
+
+    /// Casts a resolved expression the way a Spark `Cast` does, for ANSI mode and the types
+    /// whose Arrow cast differs from Spark's.
+    ///
+    /// TODO: a Spark cast is nullable where its input is or where the cast can turn a value into
+    ///   NULL (`Cast.nullable`, `Cast.forceNullable`), so `CAST('1' AS DECIMAL(2,0))` is nullable.
+    ///   A DataFusion cast keeps the nullability of its input. Set operations declare it with a
+    ///   `CASE` (`cast_force_nullable` in `query/set_op.rs`); doing it here would add that `CASE`
+    ///   to every cast in every plan, so it is left to its own change.
+    ///
+    /// TODO: with ANSI mode a string that is not a number fails with DataFusion's own message
+    ///   (`Cannot cast string 'abc' to value of Int64 type`) rather than `CAST_INVALID_INPUT`.
+    pub(in crate::resolver) fn cast_to_spark_type(
+        &self,
+        expr: expr::Expr,
+        expr_field: &Field,
+        cast_to_type: DataType,
+        is_try: bool,
+        day_time_interval_field: Option<spec::IntervalFieldType>,
+        schema: &DFSchemaRef,
+    ) -> PlanResult<expr::Expr> {
+        let expr_type = expr_field.data_type().clone();
+        let expr_is_variant = is_variant_storage_field(expr_field);
         let override_string_cast = matches!(
             expr_type,
             DataType::Date32
@@ -116,6 +173,10 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            // A variant is stored as a struct, which only its own conversion can build.
+            (_, to, _) if !expr_is_variant && is_marked_variant_storage_type(&to) => {
+                ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr])
+            }
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
@@ -257,6 +318,27 @@ impl PlanResolver<'_> {
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
+            (from, to, _)
+                if struct_repeats_a_field_name(&to) && struct_arity_aligns(&from, &to) =>
+            {
+                // A struct that names two fields the same cannot be cast by name, so the fields
+                // are named by their position for the conversion and renamed to what the target
+                // asks for afterwards. Both renames are metadata only, so only the middle cast
+                // converts a value, and it pairs the fields in order as Spark does.
+                let positional_from = build_positional_names_type(&from);
+                let positional_to = build_positional_names_type(&to);
+                let renamed =
+                    ScalarUDF::new_from_impl(SparkStructRename::new(positional_from.clone()))
+                        .call(vec![expr]);
+                let converted = if positional_from == positional_to {
+                    renamed
+                } else if is_try {
+                    try_cast(renamed, positional_to)
+                } else {
+                    cast(renamed, positional_to)
+                };
+                ScalarUDF::new_from_impl(SparkStructRename::new(to)).call(vec![converted])
+            }
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
                 // Pre-rename the source struct fields positionally so the cast
                 // becomes a no-op or a valid name-matched one (see
@@ -286,33 +368,7 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(match spark_interval_metadata {
-            Some(metadata) => {
-                // Nested expressions consume the Expr without its NamedExpr metadata.
-                // Keep the target qualifier on the cast field as well as the projection.
-                let field = expr.to_field(schema)?.1;
-                let mut field_metadata = field.metadata().clone();
-                field_metadata.insert(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata.clone(),
-                );
-                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
-                let expr = match expr {
-                    expr::Expr::Cast(cast) => {
-                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
-                    }
-                    expr::Expr::TryCast(cast) => {
-                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
-                    }
-                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
-                };
-                NamedExpr::new(name, expr).with_metadata(vec![(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata,
-                )])
-            }
-            None => NamedExpr::new(name, expr),
-        })
+        Ok(expr)
     }
 }
 
@@ -346,16 +402,123 @@ fn spark_string_cast_arguments(
     Ok(arguments)
 }
 
-/// Returns true if the cast from `from` to `to` involves a Struct
-/// (possibly nested in a List/LargeList/FixedSizeList/Map) whose field names
-/// don't share enough overlap for DataFusion's struct cast validator.
-fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
+/// Returns true where a struct at any level of the type names two of its fields the same.
+/// DataFusion picks the source child of a struct cast with `column_by_name`
+/// (`datafusion_common::nested_struct::cast_struct_column`), which answers with the first field of
+/// that name, so a cast that converts a leaf would read one field twice and lose the value of the
+/// other. Spark pairs the fields by position instead (`Cast.castStruct`).
+fn struct_repeats_a_field_name(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields
+                .iter()
+                .enumerate()
+                .any(|(i, x)| fields.iter().take(i).any(|y| y.name() == x.name()))
+                || fields
+                    .iter()
+                    .any(|x| struct_repeats_a_field_name(x.data_type()))
+        }
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            struct_repeats_a_field_name(field.data_type())
+        }
+        DataType::Map(field, _) => struct_repeats_a_field_name(field.data_type()),
+        _ => false,
+    }
+}
+
+/// Returns true where both types hold the same containers with the same number of struct fields at
+/// every level, which is what pairing the fields by position needs.
+fn struct_arity_aligns(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         (DataType::Struct(a), DataType::Struct(b)) => {
             a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())
-                    .any(|(fa, fb)| fa.name() != fb.name())
+                    .all(|(x, y)| struct_arity_aligns(x.data_type(), y.data_type()))
+        }
+        (DataType::List(a), DataType::List(b))
+        | (DataType::LargeList(a), DataType::LargeList(b)) => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        (DataType::FixedSizeList(a, sa), DataType::FixedSizeList(b, sb)) if sa == sb => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        (DataType::Map(a, sa), DataType::Map(b, sb)) if sa == sb => {
+            struct_arity_aligns(a.data_type(), b.data_type())
+        }
+        // A container on one side and something else on the other never align, so the names are
+        // left as they are: renaming them would reach a cast that cannot be done anyway, and the
+        // positional names would be what the failure names.
+        (from, to) if is_nested(from) || is_nested(to) => false,
+        _ => true,
+    }
+}
+
+fn is_nested(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
+    )
+}
+
+/// The same type with every struct field named after its position. Applied to both sides of a cast
+/// it names the fields unambiguously and pairs them in order, which is the conversion Spark does.
+/// The names are rewritten in full, so they cannot collide with one another.
+fn build_positional_names_type(data_type: &DataType) -> DataType {
+    let renamed_field = |field: &FieldRef| {
+        Arc::new(
+            Field::new(
+                field.name(),
+                build_positional_names_type(field.data_type()),
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone()),
+        )
+    };
+    match data_type {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    Arc::new(
+                        Field::new(
+                            format!("col{}", i + 1),
+                            build_positional_names_type(field.data_type()),
+                            field.is_nullable(),
+                        )
+                        .with_metadata(field.metadata().clone()),
+                    )
+                })
+                .collect::<Fields>(),
+        ),
+        DataType::List(field) => DataType::List(renamed_field(field)),
+        DataType::LargeList(field) => DataType::LargeList(renamed_field(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(renamed_field(field), *size)
+        }
+        DataType::Map(field, sorted) => DataType::Map(renamed_field(field), *sorted),
+        _ => data_type.clone(),
+    }
+}
+
+/// Returns true if the cast from `from` to `to` involves a Struct
+/// (possibly nested in a List/LargeList/FixedSizeList/Map) whose field names
+/// don't share enough overlap for DataFusion's struct cast validator.
+fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        // Spark casts a struct by position at every level, so a field whose own type needs a
+        // rename counts as well.
+        (DataType::Struct(a), DataType::Struct(b)) => {
+            a.len() == b.len()
+                && a.iter().zip(b.iter()).any(|(fa, fb)| {
+                    fa.name() != fb.name()
+                        || needs_struct_field_rename(fa.data_type(), fb.data_type())
+                })
         }
         (DataType::List(a), DataType::List(b))
         | (DataType::LargeList(a), DataType::LargeList(b)) => {

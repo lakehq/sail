@@ -131,7 +131,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
         let expr = if let Some(table_alias) = table_alias {
             let table_reference = self.resolve_table_reference(&table_alias)?;
             expr.into_iter()

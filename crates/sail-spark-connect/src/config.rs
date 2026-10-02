@@ -320,6 +320,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_ANALYZER_STRICT_DATA_FRAME_COLUMN_RESOLUTION)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.strict_dataframe_column_resolution = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_PIVOT_MAX_VALUES)
             .map(|x| x.trim().parse::<usize>())
             .transpose()?
@@ -349,6 +357,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.legacy_size_of_null = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_DECIMAL_RETAIN_FRACTION_DIGITS_ON_TRUNCATE)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_retain_fraction_digits = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
