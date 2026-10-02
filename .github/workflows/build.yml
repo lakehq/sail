@@ -141,6 +141,13 @@ jobs:
       - setup
       - rust-build
 
+  free-threading-tests:
+    name: Free-Threading Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    uses: ./.github/workflows/free-threading-tests.yml
+    needs:
+      - setup
+
   catalog-tests:
     name: Catalog Integration Tests
     if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_catalog_tests == 'true' }}
