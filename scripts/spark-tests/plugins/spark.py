@@ -15,6 +15,12 @@ from typing import Any
 
 import pytest
 
+from pysail.testing.spark.utils.parity import (
+    assert_math_function_frames_equal,
+    normalize_datetime_dtypes,
+    normalize_pandas_data_frame,
+)
+
 
 def _is_spark_testing():
     return os.environ.get("SPARK_TESTING") == "1"
@@ -123,27 +129,23 @@ def spark_doctest_session(doctest_namespace, request):
 # Such tests should be ported to the PySail test suite where the patch is not applied.
 
 
-def normalize_pandas_data_frame(df):
-    from pandas.api.types import is_hashable
+@pytest.fixture(autouse=_is_spark_testing())
+def spark_math_function_tolerance(request, monkeypatch):
+    keywords = ["test_connect_function.py", "SparkConnectFunctionTests", "test_math_functions"]
+    if _spark_major_version() >= 4 or not all(key in request.node.keywords for key in keywords):  # noqa: PLR2004
+        return
 
-    columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
-    return df.sort_values(by=columns, ignore_index=True)
+    import pandas as pd
 
+    original = request.instance.assert_eq
 
-def normalize_datetime_dtypes(df):
-    """Normalize datetime column dtypes from nanosecond to microsecond resolution.
+    def assert_eq(left, right, **kwargs):
+        if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame) and not kwargs:
+            assert_math_function_frames_equal(left, right)
+        else:
+            original(left, right, **kwargs)
 
-    Sail uses microsecond precision for timestamps (per Spark specification).
-    In Pandas 2.0-2.1, Python datetime objects and ``pd.Timestamp.apply()``
-    produce ``datetime64[ns]`` dtype, while Sail's ``toPandas()`` returns
-    ``datetime64[us]``. This normalization ensures that dtype comparisons in
-    ``assert_frame_equal`` do not fail due to this precision difference.
-    """
-    result = df.copy()
-    for col in result.columns:
-        if str(result[col].dtype) == "datetime64[ns]":
-            result[col] = result[col].astype("datetime64[us]")
-    return result
+    monkeypatch.setattr(request.instance, "assert_eq", assert_eq)
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
@@ -352,12 +354,98 @@ SKIPPED_SPARK_TESTS = [
         reason="JVM-dependent test",
     ),
     TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.toJSON"],
+        reason="PySpark 3.x Spark Connect does not implement the RDD-returning DataFrame.toJSON API",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.repartition"],
+        reason="Uses DataFrame.rdd to count partitions; Connect-compatible coverage is in dataframe/test_repartition.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.repartitionByRange"],
+        reason=(
+            "Uses DataFrame.rdd to count partitions; dataframe/test_repartition.py covers counts and rows "
+            "and retains the known range-boundary defect as a strict xfail"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.observe"],
+        reason=(
+            "PySpark 3.x Connect does not support Observation.get and this example installs a streaming listener; "
+            "batch observed_metrics remain covered by test_observe"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
     TestMarker(
         keywords=["pyspark.sql.functions.reflect"],
         reason="JVM-dependent test",
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectSessionTests", "test_error_stack_trace"],
+        reason="Asserts JVM/Catalyst stack frames and JVM stacktrace configuration, which do not apply to Sail",
+    ),
+    TestMarker(
+        keywords=["test_parity_types.py", "TypesParityTests", "test_cast_to_string_with_udt"],
+        reason=(
+            "Requires a Scala UDT's JVM toString implementation; Python UDT casts, NULLs and nested fields "
+            "are covered in dataframe/test_udt.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.getFunction"],
+        reason=(
+            "Creates a persistent function backed by a JVM class; builtin/Python lookup is covered in "
+            "catalog/test_function.py, including strict xfails for unimplemented catalog APIs"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_function_exists"],
+        reason=(
+            "Creates persistent JVM class-backed functions; portable existence/lifecycle regressions "
+            "are retained in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_get_function"],
+        reason=(
+            "Inspects a persistent JVM class-backed function; builtin/Python metadata and missing-function "
+            "regressions are retained in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_list_functions"],
+        reason=(
+            "Uses persistent JVM class-backed functions; builtin/Python listing, namespace and lifecycle coverage "
+            "is in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_artifact.py", "ArtifactTests", "test_add_file"],
+        reason=(
+            "Resolves worker files through the reference JVM JobArtifactSet directory; worker-local SparkFiles "
+            "and session isolation are covered in session/test_artifacts.py, retaining the AddArtifacts gap"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_artifact.py", "ArtifactTests", "test_add_archive"],
+        reason=(
+            "Resolves archives through the reference JVM JobArtifactSet directory; worker-local SparkFiles, "
+            "archive aliases and session isolation are covered in session/test_artifacts.py"
+        ),
+        spark_major_version_less_than=4,
     ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
@@ -371,6 +459,22 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.writeStream"],
         reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.withWatermark"],
+        reason="Structured Streaming watermark example; Sail streaming behavior is tested in PySail",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.dropDuplicatesWithinWatermark"],
+        reason="Structured Streaming watermark example; Sail streaming behavior is tested in PySail",
+    ),
+    TestMarker(
+        keywords=[
+            "test_parity_pandas_grouped_map_with_state.py",
+            "GroupedApplyInPandasWithStateTests",
+            "test_apply_in_pandas_with_state_python_worker_random_failure",
+        ],
+        reason="Tests Spark Structured Streaming state and worker retry semantics; Sail streaming is tested in PySail",
     ),
     TestMarker(
         keywords=["connect", "streaming", "test_parity_foreach.py"],
@@ -402,6 +506,55 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.createTable"],
+        reason=(
+            "Reuses table names leaked by earlier failed catalog doctests; managed/external table creation "
+            "with isolated names and cleanup is covered in catalog/test_table.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.explain"],
+        reason=(
+            "Asserts Spark-specific EXPLAIN rendering; API coverage is in dataframe/test_explain.py "
+            "and Sail plan snapshots are in analyzer/features/explain.feature"
+        ),
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_extended_hint_types"],
+        reason="Asserts unresolved hint arguments in Spark plan text; portable behavior is in dataframe/test_hint.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_tail"],
+        reason="Compares tails of unordered scans across engines; ordered scan coverage is in dataframe/test_collect.py",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_collect"],
+        reason=(
+            "Compares LIMIT subsets of unordered scans across engines; ordered LIMIT, duplicate columns and structs "
+            "are covered in dataframe/test_collect.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_sql_with_command"],
+        reason=(
+            "Requires an identical Spark 3.x function inventory, while Sail exposes additional functions; "
+            "SHOW FUNCTIONS shape, names, scope and patterns are covered in catalog/test_function.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_create_global_temp_view"],
+        reason=(
+            "Creates a Sail view but checks its existence on a separate JVM server; same-server session visibility "
+            "and lifecycle are covered in catalog/test_temp_view.py"
+        ),
+        spark_major_version_less_than=4,
     ),
     TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
