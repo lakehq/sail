@@ -3,12 +3,14 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -23,6 +25,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_hex::SparkHexCast;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -39,6 +42,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::resolver::spark_interval_metadata_for_expression;
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -639,6 +643,95 @@ fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
+fn spark_hex_cast(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkHexCast::new(ansi_mode));
+    Ok(udf.call(intervals_as_text(input)))
+}
+
+fn spark_unhex(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkUnHex::with_options(false, ansi_mode));
+    Ok(udf.call(intervals_as_text(input)))
+}
+
+/// The arguments of `hex`, `unhex` and `to_binary`, with an interval printed as text.
+pub(crate) fn intervals_as_text(input: ScalarFunctionInput) -> Vec<Expr> {
+    let schema = input.function_context.schema;
+    input
+        .arguments
+        .into_iter()
+        .map(|argument| interval_as_text(argument, schema))
+        .collect()
+}
+
+/// The Spark fields of an interval (`DAY`, `HOUR TO MINUTE`...) live in field metadata that the
+/// result of arithmetic does not carry, so they are recovered from the operands and the interval
+/// is printed here, the way `CAST(.. AS STRING)` does, before it reaches `hex`.
+fn interval_as_text(argument: Expr, schema: &DFSchemaRef) -> Expr {
+    match computed_interval_metadata(&argument, schema) {
+        Some(json) => ScalarUDF::from(SparkToUtf8::new()).call(vec![argument, lit(json)]),
+        None => argument,
+    }
+}
+
+/// The Spark fields of the interval `expression` computes, as the JSON of the field metadata, when
+/// they can be recovered from its operands.
+fn computed_interval_metadata(expression: &Expr, schema: &DFSchemaRef) -> Option<String> {
+    let interval = spark_interval_metadata_for_expression(expression, schema).ok()??;
+    // An operand with no fields of its own (a difference of timestamps) is `DAY TO SECOND`, the
+    // widest day-time interval, which no other operand can narrow: leave the default rendering.
+    if has_interval_without_fields(expression, schema) {
+        return None;
+    }
+    interval.to_json().ok()
+}
+
+/// Whether `expression` holds an interval of its own type that is computed from something that is
+/// not an interval and carries no Spark field metadata.
+fn has_interval_without_fields(expression: &Expr, schema: &DFSchemaRef) -> bool {
+    let Ok(interval_type) = expression.get_type(schema) else {
+        return true;
+    };
+    let mut without_fields = false;
+    let _ = expression.apply(|node| {
+        let Ok((_, field)) = node.to_field(schema) else {
+            without_fields = true;
+            return Ok(TreeNodeRecursion::Stop);
+        };
+        if field.data_type() != &interval_type {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        if field
+            .metadata()
+            .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY)
+        {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        let mut has_children = false;
+        let mut from_intervals = false;
+        let _ = node.apply_children(|child| {
+            has_children = true;
+            if child.get_type(schema).is_ok_and(|t| t == interval_type) {
+                from_intervals = true;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+        if from_intervals {
+            Ok(TreeNodeRecursion::Continue)
+        } else if has_children {
+            // Computed from something that is not an interval, like a difference of timestamps.
+            without_fields = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            // A leaf with no metadata (a lambda variable): nothing is known about it, so the
+            // fields of the other operands decide, as they do for `CAST`.
+            Ok(TreeNodeRecursion::Jump)
+        }
+    });
+    without_fields
+}
+
 fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkPmod::new(ansi_mode));
@@ -788,7 +881,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::var_arg(expr_fn::greatest)),
-        ("hex", F::unary(math_fn::hex)),
+        ("hex", F::custom(spark_hex_cast)),
         ("hypot", F::binary(hypot)),
         ("least", F::var_arg(expr_fn::least)),
         ("ln", F::unary(double(ln))),
@@ -823,7 +916,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_multiply", F::udf(SparkTryMult::new())),
         ("try_mod", F::udf(SparkTryMod::new())),
         ("try_subtract", F::udf(SparkTrySubtract::new())),
-        ("unhex", F::udf(SparkUnHex::new())),
+        ("unhex", F::custom(spark_unhex)),
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]

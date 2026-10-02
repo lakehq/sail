@@ -244,6 +244,9 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkHexCastUdf spark_hex_cast = 40;
+    SparkUnhexUdf spark_unhex = 41;
+    SparkToBinaryUdf spark_to_binary = 42;
   }
 }
 
@@ -401,6 +404,20 @@ message SparkAbsUdf {
 }
 
 message SparkBinUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkToBinaryUdf {
+  bool is_try = 1;
+  bool ansi_mode = 2;
+}
+
+message SparkUnhexUdf {
+  bool fail_on_error = 1;
+  bool ansi_mode = 2;
+}
+
+message SparkHexCastUdf {
   bool ansi_mode = 1;
 }
 

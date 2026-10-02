@@ -4,16 +4,18 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
-use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::math::spark_hex::SparkHexCast;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -33,7 +35,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::{
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
-use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_binary::{SparkToBinary, is_foldable, validate_format};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 
@@ -41,6 +43,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
 use crate::function::scalar::lambda::lambda_with_fresh_parameter;
+use crate::function::scalar::math::intervals_as_text;
 
 fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
     let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
@@ -213,6 +216,48 @@ fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         None => expr_fn::strpos(str, substr),
     })
+}
+
+/// Spark rejects a bad format when it analyzes the call, so it is checked here and not only when
+/// the call runs (a branch that never runs, a plan that is never executed).
+fn validate_to_binary_format(input: &ScalarFunctionInput, is_try: bool) -> PlanResult<()> {
+    if let Some(format) = input.arguments.get(1) {
+        let folded = fold_format(format, input.function_context.schema);
+        validate_format(folded.as_ref().unwrap_or(format), is_try)?;
+    }
+    Ok(())
+}
+
+/// A foldable format that is not yet a literal (`concat('he', 'y')`, `lower('BAD')`, a CAST), folded
+/// to the literal it evaluates to. `None` when it is already a literal, is not foldable, or cannot
+/// be folded here: the call then checks it when it runs.
+fn fold_format(format: &expr::Expr, schema: &DFSchemaRef) -> Option<expr::Expr> {
+    if matches!(format, expr::Expr::Literal(..)) || !is_foldable(format) {
+        return None;
+    }
+    let context = SimplifyContextBuilder::default()
+        .with_schema(schema.clone())
+        .build();
+    let simplifier = ExprSimplifier::new(context);
+    let coerced = simplifier.coerce(format.clone(), schema).ok()?;
+    simplifier
+        .simplify(coerced)
+        .ok()
+        .filter(|folded| matches!(folded, expr::Expr::Literal(..)))
+}
+
+fn to_binary(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    validate_to_binary_format(&input, false)?;
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkToBinary::new(false, ansi_mode));
+    Ok(udf.call(intervals_as_text(input)))
+}
+
+fn try_to_binary(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    validate_to_binary_format(&input, true)?;
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkToBinary::new(true, ansi_mode));
+    Ok(udf.call(intervals_as_text(input)))
 }
 
 fn space(n: expr::Expr) -> expr::Expr {
@@ -415,7 +460,10 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             match scalar.try_as_str() {
                 Some(Some(name)) => match name.trim().to_lowercase().as_str() {
                     "base64" => Ok(ScalarUDF::from(SparkBase64::new()).call(vec![value])),
-                    "hex" => Ok(math_fn::hex(value)),
+                    "hex" => Ok(ScalarUDF::from(SparkHexCast::new(
+                        function_context.plan_config.ansi_mode,
+                    ))
+                    .call(vec![value])),
                     "utf-8" => Ok(ScalarUDF::from(SparkDecode::new()).call(vec![value, format])),
                     invalid => Err(PlanError::invalid(format!(
                         "to_char: the value of the `format` parameter expects one of binary formats 'base64', 'hex', 'utf-8', but got '{invalid}'"
@@ -500,13 +548,13 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
-        ("to_binary", F::udf(SparkToBinary::new())),
+        ("to_binary", F::custom(to_binary)),
         ("to_char", F::custom(to_char)),
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
-        ("try_to_binary", F::udf(SparkTryToBinary::new())),
+        ("try_to_binary", F::custom(try_to_binary)),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::custom(upper)),

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/variant_to_json.rs>
+use arrow::array::ArrayRef;
 use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
@@ -8,8 +9,10 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
+use parquet_variant::Variant;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
+use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
 
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
@@ -54,6 +57,59 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
             unsupported => exec_err!("Invalid data type: {unsupported}"),
         },
     }
+}
+
+/// The text Spark's CAST of a VARIANT to STRING prints (`VariantGet.cast`): a string is its raw
+/// text (no quotes), a variant null is SQL NULL, a float or a double prints as Java does, a
+/// timestamp prints as a TIMESTAMP does (in the session time zone when it has one), and every
+/// other value is its JSON.
+pub fn variant_to_text(array: &ArrayRef, time_zone: Option<&str>) -> Result<ArrayRef> {
+    let variant_array = VariantArray::try_new(array.as_ref())?;
+    let zone = time_zone.and_then(|zone| zone.parse::<chrono_tz::Tz>().ok());
+    let mut builder = arrow::array::StringViewBuilder::with_capacity(variant_array.len());
+    for variant in variant_array.iter() {
+        match variant {
+            None | Some(Variant::Null) => builder.append_null(),
+            Some(Variant::Float(value)) => builder.append_value(spark_f32_to_string(value)),
+            Some(Variant::Double(value)) => builder.append_value(spark_f64_to_string(value)),
+            Some(Variant::TimestampMicros(value) | Variant::TimestampNanos(value)) => {
+                let local = match zone {
+                    Some(zone) => value.with_timezone(&zone).naive_local(),
+                    None => value.naive_utc(),
+                };
+                builder.append_value(timestamp_text(local));
+            }
+            Some(Variant::TimestampNtzMicros(value) | Variant::TimestampNtzNanos(value)) => {
+                builder.append_value(timestamp_text(value));
+            }
+            Some(v) => {
+                let json = v.to_json_string()?;
+                // A string, a date... print as a JSON string: unquote it.
+                if json.starts_with('"') {
+                    builder.append_value(serde_json::from_str::<String>(&json).map_err(
+                        |error| {
+                            exec_datafusion_err!("cannot read a VARIANT string as text: {error}")
+                        },
+                    )?);
+                } else {
+                    builder.append_value(json);
+                }
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+/// `yyyy-MM-dd HH:mm:ss` with the fraction of a second only when there is one, without trailing zeros.
+fn timestamp_text(value: chrono::NaiveDateTime) -> String {
+    let text = value.format("%Y-%m-%d %H:%M:%S").to_string();
+    let micros = value.and_utc().timestamp_subsec_micros();
+    if micros == 0 {
+        return text;
+    }
+    format!("{text}.{micros:06}")
+        .trim_end_matches('0')
+        .to_string()
 }
 
 /// Returns a JSON string from a VariantArray
