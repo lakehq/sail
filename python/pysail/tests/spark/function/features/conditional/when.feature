@@ -188,6 +188,28 @@ Feature: when output schema
         | 1 | 0 | bigint |
         | 0 | 0 | bigint |
 
+    @sail-bug
+    Scenario Outline: Exhaustive numeric CASE declares non-nullable output with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CASE WHEN id = 0 THEN 1L ELSE 2L END AS v FROM range(2)
+        """
+      Then query result
+        | v |
+        | 1 |
+        | 2 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
   Rule: Spark-compatible coercion for non-numeric branches
 
     Scenario Outline: CASE widens numeric STRING branches to the Spark common type: <case>
