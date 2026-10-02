@@ -103,6 +103,27 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
         filters: Vec<PythonFilter>,
     ) -> Result<PartitionPlan>;
 
+    /// Plan partitions with optional column pruning, returning the plan and
+    /// the schema emitted by its reader.
+    ///
+    /// Sail's optional `pruneColumns(pyarrow.Schema)` hook receives the required
+    /// schema after filter pushdown. Success promises output in that schema's
+    /// order; absent or unimplemented hooks retain the full schema.
+    ///
+    /// The default preserves existing executors: they read the full schema and
+    /// the table provider applies the projection after the scan.
+    async fn get_partitions_with_projection(
+        &self,
+        command: &[u8],
+        schema: &SchemaRef,
+        required_schema: Option<&SchemaRef>,
+        filters: Vec<PythonFilter>,
+    ) -> Result<(PartitionPlan, SchemaRef)> {
+        let _ = required_schema;
+        let plan = self.get_partitions(command, schema, filters).await?;
+        Ok((plan, schema.clone()))
+    }
+
     /// Execute a read for a specific partition.
     ///
     /// Takes a pickled reader (with filters already applied) and partition.
@@ -273,8 +294,21 @@ impl PythonExecutor for InProcessExecutor {
         schema: &SchemaRef,
         filters: Vec<PythonFilter>,
     ) -> Result<PartitionPlan> {
+        self.get_partitions_with_projection(command, schema, None, filters)
+            .await
+            .map(|(plan, _)| plan)
+    }
+
+    async fn get_partitions_with_projection(
+        &self,
+        command: &[u8],
+        schema: &SchemaRef,
+        required_schema: Option<&SchemaRef>,
+        filters: Vec<PythonFilter>,
+    ) -> Result<(PartitionPlan, SchemaRef)> {
         let command = command.to_vec();
         let schema = schema.clone();
+        let required_schema = required_schema.cloned();
 
         tokio::task::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
@@ -352,7 +386,13 @@ impl PythonExecutor for InProcessExecutor {
                     }
                 }
 
-                // Now call partitions() on the same reader that has the filters
+                // Pruning is opt-in: legacy readers still emit the full schema.
+                let schema = match required_schema {
+                    Some(required) if prune_columns(py, &reader, &required, &ds_name)? => required,
+                    _ => schema,
+                };
+
+                // Plan and pickle the same reader with filters and pruning applied.
                 let partitions = match reader.call_method0("partitions") {
                     Ok(partitions) => partitions,
                     Err(err) => {
@@ -409,10 +449,13 @@ impl PythonExecutor for InProcessExecutor {
                     pickled_reader.len()
                 );
 
-                Ok(PartitionPlan {
-                    pickled_reader,
-                    partitions: result,
-                })
+                Ok((
+                    PartitionPlan {
+                        pickled_reader,
+                        partitions: result,
+                    },
+                    schema,
+                ))
             })
         })
         .await
@@ -883,6 +926,33 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
     Ok(bytes)
 }
 
+/// Sail-specific optional hook, not part of the PySpark 4.2 reader API.
+fn prune_columns(
+    py: Python<'_>,
+    reader: &Bound<'_, PyAny>,
+    schema: &SchemaRef,
+    datasource_name: &str,
+) -> Result<bool> {
+    let ctx = PythonDataSourceContext::new(datasource_name, "pruneColumns");
+    let hook = match reader.getattr("pruneColumns") {
+        Ok(hook) if hook.is_callable() => hook,
+        Ok(_) => return Ok(false),
+        Err(err) if err.is_instance_of::<PyAttributeError>(py) => return Ok(false),
+        Err(err) => return Err(ctx.wrap_py_error(err).into()),
+    };
+    let schema = super::arrow_utils::rust_schema_to_py(py, schema)?;
+    match hook.call1((schema,)) {
+        Ok(_) => Ok(true),
+        Err(err)
+            if err.is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py)
+                || is_pyspark_not_implemented(py, &err) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(ctx.wrap_py_error(err).into()),
+    }
+}
+
 fn is_pyspark_not_implemented(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> bool {
     let errors_module = match py.import("pyspark.errors") {
         Ok(module) => module,
@@ -902,6 +972,184 @@ use super::error::py_err;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Implements only the original executor API, without projection support.
+    #[derive(Debug)]
+    struct LegacyExecutor {
+        schema: SchemaRef,
+        plan: PartitionPlan,
+    }
+
+    #[async_trait]
+    impl PythonExecutor for LegacyExecutor {
+        async fn get_schema(&self, _command: &[u8]) -> Result<SchemaRef> {
+            datafusion_common::internal_err!("LegacyExecutor::get_schema must not be called")
+        }
+
+        async fn get_partitions(
+            &self,
+            command: &[u8],
+            schema: &SchemaRef,
+            filters: Vec<PythonFilter>,
+        ) -> Result<PartitionPlan> {
+            assert_eq!(command, b"legacy command");
+            assert_eq!(schema, &self.schema);
+            assert!(
+                matches!(filters.as_slice(), [PythonFilter::IsNotNull { column }] if column == &vec!["name".to_string()])
+            );
+            Ok(self.plan.clone())
+        }
+
+        async fn execute_read(
+            &self,
+            _pickled_reader: &[u8],
+            _partition: &InputPartition,
+            _schema: SchemaRef,
+            _batch_size: usize,
+        ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+            datafusion_common::internal_err!("LegacyExecutor::execute_read must not be called")
+        }
+
+        async fn get_writer(
+            &self,
+            _command: &[u8],
+            _schema: &SchemaRef,
+            _overwrite: bool,
+        ) -> Result<WriterPlan> {
+            datafusion_common::internal_err!("LegacyExecutor::get_writer must not be called")
+        }
+
+        async fn execute_write(
+            &self,
+            _pickled_writer: &[u8],
+            _schema: SchemaRef,
+            _is_arrow: bool,
+            _batches: BoxStream<'static, Result<RecordBatch>>,
+        ) -> Result<WriteResult> {
+            datafusion_common::internal_err!("LegacyExecutor::execute_write must not be called")
+        }
+
+        async fn commit_write(
+            &self,
+            _pickled_writer: &[u8],
+            _commit_messages: Vec<Option<Vec<u8>>>,
+        ) -> Result<()> {
+            datafusion_common::internal_err!("LegacyExecutor::commit_write must not be called")
+        }
+
+        async fn abort_write(
+            &self,
+            _pickled_writer: &[u8],
+            _commit_messages: Vec<Option<Vec<u8>>>,
+        ) -> Result<()> {
+            datafusion_common::internal_err!("LegacyExecutor::abort_write must not be called")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_legacy_executor_projection_defaults_to_full_schema() -> Result<()> {
+        use std::sync::Arc;
+
+        use arrow_schema::{DataType, Field, Schema};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let expected_plan = PartitionPlan {
+            pickled_reader: vec![1, 2, 3],
+            partitions: vec![
+                InputPartition {
+                    partition_id: 7,
+                    data: vec![4, 5],
+                },
+                InputPartition {
+                    partition_id: 9,
+                    data: vec![6],
+                },
+            ],
+        };
+        let executor: &dyn PythonExecutor = &LegacyExecutor {
+            schema: schema.clone(),
+            plan: expected_plan.clone(),
+        };
+        let subset = Arc::new(Schema::new(vec![schema.field(0).clone()]));
+        let empty = Arc::new(Schema::empty());
+        for required_schema in [Some(&subset), Some(&empty), None] {
+            let (plan, read_schema) = executor
+                .get_partitions_with_projection(
+                    b"legacy command",
+                    &schema,
+                    required_schema,
+                    vec![PythonFilter::IsNotNull {
+                        column: vec!["name".to_string()],
+                    }],
+                )
+                .await?;
+            assert_eq!(read_schema, schema);
+            assert_eq!(plan.pickled_reader, expected_plan.pickled_reader);
+            assert_eq!(plan.partitions.len(), expected_plan.partitions.len());
+            for (actual, expected) in plan.partitions.iter().zip(&expected_plan.partitions) {
+                assert_eq!(actual.partition_id, expected.partition_id);
+                assert_eq!(actual.data, expected.data);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_optional_column_pruning() -> Result<()> {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::types::PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class Legacy: pass\n\
+                     class Disabled: pruneColumns = None\n\
+                     class Unsupported:\n    def pruneColumns(self, schema): raise NotImplementedError()\n\
+                     class Broken:\n    def pruneColumns(self, schema): raise ValueError('broken')\n\
+                     class Pruned:\n    def pruneColumns(self, schema): self.schema = schema\n"
+                ),
+                pyo3::ffi::c_str!("pruning_test.py"),
+                pyo3::ffi::c_str!("pruning_test"),
+            )
+            .map_err(py_err)?;
+            // A reordered, mixed-nullability subset: the hook must receive the
+            // required schema verbatim, not the table schema.
+            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+                arrow_schema::Field::new("label", arrow_schema::DataType::Utf8, true),
+                arrow_schema::Field::new("id", arrow_schema::DataType::Int64, false),
+            ]));
+            for name in ["Legacy", "Disabled", "Unsupported"] {
+                let reader = module
+                    .getattr(name)
+                    .and_then(|cls| cls.call0())
+                    .map_err(py_err)?;
+                assert!(!prune_columns(py, &reader, &schema, name)?);
+            }
+            let reader = module
+                .getattr("Pruned")
+                .and_then(|cls| cls.call0())
+                .map_err(py_err)?;
+            assert!(prune_columns(py, &reader, &schema, "Pruned")?);
+            assert_eq!(
+                super::super::arrow_utils::py_schema_to_rust(
+                    py,
+                    &reader.getattr("schema").map_err(py_err)?,
+                )?,
+                schema,
+            );
+            let reader = module
+                .getattr("Broken")
+                .and_then(|cls| cls.call0())
+                .map_err(py_err)?;
+            let Err(error) = prune_columns(py, &reader, &schema, "Broken") else {
+                return datafusion_common::internal_err!("pruneColumns errors must propagate");
+            };
+            assert!(error.to_string().contains("ValueError: broken"), "{error}");
+            Ok(())
+        })
+    }
 
     #[test]
     fn test_input_partition_clone() {
