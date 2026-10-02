@@ -17,9 +17,13 @@ use async_trait::async_trait;
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::config::ConfigOptions;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::filter_pushdown::{
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -30,6 +34,7 @@ use datafusion::physical_plan::{
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, ScalarValue, Statistics, internal_err};
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::conjunction;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -41,7 +46,10 @@ use crate::datasource::scan::{
     FileScanParams, TableStatsMode, file_scan_projection_for_schema, map_statistics_to_schema,
     sanitize_statistics_for_schema,
 };
-use crate::datasource::{DeltaScanConfig, PATH_COLUMN, build_file_scan_config};
+use crate::datasource::{
+    DeltaScanConfig, PATH_COLUMN, build_file_scan_config, collect_physical_columns,
+    rewrite_predicate_for_column_mapping,
+};
 use crate::delta_log::LogStoreRef;
 use crate::physical_plan::{COL_ACTION, DeltaDecodePath, decode_adds_from_batch, meta_adds};
 use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
@@ -664,6 +672,50 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         apply_expression_roots(self.pushdown_filter.iter(), f)
     }
 
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Metadata rows and fetches cannot be filtered as if they were table rows.
+        if self.limit.is_some()
+            || self.scan_config.metadata_aggregate.is_some()
+            || !self.scan_config.enable_parquet_pushdown
+        {
+            return Ok(FilterPushdownPropagation::all_unsupported(result));
+        }
+        let mut predicates = Vec::new();
+        for parent in &result.parent_filters {
+            if datafusion::physical_expr_common::physical_expr::is_volatile(&parent.filter) {
+                continue;
+            }
+            if collect_physical_columns(&parent.filter)
+                .iter()
+                .any(|name| self.table_schema.field_with_name(name).is_err())
+            {
+                continue;
+            }
+            // Both mapping modes resolve names through the same field metadata.
+            predicates.push(rewrite_predicate_for_column_mapping(
+                parent.filter.clone(),
+                &self.table_schema,
+                crate::spec::ColumnMappingMode::Name,
+            )?);
+        }
+        let propagation = FilterPushdownPropagation::all_unsupported(result);
+        if predicates.is_empty() {
+            return Ok(propagation);
+        }
+        let mut scan = self.clone();
+        scan.statistics = scan.statistics.to_inexact();
+        scan.pushdown_filter = Some(conjunction(
+            self.pushdown_filter.iter().cloned().chain(predicates),
+        ));
+        // DV readers may apply pruning only. Keep the residual filter above the scan.
+        Ok(propagation.with_updated_node(Arc::new(scan)))
+    }
+
     #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
@@ -913,6 +965,129 @@ mod tests {
     use super::{DeltaScanByAddsExec, metadata_record_batches};
     use crate::datasource::scan::map_statistics_to_schema;
     use crate::snapshot::GroupedCountMetadataRow;
+
+    #[test]
+    fn physical_pushdown_preserves_mapped_dynamic_state_and_scan_barriers() -> Result<()> {
+        use datafusion::arrow::array::{BooleanArray, Int32Array};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{
+            Column, DynamicFilterPhysicalExpr, binary, lit,
+        };
+        use datafusion::physical_expr::utils::reassign_expr_columns;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::physical_plan::filter_pushdown::{
+            ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase, PushedDown,
+        };
+
+        use crate::datasource::{DeltaMetadataAggregateConfig, DeltaScanConfig};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true).with_metadata(std::collections::HashMap::from(
+                [(
+                    "delta.columnMapping.physicalName".into(),
+                    "physical-b".into(),
+                )],
+            )),
+        ]));
+        let output = Arc::new(schema.project(&[1])?);
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![column.clone()],
+            lit(true),
+        ));
+        let mut scan = DeltaScanByAddsExec::new(
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+            Url::parse("file:///table")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            0,
+            schema.clone(),
+            output.clone(),
+            DeltaScanConfig {
+                enable_parquet_pushdown: true,
+                ..Default::default()
+            },
+            Some(vec![1]),
+            None,
+            Some(binary(
+                Arc::new(Column::new("a", 0)),
+                Operator::Gt,
+                lit(0i32),
+                &schema,
+            )?),
+            None,
+            None,
+        );
+        let result = ChildPushdownResult {
+            parent_filters: vec![ChildFilterPushdownResult {
+                filter: dynamic.clone(),
+                child_results: vec![],
+            }],
+            self_filters: vec![],
+        };
+        let pushed = scan.handle_child_pushdown_result(
+            FilterPushdownPhase::Post,
+            result.clone(),
+            &ConfigOptions::default(),
+        )?;
+        assert!(matches!(pushed.filters.as_slice(), [PushedDown::No]));
+        let updated = pushed
+            .updated_node
+            .ok_or_else(|| DataFusionError::Internal("missing pushed scan".into()))?;
+        let updated = updated
+            .downcast_ref::<DeltaScanByAddsExec>()
+            .ok_or_else(|| DataFusionError::Internal("unexpected plan".into()))?;
+        dynamic.update(binary(column, Operator::Eq, lit(2i32), &output)?)?;
+        let physical_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("physical-b", DataType::Int32, true),
+        ]));
+        let predicate = reassign_expr_columns(
+            updated
+                .pushdown_filter()
+                .ok_or_else(|| DataFusionError::Internal("missing predicate".into()))?
+                .clone(),
+            &physical_schema,
+        )?;
+        let batch = RecordBatch::try_new(
+            physical_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, -1])),
+                Arc::new(Int32Array::from(vec![1, 2, 2])),
+            ],
+        )?;
+        assert_eq!(
+            predicate.evaluate(&batch)?.into_array(3)?.as_ref(),
+            &BooleanArray::from(vec![false, true, false])
+        );
+        scan.limit = Some(1);
+        assert!(
+            scan.handle_child_pushdown_result(
+                FilterPushdownPhase::Post,
+                result.clone(),
+                &ConfigOptions::default()
+            )?
+            .updated_node
+            .is_none()
+        );
+        scan.limit = None;
+        scan.scan_config.metadata_aggregate = Some(DeltaMetadataAggregateConfig {
+            group_columns: vec!["b".into()],
+        });
+        assert!(
+            scan.handle_child_pushdown_result(
+                FilterPushdownPhase::Post,
+                result,
+                &ConfigOptions::default()
+            )?
+            .updated_node
+            .is_none()
+        );
+        Ok(())
+    }
 
     #[test]
     fn metadata_batches_bound_rows_without_expanding_count_weights() -> Result<()> {

@@ -2,7 +2,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    BinaryArray, BooleanArray, Int32Array, RecordBatch, StringArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
@@ -24,6 +26,8 @@ use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, PartitionSp
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ManifestPruning {
+    pub(crate) schema: crate::spec::Schema,
+    pub(crate) file_schema: SchemaRef,
     pub(crate) predicate: Predicate,
     pub(crate) specs: Vec<PartitionSpec>,
     pub(crate) floating_field_ids: Option<Vec<i32>>,
@@ -38,6 +42,7 @@ pub const COL_FILE_SIZE_IN_BYTES: &str = "file_size_in_bytes";
 pub const COL_PARTITION_SPEC_ID: &str = "partition_spec_id";
 pub const COL_CONTENT_TYPE: &str = "content_type";
 pub const COL_NAN_FREE: &str = "nan_free";
+pub const COL_SCAN_METADATA: &str = "scan_metadata";
 
 /// Returns the Arrow schema used by the manifest scan metadata batch.
 pub fn manifest_scan_schema() -> SchemaRef {
@@ -49,6 +54,7 @@ pub fn manifest_scan_schema() -> SchemaRef {
         Field::new(COL_PARTITION_SPEC_ID, DataType::Int32, false),
         Field::new(COL_CONTENT_TYPE, DataType::Utf8, false),
         Field::new(COL_NAN_FREE, DataType::Boolean, false),
+        Field::new(COL_SCAN_METADATA, DataType::Binary, false),
     ]))
 }
 
@@ -236,6 +242,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                             let mut partition_spec_ids = Vec::new();
                             let mut content_types = Vec::new();
                             let mut nan_free = Vec::new();
+                            let mut scan_metadata = Vec::new();
 
                             for entry_ref in manifest.entries() {
                                 if pruning.limit == Some(0) {
@@ -249,7 +256,9 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                     continue;
                                 }
 
-                                let df = &entry.data_file;
+                                let mut data_file = entry.data_file.clone();
+                                data_file.partition_spec_id = partition_spec_id;
+                                let df = &data_file;
                                 let spec = pruning
                                     .specs
                                     .iter()
@@ -262,6 +271,9 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                         usize::try_from(df.record_count()).unwrap_or(usize::MAX),
                                     );
                                 }
+                                scan_metadata.push(crate::datasource::scan_metadata::ScanFileMetadata::encode_file(
+                                    df, &pruning.schema, &manifest.metadata().schema, &pruning.file_schema, &pruning.specs,
+                                )?);
                                 file_paths.push(df.file_path().to_string());
                                 file_formats.push(df.file_format().as_action_str().to_string());
                                 record_counts.push(df.record_count());
@@ -289,6 +301,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                     Arc::new(Int32Array::from(partition_spec_ids)),
                                     Arc::new(StringArray::from(content_types)),
                                     Arc::new(BooleanArray::from(nan_free)),
+                                    Arc::new(BinaryArray::from_iter_values(scan_metadata.iter().map(Vec::as_slice))),
                                 ],
                             )?;
                             return Ok(Some((batch, (store_ctx, manifests, idx, schema, pruning))));
@@ -313,7 +326,7 @@ mod tests {
     #[test]
     fn manifest_scan_schema_has_expected_columns() {
         let schema = manifest_scan_schema();
-        assert_eq!(schema.fields().len(), 7);
+        assert_eq!(schema.fields().len(), 8);
         assert!(schema.field_with_name(COL_FILE_PATH).is_ok());
         assert!(schema.field_with_name(COL_FILE_FORMAT).is_ok());
         assert!(schema.field_with_name(COL_RECORD_COUNT).is_ok());
@@ -321,5 +334,6 @@ mod tests {
         assert!(schema.field_with_name(COL_PARTITION_SPEC_ID).is_ok());
         assert!(schema.field_with_name(COL_CONTENT_TYPE).is_ok());
         assert!(schema.field_with_name(COL_NAN_FREE).is_ok());
+        assert!(schema.field_with_name(COL_SCAN_METADATA).is_ok());
     }
 }

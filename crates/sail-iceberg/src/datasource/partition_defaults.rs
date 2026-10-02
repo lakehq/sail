@@ -24,11 +24,13 @@ use crate::spec::{DataFile, PartitionSpec, Transform};
 use crate::utils::conversions::to_scalar;
 
 /// Consumed during scan construction; defaults travel to workers in field metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct IdentityPartitionDefaults(BTreeMap<i32, String>);
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub(crate) struct IdentityPartitionDefaults(BTreeMap<i32, String>);
 
 impl IdentityPartitionDefaults {
-    pub(super) fn from_file(
+    pub(crate) fn from_file(
         file: &DataFile,
         specs: &[PartitionSpec],
         schema: &crate::spec::Schema,
@@ -93,7 +95,34 @@ impl IdentityPartitionDefaults {
     }
 }
 
-pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
+pub(crate) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
+    let facts = config
+        .file_groups
+        .iter()
+        .flat_map(|group| group.files())
+        .filter_map(|file| {
+            file.extensions
+                .get::<crate::datasource::file_pruning::FilePruning>()
+                .map(|facts| (file.object_meta.location.to_string(), facts.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let iceberg_source =
+        |parquet: Arc<dyn FileSource>, groups: &[FileGroup]| -> Arc<dyn FileSource> {
+            let files = groups
+                .iter()
+                .flat_map(|group| group.files())
+                .filter_map(|file| {
+                    facts
+                        .get(file.object_meta.location.as_ref())
+                        .map(|facts| (file.object_meta.location.to_string(), facts.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            if files.is_empty() {
+                parquet
+            } else {
+                Arc::new(crate::datasource::IcebergParquetSource::new(parquet, files))
+            }
+        };
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();
@@ -149,6 +178,7 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
                     .collect::<Vec<_>>(),
             );
         }
+        config.file_source = iceberg_source(config.file_source.clone(), &config.file_groups);
         return Ok(DataSourceExec::from_data_source(config));
     }
 
@@ -175,12 +205,13 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
         if let Some(predicate) = parquet.filter() {
             source = source.with_predicate(predicate);
         }
-        let source = match parquet.projection() {
+        let projected_source = match parquet.projection() {
             Some(projection) => source
                 .try_pushdown_projection(projection)?
                 .ok_or_else(|| internal_datafusion_err!("Cannot project Iceberg Parquet scan"))?,
             None => Arc::new(source),
         };
+        let source = iceberg_source(projected_source, &file_groups);
         let unknown =
             datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
         let statistics = sail_common_datafusion::statistics::aggregate_statistics(
