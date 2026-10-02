@@ -1279,9 +1279,11 @@ Feature: Data source temporary views
       """
       DESCRIBE TABLE v_csv_infer
       """
+    # INT, as Spark infers it: the catalog suite does not run against the JVM, so the same statements
+    # are checked on Spark by `test_csv_temporary_view_using_infer_schema_describes_an_int_column`.
     Then query result ordered
       | col_name | data_type | comment |
-      | id       | bigint    | NULL    |
+      | id       | int       | NULL    |
       | name     | string    | NULL    |
     Given statement template
       """

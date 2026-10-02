@@ -62,3 +62,29 @@ Feature: array output schema
          |-- result: array (nullable = false)
          |    |-- element: integer (containsNull = true)
         """
+
+    # Spark's `Coalesce.nullable` is `children.forall(_.nullable)`, so a non-nullable branch keeps
+    # the whole coalesce non-nullable even if another branch is a forced-nullable cast.
+    Scenario: a forced-nullable cast inside a coalesce with a non-nullable branch stays non-nullable
+      When query
+        """
+        SELECT array(coalesce(CAST('1' AS INT), 2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    Scenario: a forced-nullable cast inside a coalesce where every branch is nullable stays nullable
+      When query
+        """
+        SELECT array(coalesce(CAST('1' AS INT), CAST(NULL AS INT))) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = true)
+        """

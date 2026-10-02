@@ -78,6 +78,22 @@ Feature: try_mod output schema
         | p_p | n_p  | p_n | n_n  |
         | 1.5 | -1.5 | 1.5 | -1.5 |
 
+  Rule: The integral minimum
+    # `try_mod` is `Remainder` with `EvalMode.TRY` (`arithmetic.scala`), and a Java `%` does not
+    # overflow: `Integer.MIN_VALUE % -1` is 0. A NULL here means the kernel read it as an overflow.
+    Scenario: try_mod of the INT and BIGINT minimum by -1 is zero
+      When query
+        """
+        SELECT
+          try_mod(-2147483648, -1) AS a,
+          try_mod(-9223372036854775808, -1) AS b,
+          try_mod(CAST(-2147483648 AS INT), CAST(-1 AS INT)) AS c,
+          try_mod(-2147483648, 0) AS d
+        """
+      Then query result
+        | a | b | c | d    |
+        | 0 | 0 | 0 | NULL |
+
   Rule: Output schema (migrated from test_try_mod.txt printSchema doctests)
 
     Scenario: try_mod doctest #17 (schema)

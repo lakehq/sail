@@ -35,12 +35,12 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                            | input                            | result    |
-        | whole value keeps a .0 suffix   | CAST(8 AS DOUBLE)                | 8.0       |
-        | positive zero                   | CAST(0.0 AS DOUBLE)              | 0.0       |
-        | a round hundred is not special  | CAST(100 AS DOUBLE)              | 100.0     |
-        | just below the upper threshold  | CAST(9999999.0 AS DOUBLE)        | 9999999.0 |
-        | at the lower threshold          | 1e-3                             | 0.001     |
+        | case                           | input                     | result    |
+        | whole value keeps a .0 suffix  | CAST(8 AS DOUBLE)         | 8.0       |
+        | positive zero                  | CAST(0.0 AS DOUBLE)       | 0.0       |
+        | a round hundred is not special | CAST(100 AS DOUBLE)       | 100.0     |
+        | just below the upper threshold | CAST(9999999.0 AS DOUBLE) | 9999999.0 |
+        | at the lower threshold         | 1e-3                      | 0.001     |
 
     @sail-bug
     Scenario Outline: DOUBLE rendering Sail gets wrong: <case>
@@ -53,18 +53,18 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                                | input                       | result                  |
-        | at the upper threshold, scientific  | 1e7                         | 1.0E7                   |
-        | one step below the lower threshold  | 1e-4                        | 1.0E-4                  |
-        | small negative exponent             | 1.0E-5                      | 1.0E-5                  |
-        | large positive exponent             | 1e100                       | 1.0E100                 |
-        | large negative value                | -1e100                      | -1.0E100                |
-        | uppercase E on MAX_VALUE            | 1.7976931348623157E308      | 1.7976931348623157E308  |
-        | uppercase E on MIN_NORMAL           | 2.2250738585072014E-308     | 2.2250738585072014E-308 |
-        | smallest subnormal                  | 4.9E-324                    | 4.9E-324                |
-        | positive infinity is a word         | CAST('Infinity' AS DOUBLE)  | Infinity                |
-        | negative infinity is a word         | CAST('-Infinity' AS DOUBLE) | -Infinity               |
-        | nine-digit whole value goes sci     | CAST(123456789.0 AS DOUBLE) | 1.23456789E8            |
+        | case                               | input                       | result                  |
+        | at the upper threshold, scientific | 1e7                         | 1.0E7                   |
+        | one step below the lower threshold | 1e-4                        | 1.0E-4                  |
+        | small negative exponent            | 1.0E-5                      | 1.0E-5                  |
+        | large positive exponent            | 1e100                       | 1.0E100                 |
+        | large negative value               | -1e100                      | -1.0E100                |
+        | uppercase E on MAX_VALUE           | 1.7976931348623157E308      | 1.7976931348623157E308  |
+        | uppercase E on MIN_NORMAL          | 2.2250738585072014E-308     | 2.2250738585072014E-308 |
+        | smallest subnormal                 | 4.9E-324                    | 4.9E-324                |
+        | positive infinity is a word        | CAST('Infinity' AS DOUBLE)  | Infinity                |
+        | negative infinity is a word        | CAST('-Infinity' AS DOUBLE) | -Infinity               |
+        | nine-digit whole value goes sci    | CAST(123456789.0 AS DOUBLE) | 1.23456789E8            |
 
     Scenario: NaN renders as NaN
       # The one special value both engines already spell the same way; kept as the
@@ -90,11 +90,11 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                     | input                      | result       |
-        | at the upper threshold   | CAST(1e7 AS FLOAT)         | 1.0E7        |
+        | case                     | input                       | result       |
+        | at the upper threshold   | CAST(1e7 AS FLOAT)          | 1.0E7        |
         | float MAX_VALUE          | CAST(3.4028235E38 AS FLOAT) | 3.4028235E38 |
-        | float smallest subnormal | CAST(1.4E-45 AS FLOAT)     | 1.4E-45      |
-        | float infinity           | CAST('Infinity' AS FLOAT)  | Infinity     |
+        | float smallest subnormal | CAST(1.4E-45 AS FLOAT)      | 1.4E-45      |
+        | float infinity           | CAST('Infinity' AS FLOAT)   | Infinity     |
 
   Rule: A NULL nested in a container renders lowercase under CAST and uppercase under show
     # This is the sharpest CAST-vs-show split. Cast overrides nullString to "null" and
@@ -115,11 +115,11 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                     | input                                      | result       |
-        | NULL in the middle       | array(1, CAST(NULL AS INT), 3)             | [1, null, 3] |
-        | all-NULL array           | array(CAST(NULL AS INT), CAST(NULL AS INT)) | [null, null] |
-        | NULL struct field        | named_struct('a',1,'b',CAST(NULL AS INT))  | {1, null}    |
-        | NULL map value           | map('k', CAST(NULL AS STRING))             | {k -> null}  |
+        | case               | input                                       | result       |
+        | NULL in the middle | array(1, CAST(NULL AS INT), 3)              | [1, null, 3] |
+        | all-NULL array     | array(CAST(NULL AS INT), CAST(NULL AS INT)) | [null, null] |
+        | NULL struct field  | named_struct('a',1,'b',CAST(NULL AS INT))   | {1, null}    |
+        | NULL map value     | map('k', CAST(NULL AS STRING))              | {k -> null}  |
 
     Scenario: a top-level NULL cast to string is a real NULL, not the text
       # The contrasting half: CAST(NULL AS STRING) short-circuits in UnaryExpression.eval
@@ -173,12 +173,12 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                             | input                       | result           |
-        | struct drops the field names     | named_struct('x',1,'y','a') | {1, a}           |
-        | nested strings are not quoted    | array('a, b','c')           | [a, b, c]        |
-        | map keeps insertion order        | map(2,'b',1,'a')            | {2 -> b, 1 -> a} |
-        | nested arrays                    | array(array(1,2), array(3)) | [[1, 2], [3]]    |
-        | a map inside a struct            | named_struct('a', map(1,'a')) | {{1 -> a}}     |
+        | case                          | input                         | result           |
+        | struct drops the field names  | named_struct('x',1,'y','a')   | {1, a}           |
+        | nested strings are not quoted | array('a, b','c')             | [a, b, c]        |
+        | map keeps insertion order     | map(2,'b',1,'a')              | {2 -> b, 1 -> a} |
+        | nested arrays                 | array(array(1,2), array(3))   | [[1, 2], [3]]    |
+        | a map inside a struct         | named_struct('a', map(1,'a')) | {{1 -> a}}       |
 
   Rule: DECIMAL keeps its declared scale
     # toPlainString prints the declared scale, trailing zeros included — so the scale is
@@ -194,10 +194,10 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                        | input                      | result |
-        | trailing zero is kept       | CAST(1.10 AS DECIMAL(3,2)) | 1.10   |
-        | integer gains its scale     | CAST(1 AS DECIMAL(10,2))   | 1.00   |
-        | decimal has no signed zero  | CAST(-0.0 AS DECIMAL(2,1)) | 0.0    |
+        | case                       | input                      | result |
+        | trailing zero is kept      | CAST(1.10 AS DECIMAL(3,2)) | 1.10   |
+        | integer gains its scale    | CAST(1 AS DECIMAL(10,2))   | 1.00   |
+        | decimal has no signed zero | CAST(-0.0 AS DECIMAL(2,1)) | 0.0    |
 
   Rule: Interval strings pad leading hours minutes and seconds
 
@@ -212,17 +212,17 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result>      | <result>     |
 
       Examples:
-        | case                    | input                                   | result                                  |
-        | day stays unpadded      | INTERVAL '1' DAY                        | INTERVAL '1' DAY                        |
-        | single hour             | INTERVAL '1' HOUR                       | INTERVAL '01' HOUR                      |
-        | hour to minute          | INTERVAL '1:02' HOUR TO MINUTE           | INTERVAL '01:02' HOUR TO MINUTE          |
-        | negative hour to second | INTERVAL '-1:02:03.4' HOUR TO SECOND     | INTERVAL '-01:02:03.4' HOUR TO SECOND    |
-        | single minute           | INTERVAL '1' MINUTE                     | INTERVAL '01' MINUTE                    |
-        | minute to second        | INTERVAL '1:02.3' MINUTE TO SECOND       | INTERVAL '01:02.3' MINUTE TO SECOND      |
-        | single second           | INTERVAL '1' SECOND                     | INTERVAL '01' SECOND                    |
-        | fractional second       | INTERVAL '-0.000001' SECOND             | INTERVAL '-00.000001' SECOND             |
-        | zero second             | INTERVAL '0' SECOND                     | INTERVAL '00' SECOND                    |
-        | large leading hour      | INTERVAL '123:04' HOUR TO MINUTE         | INTERVAL '123:04' HOUR TO MINUTE         |
+        | case                    | input                                | result                                |
+        | day stays unpadded      | INTERVAL '1' DAY                     | INTERVAL '1' DAY                      |
+        | single hour             | INTERVAL '1' HOUR                    | INTERVAL '01' HOUR                    |
+        | hour to minute          | INTERVAL '1:02' HOUR TO MINUTE       | INTERVAL '01:02' HOUR TO MINUTE       |
+        | negative hour to second | INTERVAL '-1:02:03.4' HOUR TO SECOND | INTERVAL '-01:02:03.4' HOUR TO SECOND |
+        | single minute           | INTERVAL '1' MINUTE                  | INTERVAL '01' MINUTE                  |
+        | minute to second        | INTERVAL '1:02.3' MINUTE TO SECOND   | INTERVAL '01:02.3' MINUTE TO SECOND   |
+        | single second           | INTERVAL '1' SECOND                  | INTERVAL '01' SECOND                  |
+        | fractional second       | INTERVAL '-0.000001' SECOND          | INTERVAL '-00.000001' SECOND          |
+        | zero second             | INTERVAL '0' SECOND                  | INTERVAL '00' SECOND                  |
+        | large leading hour      | INTERVAL '123:04' HOUR TO MINUTE     | INTERVAL '123:04' HOUR TO MINUTE      |
 
   Rule: Nested interval casts preserve the target qualifier
 
@@ -239,13 +239,80 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result>      | NULL         |
 
       Examples:
-        | cast     | case                   | input                                                      | qualifier | result              |
-        | CAST     | numeric days           | 1                                                          | DAY       | INTERVAL '1' DAY    |
-        | TRY_CAST | numeric days           | 1                                                          | DAY       | INTERVAL '1' DAY    |
-        | CAST     | parsed years           | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR')          | YEAR      | INTERVAL '1' YEAR   |
-        | TRY_CAST | parsed years           | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR')          | YEAR      | INTERVAL '1' YEAR   |
-        | CAST     | a changed month unit   | INTERVAL '1' YEAR                                          | MONTH     | INTERVAL '12' MONTH |
-        | TRY_CAST | a changed month unit   | INTERVAL '1' YEAR                                          | MONTH     | INTERVAL '12' MONTH |
+        | cast     | case                 | input                                               | qualifier | result              |
+        | CAST     | numeric days         | 1                                                   | DAY       | INTERVAL '1' DAY    |
+        | TRY_CAST | numeric days         | 1                                                   | DAY       | INTERVAL '1' DAY    |
+        | CAST     | parsed years         | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR') | YEAR      | INTERVAL '1' YEAR   |
+        | TRY_CAST | parsed years         | CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' YEAR') | YEAR      | INTERVAL '1' YEAR   |
+        | CAST     | a changed month unit | INTERVAL '1' YEAR                                   | MONTH     | INTERVAL '12' MONTH |
+        | TRY_CAST | a changed month unit | INTERVAL '1' YEAR                                   | MONTH     | INTERVAL '12' MONTH |
+
+  Rule: Every interval string producer preserves its qualifier
+
+    # SparkToUtf8 receives the qualifier as a constant argument. These are distinct planner
+    # producers, so one scenario per producer prevents a format migration from updating only a
+    # subset of them. The IN path has its own legacy configuration coverage.
+    Scenario Outline: <producer> renders an interval with its own qualifier
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result             |
+        | INTERVAL '02' HOUR |
+
+      Examples:
+        | producer          | query                                                                           |
+        | a direct cast     | SELECT CAST(INTERVAL '2' HOUR AS STRING) AS result                              |
+        | nvl               | SELECT CAST(nvl(INTERVAL '2' HOUR, INTERVAL '3' HOUR) AS STRING) AS result      |
+        | if                | SELECT CAST(if(true, INTERVAL '2' HOUR, INTERVAL '3' HOUR) AS STRING) AS result |
+        | case              | SELECT CAST(CASE WHEN true THEN INTERVAL '2' HOUR END AS STRING) AS result      |
+        | interval addition | SELECT CAST(INTERVAL '1' HOUR + INTERVAL '1' HOUR AS STRING) AS result          |
+        | a VALUES column   | SELECT CAST(v AS STRING) AS result FROM VALUES (INTERVAL '2' HOUR) AS t(v)      |
+
+    # A cast has already produced STRING, so indexing it is invalid SQL. These two container
+    # producers assert the complete rendered value instead of attempting to extract from STRING.
+    Scenario Outline: <producer> retains its interval element qualifier
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result               |
+        | [INTERVAL '02' HOUR] |
+
+      Examples:
+        | producer         | query                                                                             |
+        | an array literal | SELECT CAST(array(INTERVAL '2' HOUR) AS STRING) AS result                         |
+        | an array column  | SELECT CAST(array(v) AS STRING) AS result FROM VALUES (INTERVAL '2' HOUR) AS t(v) |
+
+  Rule: Container fields retain their interval qualifiers
+
+    # `ToStringBase.castToString` formats an interval from its declared field. Array elements
+    # share one field and therefore widen to a covering range; struct, map-key and map-value
+    # fields are independent.
+    Scenario Outline: casting <case> to string retains every field qualifier
+      When query
+        """
+        SELECT CAST(<input> AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                           | input                                                          | result                                                                   |
+        | a day-time array element       | array(INTERVAL '2' HOUR)                                       | [INTERVAL '02' HOUR]                                                     |
+        | a day-time map key             | map(INTERVAL '5' SECOND, 1)                                    | {INTERVAL '05' SECOND -> 1}                                              |
+        | a day-time map value           | map('k', INTERVAL '2' HOUR)                                    | {k -> INTERVAL '02' HOUR}                                                |
+        | an interval map key and value  | map(INTERVAL '5' SECOND, INTERVAL '2' HOUR)                     | {INTERVAL '05' SECOND -> INTERVAL '02' HOUR}                             |
+        | a day-time struct field        | named_struct('f', INTERVAL '2' HOUR)                           | {INTERVAL '02' HOUR}                                                     |
+        | two day-time struct fields     | named_struct('a', INTERVAL '5' SECOND, 'b', INTERVAL '2' HOUR) | {INTERVAL '05' SECOND, INTERVAL '02' HOUR}                               |
+        | a day-time array of two ranges | array(INTERVAL '5' SECOND, INTERVAL '2' HOUR)                  | [INTERVAL '00:00:05' HOUR TO SECOND, INTERVAL '02:00:00' HOUR TO SECOND] |
+        | a map nested in an array       | array(map('k', INTERVAL '2' HOUR))                             | [{k -> INTERVAL '02' HOUR}]                                              |
+        | an array nested in an array    | array(array(INTERVAL '2' HOUR))                                | [[INTERVAL '02' HOUR]]                                                   |
+        | a year-month array element     | array(INTERVAL '2' MONTH)                                      | [INTERVAL '2' MONTH]                                                     |
+        | a year-month struct field      | named_struct('f', INTERVAL '2' MONTH)                          | {INTERVAL '2' MONTH}                                                     |
 
   Rule: Temporal types print a fraction only when it is non-zero
     # appendFraction(NANO_OF_SECOND, 0, 9, true) has minWidth 0, so a zero sub-second part
@@ -263,10 +330,10 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | <result> |
 
       Examples:
-        | case                            | input                                      | result                     |
-        | zero fraction prints no dot     | TIMESTAMP '2020-01-01 00:00:00'            | 2020-01-01 00:00:00        |
-        | trailing zeros are stripped     | TIMESTAMP '2020-01-01 00:00:00.100'        | 2020-01-01 00:00:00.1      |
-        | six digits when they are needed | TIMESTAMP_NTZ '1970-01-01 00:00:00.000001' | 1970-01-01 00:00:00.000001 |
-        | full microsecond precision      | TIMESTAMP '2020-01-01 00:00:00.123456'     | 2020-01-01 00:00:00.123456 |
-        | years below 1000 are zero-padded | DATE '0015-01-01'                         | 0015-01-01                 |
-        | first representable date        | DATE '0001-01-01'                          | 0001-01-01                 |
+        | case                             | input                                      | result                     |
+        | zero fraction prints no dot      | TIMESTAMP '2020-01-01 00:00:00'            | 2020-01-01 00:00:00        |
+        | trailing zeros are stripped      | TIMESTAMP '2020-01-01 00:00:00.100'        | 2020-01-01 00:00:00.1      |
+        | six digits when they are needed  | TIMESTAMP_NTZ '1970-01-01 00:00:00.000001' | 1970-01-01 00:00:00.000001 |
+        | full microsecond precision       | TIMESTAMP '2020-01-01 00:00:00.123456'     | 2020-01-01 00:00:00.123456 |
+        | years below 1000 are zero-padded | DATE '0015-01-01'                          | 0015-01-01                 |
+        | first representable date         | DATE '0001-01-01'                          | 0001-01-01                 |

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
@@ -14,6 +14,7 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_interval::YearMonthIntervalMonths;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -22,10 +23,14 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_substring::{
+    SparkBinaryOverlay, SparkBinarySubstring,
+};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_overlay::SparkOverlay;
 use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
     SparkRegexpExtract, SparkRegexpExtractAll,
@@ -37,6 +42,7 @@ use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBi
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 
+use crate::coercion::spark_interval_metadata_for_expression;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
@@ -77,6 +83,15 @@ fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Ex
     }
 }
 
+/// `RegExpCount.dataType` is `IntegerType` (`regexpExpressions.scala:1106`) and DataFusion's
+/// `regexp_count` returns `Int64`. The width is not cosmetic: a BIGINT is a different arithmetic
+/// operand, and `DATE + regexp_count(...)` is a date offset only as an INT -- Spark's `DateAdd`
+/// refuses a BIGINT. A count of matches cannot leave `Int32`.
+fn regexp_count(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let udf = ScalarUDF::from(RegexpCountFunc::new());
+    Ok(cast(udf.call(input.arguments), DataType::Int32))
+}
+
 fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, pattern) = input
         .arguments
@@ -87,6 +102,8 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(array_element(matches, lit(1i64)))
 }
 
+/// `RegExpInStr.dataType` is `IntegerType` (`regexpExpressions.scala:1193`); the width is
+/// declared by `SparkRegexpInstr::return_field_from_args`, so nothing is cast here.
 fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, pattern, index) = match input.arguments.len() {
         2 => {
@@ -145,6 +162,22 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, position) = arguments
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
+    if matches!(string.get_type(function_context.schema)?, DataType::Binary) {
+        let force_nullable = std::iter::once(&position)
+            .chain(length_opt.iter())
+            .any(|argument| {
+                matches!(argument.get_type(function_context.schema), Ok(data_type) if data_type.is_string())
+            });
+        let arguments = match length_opt {
+            Some(length) => vec![
+                string,
+                cast(position, DataType::Int64),
+                cast(length, DataType::Int64),
+            ],
+            None => vec![string, cast(position, DataType::Int64)],
+        };
+        return Ok(ScalarUDF::from(SparkBinarySubstring::new(force_nullable)).call(arguments));
+    }
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
     // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
     // For negative positions, Spark counts from the end of the string.
@@ -177,17 +210,138 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(cast(substr_res, DataType::Utf8))
 }
 
-fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    if args.len() == 4
-        && matches!(
-            args[3],
-            expr::Expr::Literal(ScalarValue::Int64(Some(-1)), _)
-                | expr::Expr::Literal(ScalarValue::Int32(Some(-1)), _)
-        )
-    {
-        args.pop();
+fn left(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, length) = arguments.two()?;
+    if matches!(value.get_type(function_context.schema)?, DataType::Binary) {
+        let force_nullable = matches!(length.get_type(function_context.schema), Ok(data_type) if data_type.is_string());
+        return Ok(
+            ScalarUDF::from(SparkBinarySubstring::new(force_nullable)).call(vec![
+                value,
+                lit(1_i64),
+                cast(length, DataType::Int64),
+            ]),
+        );
     }
-    Ok(expr_fn::overlay(args))
+    Ok(expr_fn::left(value, length))
+}
+
+// TODO: Spark keeps a BINARY `substr`/`substring`/`left`/`overlay` a BINARY cut by bytes
+//  (`stringExpressions.scala:1000-1010,2301-2313,2408`). Sail reads the input as a STRING instead
+//  because most of its string functions do not take a BINARY yet, and a BINARY result broke every
+//  one of them downstream (`trim(substr(b, 2))`, `hex(substr(b, 2))` over Parquet, ...).
+fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    if !(3..=4).contains(&arguments.len()) {
+        return Err(PlanError::invalid(format!(
+            "overlay requires 3 or 4 arguments, got {}",
+            arguments.len()
+        )));
+    }
+    let output_nullable = arguments
+        .iter()
+        .map(|argument| argument.to_field(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|(_, field)| field.is_nullable())
+        // `Overlay` requires integral position and length. Spark's implicit STRING-to-integral
+        // cast is force-nullable even for a non-null input (`Cast.scala:427-447`).
+        || arguments.iter().skip(2).any(|argument| {
+            matches!(
+                argument.get_type(function_context.schema),
+                Ok(data_type) if data_type.is_string()
+            )
+        });
+    if arguments.len() == 4 {
+        let length = arguments[3].clone();
+        let negative_literal = match length {
+            expr::Expr::Literal(ScalarValue::Int64(Some(value)), _) => value < 0,
+            expr::Expr::Literal(ScalarValue::Int32(Some(value)), _) => value < 0,
+            _ => false,
+        };
+        if negative_literal {
+            // Omitting the optional argument gives DataFusion the same default Spark uses for a
+            // negative literal: the replacement's character length.
+            arguments.pop();
+        } else if !matches!(
+            arguments
+                .first()
+                .map(|arg| arg.get_type(function_context.schema)),
+            Some(Ok(DataType::Binary))
+        ) {
+            let length = cast(length, DataType::Int64);
+            arguments[3] = when(
+                length.clone().lt(lit(0_i64)),
+                cast(expr_fn::char_length(arguments[1].clone()), DataType::Int64),
+            )
+            .otherwise(length)?;
+        }
+    }
+    if matches!(
+        arguments
+            .first()
+            .map(|arg| arg.get_type(function_context.schema)),
+        Some(Ok(DataType::Binary))
+    ) {
+        let arguments = arguments
+            .into_iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if index >= 2 {
+                    cast(arg, DataType::Int64)
+                } else {
+                    arg
+                }
+            })
+            .collect();
+        return Ok(ScalarUDF::from(SparkBinaryOverlay::new()).call(arguments));
+    }
+    let positive_literal_position = match &arguments[2] {
+        expr::Expr::Literal(ScalarValue::Int64(Some(value)), _) => *value >= 1,
+        expr::Expr::Literal(ScalarValue::Int32(Some(value)), _) => *value >= 1,
+        _ => false,
+    };
+    if positive_literal_position {
+        return Ok(ScalarUDF::from(SparkOverlay::new(output_nullable)).call(arguments));
+    }
+    // Spark builds `replacement + input.substringSQL(position + length, ...)` when the prefix is
+    // empty (`Overlay.calculate`, `stringExpressions.scala:984-997`). `substringSQL` counts a
+    // negative suffix position back from the end, whereas DataFusion rejects it, so use position
+    // one and remove exactly the number of leading characters before Spark's suffix.
+    let position = cast(arguments[2].clone(), DataType::Int64);
+    if arguments.len() == 3 {
+        arguments.push(cast(
+            expr_fn::char_length(arguments[1].clone()),
+            DataType::Int64,
+        ));
+    }
+    let length = cast(arguments[3].clone(), DataType::Int64);
+    let non_positive_position = position.clone().lt(lit(1_i64));
+    let input_length = cast(expr_fn::char_length(arguments[0].clone()), DataType::Int64);
+    let suffix_position = position.clone() + length.clone();
+    let suffix_start = when(
+        suffix_position.clone().gt(lit(0_i64)),
+        suffix_position.clone() - lit(1_i64),
+    )
+    .otherwise(
+        when(
+            suffix_position.clone().lt(lit(0_i64)),
+            input_length.clone() + suffix_position,
+        )
+        .otherwise(lit(0_i64))?,
+    )?;
+    let clamped_suffix_start = when(suffix_start.clone().lt(lit(0_i64)), lit(0_i64))
+        .when(suffix_start.clone().gt(input_length.clone()), input_length)
+        .otherwise(suffix_start)?;
+    arguments[2] = when(non_positive_position.clone(), lit(1_i64)).otherwise(position)?;
+    arguments[3] = when(non_positive_position, clamped_suffix_start).otherwise(length)?;
+    Ok(ScalarUDF::from(SparkOverlay::new(output_nullable)).call(arguments))
 }
 
 fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -219,7 +373,31 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+/// Spark's `Substring`/`Left`/`Overlay` keep a BINARY input as BINARY
+/// (`stringExpressions.scala:1000-1010,2301-2313`), but `Trim`/`Replace`/`InitCap` are pure
+/// string operations that only accept STRING -- Spark inserts an implicit cast from BINARY there
+/// (`ImplicitCastInputTypes`), same as it does for any other non-string type. The bytes are
+/// already the value's own UTF-8 encoding (they came from a STRING originally), so the same plain
+/// cast `cast_to_logical_string_or_try` uses elsewhere for BINARY is exact here too.
+fn coerce_binary_argument(arg: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
+    match arg.get_type(schema)? {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => cast_to_logical_string_or_try(arg, schema, false),
+        _ => Ok(arg),
+    }
+}
+
+fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let mut args = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
     let replacement = (args.len() == 3)
         .then(|| args.pop())
         .flatten()
@@ -228,6 +406,47 @@ fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("replace requires 2 or 3 arguments"))?;
     Ok(expr_fn::replace(str, substr, replacement))
+}
+
+fn initcap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = coerce_binary_argument(input.arguments.one()?, input.function_context.schema)?;
+    Ok(expr_fn::initcap(arg))
+}
+
+fn trim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::trim)(arguments))
+}
+
+fn ltrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::ltrim)(arguments))
+}
+
+fn rtrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|arg| coerce_binary_argument(arg, function_context.schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(rev_args(expr_fn::rtrim)(arguments))
 }
 
 fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -248,6 +467,71 @@ fn endswith(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     in_str_str_out_bool(expr_fn::contains)(input)
+}
+
+fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
+    let schema = input.function_context.schema;
+    let arguments = input
+        .arguments
+        .into_iter()
+        .map(|argument| spark_interval_to_utf8(argument, schema))
+        .collect::<PlanResult<Vec<_>>>()?;
+    F::udf(SparkConcatWs::new())(ScalarFunctionInput {
+        arguments,
+        function_context: input.function_context,
+    })
+}
+
+fn spark_interval_to_utf8(
+    argument: expr::Expr,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    let Some(metadata) = spark_interval_metadata_for_expression(&argument, schema)? else {
+        return Ok(argument);
+    };
+    let metadata = sail_common::spec::SparkIntervalMetadataTree::Interval { metadata }.to_json()?;
+    Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![argument, lit(metadata)]))
+}
+
+fn format_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
+    let schema = input.function_context.schema;
+    let arguments = input
+        .arguments
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| -> PlanResult<_> {
+            if index == 0 {
+                return Ok(argument);
+            }
+            match argument.get_type(schema.as_ref())? {
+                DataType::Duration(TimeUnit::Microsecond) => Ok(cast(argument, DataType::Int64)),
+                // TODO: Arrow's `Interval(DayTime)` isn't handled here; see
+                // `math::rejects_unsupported_day_time_interval_operand` for why.
+                DataType::Interval(IntervalUnit::DayTime) => Err(PlanError::todo(
+                    "format_string over Arrow's Interval(DayTime) representation of a day-time \
+                     interval is not yet implemented",
+                )),
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    Ok(ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![argument]))
+                }
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+                    // TODO: DataFusion's Formatter cannot apply Java Formatter's `%b`/`%B` or
+                    // `%h`/`%H` decimal rules. The pattern can vary per row, so supporting those
+                    // conversions requires extending the formatter rather than a fixed coercion.
+                    Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![argument]))
+                }
+                _ => Ok(argument),
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    F::udf(FormatStringFunc::new())(ScalarFunctionInput {
+        arguments,
+        function_context: input.function_context,
+    })
 }
 
 /// Spark measures the character length of string data and the byte length of binary data,
@@ -308,13 +592,14 @@ fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .arguments
         .into_iter()
         .map(|arg| {
-            // Spark implicitly casts either numeric argument to string in both ANSI modes.
+            // Spark implicitly casts either a numeric or a binary argument to string in both
+            // ANSI modes.
             if arg.get_type(input.function_context.schema)?.is_numeric() {
                 // TODO: Match Spark's scientific notation for floats and non-ANSI decimals
                 //  once the shared numeric formatter supports it.
                 Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]))
             } else {
-                Ok(arg)
+                coerce_binary_argument(arg, input.function_context.schema)
             }
         })
         .collect::<PlanResult<Vec<_>>>()?;
@@ -450,7 +735,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::udf(SparkConcatWs::new())),
+        ("concat_ws", F::custom(concat_ws)),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::udf(SparkElt::new())),
@@ -458,39 +743,39 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
-        ("format_string", F::udf(FormatStringFunc::new())),
-        ("initcap", F::unary(expr_fn::initcap)),
+        ("format_string", F::custom(format_string)),
+        ("initcap", F::custom(initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
-        ("left", F::binary(expr_fn::left)),
+        ("left", F::custom(left)),
         ("len", F::custom(length)),
         ("length", F::custom(length)),
         ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
-        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
+        ("ltrim", F::custom(ltrim)),
         ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::custom(octet_length)),
-        ("overlay", F::var_arg(overlay)),
+        ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),
-        ("printf", F::udf(FormatStringFunc::new())),
+        ("printf", F::custom(format_string)),
         ("quote", F::udf(SparkQuote::new())),
         ("randstr", F::udf(Randstr::new())),
-        ("regexp_count", F::udf(RegexpCountFunc::new())),
+        ("regexp_count", F::custom(regexp_count)),
         ("regexp_extract", F::udf(SparkRegexpExtract::new())),
         ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
         ("regexp_instr", F::custom(regexp_instr)),
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::var_arg(replace)),
+        ("replace", F::custom(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
-        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
+        ("rtrim", F::custom(rtrim)),
         ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
@@ -505,7 +790,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
-        ("trim", F::var_arg(rev_args(expr_fn::trim))),
+        ("trim", F::custom(trim)),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
