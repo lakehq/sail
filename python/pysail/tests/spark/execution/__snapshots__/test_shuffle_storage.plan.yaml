@@ -61,6 +61,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
@@ -152,6 +155,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -162,6 +168,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -231,6 +240,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:

@@ -43,6 +43,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     Barrier
       DeltaWrite: options=DeltaWriteNodeOptions { path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
@@ -121,6 +124,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -131,6 +137,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -200,6 +209,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:
@@ -409,6 +421,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     Barrier
       IcebergWrite: options=IcebergWriteNodeOptions { path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
@@ -487,6 +502,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -497,6 +515,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -566,6 +587,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:
@@ -789,6 +813,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     RowLevelWrite: command=Delete, mode=CopyOnWrite, target=distributed_iceberg_commit, format=iceberg, condition=id < 10
       Projection: id, __sail_file_path, __sail_operation_type
@@ -870,6 +897,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -880,6 +910,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -949,6 +982,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:
@@ -1276,6 +1312,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     RowLevelWrite: command=Merge, mode=CopyOnWrite, target=distributed_iceberg_commit, format=iceberg, matched=1, not_matched=0, not_matched_by_source=0
       Projection: id, __sail_file_path, __sail_file_row_index, __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata, __sail_operation_type, __sail_merge_source_metric
@@ -1439,6 +1478,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -1449,6 +1491,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -1518,6 +1563,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:
@@ -1965,6 +2013,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=distributed_iceberg_commit, format=iceberg, condition=id < 10
       Projection: id, __sail_file_path, __sail_operation_type
@@ -2055,6 +2106,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2065,6 +2119,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -2134,6 +2191,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:
@@ -2448,6 +2508,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     RowLevelWrite: command=Delete, mode=CopyOnWrite, target=distributed_iceberg_commit, format=iceberg, condition=id >= 0
       Projection: id, __sail_file_path, __sail_operation_type
@@ -2529,6 +2592,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after simplify_conditionals:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2539,6 +2605,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
@@ -2608,6 +2677,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:

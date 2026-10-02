@@ -13,6 +13,10 @@ pub use status::*;
 
 use crate::datasource::BucketBy;
 
+pub const VIEW_PREFIX: &str = "view.";
+
+pub const VIEW_SQL_CONFIG_PREFIX: &str = "view.sqlConfig.";
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableConstraint {
     Unique {

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion_common::TableReference;
@@ -10,7 +11,7 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::TemporaryViewSource;
+use sail_common_datafusion::catalog::{TemporaryViewSource, VIEW_SQL_CONFIG_PREFIX};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -71,6 +72,21 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
+        let mut properties = properties.into_iter().collect::<BTreeMap<_, _>>();
+        // FIXME: Capture all eligible creation-time SQL settings, as Spark does.
+        // For now, capture only the settings used by conditional coercion.
+        properties.insert(
+            format!("{VIEW_SQL_CONFIG_PREFIX}spark.sql.ansi.enabled"),
+            self.config.ansi_mode.to_string(),
+        );
+        properties.insert(
+            format!(
+                "{VIEW_SQL_CONFIG_PREFIX}spark.sql.legacy.decimal.retainFractionDigitsOnTruncate"
+            ),
+            self.config
+                .legacy_decimal_retain_fraction_digits
+                .to_string(),
+        );
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {
@@ -79,7 +95,7 @@ impl PlanResolver<'_> {
                 comment,
                 if_not_exists,
                 replace,
-                properties,
+                properties: properties.into_iter().collect(),
             },
         };
         self.resolve_catalog_command(command)

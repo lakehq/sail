@@ -7,15 +7,16 @@ Feature: Sort reference resolution
       GROUP BY a
       <sort> a + sum(b) DESC
       """
-    Then query result ordered
+    Then <result_check>
       | a  | total |
       | -2 | 35    |
       | -1 | 10    |
 
     Examples:
-      | sort     |
-      | ORDER BY |
-      | SORT BY  |
+      # SORT BY orders each partition, so collection order is unspecified.
+      | sort     | result_check         |
+      | ORDER BY | query result ordered |
+      | SORT BY  | query result         |
 
   Scenario: Sort ordinals refer to visible output alongside a recovered key
     When query
