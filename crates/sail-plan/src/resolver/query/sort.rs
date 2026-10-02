@@ -35,13 +35,15 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
+        let output_schema = Arc::clone(input.schema());
+        let (input, expressions) =
+            self.rewrite_distributed_sequence_expressions(input, expressions, state)?;
         let sorts = expressions
             .into_iter()
             .zip(order)
             .map(|(expr, sort)| Self::sort_with_options(expr, sort.direction, sort.null_ordering))
             .collect();
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
-        let output_schema = Arc::clone(input.schema());
         let plan = if is_global {
             // Visible sort orders need no recovery, so leave their rewrite to the builder.
             // Rewriting scans the input projection for each sort order.

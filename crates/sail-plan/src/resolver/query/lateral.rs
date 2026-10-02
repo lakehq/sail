@@ -12,6 +12,7 @@ use crate::function::get_outer_built_in_generator_functions;
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
@@ -129,6 +130,8 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;

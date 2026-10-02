@@ -5,6 +5,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::{Distinct, Expr, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_logical_plan::distributed_sequence_id::DistributedSequenceIdNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
@@ -152,6 +153,7 @@ impl MissingInputBoundaries {
                     || node.is::<SortWithinPartitionsNode>()
                     || node.is::<RequiredSortNode>()
                     || node.is::<MonotonicIdNode>()
+                    || node.is::<DistributedSequenceIdNode>()
                     || node.is::<SparkPartitionIdNode>()
             }
             // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing

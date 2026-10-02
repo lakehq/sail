@@ -4,6 +4,8 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.connect.column import Column
+from pyspark.sql.connect.expressions import DistributedSequenceID
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server
@@ -88,3 +90,11 @@ def test_repartition_collect_with_storage_shuffle(spark):
         Row(group=1, count=10),
         Row(group=2, count=10),
     ]
+
+
+def test_distributed_sequence_id_with_storage_shuffle(spark):
+    source = spark.range(0, 4097, 1, 4).filter("id % 3 != 1")
+    indexed = source.select("*", Column(DistributedSequenceID()).alias("index"))
+    rows = indexed.orderBy("index").collect()
+    expected = [(value, index) for index, value in enumerate(i for i in range(4097) if i % 3 != 1)]
+    assert [tuple(row) for row in rows] == expected
