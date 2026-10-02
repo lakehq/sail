@@ -71,13 +71,21 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         };
+        // FIXME: Capture all eligible creation-time SQL settings, as Spark does.
+        // For now, preserve only the settings used by conditional coercion.
         properties.retain(|(key, _)| !key.starts_with(VIEW_SQL_CONFIG_PREFIX));
-        properties.extend(
+        properties.push((
+            format!("{VIEW_SQL_CONFIG_PREFIX}spark.sql.ansi.enabled"),
+            self.config.ansi_mode.to_string(),
+        ));
+        properties.push((
+            format!(
+                "{VIEW_SQL_CONFIG_PREFIX}spark.sql.legacy.decimal.retainFractionDigitsOnTruncate"
+            ),
             self.config
-                .view_sql_configs()
-                .into_iter()
-                .map(|(key, value)| (format!("{VIEW_SQL_CONFIG_PREFIX}{key}"), value)),
-        );
+                .legacy_decimal_retain_fraction_digits
+                .to_string(),
+        ));
         let command = CatalogCommand::CreateView {
             view: view.into(),
             options: CreateViewOptions {

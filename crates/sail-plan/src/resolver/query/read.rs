@@ -227,6 +227,8 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    // FIXME: Capture and restore the remaining creation-time SQL configuration;
+    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
@@ -241,14 +243,25 @@ impl PlanResolver<'_> {
         let config = if self.config.legacy_use_current_configs_for_view {
             Arc::clone(&self.config)
         } else {
-            let configs = properties
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
-                        .map(|key| (key.to_string(), value))
+            let mut config = self.config.as_ref().clone();
+            // Older views without a captured ANSI setting use non-ANSI coercion.
+            config.ansi_mode = properties
+                .iter()
+                .find(|(key, _)| {
+                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX) == Some("spark.sql.ansi.enabled")
                 })
-                .collect();
-            Arc::new(self.config.with_view_sql_configs(configs)?)
+                .and_then(|(_, value)| value.parse::<bool>().ok())
+                .unwrap_or(false);
+            // Older views retain the existing nonlegacy decimal rule.
+            config.legacy_decimal_retain_fraction_digits = properties
+                .iter()
+                .find(|(key, _)| {
+                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
+                        == Some("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
+                })
+                .and_then(|(_, value)| value.parse::<bool>().ok())
+                .unwrap_or(false);
+            Arc::new(config)
         };
         let resolver = Self::new(self.ctx, config);
         let plan = match spec_plan {

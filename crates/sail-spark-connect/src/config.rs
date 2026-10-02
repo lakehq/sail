@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use sail_plan::config::PlanConfig;
+use sail_plan::config::{
+    DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
+};
+use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2,
+    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SparkConfigKey,
 };
 use crate::spark::connect;
 
@@ -217,38 +221,253 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = PlanConfig::from_sql_config(|key| config.get_option(key))?;
-        // Match Spark CapturesConfig: capture modified, modifiable settings except
-        // optimizer/execution settings, with the disableHints exception.
-        const DENIED_PREFIXES: &[&str] = &[
-            "spark.sql.view.maxNestedViewDepth",
-            "spark.sql.optimizer.",
-            "spark.sql.codegen.",
-            "spark.sql.execution.",
-            "spark.sql.shuffle.",
-            "spark.sql.adaptive.",
-            "spark.sql.hive.convertMetastoreParquet",
-            "spark.sql.hive.convertMetastoreOrc",
-            "spark.sql.hive.convertInsertingPartitionedTable",
-            "spark.sql.hive.convertInsertingUnpartitionedTable",
-            "spark.sql.hive.convertMetastoreCtas",
-            "spark.sql.maven.additionalRemoteRepositories",
-        ];
-        output.view_sql_configs = config
-            .config
-            .iter()
-            .filter(|(key, _)| {
-                config.is_modifiable(key)
-                    && (key.as_str() == "spark.sql.optimizer.disableHints"
-                        || (!DENIED_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
-                            && !matches!(
-                                key.as_str(),
-                                "spark.sql.analyzer.singlePassResolver.enabledTentatively"
-                                    | "spark.sql.analyzer.singlePassResolver.dualRunWithLegacy"
-                            )))
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
+        let mut output = PlanConfig::new()?;
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
+            .map(|x| x.to_string())
+        {
+            output.session_timezone = Arc::from(value);
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.arrow_use_large_var_types = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_SOURCES_DEFAULT)
+            .map(|x| x.to_string())
+        {
+            output.default_table_file_format = value;
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_WAREHOUSE_DIR) {
+            output.default_warehouse_directory = value.to_string();
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_TIMESTAMP_TYPE) {
+            let value = value.to_uppercase().trim().to_string();
+            if value == "TIMESTAMP_NTZ" {
+                output.default_timestamp_type = DefaultTimestampType::TimestampNtz;
+            } else if value.is_empty() || value == "TIMESTAMP_LTZ" {
+                output.default_timestamp_type = DefaultTimestampType::TimestampLtz;
+            } else {
+                return Err(SparkError::invalid(format!(
+                    "invalid timestamp type: {value}"
+                )));
+            }
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_ANSI_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.ansi_mode = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_DECIMAL_RETAIN_FRACTION_DIGITS_ON_TRUNCATE)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_decimal_retain_fraction_digits = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_USE_CURRENT_CONFIGS_FOR_VIEW)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_use_current_configs_for_view = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_type_coercion_datetime_to_string = value;
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {
+            output.store_assignment_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "ANSI" => StoreAssignmentPolicy::Ansi,
+                "STRICT" => StoreAssignmentPolicy::Strict,
+                "LEGACY" => StoreAssignmentPolicy::Legacy,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid store assignment policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
+            output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "EXCEPTION" => MapKeyDedupPolicy::Exception,
+                "LAST_WIN" => MapKeyDedupPolicy::LastWin,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid map key dedup policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_CROSS_JOIN_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.cross_join_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_CASE_SENSITIVE)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.case_sensitive = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_PIVOT_MAX_VALUES)
+            .map(|x| x.trim().parse::<usize>())
+            .transpose()?
+        {
+            output.pivot_max_values = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.tvf_allow_multiple_table_arguments = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_ALLOW_PARAMETERLESS_COUNT)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_allow_parameterless_count = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_SIZE_OF_NULL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_size_of_null = value;
+        }
+
+        output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
+
+        Ok(output)
+    }
+}
+
+impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
+    type Error = SparkError;
+
+    fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
+        let mut output = PySparkUdfConfig::default();
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
+            .map(|x| x.to_string())
+        {
+            output.session_timezone = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.pandas_grouped_map_assign_columns_by_name = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.pandas_convert_to_arrow_array_safely = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)
+            .map(|x| x.trim().parse::<i128>())
+            .transpose()?
+        {
+            output.arrow_max_records_per_batch = if value <= 0 || value > usize::MAX as i128 {
+                usize::MAX
+            } else {
+                value as usize
+            };
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.arrow_use_large_var_types = value;
+        }
+
+        if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
+            )
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_conversion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED,
+            )
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udtf_pandas_conversion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_int_to_decimal_coercion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_PREFER_INT_EXTENSION_DTYPE,
+            )
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_prefer_int_extension_dtype = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.binary_as_bytes = value;
+        }
+
         Ok(output)
     }
 }
