@@ -38,3 +38,54 @@ Feature: bitmap_bit_position output schema
         root
          |-- result: long (nullable = true)
         """
+
+  Rule: 64-bit arithmetic
+
+    @sail-bug
+    Scenario: negating the smallest 32-bit integer does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(CAST(-2147483648 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 0 |
+
+    Scenario: an input beyond the 32-bit range does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(3000000000) AS result
+        """
+      Then query result
+        | result |
+        | 24063  |
+
+    Scenario: a negative input beyond the 32-bit range does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(-3000000000) AS result
+        """
+      Then query result
+        | result |
+        | 24064  |
+
+  @function(nullability)
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: bitmap_bit_position loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT bitmap_bit_position(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = <nullable>)
+        """
+
+      Examples:
+        | case             | input             | nullable |
+        | no cast          | 1                 | false    |
+        | DOUBLE -> BIGINT | CAST(1 AS DOUBLE) | true     |

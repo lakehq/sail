@@ -116,3 +116,62 @@ Feature: CTE (Common Table Expressions) support
       Then query result
         | a_val | b_val |
         | 3     | 2     |
+
+  Rule: Recursive CTE
+
+    @sail-bug
+    Scenario: recursive CTE counting to five
+      When query
+        """
+        WITH RECURSIVE r(n) AS (
+          SELECT 1
+          UNION ALL
+          SELECT n + 1 FROM r WHERE n < 5
+        )
+        SELECT sum(n) AS s FROM r
+        """
+      Then query result
+        | s  |
+        | 15 |
+
+    @sail-bug
+    Scenario: recursive CTE walking a hierarchy with a column list
+      When query
+        """
+        WITH RECURSIVE
+          base AS (
+            SELECT id AS node, CASE WHEN pmod(id, 8) = 0 THEN id ELSE id - 1 END AS parent
+            FROM range(0, 1000)
+          ),
+          w(node, cur) AS (
+            SELECT node, parent FROM base
+            UNION ALL
+            SELECT w.node, b.parent FROM w JOIN base b ON w.cur = b.node WHERE b.node <> b.parent
+          )
+        SELECT count(*) AS n, sum(root) AS s
+        FROM (SELECT node, min(cur) AS root FROM w GROUP BY node)
+        """
+      Then query result
+        | n    | s      |
+        | 1000 | 496000 |
+
+    @sail-bug
+    Scenario: recursive CTE walking a hierarchy without a column list
+      When query
+        """
+        WITH RECURSIVE
+          base AS (
+            SELECT id AS node, CASE WHEN pmod(id, 8) = 0 THEN id ELSE id - 1 END AS parent
+            FROM range(0, 1000)
+          ),
+          w AS (
+            SELECT node, parent AS cur FROM base
+            UNION ALL
+            SELECT w.node, b.parent AS cur FROM w JOIN base b ON w.cur = b.node WHERE b.node <> b.parent
+          )
+        SELECT count(*) AS n, sum(root) AS s
+        FROM (SELECT node, min(cur) AS root FROM w GROUP BY node)
+        """
+      Then query result
+        | n    | s      |
+        | 1000 | 496000 |

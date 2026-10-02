@@ -193,3 +193,68 @@ Feature: concat_ws function
       Then query result
         | r |
         | a |
+
+  Rule: Basic scalar usage
+
+    Scenario: space separator
+      When query
+        """
+        SELECT concat_ws(' ', 'Spark', 'SQL') AS result
+        """
+      Then query result
+        | result    |
+        | Spark SQL |
+
+    Scenario: null arguments are skipped
+      When query
+        """
+        SELECT concat_ws('/', 'foo', NULL, 'bar') AS result
+        """
+      Then query result
+        | result  |
+        | foo/bar |
+
+    Scenario: all null arguments returns empty string
+      When query
+        """
+        SELECT concat_ws(',', CAST(NULL AS STRING), CAST(NULL AS STRING)) AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+  Rule: Array arguments
+
+    Scenario: null array is skipped
+      When query
+        """
+        SELECT concat_ws(',', 'x', CAST(NULL AS ARRAY<STRING>), 'y') AS result
+        """
+      Then query result
+        | result |
+        | x,y    |
+
+  Rule: Column expressions
+
+    Scenario: concat_ws on columns
+      When query
+        """
+        SELECT concat_ws('-', a, b) AS result
+        FROM VALUES ('hello', 'world'), ('foo', 'bar') AS t(a, b)
+        """
+      Then query result
+        | result      |
+        | hello-world |
+        | foo-bar     |
+
+    Scenario: concat_ws with null in columns
+      When query
+        """
+        SELECT concat_ws(',', a, b) AS result
+        FROM VALUES ('a', 'b'), ('c', CAST(NULL AS STRING)), (CAST(NULL AS STRING), 'd') AS t(a, b)
+        """
+      Then query result
+        | result |
+        | a,b    |
+        | c      |
+        | d      |

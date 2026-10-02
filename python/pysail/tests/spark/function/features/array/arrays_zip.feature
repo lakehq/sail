@@ -20,6 +20,31 @@ Feature: arrays_zip comprehensive tests
         | arrays_zip self-zip same column          | a, a                                                           | FROM VALUES (array(1,2,3)) AS t(a) | [{1, 1}, {2, 2}, {3, 3}]                                              |
         | arrays_zip zero args returns empty array |                                                                |                                    | []                                                                    |
 
+    Scenario: arrays_zip three arrays different lengths pads NULL
+      When query
+        """
+        SELECT arrays_zip(array(1,2,3), array(2,4,6), array(3,6)) AS result
+        """
+      Then query result
+        | result                              |
+        | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
+
+    @sail-bug
+    Scenario: arrays_zip schema has containsNull false and nullable true fields
+      When query
+        """
+        SELECT arrays_zip(array(1,2,3), array(2,4,6), array(3,6)) AS zipped
+        """
+      Then query schema
+        """
+        root
+         |-- zipped: array (nullable = false)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- 0: integer (nullable = true)
+         |    |    |-- 1: integer (nullable = true)
+         |    |    |-- 2: integer (nullable = true)
+        """
+
   Rule: Different array lengths
 
     Scenario Outline: Different lengths: <case>
@@ -131,6 +156,15 @@ Feature: arrays_zip comprehensive tests
         | result           |
         | [{1, x}, {2, y}] |
         | NULL             |
+
+    Scenario: arrays_zip NULL elements in both arrays at different positions
+      When query
+        """
+        SELECT arrays_zip(array(1, 2, CAST(NULL AS BIGINT)), array('a', CAST(NULL AS STRING), 'c')) AS result
+        """
+      Then query result
+        | result                        |
+        | [{1, a}, {2, NULL}, {NULL, c}] |
 
   Rule: Columnar multi-row paths (flatten build)
     # Multi-row FROM VALUES columns exercise the flatten kernel's per-row offset

@@ -303,3 +303,46 @@ Feature: next_day comprehensive tests
         root
          |-- result: date (nullable = true)
         """
+
+  # Spark 4.2.0 DateTimeUtils.getNextDateForDayOfWeek: plain Int day arithmetic, so the result may
+  # step past 9999-12-31 or out of year 0 like any other date.
+  Rule: next_day at the edges of the date range
+
+    Scenario Outline: next_day edge: <case>
+      When query
+        """
+        SELECT next_day(<date>, '<day>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | date              | day | result       |
+        | past the maximum literal date     | DATE '9999-12-31' | MO  | +10000-01-03 |
+        | from year 0 into year 1           | DATE '0000-12-31' | SU  | 0001-01-07   |
+        | onto a leap day                   | DATE '2024-02-26' | TH  | 2024-02-29   |
+        | from a leap day                   | DATE '2024-02-29' | TH  | 2024-03-07   |
+        | across the Julian cutover gap     | DATE '1582-10-04' | MO  | 1582-10-11   |
+
+    Scenario: next_day reads each row's date at the edges of the range
+      When query
+        """
+        SELECT next_day(d, 'FR') AS result FROM VALUES (1, DATE '9999-12-31'), (2, DATE '2024-02-28'), (3, DATE '0001-01-01') AS t(i, d) ORDER BY i
+        """
+      Then query result ordered
+        | result       |
+        | +10000-01-07 |
+        | 2024-03-01   |
+        | 0001-01-05   |
+
+    @sail-bug
+    Scenario: next_day of an invalid date string is NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT next_day('2024-02-30', 'TH') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

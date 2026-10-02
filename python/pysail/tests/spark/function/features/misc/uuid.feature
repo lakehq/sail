@@ -14,3 +14,15 @@ Feature: uuid output schema
         root
          |-- result: string (nullable = false)
         """
+
+  Rule: An optional literal seed is accepted
+
+    @sail-bug
+    Scenario: uuid accepts an integer seed
+      When query
+        """
+        SELECT length(uuid(1)) AS result
+        """
+      Then query result
+        | result |
+        | 36     |

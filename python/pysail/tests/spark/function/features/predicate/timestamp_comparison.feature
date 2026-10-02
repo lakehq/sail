@@ -15,6 +15,44 @@ Feature: Timestamp and string predicate coercion
         | after | dynamic_match | precise_match |
         | false | true          | true          |
 
+    @sail-bug
+    Scenario: Timestamp IN compares against strings without a typed-literal error
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            IN ('2024-05-01 12:00:00.123456789') AS matched,
+          TIMESTAMP '2024-05-01 12:00:00'
+            IN ('2024-05-01 12:00:00', 1) AS mixed_matched
+        """
+      Then query result
+        | matched | mixed_matched |
+        | false   | true          |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query error UNSUPPORTED_TYPED_LITERAL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456'
+          IN ('2024-05-01 12:00:00.123456789') AS matched
+        """
+      Then query result
+        | matched |
+        | true    |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query error UNSUPPORTED_TYPED_LITERAL
+
     Scenario: Timestamp IN uses the ANSI common type
       Given config spark.sql.ansi.enabled = false
       When query

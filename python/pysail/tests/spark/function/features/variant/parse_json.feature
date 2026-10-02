@@ -225,3 +225,45 @@ Feature: parse_json (strict version; errors on invalid JSON)
         root
          |-- result: variant (nullable = false)
         """
+
+  Rule: typeof of a variant reports `variant`, not the underlying struct
+
+    @sail-bug
+    Scenario: typeof of a variant object
+      When query
+        """
+        SELECT typeof(parse_json('{"a": 1}')) AS result
+        """
+      Then query result
+        | result  |
+        | variant |
+
+    @sail-bug
+    Scenario: typeof of a variant array
+      When query
+        """
+        SELECT typeof(parse_json('[1, 2, 3]')) AS result
+        """
+      Then query result
+        | result  |
+        | variant |
+
+    @sail-bug
+    Scenario: typeof of a scalar variant
+      When query
+        """
+        SELECT typeof(parse_json('5')) AS result
+        """
+      Then query result
+        | result  |
+        | variant |
+
+    @sail-bug
+    Scenario: typeof of a SQL NULL variant
+      When query
+        """
+        SELECT typeof(CAST(NULL AS VARIANT)) AS result
+        """
+      Then query result
+        | result  |
+        | variant |

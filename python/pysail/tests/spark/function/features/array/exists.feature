@@ -21,6 +21,60 @@ Feature: exists higher-order function
         | single element array predicate false                | array(5)       | x > 10 | false  |
         | empty array always returns false                    | array()        | x > 0  | false  |
 
+    Scenario: predicate matches at least one element returns true
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> x > 2) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: predicate matches no elements returns false
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> x > 10) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: predicate matches all elements returns true
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: single element array predicate true
+      When query
+        """
+        SELECT exists(array(5), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: single element array predicate false
+      When query
+        """
+        SELECT exists(array(5), x -> x > 10) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: empty array always returns false
+      When query
+        """
+        SELECT exists(array(), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
   Rule: NULL array input
 
     Scenario: typed NULL array input returns NULL
@@ -61,6 +115,78 @@ Feature: exists higher-order function
         | all null array with IS NULL predicate returns true                           | array(null, null)        | x IS NULL     | true   |
         | single typed null element matched by IS NULL                                 | array(CAST(NULL AS INT)) | x IS NULL     | true   |
 
+    Scenario: null in array when predicate returns false for null and true exists
+      When query
+        """
+        SELECT exists(array(1, null, 3), x -> x > 2) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: null in array when predicate returns true for some non-null element
+      When query
+        """
+        SELECT exists(array(1, null, 3), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: null in array when no non-null element matches and null makes predicate null
+      When query
+        """
+        SELECT exists(array(1, null, 3), x -> x > 5) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: null element matched by IS NULL predicate
+      When query
+        """
+        SELECT exists(array(1, null, 3), x -> x IS NULL) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: IS NOT NULL predicate still true when non-null elements exist
+      When query
+        """
+        SELECT exists(array(1, null, 3), x -> x IS NOT NULL) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: all null array with numeric predicate returns NULL
+      When query
+        """
+        SELECT exists(array(null, null), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: all null array with IS NULL predicate returns true
+      When query
+        """
+        SELECT exists(array(null, null), x -> x IS NULL) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: single typed null element matched by IS NULL
+      When query
+        """
+        SELECT exists(array(CAST(NULL AS INT)), x -> x IS NULL) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: Predicate returning NULL
 
     Scenario Outline: Predicate returning NULL: <case>
@@ -77,6 +203,33 @@ Feature: exists higher-order function
         | predicate always returns NULL results in NULL                              | CAST(NULL AS BOOLEAN)                                     | NULL   |
         | predicate returns true for some elements and NULL for others returns true  | CASE WHEN x = 2 THEN true ELSE CAST(NULL AS BOOLEAN) END  | true   |
         | predicate returns false for some elements and NULL for others returns NULL | CASE WHEN x = 2 THEN false ELSE CAST(NULL AS BOOLEAN) END | NULL   |
+
+    Scenario: predicate always returns NULL results in NULL
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: predicate returns true for some elements and NULL for others returns true
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> CASE WHEN x = 2 THEN true ELSE CAST(NULL AS BOOLEAN) END) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: predicate returns false for some elements and NULL for others returns NULL
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> CASE WHEN x = 2 THEN false ELSE CAST(NULL AS BOOLEAN) END) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Lambda only accepts one parameter
 
@@ -108,6 +261,69 @@ Feature: exists higher-order function
         | boolean array with true element | array(false, false, true)  | x         | true   |
         | boolean array all false         | array(false, false, false) | x         | false  |
 
+    Scenario: long array
+      When query
+        """
+        SELECT exists(array(1L, 2L, 3L), x -> x > 2L) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: double array
+      When query
+        """
+        SELECT exists(array(1.0, 2.0, 3.0), x -> x > 2.5) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: decimal array
+      When query
+        """
+        SELECT exists(array(1.5BD, 2.5BD, 3.5BD), x -> x > 3.0BD) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: string array match found
+      When query
+        """
+        SELECT exists(array('a', 'b', 'c'), x -> x = 'b') AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: string array no match
+      When query
+        """
+        SELECT exists(array('a', 'b', 'c'), x -> x = 'z') AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: boolean array with true element
+      When query
+        """
+        SELECT exists(array(false, false, true), x -> x) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: boolean array all false
+      When query
+        """
+        SELECT exists(array(false, false, false), x -> x) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
   Rule: Complex predicates
 
     Scenario Outline: Complex predicate: <case>
@@ -126,6 +342,51 @@ Feature: exists higher-order function
         | struct array field access          | array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)) | s -> s.a > 2               | true   |
         | struct array field access no match | array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)) | s -> s.a > 10              | false  |
         | nested array with inner exists     | array(array(1,2), array(3,4))                                     | x -> exists(x, y -> y > 3) | true   |
+
+    Scenario: AND predicate
+      When query
+        """
+        SELECT exists(array(1, 2, 3, 4, 5), x -> x > 2 AND x < 5) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: OR predicate
+      When query
+        """
+        SELECT exists(array(1, 2, 3), x -> x < 0 OR x > 2) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: struct array field access
+      When query
+        """
+        SELECT exists(array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)), s -> s.a > 2) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: struct array field access no match
+      When query
+        """
+        SELECT exists(array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)), s -> s.a > 10) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: nested array with inner exists
+      When query
+        """
+        SELECT exists(array(array(1,2), array(3,4)), x -> exists(x, y -> y > 3)) AS result
+        """
+      Then query result
+        | result |
+        | true   |
 
   Rule: Outer column capture
 
@@ -326,3 +587,211 @@ Feature: exists higher-order function
         root
          |-- result: boolean (nullable = true)
         """
+
+    Scenario: a non-nullable array with a null element yields a nullable boolean
+      When query
+        """
+        SELECT exists(array(1, CAST(NULL AS INT), 3), x -> x > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: an untyped NULL predicate yields a nullable boolean
+      When query
+        """
+        SELECT exists(array(1, 2), NULL) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral) so the predicate — and thus the result — is nullable.
+    # Sail's expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports here. The divergence is schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    Scenario: a Cast.forceNullable predicate body yields a nullable boolean
+      When query
+        """
+        SELECT exists(array(1.5, 2.5), x -> CAST(x AS INT) > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    # An unaliased wrapped-lambda call is named after the full lambda, rendering
+    # each hidden parameter as a nameless `namedlambdavariable()`, matching Spark.
+    @sail-bug
+    Scenario: the wrapped-lambda column name includes the hidden parameter
+      When query
+        """
+        SELECT exists(array(1, 2), true)
+        """
+      Then query schema
+        """
+        root
+         |-- exists(array(1, 2), lambdafunction(true, namedlambdavariable())): boolean (nullable = false)
+        """
+
+  Rule: Non-lambda expression in place of the lambda
+
+    @sail-bug
+    Scenario Outline: Non-lambda predicate: <case>
+      When query
+        """
+        SELECT exists(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                        | args                               | result |
+        | a constant true predicate                   | array(1, 2), true                  | true   |
+        | a constant false predicate                  | array(1, 2), false                 | false  |
+        | a constant NULL predicate                   | array(1, 2), CAST(NULL AS BOOLEAN) | NULL   |
+        | the empty array wins over a constant true   | array(), true                      | false  |
+        | a NULL array wins over a constant true      | CAST(NULL AS ARRAY<INT>), true     | NULL   |
+
+    @sail-bug
+    Scenario: a predicate that only references an outer column
+      When query
+        """
+        SELECT exists(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: a constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT exists(c, true) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+        | NULL   |
+
+    @sail-bug
+    Scenario: a non-boolean constant is still a type error
+      When query
+        """
+        SELECT exists(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    @sail-bug
+    Scenario: a subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT exists(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    @sail-bug
+    Scenario: a subquery inside a lambda body is rejected
+      When query
+        """
+        SELECT exists(array(1, 2), x -> (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: Untyped NULL body
+
+    @sail-bug
+    Scenario: an untyped NULL lambda body
+      When query
+        """
+        SELECT exists(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: an untyped NULL in place of the lambda
+      When query
+        """
+        SELECT exists(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: The predicate type is validated at analysis time even in a dead branch
+
+    @sail-bug
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, exists(array(1), 1), false) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    @sail-bug
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT exists(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    @sail-bug
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT exists(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    @sail-bug
+    Scenario: exists with a seeded rand short-circuits per row
+      When query
+        """
+        SELECT exists(c, rand(42) > 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+
+  Rule: A subquery in a value argument is rejected
+
+    @sail-bug
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT exists((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: A NULL-typed predicate with a side effect is erased, not evaluated
+
+    # Spark's type coercion replaces a lambda body whose type is NULL (here
+    # `assert_true`, whose type is NullType) with a constant NULL of the expected
+    # boolean type, so the body never runs. Sail keeps and evaluates the body, so
+    # the side effect still raises. Pure `x -> NULL` bodies agree; only effectful
+    # NULL-typed bodies diverge.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
+      When query
+        """
+        SELECT exists(array(1, 0), x -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

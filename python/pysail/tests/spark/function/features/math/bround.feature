@@ -246,6 +246,24 @@ Feature: bround comprehensive tests
         | bround takes argument 2 from a column holding two different values | 0  |
         | bround takes argument 2 from a column                              | -1 |
 
+    @sail-bug
+    @function(columnargs)
+    Scenario: bround takes argument 2 from a column holding two different values
+      When query
+        """
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, 0) AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
+
+    @sail-bug
+    @function(columnargs)
+    Scenario: bround takes argument 2 from a column
+      When query
+        """
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
+
   @function(nullability)
   Rule: Output schema
 
@@ -351,3 +369,285 @@ Feature: bround comprehensive tests
         root
          |-- result: short (nullable = true)
         """
+
+  Rule: bround rounds half to even on DECIMAL too, not only on DOUBLE
+
+    # A bare `2.5` is a DECIMAL in Spark, and this is where bround earns its name. Sail rounds
+    # half UP on the decimal path -- that is `round`, not `bround` -- and only gets the DOUBLE path
+    # right, which is why the scenarios above (all of them CAST to DOUBLE) never caught it.
+
+    # Sail returns 3.0.
+    @sail-bug
+    Scenario: bround DECIMAL 2.5 rounds down to even
+      When query
+        """
+        SELECT bround(2.5) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    # Sail returns 1.0.
+    @sail-bug
+    Scenario: bround DECIMAL 0.5 rounds down to even
+      When query
+        """
+        SELECT bround(0.5) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    # Sail returns -3.0.
+    @sail-bug
+    Scenario: bround DECIMAL -2.5 rounds up to even
+      When query
+        """
+        SELECT bround(-2.5) AS result
+        """
+      Then query result
+        | result |
+        | -2     |
+
+  Rule: the result keeps the type of the value
+
+    # Spark's bround returns the input's type; Sail casts everything to DOUBLE. This is the root of
+    # most of the value divergences above: the number is right, the type is not.
+
+    # Sail returns double.
+    @sail-bug
+    Scenario: bround of a DECIMAL returns a DECIMAL
+      When query
+        """
+        SELECT bround(CAST(2.5 AS DECIMAL(10,2)), 1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,1) (nullable = true)
+        """
+
+    # Sail errors: Assertion failed: result_data_type == *expected_type.
+    @sail-bug
+    Scenario: bround of a FLOAT returns a FLOAT
+      When query
+        """
+        SELECT bround(CAST(2.5 AS FLOAT)) AS result
+        """
+      Then query result
+        | result |
+        | 2.0    |
+
+  Rule: bround accepts every numeric type, a string, and NULL
+
+    # Sail errors: Unsupported Data Type: Spark `spark_bround` function expects Float64, Float32...
+
+    @sail-bug
+    Scenario: bround of a TINYINT
+      When query
+        """
+        SELECT bround(CAST(25 AS TINYINT), -1) AS result
+        """
+      Then query result
+        | result |
+        | 20     |
+
+    @sail-bug
+    Scenario: bround of a SMALLINT
+      When query
+        """
+        SELECT bround(CAST(25 AS SMALLINT), -1) AS result
+        """
+      Then query result
+        | result |
+        | 20     |
+
+    @sail-bug
+    Scenario: bround of a string casts it to a double
+      When query
+        """
+        SELECT bround('2.5') AS result
+        """
+      Then query result
+        | result |
+        | 2.0    |
+
+    @sail-bug
+    Scenario: bround of an untyped NULL is NULL
+      When query
+        """
+        SELECT bround(NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: bround with a NULL scale is NULL
+      When query
+        """
+        SELECT bround(1.5, CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    # The columnar kernel, not the constant-folded scalar path. Sail errors:
+    # Unsupported Data Type: Spark `spark_bround` function expects vectorized Decimal...
+    @sail-bug
+    Scenario: bround of a DECIMAL column
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (1, 2.5), (2, 3.5), (3, -2.5), (4, CAST(NULL AS DECIMAL(3,1))) AS t(i, v) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | 2      |
+        | 4      |
+        | -2     |
+        | NULL   |
+
+  Rule: rounding that overflows the type errors under ANSI, and wraps otherwise
+
+    # Sail neither errors nor wraps: it widens to a double and returns 130.0.
+    @sail-bug
+    Scenario: bround overflowing a TINYINT errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bround(CAST(127 AS TINYINT), -1) AS result
+        """
+      Then query error (?i)overflow
+
+    @sail-bug
+    Scenario: bround overflowing a TINYINT wraps under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bround(CAST(127 AS TINYINT), -1) AS result
+        """
+      Then query result
+        | result |
+        | -126   |
+
+  Rule: the value may come from a column
+
+    # The literal scenarios are constant-folded and never reach the columnar kernel, which is in
+    # worse shape than the scalar one: it rejects DECIMAL and asserts on FLOAT.
+
+    # Sail errors: Assertion failed: result_data_type == *expected_type.
+    @sail-bug
+    Scenario: bround of a FLOAT column keeps the FLOAT type
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (1, CAST(2.5 AS FLOAT)), (2, CAST(3.5 AS FLOAT)) AS t(i, v) ORDER BY i
+        """
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = true)
+        """
+      Then query result ordered
+        | result |
+        | 2.0    |
+        | 4.0    |
+
+    # Sail errors: Unsupported Data Type: Spark `spark_bround` function expects Float64, Float32...
+    @sail-bug
+    # Note 25 rounds DOWN to 20: half-even takes 2.5 to the even 2, where `round` would take it to 3.
+    Scenario: bround of a TINYINT column
+      When query
+        """
+        SELECT bround(CAST(v AS TINYINT), -1) AS result FROM VALUES (1, 25), (2, 24) AS t(i, v) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | 20     |
+        | 20     |
+
+    # Sail errors: Unsupported Data Type.
+    @sail-bug
+    Scenario: bround of a string column
+      When query
+        """
+        SELECT bround(v) AS result FROM VALUES (1, '2.5'), (2, '3.5') AS t(i, v) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | 2.0    |
+        | 4.0    |
+
+    # Sail returns 2147483647 without erroring.
+    @sail-bug
+    Scenario: bround of an INT column that overflows errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bround(v, -1) AS result FROM VALUES (1, 2147483647), (2, 1) AS t(i, v) ORDER BY i
+        """
+      Then query error (?i)overflow
+
+  Rule: Decimal literal tie-to-even (half-even, not half-up)
+    # Regression: the Decimal128 scalar fast path used `f64::round()`
+    # (half-away-from-zero) instead of round-half-to-even, so `bround(2.5, 0)`
+    # returned 3.0 instead of 2.0. Bare decimal literals (2.5, 3.5, ...) route
+    # through that path. Result is CAST to DOUBLE to normalise the return type
+    # (Sail's decimal path yields DOUBLE, Spark yields DECIMAL) so the scenario
+    # checks the VALUE, not the type — both render 2.0.
+
+    @sail-bug
+    Scenario: bround decimal literal 2.5 rounds to even
+      When query
+        """
+        SELECT CAST(bround(2.5, 0) AS DOUBLE) AS result
+        """
+      Then query result
+        | result |
+        | 2.0    |
+
+    Scenario: bround decimal literal 3.5 rounds to even
+      When query
+        """
+        SELECT CAST(bround(3.5, 0) AS DOUBLE) AS result
+        """
+      Then query result
+        | result |
+        | 4.0    |
+
+    @sail-bug
+    Scenario: bround decimal literal -2.5 rounds to even
+      When query
+        """
+        SELECT CAST(bround(-2.5, 0) AS DOUBLE) AS result
+        """
+      Then query result
+        | result |
+        | -2.0   |
+
+  Rule: High-scale rounding matches Spark's exact decimal rounding
+    # Spark rounds the EXACT decimal value of the double
+    # (`BigDecimal(d).setScale(scale, HALF_EVEN)`). Naive binary rounding
+    # (`(x * 10^scale).round_ties_even() / 10^scale`) loses the sub-ulp tail of
+    # the product, so a value just past the .5 boundary in exact decimal lands
+    # on .5 in binary and ties the other way — a 1-ulp divergence that appears
+    # from scale 6 up (0 at scale ≤ 5). For scale 6..=22 Sail switches to an
+    # FMA-compensated round that recovers the exact product tail and is
+    # bit-identical to Spark (verified over 200M+ samples).
+
+    Scenario: bround DOUBLE positive value at scale 6
+      When query
+        """
+        SELECT bround(CAST(741.6236645 AS DOUBLE), 6) AS result
+        """
+      Then query result
+        | result     |
+        | 741.623664 |
+
+    Scenario: bround DOUBLE negative value at scale 6
+      When query
+        """
+        SELECT bround(CAST(-6904.8782075 AS DOUBLE), 6) AS result
+        """
+      Then query result
+        | result       |
+        | -6904.878208 |

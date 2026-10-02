@@ -22,6 +22,78 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | decimal input                      | ceil(CAST(1.5 AS DECIMAL(2,1))) | 2      |
         | ceiling alias                      | ceiling(1.5)                    | 2      |
 
+    Scenario: positive integer
+      When query
+        """
+        SELECT ceil(1) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: zero
+      When query
+        """
+        SELECT ceil(0) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: positive double rounds up
+      When query
+        """
+        SELECT ceil(1.1) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: negative double rounds toward zero
+      When query
+        """
+        SELECT ceil(-1.9) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+    Scenario: negative small value
+      When query
+        """
+        SELECT ceil(-0.1) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: float input
+      When query
+        """
+        SELECT ceil(CAST(1.5 AS FLOAT)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: decimal input
+      When query
+        """
+        SELECT ceil(CAST(1.5 AS DECIMAL(2,1))) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceiling alias
+      When query
+        """
+        SELECT ceiling(1.5) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
   Rule: floor basic
 
     Scenario Outline: floor basic: <case>
@@ -40,6 +112,24 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | positive double rounds down           | 1.9  | 1      |
         | negative double rounds away from zero | -1.1 | -2     |
         | floor negative small value            | -0.1 | -1     |
+
+    Scenario: positive double rounds down
+      When query
+        """
+        SELECT floor(1.9) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: negative double rounds away from zero
+      When query
+        """
+        SELECT floor(-1.1) AS result
+        """
+      Then query result
+        | result |
+        | -2     |
 
   Rule: NULL handling (1-arg)
 
@@ -60,6 +150,51 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | typed NULL integer | ceil  | CAST(NULL AS INT)           |
         | typed NULL decimal | ceil  | CAST(NULL AS DECIMAL(10,2)) |
 
+    Scenario: untyped NULL ceil
+      When query
+        """
+        SELECT ceil(NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: untyped NULL floor
+      When query
+        """
+        SELECT floor(NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL double
+      When query
+        """
+        SELECT ceil(CAST(NULL AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL integer
+      When query
+        """
+        SELECT ceil(CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL decimal
+      When query
+        """
+        SELECT ceil(CAST(NULL AS DECIMAL(10,2))) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: NULL handling (2-arg)
 
     Scenario Outline: NULL 2-arg: <case>
@@ -78,6 +213,42 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | typed NULL double with positive scale | ceil(CAST(NULL AS DOUBLE), 2)   |
         | typed NULL double with negative scale | floor(CAST(NULL AS DOUBLE), -1) |
 
+    Scenario: untyped NULL with positive scale
+      When query
+        """
+        SELECT ceil(NULL, 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: untyped NULL with negative scale
+      When query
+        """
+        SELECT ceil(NULL, -1) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL double with positive scale
+      When query
+        """
+        SELECT ceil(CAST(NULL AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL double with negative scale
+      When query
+        """
+        SELECT floor(CAST(NULL AS DOUBLE), -1) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Two-arg with scale equal to input scale (no change)
 
     Scenario Outline: Scale equal: <case>
@@ -94,6 +265,33 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | ceil(1.5, 1)  | ceil(1.5, 1)  | 1.5    |
         | floor(1.5, 1) | floor(1.5, 1) | 1.5    |
         | ceil(1.23, 2) | ceil(1.23, 2) | 1.23   |
+
+    Scenario: ceil(1.5, 1)
+      When query
+        """
+        SELECT ceil(1.5, 1) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: floor(1.5, 1)
+      When query
+        """
+        SELECT floor(1.5, 1) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: ceil(1.23, 2)
+      When query
+        """
+        SELECT ceil(1.23, 2) AS result
+        """
+      Then query result
+        | result |
+        | 1.23   |
 
   Rule: Two-arg with scale greater than input (value unchanged)
 
@@ -114,6 +312,60 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | scale 38 is still valid                          | ceil(1.5, 38)                    | 1.5    |
         | scale 100 beyond decimal128 max, value unchanged | ceil(1.5, 100)                   | 1.5    |
         | zero decimal with large scale                    | ceil(CAST(0 AS DECIMAL(5,2)), 5) | 0.00   |
+
+    Scenario: scale 2 on decimal(2,1) — ceil
+      When query
+        """
+        SELECT ceil(1.5, 2) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: scale 2 on decimal(2,1) — floor
+      When query
+        """
+        SELECT floor(1.5, 2) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: scale 10 on decimal(2,1)
+      When query
+        """
+        SELECT ceil(1.5, 10) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: scale 38 is still valid
+      When query
+        """
+        SELECT ceil(1.5, 38) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: scale 100 beyond decimal128 max, value unchanged
+      When query
+        """
+        SELECT ceil(1.5, 100) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    Scenario: zero decimal with large scale
+      When query
+        """
+        SELECT ceil(CAST(0 AS DECIMAL(5,2)), 5) AS result
+        """
+      Then query result
+        | result |
+        | 0.00   |
 
   Rule: Two-arg with scale less than input (rounds)
 
@@ -142,6 +394,42 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | negative value ceil moves toward zero     | ceil(-1.25, 1)  | -1.2   |
         | negative value floor moves away from zero | floor(-1.25, 1) | -1.3   |
 
+    Scenario: floor(1.234, 2) truncates
+      When query
+        """
+        SELECT floor(1.234, 2) AS result
+        """
+      Then query result
+        | result |
+        | 1.23   |
+
+    Scenario: ceil(1.234, 0)
+      When query
+        """
+        SELECT ceil(1.234, 0) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: negative value ceil moves toward zero
+      When query
+        """
+        SELECT ceil(-1.25, 1) AS result
+        """
+      Then query result
+        | result |
+        | -1.2   |
+
+    Scenario: negative value floor moves away from zero
+      When query
+        """
+        SELECT floor(-1.25, 1) AS result
+        """
+      Then query result
+        | result |
+        | -1.3   |
+
   Rule: Two-arg with negative scale (rounds left of decimal)
 
     Scenario Outline: Negative scale: <case>
@@ -163,6 +451,69 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | ceil negative with negative scale                        | ceil(-999.99, -1)  | -990                                   |
         | floor negative with negative scale                       | floor(-999.99, -1) | -1000                                  |
 
+    Scenario: ceil(123.456, -1)
+      When query
+        """
+        SELECT ceil(123.456, -1) AS result
+        """
+      Then query result
+        | result |
+        | 130    |
+
+    Scenario: floor(123.456, -1)
+      When query
+        """
+        SELECT floor(123.456, -1) AS result
+        """
+      Then query result
+        | result |
+        | 120    |
+
+    Scenario: ceil(123.456, -2)
+      When query
+        """
+        SELECT ceil(123.456, -2) AS result
+        """
+      Then query result
+        | result |
+        | 200    |
+
+    Scenario: ceil(999.99, -1) crosses boundary
+      When query
+        """
+        SELECT ceil(999.99, -1) AS result
+        """
+      Then query result
+        | result |
+        | 1000   |
+
+    Scenario: scale -37 is the max negative scale that fits Decimal128
+      When query
+        """
+        SELECT ceil(123.456, -37) AS result
+        """
+      Then query result
+        | result                                  |
+        | 10000000000000000000000000000000000000  |
+
+    Scenario: ceil negative with negative scale
+      When query
+        """
+        SELECT ceil(-999.99, -1) AS result
+        """
+      Then query result
+        | result |
+        | -990   |
+
+    Scenario: floor negative with negative scale
+      When query
+        """
+        SELECT floor(-999.99, -1) AS result
+        """
+      Then query result
+        | result |
+        | -1000  |
+
   Rule: Integer input with scale
 
     Scenario Outline: Integer with scale: <case>
@@ -182,6 +533,60 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | floor int with negative scale       | floor(CAST(5 AS INT), -1)      | 0      |
         | tinyint with negative scale         | ceil(CAST(125 AS TINYINT), -1) | 130    |
         | bigint zero with negative scale     | ceil(CAST(0 AS BIGINT), -5)    | 0      |
+
+    Scenario: int with zero scale
+      When query
+        """
+        SELECT ceil(CAST(5 AS INT), 0) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: int with positive scale (no effect)
+      When query
+        """
+        SELECT ceil(CAST(5 AS INT), 2) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: int with negative scale
+      When query
+        """
+        SELECT ceil(CAST(5 AS INT), -1) AS result
+        """
+      Then query result
+        | result |
+        | 10     |
+
+    Scenario: floor int with negative scale
+      When query
+        """
+        SELECT floor(CAST(5 AS INT), -1) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: tinyint with negative scale
+      When query
+        """
+        SELECT ceil(CAST(125 AS TINYINT), -1) AS result
+        """
+      Then query result
+        | result |
+        | 130    |
+
+    Scenario: bigint zero with negative scale
+      When query
+        """
+        SELECT ceil(CAST(0 AS BIGINT), -5) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
 
   Rule: Float and Double with scale
 
@@ -230,6 +635,42 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | NaN to zero           | ceil  | 'NaN'       | 0                    |
         | floor Infinity        | floor | 'Infinity'  | 9223372036854775807  |
 
+    Scenario: Infinity to LONG_MAX
+      When query
+        """
+        SELECT ceil(CAST('Infinity' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
+    Scenario: -Infinity to LONG_MIN
+      When query
+        """
+        SELECT ceil(CAST('-Infinity' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result               |
+        | -9223372036854775808 |
+
+    Scenario: NaN to zero
+      When query
+        """
+        SELECT ceil(CAST('NaN' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: floor Infinity
+      When query
+        """
+        SELECT floor(CAST('Infinity' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
   Rule: Special float values with scale (2-arg) — Spark returns NULL
 
     Scenario Outline: Special float with scale: <case>
@@ -249,6 +690,51 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | -Infinity with positive scale returns NULL | ceil(CAST('-Infinity' AS DOUBLE), 2) |
         | floor NaN with scale returns NULL          | floor(CAST('NaN' AS DOUBLE), 2)      |
 
+    Scenario: NaN with positive scale returns NULL
+      When query
+        """
+        SELECT ceil(CAST('NaN' AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: NaN with negative scale returns NULL
+      When query
+        """
+        SELECT ceil(CAST('NaN' AS DOUBLE), -1) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Infinity with positive scale returns NULL
+      When query
+        """
+        SELECT ceil(CAST('Infinity' AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: -Infinity with positive scale returns NULL
+      When query
+        """
+        SELECT ceil(CAST('-Infinity' AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: floor NaN with scale returns NULL
+      When query
+        """
+        SELECT floor(CAST('NaN' AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Negative zero
 
     Scenario Outline: Negative zero: <case>
@@ -265,6 +751,33 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | ceil -0.0 returns 0               | ceil(CAST(-0.0 AS DOUBLE))    | 0      |
         | floor -0.0 returns 0              | floor(CAST(-0.0 AS DOUBLE))   | 0      |
         | ceil -0.0 with scale returns 0.00 | ceil(CAST(-0.0 AS DOUBLE), 2) | 0.00   |
+
+    Scenario: ceil -0.0 returns 0
+      When query
+        """
+        SELECT ceil(CAST(-0.0 AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: floor -0.0 returns 0
+      When query
+        """
+        SELECT floor(CAST(-0.0 AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: ceil -0.0 with scale returns 0.00
+      When query
+        """
+        SELECT ceil(CAST(-0.0 AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | 0.00   |
 
   Rule: Multi-row propagation
 
@@ -334,6 +847,69 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | floor of ceil cascades                                        | floor(ceil(1.1))           | 2      |
         | ceil of integer is integer (no rounding)                      | ceil(CAST(7 AS INT))       | 7      |
         | floor of integer is integer (no rounding)                     | floor(CAST(-42 AS BIGINT)) | -42    |
+
+    Scenario: ceil of ceil is ceil
+      When query
+        """
+        SELECT ceil(ceil(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: floor of floor is floor
+      When query
+        """
+        SELECT floor(floor(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: triple nested ceil collapses
+      When query
+        """
+        SELECT ceil(ceil(ceil(1.9))) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceil of floor cascades (floor returns integer, ceil identity)
+      When query
+        """
+        SELECT ceil(floor(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: floor of ceil cascades
+      When query
+        """
+        SELECT floor(ceil(1.1)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceil of integer is integer (no rounding)
+      When query
+        """
+        SELECT ceil(CAST(7 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 7      |
+
+    Scenario: floor of integer is integer (no rounding)
+      When query
+        """
+        SELECT floor(CAST(-42 AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | -42    |
 
   Rule: Filter pushdown — WHERE ceil/floor(col) OP constant
 
@@ -499,6 +1075,41 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | scale -38 overflows decimal128 precision            | 123.456, -38             |
         | ceil very large double with scale overflows decimal | CAST(1e300 AS DOUBLE), 2 |
 
+    Scenario: non-foldable scale errors
+      When query
+        """
+        SELECT ceil(1.5, CAST(NULL AS INT)) AS result
+        """
+      Then query error .*
+
+    Scenario: too-negative scale errors
+      When query
+        """
+        SELECT ceil(1.5, -100) AS result
+        """
+      Then query error .*
+
+    Scenario: non-INT scale type errors
+      When query
+        """
+        SELECT ceil(1.5, CAST(2 AS BIGINT)) AS result
+        """
+      Then query error .*
+
+    Scenario: scale -38 overflows decimal128 precision
+      When query
+        """
+        SELECT ceil(123.456, -38) AS result
+        """
+      Then query error .*
+
+    Scenario: ceil very large double with scale overflows decimal
+      When query
+        """
+        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
+        """
+      Then query error .*
+
   Rule: Scale -37 boundary (max negative scale that fits Decimal128)
 
     Scenario: ceil scale -37 returns 10^37
@@ -643,3 +1254,208 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query result
         | v |
+
+  Rule: Adversarial — nested filter (propagate_constraints + evaluate_bounds paired)
+    # Nested `ceil(floor(v)) > K` exercises the forward (`evaluate_bounds` on
+    # inner `floor`) and backward (`propagate_constraints` on outer `ceil`)
+    # interval graph hooks as a pair. Without evaluate_bounds on floor,
+    # propagate_constraints on ceil would receive Unbounded — cardinality
+    # estimation degrades silently.
+
+    Scenario: nested filter ceil(floor(v)) > K returns correct rows
+      When query
+        """
+        SELECT v FROM VALUES (1.5), (2.5), (3.5), (4.5), (5.5) AS t(v)
+        WHERE ceil(floor(v)) > 3
+        ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 4.5 |
+        | 5.5 |
+
+  Rule: Adversarial — ORDER BY DESC (output_ordering preserves direction)
+    # output_ordering forwards child sort_properties without flipping. For a
+    # monotonic non-decreasing function, DESC input → DESC output, so no
+    # redundant SortExec should appear after projection.
+    #
+    # FINDING (captured as fixture): the DESC variant currently shows a
+    # redundant SortExec in the plan — the ASC variant at `Rule: Plan snapshot
+    # — output_ordering` does NOT. Investigation:
+    #
+    #   1) Our hooks expose the property correctly:
+    #      - `output_ordering` forwards `SortProperties` including `descending`.
+    #      - `preserves_lex_ordering = true` (explicitly overridden). Verified
+    #        empirically: setting it to true didn't change the DESC plan →
+    #        the gap is NOT in the equivalence inference path that consumes
+    #        this flag (see equivalence/properties/mod.rs:469).
+    #
+    #   2) Upstream DataFusion `CeilFunc`/`FloorFunc` have the same trivial
+    #      `output_ordering` impl and default `preserves_lex_ordering = false`
+    #      → reproducing this with vanilla DF would show the same DESC gap.
+    #
+    #   3) The gap lives in `datafusion-physical-optimizer/enforce_sorting/
+    #      sort_pushdown.rs` (`pushdown_sorts_helper`). Traced against DF v53.1:
+    #      - `options_compatible` (strict equality for nullable in
+    #        physical-expr-common/sort_expr.rs:210) does NOT discriminate ASC/DESC.
+    #      - `get_expr_properties` (physical-expr/equivalence/properties/mod.rs:1446)
+    #        recurses correctly through our `ScalarFunctionExpr::get_properties`,
+    #        forwarding `SortProperties` via `output_ordering`.
+    #      The asymmetry is in PLAN SHAPE, not in property inference:
+    #           ASC:  keeps inner `SortExec[v ASC]`, projection computes ceil
+    #                 after sort → outer ORDER BY satisfied via monotonicity.
+    #           DESC: eliminates inner `SortExec[v DESC]`, computes ceil+v in
+    #                 the projection, then adds outer `SortExec[ceil(v) DESC]`.
+    #      i.e. DF v53 chooses a different plan shape for DESC ORDER BY over a
+    #      monotonic UDF, bypassing the optimization that works for ASC. Not a
+    #      Sail bug.
+    #
+    # The snapshot below is a regression fixture: when upstream (or we) teach
+    # the planner to reuse DESC input order through monotonic UDFs, the
+    # SortExec will disappear and the snapshot diff will flag the improvement.
+
+    Scenario: ORDER BY ceil(v) DESC on reversed input preserves order
+      When query
+        """
+        SELECT v, ceil(v) AS c FROM VALUES (3.5), (1.5), (2.5) AS t(v)
+        ORDER BY ceil(v) DESC
+        """
+      Then query result ordered
+        | v   | c |
+        | 3.5 | 4 |
+        | 2.5 | 3 |
+        | 1.5 | 2 |
+
+  Rule: ceil and floor on integer inputs return the same value as BIGINT
+
+    Scenario: ceil on INT returns same value as BIGINT
+      When query
+        """
+        SELECT ceil(CAST(5 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: ceil on BIGINT returns same value
+      When query
+        """
+        SELECT ceil(CAST(5 AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: ceil on negative INT returns same value
+      When query
+        """
+        SELECT ceil(CAST(-3 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | -3     |
+
+    Scenario: ceil on NULL INT returns NULL
+      When query
+        """
+        SELECT ceil(CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: floor on INT returns same value as BIGINT
+      When query
+        """
+        SELECT floor(CAST(5 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: floor on BIGINT returns same value
+      When query
+        """
+        SELECT floor(CAST(5 AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: floor on negative INT returns same value
+      When query
+        """
+        SELECT floor(CAST(-3 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | -3     |
+
+    Scenario: floor on NULL INT returns NULL
+      When query
+        """
+        SELECT floor(CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: ceil on INT column returns BIGINT schema
+      When query
+        """
+        SELECT ceil(CAST(5 AS INT)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: floor on INT column returns BIGINT schema
+      When query
+        """
+        SELECT floor(CAST(5 AS INT)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+  Rule: ceil and floor on float inputs
+
+    Scenario: ceil on positive float rounds up
+      When query
+        """
+        SELECT ceil(1.5) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceil on negative float rounds toward zero
+      When query
+        """
+        SELECT ceil(-1.5) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+    Scenario: floor on positive float rounds down
+      When query
+        """
+        SELECT floor(1.9) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: floor on negative float rounds away from zero
+      When query
+        """
+        SELECT floor(-1.1) AS result
+        """
+      Then query result
+        | result |
+        | -2     |

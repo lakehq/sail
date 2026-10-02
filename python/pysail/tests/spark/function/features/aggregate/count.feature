@@ -125,12 +125,15 @@ Feature: count aggregate function
 
   Rule: parameterless count is not count star
 
+    @sail-bug
+    # Sail rejects it with its own wording; Spark raises WRONG_NUM_ARGS.WITH_SUGGESTION.
+    # Same verdict, different message. Measured on Spark 4.2.0.
     Scenario: parameterless count is rejected by default
       When query
         """
         SELECT COUNT() FROM VALUES (1), (2) AS t(id)
         """
-      Then query error (?i)count.*requires at least one parameter
+      Then query error \[WRONG_NUM_ARGS.WITH_SUGGESTION\]
 
     Scenario: legacy parameterless count returns zero
       Given config spark.sql.legacy.allowParameterlessCount = true

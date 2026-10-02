@@ -224,3 +224,18 @@ Feature: to_csv converts a struct value to a CSV string
         root
          |-- result: string (nullable = true)
         """
+
+  # A variant has no flat text form, so Spark refuses the type in analysis rather than inventing
+  # one. Sail accepts it and writes the two internal buffers in hexadecimal.
+  # Measured on the Spark 4.2 JVM over Spark Connect.
+  Rule: a VARIANT is refused
+
+    # `parse_json` needs a PySpark 4 client.
+    @spark-4
+    @sail-bug
+    Scenario: to_csv of a variant is rejected
+      When query
+        """
+        SELECT to_csv(named_struct('v', parse_json('{"a":1}'))) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNSUPPORTED_INPUT_TYPE\]

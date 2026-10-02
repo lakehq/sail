@@ -271,3 +271,30 @@ Feature: to_json
       Then query result
         | result                                                                                         |
         | {"alpha":{"alpha_inner":"A","zeta_inner":"Z"},"zeta":{"alpha_inner":"a","zeta_inner":"z"}} |
+
+  # A VARIANT is stored as two binary buffers, `value` and `metadata`. That pair is an internal
+  # encoding, never the value, so `to_json` has to write the JSON the variant represents. Sail
+  # leaks the two buffers base64-encoded instead, and nothing raises -- a file written from a
+  # VARIANT column ends up holding Sail's internal layout rather than the data.
+  # Measured on the Spark 4.2 JVM over Spark Connect.
+  Rule: a VARIANT is written as the JSON it holds
+
+    # `parse_json` needs a PySpark 4 client.
+    @spark-4
+    @sail-bug
+    Scenario Outline: to_json of a variant holding <case>
+      When query template
+        """
+        SELECT to_json(named_struct('v', <input>)) AS result
+        """
+      Then query result collected
+        | result   |
+        | <result> |
+
+      Examples:
+        | case       | input                 | result        |
+        | an object  | parse_json('{"a":1}') | {"v":{"a":1}} |
+        | an array   | parse_json('[1,2]')   | {"v":[1,2]}   |
+        | a number   | parse_json('1')       | {"v":1}       |
+        | a string   | parse_json('"x"')     | {"v":"x"}     |
+        | a JSON null| parse_json('null')    | {"v":null}    |

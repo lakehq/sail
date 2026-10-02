@@ -4,6 +4,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 def test_vector_cosine_similarity(spark):
     assert spark.sql("SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))").first()[
@@ -63,8 +65,10 @@ def test_vector_cosine_similarity_extreme_values(spark):
     )
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_vector_cosine_similarity_rejects_dimension_mismatch(spark):
-    with pytest.raises(Exception, match="matching dimensions"):
+    # Spark: [VECTOR_DIMENSION_MISMATCH] ... must have the same dimension, but got 2 and 1.
+    with pytest.raises(Exception, match=r"\[VECTOR_DIMENSION_MISMATCH\]"):
         spark.sql("SELECT vector_cosine_similarity(array(1.0F, 2.0F), array(1.0F))").collect()
 
 

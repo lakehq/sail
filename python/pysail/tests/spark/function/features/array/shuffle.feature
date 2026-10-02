@@ -26,3 +26,15 @@ Feature: shuffle output schema
          |-- result: array (nullable = true)
          |    |-- element: integer (containsNull = true)
         """
+
+  Rule: An optional literal seed is accepted
+
+    @sail-bug
+    Scenario: shuffle accepts an integer seed
+      When query
+        """
+        SELECT size(shuffle(array(1, 2, 3), 1)) AS result
+        """
+      Then query result
+        | result |
+        | 3      |

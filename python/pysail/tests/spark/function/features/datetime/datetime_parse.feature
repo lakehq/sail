@@ -94,6 +94,68 @@ Feature: datetime parsing with format strings
         | `to_timestamp_ltz` parses custom format with offset         | to_timestamp_ltz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 14:30:45        |
         | `to_timestamp_ntz` ignores a positive offset                | to_timestamp_ntz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 16:30:45        |
 
+    Scenario: `to_timestamp` parses custom format with literal separator
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45', "yyyy-MM-dd'T'HH:mm:ss") AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
+
+    Scenario: `to_timestamp` parses custom format with fractional seconds
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45.123456', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS result
+        """
+      Then query result
+        | result                      |
+        | 2026-06-15 14:30:45.123456 |
+
+    Scenario: `to_date` parses custom format
+      When query
+        """
+        SELECT to_date('2026/06/15', 'yyyy/MM/dd') AS result
+        """
+      Then query result
+        | result    |
+        | 2026-06-15 |
+
+    Scenario: `to_timestamp` parses with month name
+      When query
+        """
+        SELECT to_timestamp('15 June 2026', 'dd MMMM yyyy') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 00:00:00 |
+
+    @sail-bug
+    Scenario: `to_timestamp` parses with day name
+      When query
+        """
+        SELECT to_timestamp('Monday, 15 June 2026', 'EEEE, dd MMMM yyyy') AS result
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+    Scenario: `to_timestamp_ltz` parses custom format with offset
+      When query
+        """
+        SELECT to_timestamp_ltz('2026-06-15T16:30:45+02:00', "yyyy-MM-dd'T'HH:mm:ssXXX") AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
+
+    Scenario: `to_timestamp_ntz` parses custom format with offset
+      When query
+        """
+        SELECT to_timestamp_ntz('2026-06-15T16:30:45+02:00', "yyyy-MM-dd'T'HH:mm:ssXXX") AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 16:30:45 |
+
   Rule: Formatted TIMESTAMP_NTZ offset handling
 
     Background:
@@ -201,6 +263,54 @@ Feature: datetime parsing with format strings
         | `to_date` handles NULL input       | to_date      | CAST(NULL AS STRING) | 'yyyy-MM-dd'         |
         | `to_timestamp` handles NULL format | to_timestamp | '2026-06-15'         | CAST(NULL AS STRING) |
 
+    Scenario: `to_timestamp` parses AD era
+      When query
+        """
+        SELECT
+          to_timestamp('AD 2026-06-15', 'G yyyy-MM-dd') AS era_ad,
+          to_timestamp('2026-06-15 AD', 'yyyy-MM-dd G') AS era_ad_suffix
+        """
+      Then query result
+        | era_ad              | era_ad_suffix       |
+        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
+
+    @sail-bug
+    Scenario: `to_timestamp` parses CE era
+      When query
+        """
+        SELECT
+          to_timestamp('CE 2026-06-15', 'G yyyy-MM-dd') AS era_ce,
+          to_timestamp('2026-06-15 CE', 'yyyy-MM-dd G') AS era_ce_suffix
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
+
+    Scenario: `to_timestamp` handles NULL input
+      When query
+        """
+        SELECT to_timestamp(CAST(NULL AS STRING), 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: `to_date` handles NULL input
+      When query
+        """
+        SELECT to_date(CAST(NULL AS STRING), 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: `to_timestamp` handles NULL format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15', CAST(NULL AS STRING)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Padding variations for numeric fields
 
     Background:
@@ -293,6 +403,26 @@ Feature: datetime parsing with format strings
         | lower_june          | upper_june          | mixed_june          |
         | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
 
+    @sail-bug
+    Scenario: `to_timestamp` parses with extra whitespace
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15  14:30:45', 'yyyy-MM-dd HH:mm:ss') AS extra_space,
+          to_timestamp('  2026-06-15 14:30:45  ', 'yyyy-MM-dd HH:mm:ss') AS leading_trailing
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
+
+    @sail-bug
+    Scenario: `to_timestamp` parses with case-insensitive day names
+      When query
+        """
+        SELECT
+          to_timestamp('monday, 15 June 2026', 'EEEE, dd MMMM yyyy') AS lower_mon,
+          to_timestamp('MONDAY, 15 June 2026', 'EEEE, dd MMMM yyyy') AS upper_mon
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
   Rule: Parsing with different timezones
 
     Background:
@@ -312,6 +442,33 @@ Feature: datetime parsing with format strings
         | `to_timestamp` parses with timezone offset          | +02:00 | 2026-06-15 12:30:45 |
         | `to_timestamp` parses with UTC timezone             | Z      | 2026-06-15 14:30:45 |
         | `to_timestamp` parses with negative timezone offset | -05:00 | 2026-06-15 19:30:45 |
+
+    Scenario: `to_timestamp` parses with timezone offset
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45+02:00', 'yyyy-MM-dd HH:mm:ssXXX') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 12:30:45 |
+
+    Scenario: `to_timestamp` parses with UTC timezone
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45Z', 'yyyy-MM-dd HH:mm:ssXXX') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
+
+    Scenario: `to_timestamp` parses with negative timezone offset
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45-05:00', 'yyyy-MM-dd HH:mm:ssXXX') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 19:30:45 |
 
   Rule: Optional section parsing
 
@@ -371,6 +528,16 @@ Feature: datetime parsing with format strings
         SELECT to_timestamp('2026-06-15 14:30:45+02:00', 'yyyy-MM-dd HH:mm:ss[ XXX]')
         """
       Then query error .*
+
+    @sail-bug
+    Scenario: `to_timestamp` parses with optional timezone
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 14:30:45', 'yyyy-MM-dd HH:mm:ss[ XXX]') AS without_tz,
+          to_timestamp('2026-06-15 14:30:45+02:00', 'yyyy-MM-dd HH:mm:ss[ XXX]') AS with_tz
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
 
   Rule: Two-digit year parsing
 
@@ -470,6 +637,16 @@ Feature: datetime parsing with format strings
         SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss')
         """
       Then query error .*
+
+    @sail-bug
+    Scenario: `to_timestamp` distinguishes k and H at 24:00:00
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd k:mm:ss') AS clock_hour_24,
+          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss') AS hour_24
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
 
   Rule: Width variation parsing for month patterns
 
@@ -587,6 +764,28 @@ Feature: datetime parsing with format strings
         | offset_0000         | offset_0200         |
         | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
 
+    Scenario: `to_timestamp` parses zone offset with X (Z for zero)
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 14:30:45Z', 'yyyy-MM-dd HH:mm:ssX') AS offset_z,
+          to_timestamp('2026-06-15 14:30:45+02', 'yyyy-MM-dd HH:mm:ssX') AS offset_02
+        """
+      Then query result
+        | offset_z            | offset_02           |
+        | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
+
+    Scenario: `to_timestamp` parses zone offset with x (+00 for zero)
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 14:30:45+00', 'yyyy-MM-dd HH:mm:ssx') AS offset_00,
+          to_timestamp('2026-06-15 14:30:45+02', 'yyyy-MM-dd HH:mm:ssx') AS offset_02
+        """
+      Then query result
+        | offset_00           | offset_02           |
+        | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
+
   Rule: Edge case parsing
 
     Background:
@@ -638,6 +837,17 @@ Feature: datetime parsing with format strings
         | day_166             | day_001             | day_365             |
         | 2026-06-15 00:00:00 | 2026-01-01 00:00:00 | 2026-12-31 00:00:00 |
 
+    @sail-bug
+    Scenario: `to_timestamp` parses week-based date
+      When query
+        """
+        SELECT
+          to_timestamp('2026-W25-1', 'YYYY-\'W\'ww-e') AS week_date,
+          to_timestamp('2026-W01-1', 'YYYY-\'W\'ww-e') AS first_week,
+          to_timestamp('2026-W52-7', 'YYYY-\'W\'ww-e') AS last_week
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN
+
   Rule: Invalid input handling
 
     Background:
@@ -664,6 +874,48 @@ Feature: datetime parsing with format strings
       When query
         """
         SELECT to_timestamp('2026-06-15 14:30:60', 'yyyy-MM-dd HH:mm:ss')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid date
+      When query
+        """
+        SELECT to_timestamp('2026-13-01', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid day
+      When query
+        """
+        SELECT to_timestamp('2026-06-32', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid hour
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 25:00:00', 'yyyy-MM-dd HH:mm:ss')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid minute
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:60:00', 'yyyy-MM-dd HH:mm:ss')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid month name
+      When query
+        """
+        SELECT to_timestamp('2026-InvalidMonth-15', 'yyyy-MMMM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on non-leap year Feb 29
+      When query
+        """
+        SELECT to_timestamp('2023-02-29', 'yyyy-MM-dd')
         """
       Then query error .*
 
@@ -763,6 +1015,30 @@ Feature: datetime parsing with format strings
         | case                                                 | fn           | r                   |
         | `to_timestamp` parses multiple formats in same query | to_timestamp | 2026-06-15 00:00:00 |
         | `to_date` parses multiple formats in same query      | to_date      | 2026-06-15          |
+
+    Scenario: `to_timestamp` parses multiple formats in same query
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15', 'yyyy-MM-dd') AS format1,
+          to_timestamp('06/15/2026', 'MM/dd/yyyy') AS format2,
+          to_timestamp('15.06.2026', 'dd.MM.yyyy') AS format3
+        """
+      Then query result
+        | format1             | format2             | format3             |
+        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
+
+    Scenario: `to_date` parses multiple formats in same query
+      When query
+        """
+        SELECT
+          to_date('2026-06-15', 'yyyy-MM-dd') AS format1,
+          to_date('06/15/2026', 'MM/dd/yyyy') AS format2,
+          to_date('15.06.2026', 'dd.MM.yyyy') AS format3
+        """
+      Then query result
+        | format1    | format2    | format3    |
+        | 2026-06-15 | 2026-06-15 | 2026-06-15 |
 
   Rule: Special date values
 
@@ -884,6 +1160,16 @@ Feature: datetime parsing with format strings
         | absent numeric optional before fraction   | 20260615123           | yyyyMMdd[HHmmss]SSS    |
         | numeric optional before fixed fraction     | 202606151430451       | yyyyMMdd[HHmmss]S      |
 
+    @sail-bug
+    Scenario: `to_timestamp` parses adjacent with fractional seconds
+      When query
+        """
+        SELECT
+          to_timestamp('20260615143045123', 'yyyyMMddHHmmssSSS') AS adjacent_ms,
+          to_timestamp('20260615143045123456', 'yyyyMMddHHmmssSSSSSS') AS adjacent_us
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
+
   Rule: Spark-specific deviation tests
 
     Background:
@@ -1000,6 +1286,22 @@ Feature: datetime parsing with format strings
       Then query result
         | minimal             | with_hour           | with_min            | with_sec            |
         | 2026-06-15 00:00:00 | 2026-06-15 14:00:00 | 2026-06-15 14:30:00 | 2026-06-15 14:30:45 |
+
+    @sail-bug
+    Scenario: `to_timestamp` handles 24:00:00 as next day midnight
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss') AS midnight_next
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
+
+    @sail-bug
+    Scenario: `to_timestamp` handles leap second 23:59:60
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 23:59:60', 'yyyy-MM-dd HH:mm:ss') AS leap_second
+        """
+      Then query error CANNOT_PARSE_TIMESTAMP
 
   Rule: Performance and stress tests
 
@@ -1125,6 +1427,24 @@ Feature: datetime parsing with format strings
         SELECT to_timestamp('2026''s year', "yyyy''s year") AS result
         """
       Then query error (?i).*
+
+    Scenario: `to_timestamp` parses with escaped single quote
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45', "yyyy-MM-dd'T'HH:mm:ss") AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
+
+    Scenario: `to_timestamp` parses with multiple literals
+      When query
+        """
+        SELECT to_timestamp('Date: 2026-06-15 Time: 14:30:45', "'Date: 'yyyy-MM-dd' Time: 'HH:mm:ss") AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
 
   Rule: Different separators and delimiters
 
@@ -1347,6 +1667,160 @@ Feature: datetime parsing with format strings
         | last_second         | last_nano                  |
         | 2026-06-15 23:59:59 | 2026-06-15 23:59:59.999999 |
 
+    Scenario: `to_timestamp` parses minimum date (year 0001)
+      When query
+        """
+        SELECT to_timestamp('0001-01-01', 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result              |
+        | 0001-01-01 00:00:00 |
+
+    Scenario: `to_timestamp` parses maximum date (year 9999)
+      When query
+        """
+        SELECT to_timestamp('9999-12-31', 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-12-31 00:00:00 |
+
+    Scenario: `to_timestamp` parses minimum timestamp (year 0001 with time)
+      When query
+        """
+        SELECT to_timestamp('0001-01-01 00:00:00', 'yyyy-MM-dd HH:mm:ss') AS result
+        """
+      Then query result
+        | result              |
+        | 0001-01-01 00:00:00 |
+
+    Scenario: `to_timestamp` parses maximum timestamp (year 9999 with time)
+      When query
+        """
+        SELECT to_timestamp('9999-12-31 23:59:59', 'yyyy-MM-dd HH:mm:ss') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-12-31 23:59:59 |
+
+    Scenario: `to_timestamp` parses timestamp with maximum nanoseconds
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45.999999999', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS result
+        """
+      Then query result
+        | result                    |
+        | 2026-06-15 14:30:45.999999 |
+
+    Scenario: `to_timestamp` parses timestamp with minimum nanoseconds
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45.000000001', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 14:30:45 |
+
+    Scenario: `to_timestamp` parses leap year century (2000)
+      When query
+        """
+        SELECT to_timestamp('2000-02-29', 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result              |
+        | 2000-02-29 00:00:00 |
+
+    Scenario: `to_timestamp` errors on non-leap century Feb 29 (1900)
+      When query
+        """
+        SELECT to_timestamp('1900-02-29', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` parses first day of each month
+      When query
+        """
+        SELECT
+          to_timestamp('2026-01-01', 'yyyy-MM-dd') AS jan,
+          to_timestamp('2026-02-01', 'yyyy-MM-dd') AS feb,
+          to_timestamp('2026-03-01', 'yyyy-MM-dd') AS mar,
+          to_timestamp('2026-04-01', 'yyyy-MM-dd') AS apr,
+          to_timestamp('2026-05-01', 'yyyy-MM-dd') AS may,
+          to_timestamp('2026-06-01', 'yyyy-MM-dd') AS jun,
+          to_timestamp('2026-07-01', 'yyyy-MM-dd') AS jul,
+          to_timestamp('2026-08-01', 'yyyy-MM-dd') AS aug,
+          to_timestamp('2026-09-01', 'yyyy-MM-dd') AS sep,
+          to_timestamp('2026-10-01', 'yyyy-MM-dd') AS oct,
+          to_timestamp('2026-11-01', 'yyyy-MM-dd') AS nov,
+          to_timestamp('2026-12-01', 'yyyy-MM-dd') AS dec
+        """
+      Then query result
+        | jan                 | feb                 | mar                 | apr                 | may                 | jun                 | jul                 | aug                 | sep                 | oct                 | nov                 | dec                 |
+        | 2026-01-01 00:00:00 | 2026-02-01 00:00:00 | 2026-03-01 00:00:00 | 2026-04-01 00:00:00 | 2026-05-01 00:00:00 | 2026-06-01 00:00:00 | 2026-07-01 00:00:00 | 2026-08-01 00:00:00 | 2026-09-01 00:00:00 | 2026-10-01 00:00:00 | 2026-11-01 00:00:00 | 2026-12-01 00:00:00 |
+
+    Scenario: `to_timestamp` parses last day of each month
+      When query
+        """
+        SELECT
+          to_timestamp('2026-01-31', 'yyyy-MM-dd') AS jan,
+          to_timestamp('2026-02-28', 'yyyy-MM-dd') AS feb,
+          to_timestamp('2026-03-31', 'yyyy-MM-dd') AS mar,
+          to_timestamp('2026-04-30', 'yyyy-MM-dd') AS apr,
+          to_timestamp('2026-05-31', 'yyyy-MM-dd') AS may,
+          to_timestamp('2026-06-30', 'yyyy-MM-dd') AS jun,
+          to_timestamp('2026-07-31', 'yyyy-MM-dd') AS jul,
+          to_timestamp('2026-08-31', 'yyyy-MM-dd') AS aug,
+          to_timestamp('2026-09-30', 'yyyy-MM-dd') AS sep,
+          to_timestamp('2026-10-31', 'yyyy-MM-dd') AS oct,
+          to_timestamp('2026-11-30', 'yyyy-MM-dd') AS nov,
+          to_timestamp('2026-12-31', 'yyyy-MM-dd') AS dec
+        """
+      Then query result
+        | jan                 | feb                 | mar                 | apr                 | may                 | jun                 | jul                 | aug                 | sep                 | oct                 | nov                 | dec                 |
+        | 2026-01-31 00:00:00 | 2026-02-28 00:00:00 | 2026-03-31 00:00:00 | 2026-04-30 00:00:00 | 2026-05-31 00:00:00 | 2026-06-30 00:00:00 | 2026-07-31 00:00:00 | 2026-08-31 00:00:00 | 2026-09-30 00:00:00 | 2026-10-31 00:00:00 | 2026-11-30 00:00:00 | 2026-12-31 00:00:00 |
+
+    Scenario: `to_timestamp` errors on invalid day for 30-day month
+      When query
+        """
+        SELECT to_timestamp('2026-04-31', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid day for 31-day month
+      When query
+        """
+        SELECT to_timestamp('2026-01-32', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on Feb 30
+      When query
+        """
+        SELECT to_timestamp('2026-02-30', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on Feb 31
+      When query
+        """
+        SELECT to_timestamp('2026-02-31', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid month 00
+      When query
+        """
+        SELECT to_timestamp('2026-00-15', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on invalid month 13
+      When query
+        """
+        SELECT to_timestamp('2026-13-15', 'yyyy-MM-dd')
+        """
+      Then query error .*
+
   Rule: Pattern parsing with optional sections and literals
 
     Background:
@@ -1382,6 +1856,23 @@ Feature: datetime parsing with format strings
         | `to_timestamp` treats quoted day-period as a literal       | '2026-06-15 B' | "yyyy-MM-dd 'B'" |
         | `to_timestamp` treats quoted unknown letter as a literal   | '2026-06-15 C' | "yyyy-MM-dd 'C'" |
 
+    Scenario: `to_timestamp` parses quoted literals with special characters
+      When query
+        """
+        SELECT to_timestamp("2026-06-15 'Q'", "yyyy-MM-dd '''Q'''") AS result
+        """
+      Then query result
+        | result               |
+        | 2026-06-15 00:00:00 |
+
+    @sail-bug
+    Scenario: `to_timestamp` parses pattern with quarter field
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 Q2', "yyyy-MM-dd 'Q'Q") AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
   Rule: Pattern validation and error handling
 
     Background:
@@ -1398,3 +1889,461 @@ Feature: datetime parsing with format strings
         | case                                              | in               | fmt         |
         | `to_timestamp` rejects unclosed optional section  | 2026-06-15T14:30 | yyyy-MM-dd[ |
         | `to_timestamp` rejects unexpected closing bracket | 2026-06-15T14:30 | yyyy-MM-dd] |
+
+    Scenario: `to_timestamp` rejects invalid pattern width
+      When query
+        """
+        SELECT to_timestamp('2026-06-15', 'MMMMMM')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` rejects unclosed optional section
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30', 'yyyy-MM-dd[')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` rejects unexpected closing bracket
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30', 'yyyy-MM-dd]')
+        """
+      Then query error .*
+
+  Rule: Java predefined DateTimeFormatter constants for parsing
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_LOCAL_DATE_TIME format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45', 'ISO_LOCAL_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_OFFSET_DATE_TIME format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45Z', 'ISO_OFFSET_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_INSTANT format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45Z', 'ISO_INSTANT') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_LOCAL_DATE format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15', 'ISO_LOCAL_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_LOCAL_TIME format
+      When query
+        """
+        SELECT to_timestamp('14:30:45', 'ISO_LOCAL_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses BASIC_ISO_DATE format
+      When query
+        """
+        SELECT to_timestamp('20260615', 'BASIC_ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_ORDINAL_DATE format
+      When query
+        """
+        SELECT to_timestamp('2026-166', 'ISO_ORDINAL_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_WEEK_DATE format
+      When query
+        """
+        SELECT to_timestamp('2026-W25-1', 'ISO_WEEK_DATE') AS result
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_DATE format with offset
+      When query
+        """
+        SELECT to_timestamp('2026-06-15Z', 'ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_DATE format without offset
+      When query
+        """
+        SELECT to_timestamp('2026-06-15', 'ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_TIME format with offset
+      When query
+        """
+        SELECT to_timestamp('14:30:45Z', 'ISO_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_TIME format without offset
+      When query
+        """
+        SELECT to_timestamp('14:30:45.123', 'ISO_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_OFFSET_DATE format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15Z', 'ISO_OFFSET_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_OFFSET_TIME format
+      When query
+        """
+        SELECT to_timestamp('14:30:45Z', 'ISO_OFFSET_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_DATE_TIME format with zone
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45Z[UTC]', 'ISO_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_DATE_TIME format without offset
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45.123456', 'ISO_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_8601 format alias
+      When query
+        """
+        SELECT to_timestamp('2026-06-01T10:30:45', 'ISO_8601') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.WITH_SUGGESTION
+
+    @sail-bug
+    Scenario: `to_timestamp` parses ISO_ZONED_DATE_TIME format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15T14:30:45Z[UTC]', 'ISO_ZONED_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses RFC_1123_DATE_TIME format
+      When query
+        """
+        SELECT to_timestamp('Mon, 15 Jun 2026 14:30:45 GMT', 'RFC_1123_DATE_TIME') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+  Rule: to_date with predefined formatters
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_LOCAL_DATE format
+      When query
+        """
+        SELECT to_date('2026-06-15', 'ISO_LOCAL_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_date` parses BASIC_ISO_DATE format
+      When query
+        """
+        SELECT to_date('20260615', 'BASIC_ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_ORDINAL_DATE format
+      When query
+        """
+        SELECT to_date('2026-166', 'ISO_ORDINAL_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_WEEK_DATE format
+      When query
+        """
+        SELECT to_date('2026-W25-1', 'ISO_WEEK_DATE') AS result
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_DATE format with offset
+      When query
+        """
+        SELECT to_date('2026-06-15Z', 'ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_DATE format without offset
+      When query
+        """
+        SELECT to_date('2026-06-15', 'ISO_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_date` parses ISO_OFFSET_DATE format
+      When query
+        """
+        SELECT to_date('2026-06-15Z', 'ISO_OFFSET_DATE') AS result
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+  Rule: Error handling for invalid formats
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: `to_timestamp` errors on invalid ISO_LOCAL_DATE_TIME
+      When query
+        """
+        SELECT to_timestamp('invalid', 'ISO_LOCAL_DATE_TIME')
+        """
+      Then query error .*
+
+    Scenario: `to_date` errors on invalid BASIC_ISO_DATE
+      When query
+        """
+        SELECT to_date('invalid', 'BASIC_ISO_DATE')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on mismatched format
+      When query
+        """
+        SELECT to_timestamp('2026-06-15', 'ISO_LOCAL_TIME')
+        """
+      Then query error .*
+
+  Rule: Day-of-week parsing
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_timestamp` parses day-of-week with width 1-3 (E, EE, EEE)
+      When query
+        """
+        SELECT
+          to_timestamp('Mon, 15 June 2026', 'EEE, dd MMMM yyyy') AS day_mon,
+          to_timestamp('Tue, 16 June 2026', 'EEE, dd MMMM yyyy') AS day_tue,
+          to_timestamp('Sun, 14 June 2026', 'EEE, dd MMMM yyyy') AS day_sun
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+    @sail-bug
+    Scenario: `to_timestamp` parses day-of-week with width 4 (EEEE)
+      When query
+        """
+        SELECT
+          to_timestamp('Monday, 15 June 2026', 'EEEE, dd MMMM yyyy') AS day_monday,
+          to_timestamp('Sunday, 14 June 2026', 'EEEE, dd MMMM yyyy') AS day_sunday
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+  Rule: Quarter parsing
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_timestamp` parses quarter with width 1 (Q)
+      When query
+        """
+        SELECT
+          to_timestamp('2026 Q2', 'yyyy Q') AS q2,
+          to_timestamp('2026 Q4', 'yyyy Q') AS q4
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses quarter with width 2 (QQ)
+      When query
+        """
+        SELECT
+          to_timestamp('2026 Q02', 'yyyy QQ') AS q2,
+          to_timestamp('2026 Q04', 'yyyy QQ') AS q4
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses quarter with width 3 (QQQ)
+      When query
+        """
+        SELECT
+          to_timestamp('2026 Q2', 'yyyy QQQ') AS q2,
+          to_timestamp('2026 Q4', 'yyyy QQQ') AS q4
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    @sail-bug
+    Scenario: `to_timestamp` parses quarter with width 4 (QQQQ)
+      When query
+        """
+        SELECT
+          to_timestamp('2026 2nd quarter', 'yyyy QQQQ') AS q2,
+          to_timestamp('2026 4th quarter', 'yyyy QQQQ') AS q4
+        """
+      Then query error INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER
+
+    Scenario: `to_timestamp` parses 12-hour timestamp with AM/PM marker
+      When query
+        """
+        SELECT to_timestamp('5/9/2026 4:53:33 PM', 'M/d/yyyy h:mm:ss a') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-09 16:53:33 |
+
+  Rule: Two-digit year parsing (yy and uu)
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: `to_timestamp` parses two-digit year with yy (base year 2000)
+      When query
+        """
+        SELECT
+          to_timestamp('25-06-15', 'yy-MM-dd') AS year_2025,
+          to_timestamp('99-12-31', 'yy-MM-dd') AS year_2099,
+          to_timestamp('00-01-01', 'yy-MM-dd') AS year_2000
+        """
+      Then query result
+        | year_2025           | year_2099           | year_2000           |
+        | 2025-06-15 00:00:00 | 2099-12-31 00:00:00 | 2000-01-01 00:00:00 |
+
+    @sail-bug
+    Scenario: `to_timestamp` parses two-digit year with uu (base year 2000)
+      When query
+        """
+        SELECT
+          to_timestamp('25-06-15', 'uu-MM-dd') AS year_2025,
+          to_timestamp('99-12-31', 'uu-MM-dd') AS year_2099,
+          to_timestamp('00-01-01', 'uu-MM-dd') AS year_2000
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+  Rule: Week-based pattern variations
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_timestamp` parses week year with YYYY
+      When query
+        """
+        SELECT
+          to_timestamp('2025-W01-1', 'YYYY-\'W\'ww-e') AS week_year_2025,
+          to_timestamp('2026-W01-1', 'YYYY-\'W\'ww-e') AS week_year_2026
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN
+
+    @sail-bug
+    Scenario: `to_timestamp` parses week of month with W
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-3', 'yyyy-MM-W') AS week_3,
+          to_timestamp('2026-06-1', 'yyyy-MM-W') AS week_1
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+    @sail-bug
+    Scenario: `to_timestamp` parses day of week with e
+      When query
+        """
+        SELECT
+          to_timestamp('2026-W25-1', 'YYYY-\'W\'ww-e') AS day_1,
+          to_timestamp('2026-W25-7', 'YYYY-\'W\'ww-e') AS day_7
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN
+
+  Rule: Aligned week-of-month parsing
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: `to_timestamp` parses aligned week-of-month with F
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 1', 'yyyy-MM-dd F') AS week_1,
+          to_timestamp('2026-06-08 2', 'yyyy-MM-dd F') AS week_2
+        """
+      Then query error (?i).*
+
+    Scenario: `to_timestamp` errors on inconsistent aligned week-of-month
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 2', 'yyyy-MM-dd F')
+        """
+      Then query error .*
+
+  Rule: Week-of-month validation
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario: `to_timestamp` validates week-of-month consistency
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 3 1', 'yyyy-MM-dd W F') AS valid_week,
+          to_timestamp('2026-06-01 1 1', 'yyyy-MM-dd W F') AS first_week
+        """
+      Then query error INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION
+
+    Scenario: `to_timestamp` errors on invalid week-of-month
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 6 1', 'yyyy-MM-dd W F')
+        """
+      Then query error .*
+
+    Scenario: `to_timestamp` errors on inconsistent week-of-month
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 2 1', 'yyyy-MM-dd W F')
+        """
+      Then query error .*
