@@ -479,6 +479,9 @@ pub enum CommandNode {
         variable: String,
         value: String,
     },
+    ResetVariable {
+        variable: Option<String>,
+    },
     Update {
         table: ObjectName,
         table_alias: Option<Identifier>,

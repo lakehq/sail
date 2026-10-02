@@ -1119,14 +1119,23 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
         Statement::SetProperty { set: _, property } => {
-            let Some(property) = property else {
+            let Some((key, value)) = property else {
                 return Err(SqlError::todo("list all properties"));
             };
-            let (variable, value) = from_ast_property(property)?;
-            let Some(value) = value else {
+            let variable = from_ast_property_key(key)?;
+            let Some((_, value)) = value else {
                 return Err(SqlError::todo("show property"));
             };
-            let node = spec::CommandNode::SetVariable { variable, value };
+            let node = spec::CommandNode::SetVariable {
+                variable,
+                value: value.0,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ResetProperty { reset: _, property } => {
+            let node = spec::CommandNode::ResetVariable {
+                variable: property.map(from_ast_property_key).transpose()?,
+            };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::AnalyzeTable {
@@ -1990,16 +1999,20 @@ impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
     }
 }
 
-fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
-    let PropertyKeyValue { key, value } = property;
-    let key = match key {
+fn from_ast_property_key(key: PropertyKey) -> SqlResult<String> {
+    Ok(match key {
         PropertyKey::Name(ObjectName(parts)) => parts
             .into_items()
             .map(|x| x.value)
             .collect::<Vec<_>>()
             .join("."),
         PropertyKey::Literal(x) => from_ast_string(x)?,
-    };
+    })
+}
+
+fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let PropertyKeyValue { key, value } = property;
+    let key = from_ast_property_key(key)?;
     let value = if let Some((_, value)) = value {
         let value = match value {
             PropertyValue::String(x) => from_ast_string(x)?,
