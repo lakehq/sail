@@ -145,7 +145,9 @@ impl ServerSessionFactory {
             .with_config(config)
             .with_runtime_env(runtime)
             .with_analyzer_rules(default_analyzer_rules())
-            .with_optimizer_rules(default_optimizer_rules())
+            .with_optimizer_rules(default_optimizer_rules(
+                self.config.execution.partition_bounds_from_listing,
+            ))
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
                 ..Default::default()

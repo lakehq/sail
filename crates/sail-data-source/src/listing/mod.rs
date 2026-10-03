@@ -1,5 +1,7 @@
 pub mod delete;
 pub mod input_files;
+pub mod partition_bounds;
+pub mod partition_bounds_subquery;
 pub mod planner;
 pub mod source;
 pub mod table;

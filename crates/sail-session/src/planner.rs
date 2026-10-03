@@ -39,6 +39,7 @@ use sail_common_datafusion::streaming::event::schema::{
 use sail_data_source::formats::console::ConsolePhysicalPlanner;
 use sail_data_source::formats::noop::NoopPhysicalPlanner;
 use sail_data_source::formats::python::PythonPhysicalPlanner;
+use sail_data_source::listing::partition_bounds_subquery::InlinePartitionBoundsSubquery;
 use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
@@ -93,6 +94,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
             Box::new(DeltaMetadataAggregateRewriter),
             Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
+            Box::new(InlinePartitionBoundsSubquery),
         ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {

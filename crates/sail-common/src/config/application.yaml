@@ -443,6 +443,30 @@
     Has no effect after the table is created.
   experimental: true
 
+- key: execution.partition_bounds_from_listing
+  type: boolean
+  default: "false"
+  description: |
+    Should `min` and `max` over a partition column of a listing table be answered from
+    directory names instead of scanning the table.
+    Finding the latest partition (e.g. `SELECT max(dt) FROM t`) then costs a single listing
+    request no matter how many partitions the table has, and opens no data file at all.
+    Partition columns below the first one are covered when every column above them is pinned
+    by an equality filter, as in `SELECT max(day) FROM t WHERE year = '2025' AND month = '10'`.
+    A filter comparing a partition column to such an aggregate, as in
+    `SELECT * FROM t WHERE dt = (SELECT max(dt) FROM t)`, is also covered: the subquery is
+    resolved while planning and the scan then lists only the directory of that partition.
+    This applies when the filter sits directly on the table; a filter separated from it by
+    another operator, such as a join, is left alone and the table is listed in full.
+    Aggregates other than `min` and `max` are also left alone, including `GROUP BY` and
+    `DISTINCT` over a partition column, which Spark's equivalent does cover.
+    This is disabled by default because it changes the result when a partition directory
+    exists but its files hold no rows: such a partition is invisible to a real scan, but is
+    visible to a listing. Partitions with no non-empty file are excluded either way.
+    Spark's equivalent, `spark.sql.optimizer.metadataOnly`, is disabled by default for the
+    same reason.
+  experimental: true
+
 - key: execution.use_row_number_estimates_to_optimize_partitioning
   type: boolean
   default: "false"
