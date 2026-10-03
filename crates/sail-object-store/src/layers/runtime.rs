@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use datafusion::common::runtime::trace_future;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use object_store::path::Path;
@@ -90,9 +91,11 @@ impl ObjectStore for RuntimeAwareObjectStore {
     ) -> Result<PutResult> {
         let inner = self.inner.clone();
         let location = location.clone();
-        self.handle
-            .spawn(async move { inner.put_opts(&location, payload, opts).await })
-            .await?
+        // Trace the task without changing the explicitly selected storage runtime.
+        AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.put_opts(&location, payload, opts).await
+        })))
+        .await?
     }
 
     async fn put_multipart_opts(
@@ -102,20 +105,20 @@ impl ObjectStore for RuntimeAwareObjectStore {
     ) -> Result<Box<dyn MultipartUpload>> {
         let inner = self.inner.clone();
         let location = location.clone();
-        let multipart = self
-            .handle
-            .spawn(async move { inner.put_multipart_opts(&location, opts).await })
-            .await??;
+        let multipart = AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.put_multipart_opts(&location, opts).await
+        })))
+        .await??;
         Ok(self.wrap_multipart_upload(multipart))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let inner = self.inner.clone();
         let location = location.clone();
-        let result = self
-            .handle
-            .spawn(async move { inner.get_opts(&location, options).await })
-            .await??;
+        let result = AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.get_opts(&location, options).await
+        })))
+        .await??;
         Ok(self.wrap_get_result(result))
     }
 
@@ -123,9 +126,10 @@ impl ObjectStore for RuntimeAwareObjectStore {
         let inner = self.inner.clone();
         let location = location.clone();
         let ranges = ranges.to_vec();
-        self.handle
-            .spawn(async move { inner.get_ranges(&location, &ranges).await })
-            .await?
+        AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.get_ranges(&location, &ranges).await
+        })))
+        .await?
     }
 
     fn delete_stream(
@@ -168,27 +172,30 @@ impl ObjectStore for RuntimeAwareObjectStore {
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let inner = self.inner.clone();
         let prefix = prefix.cloned();
-        self.handle
-            .spawn(async move { inner.list_with_delimiter(prefix.as_ref()).await })
-            .await?
+        AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.list_with_delimiter(prefix.as_ref()).await
+        })))
+        .await?
     }
 
     async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
         let inner = self.inner.clone();
         let from = from.clone();
         let to = to.clone();
-        self.handle
-            .spawn(async move { inner.copy_opts(&from, &to, options).await })
-            .await?
+        AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.copy_opts(&from, &to, options).await
+        })))
+        .await?
     }
 
     async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         let inner = self.inner.clone();
         let from = from.clone();
         let to = to.clone();
-        self.handle
-            .spawn(async move { inner.rename_opts(&from, &to, options).await })
-            .await?
+        AbortOnDropHandle::new(self.handle.spawn(trace_future(async move {
+            inner.rename_opts(&from, &to, options).await
+        })))
+        .await?
     }
 }
 
@@ -236,7 +243,7 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         // upload runs on the object store runtime. Dropping the returned future (e.g. when the
         // caller aborts the upload) cancels the in-flight upload instead of leaving it detached.
         let part = self.parts_cancel.clone().run_until_cancelled_owned(part);
-        let task = AbortOnDropHandle::new(self.parts.spawn_on(part, &self.handle));
+        let task = AbortOnDropHandle::new(self.parts.spawn_on(trace_future(part), &self.handle));
         Box::pin(async move {
             task.await?.unwrap_or_else(|| {
                 Err(object_store::Error::Generic {
@@ -250,10 +257,10 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let inner = self.inner.clone();
         self.handle
-            .spawn(async move {
+            .spawn(trace_future(async move {
                 let mut inner = inner.lock().await;
                 inner.complete().await
-            })
+            }))
             .await?
     }
 
@@ -265,16 +272,17 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         let _ = timeout(Duration::from_secs(15), self.parts.wait()).await;
         let inner = self.inner.clone();
         self.handle
-            .spawn(async move {
+            .spawn(trace_future(async move {
                 let mut inner = inner.lock().await;
                 inner.abort().await
-            })
+            }))
             .await?
     }
 }
 
 struct RuntimeAwareStream<T> {
     inner: ReceiverStream<T>,
+    _producer: AbortOnDropHandle<()>,
 }
 
 impl<T> RuntimeAwareStream<T>
@@ -289,16 +297,17 @@ where
         // Testing with larger buffer values showed no performance improvement.
         // Network I/O is the bottleneck, not channel capacity.
         let (tx, rx) = mpsc::channel(1);
-        handle.spawn(async move {
+        let producer = handle.spawn(trace_future(async move {
             let mut stream = initializer(&args);
             while let Some(item) = stream.next().await {
                 if tx.send(item).await.is_err() {
                     break;
                 }
             }
-        });
+        }));
         Self {
             inner: ReceiverStream::new(rx),
+            _producer: AbortOnDropHandle::new(producer),
         }
     }
 }
@@ -323,6 +332,40 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_stream_aborts_pending_producer() -> Result<()> {
+        let started = Arc::new(Notify::new());
+        let dropped = Arc::new(Notify::new());
+        let start = started.clone();
+        let drop = dropped.clone();
+        let stream = RuntimeAwareStream::new(
+            move |_| {
+                futures::stream::once(async move {
+                    let _guard = NotifyOnDrop(drop);
+                    start.notify_one();
+                    futures::future::pending::<()>().await
+                })
+                .boxed()
+            },
+            (),
+            Handle::current(),
+        );
+        timeout(Duration::from_secs(5), started.notified())
+            .await
+            .map_err(|e| object_store::Error::Generic {
+                store: "test",
+                source: Box::new(e),
+            })?;
+        std::mem::drop(stream);
+        timeout(Duration::from_secs(5), dropped.notified())
+            .await
+            .map_err(|e| object_store::Error::Generic {
+                store: "test",
+                source: Box::new(e),
+            })?;
+        Ok(())
+    }
 
     type Records = Arc<Mutex<Vec<(usize, Bytes, Id)>>>;
 

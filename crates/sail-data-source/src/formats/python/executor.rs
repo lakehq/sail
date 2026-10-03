@@ -5,9 +5,13 @@
 /// - `RemoteExecutor`: Subprocess isolation via gRPC (PR #3)
 ///
 /// The abstraction ensures we can add subprocess isolation without rewriting core logic.
+use std::sync::Arc;
+
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
+use datafusion::common::runtime::SpawnedTask;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion_common::Result;
 use futures::stream::BoxStream;
 use pyo3::exceptions::PyAttributeError;
@@ -16,6 +20,7 @@ use pyo3::types::PyAnyMethods;
 
 use super::error::{PythonDataSourceContext, import_cloudpickle};
 use super::filter::{PythonFilter, filters_to_python};
+use super::object_store::{PythonObjectStoreContext, install_object_store_context};
 
 /// Default capacity for the write channel, matching `python.data_source_write_channel_capacity` config.
 const DEFAULT_WRITE_CHANNEL_CAPACITY: usize = 8;
@@ -176,6 +181,8 @@ pub struct InProcessExecutor {
     slow_write_warn_ms: u64,
     /// Slow read warning threshold in milliseconds.
     slow_read_warn_ms: u64,
+    /// Runtime-scoped object-store access for Python callbacks.
+    object_store_context: Option<PythonObjectStoreContext>,
 }
 
 impl InProcessExecutor {
@@ -189,6 +196,7 @@ impl InProcessExecutor {
             write_channel_capacity: DEFAULT_WRITE_CHANNEL_CAPACITY,
             slow_write_warn_ms: DEFAULT_SLOW_WRITE_WARN_MS,
             slow_read_warn_ms: DEFAULT_SLOW_READ_WARN_MS,
+            object_store_context: None,
         }
     }
 
@@ -210,6 +218,7 @@ impl InProcessExecutor {
             write_channel_capacity: config.python.data_source_write_channel_capacity,
             slow_write_warn_ms: config.python.data_source_slow_write_warn_ms,
             slow_read_warn_ms: config.python.data_source_slow_read_warn_ms,
+            object_store_context: None,
         })
     }
 
@@ -223,7 +232,18 @@ impl InProcessExecutor {
             write_channel_capacity,
             slow_write_warn_ms,
             slow_read_warn_ms,
+            object_store_context: None,
         }
+    }
+
+    /// Bind this executor to the DataFusion runtime used by the current driver or worker.
+    pub fn with_runtime_env(
+        mut self,
+        runtime_env: Arc<RuntimeEnv>,
+        options: &datafusion_common::config::ConfigOptions,
+    ) -> Result<Self> {
+        self.object_store_context = Some(PythonObjectStoreContext::try_new(runtime_env, options)?);
+        Ok(self)
     }
 }
 
@@ -237,10 +257,19 @@ impl Default for InProcessExecutor {
 impl PythonExecutor for InProcessExecutor {
     async fn get_schema(&self, command: &[u8]) -> Result<SchemaRef> {
         let command = command.to_vec();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
         // Use spawn_blocking for GIL-bound operations
-        tokio::task::spawn_blocking(move || {
+        SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    install_object_store_context(py, object_store_context.as_ref())?;
                 // Deserialize and call schema()
                 let datasource = deserialize_datasource(py, &command)?;
 
@@ -275,9 +304,18 @@ impl PythonExecutor for InProcessExecutor {
     ) -> Result<PartitionPlan> {
         let command = command.to_vec();
         let schema = schema.clone();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
-        tokio::task::spawn_blocking(move || {
+        SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    install_object_store_context(py, object_store_context.as_ref())?;
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -434,6 +472,7 @@ impl PythonExecutor for InProcessExecutor {
             schema,
             batch_size,
             self.slow_read_warn_ms,
+            self.object_store_context.clone(),
         )?;
 
         Ok(Box::pin(stream))
@@ -447,9 +486,18 @@ impl PythonExecutor for InProcessExecutor {
     ) -> Result<WriterPlan> {
         let command = command.to_vec();
         let schema = schema.clone();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
-        tokio::task::spawn_blocking(move || {
+        SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    install_object_store_context(py, object_store_context.as_ref())?;
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -508,6 +556,13 @@ impl PythonExecutor for InProcessExecutor {
         mut batches: BoxStream<'static, Result<RecordBatch>>,
     ) -> Result<WriteResult> {
         let pickled_writer = pickled_writer.to_vec();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
         // Create a channel to stream batches to the blocking thread.
         // Capacity is from python.data_source_write_channel_capacity config; larger values
@@ -534,8 +589,10 @@ impl PythonExecutor for InProcessExecutor {
 
         let slow_write_warn_ms = self.slow_write_warn_ms;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let result = SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    install_object_store_context(py, object_store_context.as_ref())?;
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -606,9 +663,18 @@ impl PythonExecutor for InProcessExecutor {
         commit_messages: Vec<Option<Vec<u8>>>,
     ) -> Result<()> {
         let pickled_writer = pickled_writer.to_vec();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
-        tokio::task::spawn_blocking(move || {
+        SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    install_object_store_context(py, object_store_context.as_ref())?;
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -656,9 +722,24 @@ impl PythonExecutor for InProcessExecutor {
         commit_messages: Vec<Option<Vec<u8>>>,
     ) -> Result<()> {
         let pickled_writer = pickled_writer.to_vec();
+        let object_store_context = self
+            .object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let _cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
 
-        tokio::task::spawn_blocking(move || {
+        SpawnedTask::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
+                let _object_store_guard =
+                    match install_object_store_context(py, object_store_context.as_ref()) {
+                        Ok(guard) => guard,
+                        Err(e) => {
+                            log::warn!("Failed to install object-store context for abort: {e}");
+                            return Ok(());
+                        }
+                    };
                 // Deserialize the writer (best-effort: abort must not propagate errors
                 // since the original error from write/commit is more important)
                 let writer = match deserialize_object(py, &pickled_writer) {
