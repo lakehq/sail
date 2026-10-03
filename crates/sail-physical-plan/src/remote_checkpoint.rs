@@ -17,7 +17,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use datafusion::physical_plan::filter_pushdown::FilterPushdownPropagation;
@@ -482,6 +483,15 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
 
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![self.input.output_ordering().cloned().map(Into::into)]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // Checkpoint files preserve the order in which batches arrive from the input.
+        vec![true]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

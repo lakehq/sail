@@ -160,6 +160,23 @@ def test_checkpoint_preserves_partitioning_and_ordering(spark, local, snapshot):
     assert ordered_plan == snapshot
 
 
+@pytest.mark.parametrize("sort_mode", ["within_partitions", "global"])
+def test_checkpoint_preserves_sort_required_by_downstream_aggregates(spark, sort_mode):
+    rows = spark.range(400_000, numPartitions=10).select(
+        ((sf.col("id") * 2_654_435_761) % 100_003).alias("key")
+    )
+    if sort_mode == "within_partitions":
+        ordered = rows.repartition(10, "key").sortWithinPartitions("key")
+    else:
+        ordered = rows.orderBy("key")
+
+    expected = rows.select("key").distinct().count()
+    checkpointed = ordered.checkpoint()
+
+    assert checkpointed.groupBy("key").count().count() == expected
+    assert checkpointed.select("key").distinct().count() == expected
+
+
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):
     source = spark.range(3)
 
