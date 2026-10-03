@@ -195,6 +195,100 @@ Feature: bin converts integral values to binary strings
         | bin Infinity saturates to LONG_MAX under ANSI off            | CAST('Infinity' AS DOUBLE) | 111111111111111111111111111111111111111111111111111111111111111 |
         | bin out-of-range DOUBLE saturates to LONG_MAX under ANSI off | CAST(1e30 AS DOUBLE)       | 111111111111111111111111111111111111111111111111111111111111111 |
 
+  # `Cast.scala:2031` compares `Math.floor(x) <= Long.MaxValue` with the bound promoted to double,
+  # and `Long.MaxValue` rounds up to 2^63: 2^63 itself is accepted (it saturates) and the next
+  # double above it, 2^63 + 2048, overflows. The lower bound is exactly -2^63.
+  Rule: the BIGINT bounds of a DOUBLE are 2^63 and -2^63
+
+    Scenario Outline: ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query template
+        """
+        SELECT bin(CAST(<input> AS DOUBLE)) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | ansi  | case                    | input                | result                                                           |
+        | true  | 2^63 saturates          | 9223372036854775808  | 111111111111111111111111111111111111111111111111111111111111111  |
+        | true  | -2^63 is exact          | -9223372036854775808 | 1000000000000000000000000000000000000000000000000000000000000000 |
+        | false | 2^63 saturates          | 9223372036854775808  | 111111111111111111111111111111111111111111111111111111111111111  |
+        | false | above 2^63 saturates    | 9223372036854777856  | 111111111111111111111111111111111111111111111111111111111111111  |
+        | false | -2^63 is exact          | -9223372036854775808 | 1000000000000000000000000000000000000000000000000000000000000000 |
+        | false | below -2^63 saturates   | -9223372036854777856 | 1000000000000000000000000000000000000000000000000000000000000000 |
+
+    Scenario Outline: ANSI on: bin at the BIGINT bounds: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query template
+        """
+        SELECT bin(CAST(<input> AS DOUBLE)) AS result
+        """
+      Then query error \[CAST_OVERFLOW\] The value <shown>D of the type "DOUBLE" cannot be cast to "BIGINT" due to an overflow\. Use `try_cast` to tolerate overflow and return NULL instead\.
+
+      Examples:
+        | case                | input                | shown                 |
+        | above 2^63 errors   | 9223372036854777856  | 9.223372036854778E18  |
+        | below -2^63 errors  | -9223372036854777856 | -9.223372036854778E18 |
+
+  # `bin` casts a DECIMAL to BIGINT as `hex` does: the fraction is truncated, then ANSI off keeps the
+  # low 64 bits (`Decimal.toLong`) and ANSI on raises `CAST_OVERFLOW`.
+  Rule: a DECIMAL wider than a BIGINT follows the cast
+
+    Scenario: ANSI off: a DECIMAL beyond BIGINT keeps its low 64 bits
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(CAST('99999999999999999999' AS DECIMAL(38,0))) AS result
+        """
+      Then query result
+        | result                                                          |
+        | 110101111000111010111100010110101100011000011111111111111111111 |
+
+    Scenario: ANSI on: a DECIMAL beyond BIGINT overflows
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bin(CAST('99999999999999999999' AS DECIMAL(38,0))) AS result
+        """
+      Then query error \[CAST_OVERFLOW\] The value 99999999999999999999BD of the type "DECIMAL\(38,0\)"
+
+  Rule: bin casts every numeric type as Spark does
+
+    Scenario: ANSI off: a DECIMAL column wraps and keeps small values
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(c) AS result
+        FROM VALUES (1, CAST('99999999999999999999' AS DECIMAL(38,0))), (2, CAST('7' AS DECIMAL(38,0))) AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result                                                          |
+        | 110101111000111010111100010110101100011000011111111111111111111 |
+        | 111                                                             |
+
+    Scenario: ANSI on: a DECIMAL column overflows
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bin(c) AS result FROM VALUES (CAST('99999999999999999999' AS DECIMAL(38,0))) AS t(c)
+        """
+      Then query error \[CAST_OVERFLOW\] The value 99999999999999999999BD of the type "DECIMAL.38,0."
+
+    Scenario Outline: ANSI on: bin of <case> overflowing a BIGINT
+      Given config spark.sql.ansi.enabled = true
+      When query template
+        """
+        SELECT bin(<input>) AS result
+        """
+      Then query error \[CAST_OVERFLOW\] The value <shown> of the type "<type>" cannot be cast to "BIGINT" due to an overflow
+
+      Examples:
+        | case     | input                       | shown    | type   |
+        | a FLOAT  | CAST(1.0E30 AS FLOAT)       | 1.0E30   | FLOAT  |
+        | Infinity | CAST('Infinity' AS DOUBLE)  | Infinity | DOUBLE |
+
   @function(nullability)
   Rule: Output schema
 

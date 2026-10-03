@@ -533,7 +533,7 @@ fn stringify_non_ansi_expression(
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
 }
 
-pub(in crate::resolver) fn spark_interval_metadata_for_expression(
+pub(crate) fn spark_interval_metadata_for_expression(
     expression: &expr::Expr,
     schema: &DFSchemaRef,
 ) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
