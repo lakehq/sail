@@ -241,11 +241,6 @@ pub enum QueryNode {
     Empty {
         produce_one_row: bool,
     },
-    WithParameters {
-        input: Box<QueryPlan>,
-        positional_arguments: Vec<Expr>,
-        named_arguments: Vec<(String, Expr)>,
-    },
     Values(Vec<Vec<Expr>>),
     TableAlias {
         input: Box<QueryPlan>,

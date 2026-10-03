@@ -10,4 +10,9 @@ pub struct ParserOptions {
     pub allow_triple_quote_string: bool,
     /// Whether to treat double-quoted strings as identifiers.
     pub allow_double_quote_identifier: bool,
+    /// Whether a parameter marker (`:name` or `?`) can appear where the grammar
+    /// expects a string or integer literal, in addition to where it expects an expression.
+    /// This is used to locate the parameter markers of `spark.sql()` before they are
+    /// substituted, and should not be enabled for parsing the substituted statement.
+    pub allow_parameter_markers_in_literals: bool,
 }

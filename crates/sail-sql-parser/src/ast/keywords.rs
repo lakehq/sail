@@ -7,7 +7,10 @@ use chumsky::prelude::custom;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Keyword, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText, TreeVisit,
+    TreeVisitor,
+};
 use crate::utils::skip_whitespace;
 
 fn parse_keyword<'a, I, E>(
@@ -95,6 +98,10 @@ macro_rules! keyword_types {
                 fn text(&self) -> std::string::String {
                     format!("{} ", Self::keyword().as_str())
                 }
+            }
+
+            impl TreeVisit for $name {
+                fn visit<V: TreeVisitor>(&self, _visitor: &mut V) {}
             }
         )*
     }

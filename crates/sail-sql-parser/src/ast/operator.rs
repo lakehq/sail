@@ -7,7 +7,10 @@ use chumsky::prelude::custom;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Punctuation, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText, TreeVisit,
+    TreeVisitor,
+};
 use crate::utils::skip_whitespace;
 
 fn parse_operator<'a, I, E>(
@@ -88,6 +91,10 @@ macro_rules! define_operator {
                 let operator: String = Self::punctuations().iter().map(|p| p.to_char()).collect();
                 format!("{operator} ")
             }
+        }
+
+        impl TreeVisit for $name {
+            fn visit<V: TreeVisitor>(&self, _visitor: &mut V) {}
         }
     };
 }

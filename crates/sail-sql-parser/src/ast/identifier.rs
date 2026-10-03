@@ -3,7 +3,7 @@ use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
-use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
+use sail_sql_macro::{TreeParser, TreeSyntax, TreeText, TreeVisit};
 
 use crate::ast::operator::{Asterisk, Period};
 use crate::combinator::sequence;
@@ -12,7 +12,10 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText, TreeVisit,
+    TreeVisitor,
+};
 use crate::utils::skip_whitespace;
 
 fn parse_identifier<'a, F, I, E>(
@@ -95,6 +98,10 @@ impl TreeText for Ident {
     }
 }
 
+impl TreeVisit for Ident {
+    fn visit<V: TreeVisitor>(&self, _visitor: &mut V) {}
+}
+
 /// A restricted identifier parser for column names.
 pub(crate) fn column_ident<'a, I, E>(
     options: &'a ParserOptions,
@@ -129,7 +136,7 @@ where
     custom(move |input| parse_identifier(input, matcher, options))
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
 
 /// A restricted object name parser.
@@ -147,7 +154,7 @@ where
     sequence(ident, Period::parser((), options)).map(ObjectName)
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
 /// A named variable `$name` or `:name`, or an unnamed variable `?`.
@@ -208,6 +215,26 @@ where
     }
 }
 
+/// Parses a parameter marker `:name` or `?` of a parameterized SQL statement.
+/// Unlike a variable, a parameter marker cannot be written as `$name`.
+pub(crate) fn parse_parameter_marker<'a, I, E>(
+    input: &mut InputRef<'a, '_, I, E>,
+) -> Option<Variable>
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
+    let marker = input.save();
+    let variable = parse_named_variable(input).or_else(|| parse_unnamed_variable(input))?;
+    if variable.value.starts_with(Punctuation::Dollar.to_char()) {
+        input.rewind(marker);
+        return None;
+    }
+    Some(variable)
+}
+
 impl<'a, I, E> TreeParser<'a, I, E> for Variable
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
@@ -247,6 +274,12 @@ impl TreeSyntax for Variable {
 impl TreeText for Variable {
     fn text(&self) -> String {
         format!("{} ", self.value)
+    }
+}
+
+impl TreeVisit for Variable {
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        visitor.visit_variable(self);
     }
 }
 

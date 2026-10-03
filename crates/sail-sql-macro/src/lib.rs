@@ -104,3 +104,18 @@ pub fn derive_tree_text(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+/// Derives the `TreeVisit` trait.
+///
+/// The type can be an enum with struct or tuple variants, or a struct with named or unnamed fields.
+/// The derived implementation visits each field in order, so that a `TreeVisitor` sees every
+/// node of interest in the tree.
+///
+/// The visit cannot be derived for enums with unit variants, or structs with no fields.
+#[proc_macro_derive(TreeVisit)]
+pub fn derive_tree_visit(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    tree::visit::derive_tree_visit(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

@@ -111,19 +111,6 @@ impl PlanResolver<'_> {
             QueryNode::Aggregate(aggregate) => {
                 self.resolve_query_aggregate(aggregate, state).await?
             }
-            QueryNode::WithParameters {
-                input,
-                positional_arguments,
-                named_arguments,
-            } => {
-                self.resolve_query_with_parameters(
-                    *input,
-                    positional_arguments,
-                    named_arguments,
-                    state,
-                )
-                .await?
-            }
             QueryNode::LocalRelation { data, schema } => {
                 self.resolve_query_local_relation(data, schema, state)
                     .await?

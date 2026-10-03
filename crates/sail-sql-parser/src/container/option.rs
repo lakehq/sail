@@ -5,7 +5,9 @@ use chumsky::extra::ParserExtra;
 use chumsky::prelude::Input;
 
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText, TreeVisit, TreeVisitor,
+};
 
 impl<'a, T, I, E, A> TreeParser<'a, I, E, A> for Option<T>
 where
@@ -40,6 +42,17 @@ where
         match self {
             Some(t) => t.text(),
             None => String::new(),
+        }
+    }
+}
+
+impl<T> TreeVisit for Option<T>
+where
+    T: TreeVisit,
+{
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        if let Some(t) = self {
+            t.visit(visitor);
         }
     }
 }

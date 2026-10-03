@@ -280,7 +280,7 @@ impl PlanResolver<'_> {
         } = table;
         let schema = Arc::new(DFSchema::empty());
         let resolved = self.resolve_expression(name, &schema, state).await?;
-        let name_str = self.evaluate_identifier_expr(resolved, state)?;
+        let name_str = self.evaluate_identifier_expr(resolved)?;
         let name = sail_sql_analyzer::expression::from_ast_object_name(
             sail_sql_analyzer::parser::parse_object_name(&name_str)?,
         )?;

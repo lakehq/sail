@@ -5,7 +5,7 @@ use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
 use either::Either;
-use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
+use sail_sql_macro::{TreeParser, TreeSyntax, TreeText, TreeVisit};
 
 use crate::ast::expression::{
     DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
@@ -28,7 +28,7 @@ use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)", label = TokenLabel::Query)]
 pub struct Query {
     #[parser(function = |(q, _, _), o| compose(q, o))]
@@ -39,7 +39,7 @@ pub struct Query {
     pub modifiers: Vec<QueryModifier>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum QueryModifier {
     Window(#[parser(function = |e, o| compose(e, o))] WindowClause),
@@ -51,7 +51,7 @@ pub enum QueryModifier {
     Offset(#[parser(function = |e, o| compose(e, o))] OffsetClause),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Query")]
 pub struct WithClause {
     pub with: With,
@@ -60,7 +60,7 @@ pub struct WithClause {
     pub ctes: Sequence<NamedQuery, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Query")]
 pub struct NamedQuery {
     pub name: Ident,
@@ -72,14 +72,14 @@ pub struct NamedQuery {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct IdentList {
     pub left: LeftParenthesis,
     pub names: Sequence<Ident, Comma>,
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeSyntax, TreeText, TreeVisit)]
 pub enum QueryBody {
     Term(Box<QueryTerm>),
     SetOperation {
@@ -139,7 +139,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum SetOperator {
     Union(Union),
     Except(Except),
@@ -147,7 +147,7 @@ pub enum SetOperator {
     Intersect(Intersect),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum SetQuantifier {
     Distinct(Distinct),
     DistinctByName(Distinct, By, Name),
@@ -156,7 +156,7 @@ pub enum SetQuantifier {
     ByName(By, Name),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub enum QueryTerm {
     Select(#[parser(function = |(q, e, t), o| boxed(compose((q, e, t), o)))] Box<QuerySelect>),
@@ -169,7 +169,7 @@ pub enum QueryTerm {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct QuerySelect {
     #[parser(function = |(_, e, _), o| compose(e, o))]
@@ -186,7 +186,7 @@ pub struct QuerySelect {
     pub having: Option<HavingClause>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct ValuesClause {
     pub values: Values,
@@ -195,7 +195,7 @@ pub struct ValuesClause {
     pub alias: Option<AliasClause>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct AliasClause {
     pub r#as: Option<As>,
     #[parser(function = |(), o| table_ident(o))]
@@ -203,7 +203,7 @@ pub struct AliasClause {
     pub columns: Option<IdentList>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct SelectClause {
     pub select: Select,
@@ -214,7 +214,7 @@ pub struct SelectClause {
     pub projection: Sequence<NamedExpr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct HintClause {
     pub start: HintStart,
@@ -223,7 +223,7 @@ pub struct HintClause {
     pub end: HintEnd,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct HintItem {
     pub name: Ident,
@@ -231,7 +231,7 @@ pub struct HintItem {
     pub parameters: Option<HintParameters>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct HintParameters {
     pub left: LeftParenthesis,
@@ -240,7 +240,7 @@ pub struct HintParameters {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Expr, Ident)")]
 pub struct NamedExpr {
     #[parser(function = |(e, _), _| e)]
@@ -259,7 +259,7 @@ pub struct NamedExpr {
     pub alias: Option<(Option<As>, Either<Ident, IdentList>)>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct NamedExprList {
     pub left: LeftParenthesis,
@@ -270,7 +270,7 @@ pub struct NamedExprList {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "TableWithJoins")]
 pub struct FromClause {
     pub from: From,
@@ -278,7 +278,7 @@ pub struct FromClause {
     pub tables: Sequence<TableWithJoins, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct TableWithJoins {
     pub lateral: Option<Lateral>,
@@ -288,7 +288,7 @@ pub struct TableWithJoins {
     pub joins: Vec<TableJoin>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub enum TableFactor {
     Values {
@@ -343,7 +343,7 @@ pub enum TableFactor {
     },
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum TemporalClause {
     Version {
@@ -362,7 +362,7 @@ pub enum TemporalClause {
     },
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct TableSampleClause {
     pub sample: Tablesample,
@@ -373,7 +373,7 @@ pub struct TableSampleClause {
     pub repeatable: Option<TableSampleRepeatable>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum TableSampleMethod {
     Percent {
@@ -394,7 +394,7 @@ pub enum TableSampleMethod {
     },
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct TableSampleRepeatable {
     pub repeatable: Repeatable,
     pub left: LeftParenthesis,
@@ -402,14 +402,14 @@ pub struct TableSampleRepeatable {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum TableModifier {
     Pivot(#[parser(function = |e, o| compose(e, o))] PivotClause),
     Unpivot(UnpivotClause),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct PivotClause {
     pub pivot: Pivot,
@@ -424,7 +424,7 @@ pub struct PivotClause {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub struct UnpivotClause {
     pub unpivot: Unpivot,
     pub nulls: Option<UnpivotNulls>,
@@ -433,13 +433,13 @@ pub struct UnpivotClause {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum UnpivotNulls {
     IncludeNulls(Include, Nulls),
     ExcludeNulls(Exclude, Nulls),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum UnpivotColumns {
     SingleValue {
         values: Ident,
@@ -463,7 +463,7 @@ pub enum UnpivotColumns {
     },
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct TableFunction {
     pub name: ObjectName,
@@ -473,7 +473,7 @@ pub struct TableFunction {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct TableJoin {
     // The join criteria must be absent for natural joins.
@@ -488,7 +488,7 @@ pub struct TableJoin {
     pub criteria: Option<JoinCriteria>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum JoinOperator {
     Inner(Inner),
     Cross(Cross),
@@ -507,14 +507,14 @@ pub enum JoinOperator {
     Full(Full),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum JoinCriteria {
     On(On, #[parser(function = |e, _| e)] Expr),
     Using(Using, IdentList),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct LateralViewClause {
     pub lateral_view: (Lateral, View),
@@ -532,7 +532,7 @@ pub struct LateralViewClause {
     pub columns: Option<(Option<As>, Sequence<Ident, Comma>)>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct WhereClause {
     pub r#where: Where,
@@ -540,7 +540,7 @@ pub struct WhereClause {
     pub condition: Expr,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct GroupByClause {
     pub group_by: (Group, By),
@@ -549,13 +549,13 @@ pub struct GroupByClause {
     pub modifier: Option<GroupByModifier>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 pub enum GroupByModifier {
     WithRollup(With, Rollup),
     WithCube(With, Cube),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct HavingClause {
     pub having: Having,
@@ -563,7 +563,7 @@ pub struct HavingClause {
     pub condition: Expr,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct WindowClause {
     pub window: Window,
@@ -571,7 +571,7 @@ pub struct WindowClause {
     pub items: Sequence<NamedWindow, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct NamedWindow {
     pub name: Ident,
@@ -580,7 +580,7 @@ pub struct NamedWindow {
     pub window: WindowSpec,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct OrderByClause {
     pub order_by: (Order, By),
@@ -588,7 +588,7 @@ pub struct OrderByClause {
     pub items: Sequence<OrderByExpr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct SortByClause {
     pub sort_by: (Sort, By),
@@ -596,7 +596,7 @@ pub struct SortByClause {
     pub items: Sequence<OrderByExpr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct ClusterByClause {
     pub cluster_by: (Cluster, By),
@@ -604,7 +604,7 @@ pub struct ClusterByClause {
     pub items: Sequence<Expr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct PartitionByClause {
     pub partition_by: (Partition, By),
@@ -612,7 +612,7 @@ pub struct PartitionByClause {
     pub items: Sequence<Expr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct DistributeByClause {
     pub distribute_by: (Distribute, By),
@@ -620,7 +620,7 @@ pub struct DistributeByClause {
     pub items: Sequence<Expr, Comma>,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct LimitClause {
     pub limit: Limit,
@@ -628,14 +628,14 @@ pub struct LimitClause {
     pub value: LimitValue,
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub enum LimitValue {
     All(All),
     Value(#[parser(function = |e, _| boxed(e))] Box<Expr>),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText, TreeVisit)]
 #[parser(dependency = "Expr")]
 pub struct OffsetClause {
     pub offset: Offset,
