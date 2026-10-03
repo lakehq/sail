@@ -1,6 +1,7 @@
 use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::vector::l2_distance::VectorL2Distance;
+use sail_function::scalar::vector::normalize::VectorNormalize;
 
 use crate::function::common::ScalarFunction;
 
@@ -15,6 +16,6 @@ pub(super) fn list_built_in_vector_functions() -> Vec<(&'static str, ScalarFunct
         ("vector_inner_product", F::udf(VectorInnerProduct::new())),
         ("vector_l2_distance", F::udf(VectorL2Distance::new())),
         ("vector_norm", F::unknown("vector_norm")),
-        ("vector_normalize", F::unknown("vector_normalize")),
+        ("vector_normalize", F::udf(VectorNormalize::new())),
     ]
 }
