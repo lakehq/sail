@@ -107,7 +107,7 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (map, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-        let DataType::Map(entries, sorted) = map.data_type() else {
+        let DataType::Map(entries, _) = map.data_type() else {
             return plan_err!("transform_keys expected a map, got {}", map.data_type());
         };
         let (key, value) = entry_fields(self.name(), entries)?;
@@ -121,7 +121,9 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
         ));
         Ok(Arc::new(Field::new(
             "",
-            DataType::Map(entries, *sorted),
+            // Rewritten keys are in no particular order, so the result can never
+            // claim sorted keys even when the input map does.
+            DataType::Map(entries, false),
             map.is_nullable(),
         )))
     }
@@ -135,7 +137,7 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
             )?));
         }
         let map = map_array.as_map();
-        let DataType::Map(input_entries, sorted) = map.data_type() else {
+        let DataType::Map(input_entries, _) = map.data_type() else {
             return exec_err!("transform_keys expected a map");
         };
         let DataType::Map(entries, _) = args.return_field.data_type() else {
@@ -183,7 +185,7 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
                 offsets,
                 entry_values,
                 map.nulls().cloned(),
-                *sorted,
+                false,
             )?)));
         }
 
@@ -218,7 +220,7 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
             offsets,
             entry_values,
             map.nulls().cloned(),
-            *sorted,
+            false,
         )?)))
     }
 

@@ -134,3 +134,45 @@ Feature: transform_values with lambda
       Then query result
         | result                    |
         | {outer -> {inner -> 2}}   |
+
+  Rule: An ordinary expression is bound as a lambda that ignores its parameters
+
+    Scenario: A constant replaces every value
+      When query
+        """
+        SELECT transform_values(map(1, 2, 3, 4), 5) AS result
+        """
+      Then query result
+        | result           |
+        | {1 -> 5, 3 -> 5} |
+
+    Scenario Outline: An untyped null map with an ordinary expression is null: <case>
+      When query
+        """
+        SELECT transform_values(NULL, <expression>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case     | expression |
+        | constant | 1          |
+        | null     | NULL       |
+
+  Rule: Invalid map and lambda arguments are rejected
+
+    Scenario Outline: Invalid transform_values argument: <case>
+      When query
+        """
+        SELECT transform_values(<arguments>) AS result
+        """
+      Then query error .*
+
+      Examples:
+        | case                     | arguments                 |
+        | untyped null with lambda | NULL, (k, v) -> v         |
+        | non-map input            | array(1), (k, v) -> v     |
+        | one lambda parameter     | map(1, 2), k -> k         |
+        | three lambda parameters  | map(1, 2), (k, v, i) -> v |
+        | missing function         | map(1, 2)                 |

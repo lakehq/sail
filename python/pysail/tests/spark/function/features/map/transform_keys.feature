@@ -150,3 +150,52 @@ Feature: transform_keys with lambda
       Then query result
         | result               |
         | {outer! -> {1 -> x}} |
+
+  Rule: An ordinary expression is bound as a lambda that ignores its parameters
+
+    Scenario: A constant replaces the only key
+      When query
+        """
+        SELECT transform_keys(map(1, 2), 5) AS result
+        """
+      Then query result
+        | result   |
+        | {5 -> 2} |
+
+    Scenario: A constant key collides when the map has several entries
+      When query
+        """
+        SELECT transform_keys(map(1, 2, 3, 4), 5) AS result
+        """
+      Then query error .*\[DUPLICATED_MAP_KEY\].*
+
+    Scenario Outline: An untyped null map with an ordinary expression is null: <case>
+      When query
+        """
+        SELECT transform_keys(NULL, <expression>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case     | expression |
+        | constant | 1          |
+        | null     | NULL       |
+
+  Rule: Invalid map and lambda arguments are rejected
+
+    Scenario Outline: Invalid transform_keys argument: <case>
+      When query
+        """
+        SELECT transform_keys(<arguments>) AS result
+        """
+      Then query error .*
+
+      Examples:
+        | case                     | arguments                 |
+        | untyped null with lambda | NULL, (k, v) -> k         |
+        | non-map input            | array(1), (k, v) -> k     |
+        | one lambda parameter     | map(1, 2), k -> k         |
+        | three lambda parameters  | map(1, 2), (k, v, i) -> k |
+        | missing function         | map(1, 2)                 |

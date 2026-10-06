@@ -78,3 +78,20 @@ def test_transform_values_captures_column_across_batches(spark):
         F.transform_values("m", lambda _key, value: value + F.col("id")).alias("m"),
     )
     assert [(row.id, row.m) for row in result.orderBy("id").collect()] == [(i, {"a": i * 2}) for i in range(9000)]
+
+
+@pytest.mark.parametrize(
+    ("expression", "value_type", "value_contains_null"),
+    [
+        ("1", T.IntegerType(), False),
+        ("NULL", T.NullType(), True),
+    ],
+)
+def test_transform_values_coerces_untyped_null_map_for_ordinary_expression(
+    spark, expression, value_type, value_contains_null
+):
+    result = spark.sql(f"SELECT transform_values(NULL, {expression}) AS r")
+    assert result.schema == T.StructType(
+        [T.StructField("r", T.MapType(T.NullType(), value_type, valueContainsNull=value_contains_null), nullable=True)]
+    )
+    assert result.collect()[0].r is None

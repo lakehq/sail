@@ -267,13 +267,28 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
-fn transform_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (map, function) = input.arguments.two()?;
+/// Binds the arguments of a map higher-order function that takes one lambda
+/// over each `(key, value)` entry, such as `transform_keys` and `transform_values`.
+fn bind_map_entry_function(
+    name: &str,
+    mut map: expr::Expr,
+    function: expr::Expr,
+    schema: &DFSchema,
+) -> PlanResult<(expr::Expr, expr::Expr)> {
     // Spark binds an ordinary expression as a hidden lambda whose parameters
     // are unused. Avoid capturing variables from any enclosing lambda.
     let function = if matches!(function, expr::Expr::Lambda(_)) {
         function
     } else {
+        // Spark coerces a null map only when the function is already resolved.
+        // An explicit lambda remains unresolved and must still reject this input.
+        if map.get_type(schema)? == DataType::Null {
+            validate_map_filter_null_expr(&map, schema)?;
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
+                &DataType::Null,
+                &DataType::Null,
+            ))?);
+        }
         let mut params = Vec::with_capacity(2);
         for base in ["__map_key", "__map_value"] {
             let mut name = base.to_string();
@@ -284,7 +299,18 @@ fn transform_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         expr::Expr::Lambda(Lambda::new(params, function))
     };
-    expect_lambda_arity("transform_values", &function, 2)?;
+    expect_lambda_arity(name, &function, 2)?;
+    Ok((map, function))
+}
+
+fn transform_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, function) = input.arguments.two()?;
+    let (map, function) = bind_map_entry_function(
+        "transform_values",
+        map,
+        function,
+        input.function_context.schema,
+    )?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_TRANSFORM_VALUES_UDF),
         vec![map, function],
@@ -295,22 +321,12 @@ fn transform_keys(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
     let (map, function) = input.arguments.two()?;
-    // Spark binds an ordinary expression as a hidden lambda whose parameters
-    // are unused. Avoid capturing variables from any enclosing lambda.
-    let function = if matches!(function, expr::Expr::Lambda(_)) {
-        function
-    } else {
-        let mut params = Vec::with_capacity(2);
-        for base in ["__map_key", "__map_value"] {
-            let mut name = base.to_string();
-            while lambda_body_uses_param(&function, &name)? {
-                name.push('_');
-            }
-            params.push(name);
-        }
-        expr::Expr::Lambda(Lambda::new(params, function))
-    };
-    expect_lambda_arity("transform_keys", &function, 2)?;
+    let (map, function) = bind_map_entry_function(
+        "transform_keys",
+        map,
+        function,
+        input.function_context.schema,
+    )?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
             last_value_wins,
