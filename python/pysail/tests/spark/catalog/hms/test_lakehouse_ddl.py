@@ -198,3 +198,46 @@ def test_iceberg_type_promotion_preserves_defaults(spark, jvm_spark, hms_s3_data
     assert [tuple(r) for r in spark.sql(f"SELECT id, score, amount FROM {name}").collect()] == [
         (9, 1.5, Decimal("12.34"))
     ] * 2
+
+
+def test_iceberg_typed_default_interoperability(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    table = "typed_defaults"
+    name = f"{hms_s3_database}.{table}"
+    reference = f"iceberg.{name}"
+    spark.sql(
+        f"CREATE TABLE {name} (id INT, amount DECIMAL(5, 2), d DATE, ts TIMESTAMP_NTZ) "
+        "USING iceberg TBLPROPERTIES ('format-version'='3')"
+    )
+    for column, expression in [
+        ("amount", "1.235"),
+        ("d", "DATE '2026-01-02'"),
+        ("ts", "TIMESTAMP_NTZ '2026-01-02 03:04:05.123456'"),
+    ]:
+        spark.sql(f"ALTER TABLE {name} ALTER COLUMN {column} SET DEFAULT {expression}")
+    before, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    fields = next(s["fields"] for s in metadata["schemas"] if s["schema-id"] == metadata["current-schema-id"])
+    with pytest.raises(Exception, match="Decimal literal cannot be represented"):
+        spark.sql(f"ALTER TABLE {name} ALTER COLUMN amount SET DEFAULT 100000")
+    assert _metadata_location(jvm_spark, hms_s3_database, table) == before
+    spark.sql(f"INSERT INTO {name} (id) VALUES (1)")
+    expected = tuple(
+        jvm_spark.sql(
+            "SELECT CAST(1.235 AS DECIMAL(5, 2)), DATE '2026-01-02', TIMESTAMP_NTZ '2026-01-02 03:04:05.123456'"
+        ).first()
+    )
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT amount, d, ts FROM {reference}").collect()] == [expected]
+
+    iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001
+    iceberg_table = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)  # noqa: SLF001
+    # The Iceberg API accepts typed values; Spark SQL resolves and casts its default expressions first.
+    update = iceberg_table.updateSchema()
+    for column, value in [("amount", Decimal("1.24")), ("d", "2026-01-02"), ("ts", "2026-01-02T03:04:05.123456")]:
+        update.updateColumnDefault(column, iceberg.expressions.Literal.of(value))
+    update.commit()
+    _, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    reference_fields = next(s["fields"] for s in metadata["schemas"] if s["schema-id"] == metadata["current-schema-id"])
+    assert reference_fields == fields
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    jvm_spark.sql(f"INSERT INTO {reference} (id) VALUES (2)")
+    assert [tuple(r) for r in spark.sql(f"SELECT amount, d, ts FROM {name}").collect()] == [expected, expected]

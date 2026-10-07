@@ -17,6 +17,8 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/values.rs
 
+use datafusion::arrow::compute::kernels::cast::rescale_decimal;
+use datafusion::arrow::datatypes::Decimal128Type;
 use ordered_float::OrderedFloat;
 use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
@@ -170,6 +172,36 @@ fn sail_literal_from_str(
         return Ok(sail_spec::Literal::Null);
     }
 
+    let temporal_value = match (
+        data_type,
+        parse_expression(value).and_then(from_ast_expression),
+    ) {
+        (Type::Primitive(PrimitiveType::Date), Ok(sail_spec::Expr::UnresolvedDate { value }))
+        | (Type::Primitive(PrimitiveType::Time), Ok(sail_spec::Expr::UnresolvedTime { value }))
+        | (
+            Type::Primitive(
+                PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+            ),
+            Ok(sail_spec::Expr::UnresolvedTimestamp { value, .. }),
+        ) => Some(value),
+        (
+            Type::Primitive(
+                PrimitiveType::Date
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+            ),
+            Ok(sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value })),
+        ) => value,
+        _ => None,
+    };
+    let value = temporal_value.as_deref().unwrap_or(value);
+
     fn parse_error(e: impl std::fmt::Display) -> String {
         e.to_string()
     }
@@ -190,6 +222,11 @@ fn sail_literal_from_str(
         | Type::Primitive(PrimitiveType::Float)
         | Type::Primitive(PrimitiveType::Double)
         | Type::Primitive(PrimitiveType::Decimal { .. }) => {
+            // SQL serialization may separate a unary sign from the numeric token.
+            let signed_value = value
+                .strip_prefix(['+', '-'])
+                .map(|magnitude| format!("{}{}", &value[..1], magnitude.trim_start()));
+            let value = signed_value.as_deref().unwrap_or(value);
             let literal = match data_type {
                 Type::Primitive(PrimitiveType::Boolean) => sail_spec::Literal::Boolean {
                     value: Some(parse_bool(value)?),
@@ -214,9 +251,7 @@ fn sail_literal_from_str(
             Ok(literal)
         }
         Type::Primitive(PrimitiveType::Date) => {
-            let date = parse_date(value)
-                .or_else(|_| parse_date(unquote_str(value)))
-                .map_err(parse_error)?;
+            let date = parse_date(value).map_err(parse_error)?;
             let date = NaiveDate::try_from(date).map_err(parse_error)?;
             let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).ok_or("Bad epoch")?;
             Ok(sail_spec::Literal::Date32 {
@@ -224,9 +259,7 @@ fn sail_literal_from_str(
             })
         }
         Type::Primitive(PrimitiveType::Time) => {
-            let time = parse_time(value)
-                .or_else(|_| parse_time(unquote_str(value)))
-                .map_err(parse_error)?;
+            let time = parse_time(value).map_err(parse_error)?;
             let time = NaiveTime::try_from(time).map_err(parse_error)?;
             let microseconds = time.num_seconds_from_midnight() as i64 * 1_000_000
                 + time.nanosecond() as i64 / 1_000;
@@ -235,9 +268,7 @@ fn sail_literal_from_str(
             })
         }
         Type::Primitive(PrimitiveType::Timestamp) => {
-            let timestamp = parse_timestamp(value)
-                .or_else(|_| parse_timestamp(unquote_str(value)))
-                .map_err(parse_error)?;
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
             let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
             Ok(sail_spec::Literal::TimestampMicrosecond {
                 microseconds: Some(timestamp.and_utc().timestamp_micros()),
@@ -245,9 +276,7 @@ fn sail_literal_from_str(
             })
         }
         Type::Primitive(PrimitiveType::Timestamptz) => {
-            let timestamp = parse_timestamp(value)
-                .or_else(|_| parse_timestamp(unquote_str(value)))
-                .map_err(parse_error)?;
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
             let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
             let timestamp = if timezone.is_empty() {
                 timestamp.and_utc()
@@ -261,9 +290,7 @@ fn sail_literal_from_str(
             })
         }
         Type::Primitive(PrimitiveType::TimestampNs) => {
-            let timestamp = parse_timestamp(value)
-                .or_else(|_| parse_timestamp(unquote_str(value)))
-                .map_err(parse_error)?;
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
             let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
             Ok(sail_spec::Literal::TimestampNanosecond {
                 nanoseconds: Some(
@@ -276,9 +303,7 @@ fn sail_literal_from_str(
             })
         }
         Type::Primitive(PrimitiveType::TimestamptzNs) => {
-            let timestamp = parse_timestamp(value)
-                .or_else(|_| parse_timestamp(unquote_str(value)))
-                .map_err(parse_error)?;
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
             let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
             let timestamp = if timezone.is_empty() {
                 timestamp.and_utc()
@@ -356,13 +381,6 @@ fn sail_literal_from_str(
             Err("string defaults for complex Iceberg types are not supported".to_string())
         }
     }
-}
-
-fn unquote_str(value: &str) -> &str {
-    value
-        .strip_prefix('\'')
-        .and_then(|value| value.strip_suffix('\''))
-        .unwrap_or(value)
 }
 
 fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
@@ -444,9 +462,27 @@ impl Literal {
                 })
                 .transpose()?,
             (
-                Type::Primitive(PrimitiveType::Decimal { .. }),
-                sail_spec::Literal::Decimal128 { value, .. },
-            ) => value.map(|v| Literal::Primitive(PrimitiveLiteral::Int128(v))),
+                Type::Primitive(PrimitiveType::Decimal { precision, scale }),
+                sail_spec::Literal::Decimal128 {
+                    value,
+                    precision: source_precision,
+                    scale: source_scale,
+                },
+            ) => value
+                .map(|value| {
+                    let precision = u8::try_from(*precision).map_err(|e| e.to_string())?;
+                    let scale = i8::try_from(*scale).map_err(|e| e.to_string())?;
+                    rescale_decimal::<Decimal128Type, Decimal128Type>(
+                        value,
+                        source_precision,
+                        source_scale,
+                        precision,
+                        scale,
+                    )
+                    .map(|v| Literal::Primitive(PrimitiveLiteral::Int128(v)))
+                    .ok_or_else(|| format!("Decimal literal cannot be represented as {data_type}"))
+                })
+                .transpose()?,
             (expected, literal) => {
                 return Err(format!(
                     "Sail literal {literal:?} is not supported for Iceberg type {expected:?}"
