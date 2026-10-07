@@ -364,3 +364,224 @@ Feature: CAST expressions
         | an exact one at maximum scale     | 1                     | 37    | CAST(1.0 AS FLOAT)  |
         | a value inside the exact range    | 12345.67              | 2     | CAST(12345.67 AS FLOAT) |
         | the 2^24 float precision boundary | 16777217              | 0     | CAST(16777216 AS FLOAT) |
+
+  Rule: Decimal to double covers every kernel path
+
+    # Sail converts through a kernel with three paths -- both operands exactly
+    # representable, a single u128 division, and a string parse -- so each path is
+    # probed with values only its own arithmetic can get right. Expected values come
+    # from the Spark JVM over Spark Connect (UTC), compared by EQUALITY.
+
+    Scenario Outline: decimal to double, kernel paths: <case>
+      When query
+        """
+        SELECT CAST(CAST('<literal>' AS DECIMAL(<precision>,<scale>)) AS DOUBLE) = <expected> AS matches
+        """
+      Then query result
+        | matches |
+        | true    |
+
+      Examples:
+        | case                                        | literal                                  | precision | scale | expected               |
+        | exact operands, one division                | 12345.67                                 | 10        | 2     | 12345.67D              |
+        | exact operands at the largest scale 22      | 0.0000000000000000000001                 | 38        | 22    | 1.0E-22D               |
+        | the largest exact integer 2^53 - 1          | 9007199254740991                         | 38        | 0     | 9007199254740991D      |
+        | 2^53 itself                                 | 9007199254740992                         | 38        | 0     | 9007199254740992D      |
+        | a tie between two doubles rounds down       | 9007199254740993                         | 38        | 0     | 9007199254740992D      |
+        | a tie between two doubles rounds up         | 9007199254740995                         | 38        | 0     | 9007199254740996D      |
+        | a negative wide integral part               | -123456789012345678.90                   | 38        | 2     | -1.2345678901234568E17D |
+        | an exact tie at 2^60 + 128 stays even       | 1152921504606847104                      | 38        | 0     | 1.152921504606847E18D  |
+        | the same tie with a remainder rounds up     | 1152921504606847104.1                    | 38        | 1     | 1.1529215046068472E18D |
+        | exactly 2^60                                | 1152921504606846976                      | 38        | 0     | 1.152921504606847E18D  |
+        | scale 19 with a wide integral part          | 1234567890123456789.0123456789012345678  | 38        | 19    | 1.2345678901234568E18D |
+        | a tie plus 1e-19 rounds up (sticky bit)     | 1152921504606847104.0000000000000000001  | 38        | 19    | 1.1529215046068472E18D |
+        | a negative tie plus 1e-19 rounds away       | -1152921504606847104.0000000000000000001 | 38        | 19    | -1.1529215046068472E18D |
+        | the same tie without the remainder stays    | 1152921504606847104.0000000000000000000  | 38        | 19    | 1.152921504606847E18D  |
+        | 2^53 + 1 plus 1e-19 rounds up (sticky bit)  | 9007199254740993.0000000000000000001     | 38        | 19    | 9007199254740994D      |
+        | 2^53 + 1 at scale 19 without the remainder  | 9007199254740993.0000000000000000000     | 38        | 19    | 9007199254740992D      |
+        | the largest DECIMAL(38,0)                   | 99999999999999999999999999999999999999   | 38        | 0     | 1.0E38D                |
+        | the smallest DECIMAL(38,0)                  | -99999999999999999999999999999999999999  | 38        | 0     | -1.0E38D               |
+        | all nines at scale 38                       | 0.99999999999999999999999999999999999999 | 38        | 38    | 1.0D                   |
+        | zero                                        | 0                                        | 38        | 10    | 0.0D                   |
+        | a tiny unscaled value at scale 20           | 0.00000000000000000001                   | 38        | 20    | 1.0E-20D               |
+
+  Rule: Decimal to float covers every kernel path
+
+    # Float expectations are the exact widening of Spark's float, cast back to FLOAT.
+
+    Scenario Outline: decimal to float, kernel paths: <case>
+      When query
+        """
+        SELECT CAST(CAST('<literal>' AS DECIMAL(<precision>,<scale>)) AS FLOAT) = CAST(<expected> AS FLOAT) AS matches
+        """
+      Then query result
+        | matches |
+        | true    |
+
+      Examples:
+        | case                                          | literal                                  | precision | scale | expected                    |
+        | scale 22 is past the exact float powers       | 0.0000000000000000000001                 | 38        | 22    | 1.000000031374395E-22D      |
+        | a double-exact integer beyond 2^24            | 9007199254740991                         | 38        | 0     | 9007199254740992.0D         |
+        | a negative wide integral part                 | -123456789012345678.90                   | 38        | 2     | -1.234567905190871E17D      |
+        | a double tie is not a float tie               | 1152921504606847104.1                    | 38        | 1     | 1.152921504606847E18D       |
+        | scale 19 with a wide integral part            | 1234567890123456789.0123456789012345678  | 38        | 19    | 1.2345679395506094E18D      |
+        | 2^24 + 1 plus 1e-19 rounds up (sticky bit)    | 16777217.0000000000000000001             | 38        | 19    | 16777218.0D                 |
+        | 2^24 + 1 at scale 19 without the remainder    | 16777217.0000000000000000000             | 38        | 19    | 16777216.0D                 |
+        | 2^24 + 3 at scale 19 rounds up either way     | 16777219.0000000000000000001             | 38        | 19    | 16777220.0D                 |
+        | the largest DECIMAL(38,0)                     | 99999999999999999999999999999999999999   | 38        | 0     | 9.999999680285692E37D       |
+        | the smallest DECIMAL(38,0)                    | -99999999999999999999999999999999999999  | 38        | 0     | -9.999999680285692E37D      |
+        | scale 20 needs the string path                | 1.23456789012345678901                   | 38        | 20    | 1.2345678806304932D         |
+        | the smallest DECIMAL(38,37) step              | 0.0000000000000000000000000000000000001  | 38        | 37    | 9.99999991097579E-38D       |
+        | all nines at scale 38                         | 0.99999999999999999999999999999999999999 | 38        | 38    | 1.0D                        |
+        | zero                                          | 0                                        | 38        | 10    | 0.0D                        |
+        | a tiny unscaled value at scale 20             | 0.00000000000000000001                   | 38        | 20    | 9.999999682655225E-21D      |
+        | 2^24                                          | 16777216                                 | 38        | 0     | 16777216.0D                 |
+        | a tie between two floats rounds up            | 16777219                                 | 38        | 0     | 16777220.0D                 |
+        | rounding the double first would pick the wrong float | 13631072.500000000514758830       | 38        | 18    | 13631073.0D                 |
+        | 2^25 + 1                                      | 33554433                                 | 38        | 0     | 33554432.0D                 |
+        | scale 10, the last exact float power          | 0.0000000001                             | 38        | 10    | 1.000000013351432E-10D      |
+        | scale 11, the first inexact float power       | 0.00000000001                            | 38        | 11    | 9.999999960041972E-12D      |
+        | a long mantissa                               | 123456789.123456789                      | 38        | 9     | 123456792.0D                |
+        | one and a half                                | 1.5                                      | 38        | 1     | 1.5D                        |
+        | 1e35                                          | 100000000000000000000000000000000000     | 38        | 0     | 1.0000000409184788E35D      |
+        | just below the float maximum                  | 340282350000000000000000000000000000     | 38        | 0     | 3.4028234346940236E35D      |
+
+  Rule: One batch mixes every path
+
+    # The kernel decides per value, so a column that mixes exact, wide and extreme-scale
+    # values and NULLs must come out right row by row.
+
+    Scenario: a decimal column mixing every path casts to double
+      When query
+        """
+        SELECT id, CAST(d AS DOUBLE) = e AS matches
+        FROM VALUES
+          (1, CAST('12345.67' AS DECIMAL(38,2)), 12345.67D),
+          (2, CAST('123456789012345678.90' AS DECIMAL(38,2)), 1.2345678901234568E17D),
+          (3, CAST(NULL AS DECIMAL(38,2)), 0.0D),
+          (4, CAST('-9007199254740993' AS DECIMAL(38,2)), -9007199254740992D),
+          (5, CAST('0.00' AS DECIMAL(38,2)), 0.0D),
+          (6, CAST('999999999999999999999999999999999999.99' AS DECIMAL(38,2)), 1.0E36D)
+          AS t(id, d, e)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | matches |
+        | 1  | true    |
+        | 2  | true    |
+        | 3  | NULL    |
+        | 4  | true    |
+        | 5  | true    |
+        | 6  | true    |
+
+    Scenario: a decimal column casts to float row by row
+      When query
+        """
+        SELECT id, CAST(d AS FLOAT) = CAST(e AS FLOAT) AS matches
+        FROM VALUES
+          (1, CAST('12345.67' AS DECIMAL(38,18)), 12345.669921875D),
+          (2, CAST('13631072.500000000514758830' AS DECIMAL(38,18)), 13631073.0D),
+          (3, CAST(NULL AS DECIMAL(38,18)), 0.0D),
+          (4, CAST('16777219' AS DECIMAL(38,18)), 16777220.0D)
+          AS t(id, d, e)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | matches |
+        | 1  | true    |
+        | 2  | true    |
+        | 3  | NULL    |
+        | 4  | true    |
+
+  Rule: TRY_CAST and ANSI do not change the value
+
+    Scenario Outline: TRY_CAST of a decimal to <target> agrees with CAST
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TRY_CAST(CAST('123456789012345678.90' AS DECIMAL(38,2)) AS <target>) = CAST(<expected> AS <target>) AS matches
+        """
+      Then query result
+        | matches |
+        | true    |
+
+      Examples:
+        | target | ansi  | expected               |
+        | DOUBLE | false | 1.2345678901234568E17D |
+        | DOUBLE | true  | 1.2345678901234568E17D |
+        | FLOAT  | false | 1.234567905190871E17D  |
+        | FLOAT  | true  | 1.234567905190871E17D  |
+
+    Scenario Outline: CAST of a decimal to <target> under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS <target>) = CAST(<expected> AS <target>) AS matches
+        """
+      Then query result
+        | matches |
+        | true    |
+
+      Examples:
+        | target | ansi  | expected              |
+        | DOUBLE | false | 1.0E38D               |
+        | DOUBLE | true  | 1.0E38D               |
+        | FLOAT  | false | 9.999999680285692E37D |
+        | FLOAT  | true  | 9.999999680285692E37D |
+
+  Rule: Decimal to float and double keep the Spark schema
+
+    Scenario Outline: CAST and TRY_CAST nullability of a non-null decimal under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TRY_CAST(d AS DOUBLE) AS t, CAST(d AS DOUBLE) AS c, TRY_CAST(d AS FLOAT) AS tf, CAST(d AS FLOAT) AS cf
+        FROM (SELECT CAST(1.5 AS DECIMAL(10,2)) AS d)
+        """
+      Then query schema
+        """
+        root
+         |-- t: double (nullable = true)
+         |-- c: double (nullable = false)
+         |-- tf: float (nullable = true)
+         |-- cf: float (nullable = false)
+        """
+      Then query result
+        | t   | c   | tf  | cf  |
+        | 1.5 | 1.5 | 1.5 | 1.5 |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: CAST of a nullable decimal column stays nullable
+      When query
+        """
+        SELECT CAST(d AS DOUBLE) AS c, CAST(d AS FLOAT) AS cf
+        FROM VALUES (CAST(1.5 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))) AS t(d)
+        """
+      Then query schema
+        """
+        root
+         |-- c: double (nullable = true)
+         |-- cf: float (nullable = true)
+        """
+
+    Scenario: the cast keeps the nullability of the container it sits in
+      When query
+        """
+        SELECT array(CAST(d AS DOUBLE)) AS a, map('k', CAST(d AS FLOAT)) AS m, struct(CAST(d AS DOUBLE) AS x) AS s
+        FROM (SELECT CAST(1.5 AS DECIMAL(10,2)) AS d)
+        """
+      Then query schema
+        """
+        root
+         |-- a: array (nullable = false)
+         |    |-- element: double (containsNull = false)
+         |-- m: map (nullable = false)
+         |    |-- key: string
+         |    |-- value: float (valueContainsNull = false)
+         |-- s: struct (nullable = false)
+         |    |-- x: double (nullable = false)
+        """

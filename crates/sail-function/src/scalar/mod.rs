@@ -14,6 +14,7 @@ pub mod math;
 pub mod misc;
 pub mod multi_expr;
 pub mod predicate;
+pub mod spark_cast_decimal_to_float;
 pub mod spark_cast_string_to_int32;
 pub mod spark_integral_to_binary;
 pub mod spark_struct_rename;

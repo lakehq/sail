@@ -23,6 +23,7 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_string_to_time::SparkStringToTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_cast_decimal_to_float::SparkCastDecimalToFloat;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -211,13 +212,27 @@ impl PlanResolver<'_> {
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (
-                DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _),
+                DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _),
                 to @ (DataType::Float32 | DataType::Float64),
                 is_try,
             ) => {
+                // Decimal.scala:245-247 rounds directly from the exact decimal, once.
+                // Arrow's unscaled-integer -> float -> division path rounds twice, so
+                // use a kernel that rounds once without a per-row string.
+                let udf = if to == DataType::Float32 {
+                    SparkCastDecimalToFloat::new_float32()
+                } else {
+                    SparkCastDecimalToFloat::new_float64()
+                };
+                let converted = ScalarUDF::new_from_impl(udf).call(vec![expr]);
+                // The conversion cannot fail, but TRY_CAST's result is always nullable.
+                if is_try {
+                    try_cast(converted, to)
+                } else {
+                    converted
+                }
+            }
+            (DataType::Decimal256(_, _), to @ (DataType::Float32 | DataType::Float64), is_try) => {
                 // Decimal.scala:245-247 rounds directly from the exact decimal.
                 // Arrow's unscaled-integer -> float -> division path can round
                 // twice. Preserve every decimal digit before parsing the float.
