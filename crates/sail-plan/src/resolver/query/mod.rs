@@ -62,7 +62,7 @@ impl PlanResolver<'_> {
     /// Resolve query plan.
     /// The resolved plan may contain hidden fields.
     /// If the hidden fields cannot be handled,
-    /// [`Self::resolve_query_plan`] should be used instead,
+    /// [`Self::resolve_query_plan`] should be used instead.
     #[async_recursion]
     async fn resolve_query_plan_with_hidden_fields(
         &self,
