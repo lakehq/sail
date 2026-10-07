@@ -389,7 +389,10 @@ SKIPPED_SPARK_TESTS = [
     ),
     TestMarker(
         keywords=["test_connect_basic.py", "SparkConnectSessionTests", "test_error_stack_trace"],
-        reason="Asserts JVM/Catalyst stack frames and JVM stacktrace configuration, which do not apply to Sail",
+        reason=(
+            "Asserts JVM/Catalyst stack frames and JVM stacktrace truncation; portable analysis-error "
+            "and stacktrace-configuration coverage is in session/test_error.py"
+        ),
     ),
     TestMarker(
         keywords=["test_parity_types.py", "TypesParityTests", "test_cast_to_string_with_udt"],
@@ -404,14 +407,6 @@ SKIPPED_SPARK_TESTS = [
         reason=(
             "Creates a persistent function backed by a JVM class; builtin/Python lookup is covered in "
             "catalog/test_function.py, including strict xfails for unimplemented catalog APIs"
-        ),
-        spark_major_version_less_than=4,
-    ),
-    TestMarker(
-        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_function_exists"],
-        reason=(
-            "Creates persistent JVM class-backed functions; portable existence/lifecycle regressions "
-            "are retained in catalog/test_function.py"
         ),
         spark_major_version_less_than=4,
     ),

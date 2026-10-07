@@ -242,19 +242,6 @@ def python_function(spark):
 
 
 # Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
-# CatalogParityTests.test_function_exists; uses built-ins/Python UDFs instead of persistent Java functions.
-@pytest.mark.xfail(
-    not is_jvm_spark(), reason="Catalog.functionExists is not implemented", raises=AnalysisException, strict=True
-)
-@pytest.mark.parametrize(
-    ("name", "exists"),
-    [("to_date", True), ("missing_catalog_function", False), ("default.to_date", False)],
-)
-def test_function_exists(spark, name, exists):
-    assert spark.catalog.functionExists(name) is exists
-
-
-# Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
 # CatalogParityTests.test_get_function; uses built-ins/Python UDFs instead of persistent Java functions.
 @pytest.mark.xfail(
     not is_jvm_spark(), reason="Catalog.getFunction is not implemented", raises=AnalysisException, strict=True
@@ -281,18 +268,6 @@ def test_get_builtin_function_metadata(spark):
 def test_get_missing_or_qualified_builtin_function(spark, name):
     with pytest.raises(AnalysisException, match=r"(?i)(not found|cannot be found|unresolved|does not exist)"):
         spark.catalog.getFunction(name)
-
-
-# Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
-# CatalogParityTests.test_function_exists; uses built-ins/Python UDFs instead of persistent Java functions.
-@pytest.mark.xfail(
-    not is_jvm_spark(), reason="Catalog.functionExists is not implemented", raises=AnalysisException, strict=True
-)
-def test_python_function_exists_lifecycle(spark, python_function):
-    assert spark.catalog.functionExists(python_function)
-    assert not spark.catalog.functionExists(f"default.{python_function}")
-    spark.sql(f"DROP TEMPORARY FUNCTION {python_function}")
-    assert not spark.catalog.functionExists(python_function)
 
 
 # Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
