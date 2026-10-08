@@ -55,6 +55,21 @@ Feature: datetime edge cases
         | `to_timestamp` parses maximum positive offset +14:00 | +14:00 | 2026-06-15 00:30:45 |
         | `to_timestamp` parses maximum negative offset -12:00 | -12:00 | 2026-06-16 02:30:45 |
 
+  Rule: Foldable NULL time zones
+
+    @sail-bug
+    Scenario: `from_utc_timestamp` skips the timestamp for a foldable NULL zone
+      When query
+        """
+        SELECT from_utc_timestamp(
+          CAST(raise_error('timestamp-evaluated') AS TIMESTAMP),
+          CAST(NULL AS STRING)
+        ) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Half-hour and quarter-hour timezone offsets
 
     Background:

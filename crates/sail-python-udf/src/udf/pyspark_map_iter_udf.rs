@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::Result;
 use educe::Educe;
 use pyo3::Python;
@@ -77,7 +77,11 @@ impl StreamUDF for PySparkMapIterUDF {
         self.output_schema.clone()
     }
 
-    fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
+    fn invoke(
+        &self,
+        input: SendableRecordBatchStream,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {

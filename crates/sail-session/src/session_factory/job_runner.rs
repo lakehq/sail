@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
-use datafusion::common::{Result, internal_err};
 use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
-use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistoryReporter};
+use sail_common_datafusion::session::job::JobRunner;
 use sail_execution::DriverId;
 use sail_execution::driver::{DriverComponents, DriverHandle, DriverOptions};
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
+use sail_telemetry::events::SystemEventReporter;
 
+use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
 pub struct SessionJobRunner {
@@ -44,7 +45,7 @@ pub struct SessionJobRunnerInfo {
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: Option<u16>,
-    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
+    pub event_reporter: SystemEventReporter,
 }
 
 pub trait SessionJobRunnerFactory: Send {
@@ -52,7 +53,7 @@ pub trait SessionJobRunnerFactory: Send {
         &mut self,
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
-    ) -> Result<SessionJobRunner>;
+    ) -> SessionResult<SessionJobRunner>;
 }
 
 pub struct ServerSessionJobRunnerFactory {
@@ -70,20 +71,20 @@ impl ServerSessionJobRunnerFactory {
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
         worker_manager: Box<dyn sail_execution::worker_manager::WorkerManager>,
-    ) -> Result<SessionJobRunner> {
+    ) -> SessionResult<SessionJobRunner> {
         let Some(port) = info.driver_server_port else {
-            return internal_err!("driver gateway is not available");
+            return Err(SessionError::internal("driver gateway is not available"));
         };
-        let options = DriverOptions::new(
+        let options = DriverOptions::try_new(
             &self.config,
             self.runtime.clone(),
             info.session_id,
             info.driver_id,
             port,
-        );
+        )?;
         let components = DriverComponents {
             worker_manager,
-            history_reporter: info.history_reporter,
+            event_reporter: info.event_reporter,
         };
         Ok(SessionJobRunner::cluster(ClusterJobRunner::new(
             system, options, components,
@@ -96,10 +97,10 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
         &mut self,
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
-    ) -> Result<SessionJobRunner> {
+    ) -> SessionResult<SessionJobRunner> {
         match self.config.mode {
             ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
-                info.history_reporter,
+                info.session_id,
             ))),
             ExecutionMode::LocalCluster => {
                 let worker_session =

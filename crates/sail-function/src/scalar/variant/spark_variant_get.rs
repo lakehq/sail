@@ -277,7 +277,9 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        datafusion_common::internal_err!("return_field_from_args should be used")
+        datafusion_common::internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

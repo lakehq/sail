@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use sail_celeborn::lifecycle::LifecycleManagerActor;
-use sail_common::actor::ActorHandle;
-use tokio::sync::mpsc::error::SendError;
+use sail_common::actor::{ActorHandle, ActorSendError};
 use tokio::sync::oneshot;
 use tonic::async_trait;
 
@@ -29,8 +28,8 @@ impl DriverHandle {
     pub(crate) async fn send(
         &self,
         message: DriverMessage,
-    ) -> Result<(), SendError<DriverMessage>> {
-        self.handle.send(message).await
+    ) -> Result<(), Box<ActorSendError<DriverMessage>>> {
+        self.handle.send(message).await.map_err(Box::new)
     }
 
     pub(crate) async fn celeborn_lifecycle_manager(
@@ -44,9 +43,11 @@ impl DriverHandle {
     }
 
     pub async fn activate(&self) -> ExecutionResult<()> {
-        self.send(DriverMessage::Activate)
+        let (result, receiver) = oneshot::channel();
+        self.send(DriverMessage::Activate { result })
             .await
-            .map_err(ExecutionError::from)
+            .map_err(ExecutionError::from)?;
+        receiver.await.map_err(ExecutionError::from)?
     }
 
     pub async fn shutdown(&self) -> ExecutionResult<()> {

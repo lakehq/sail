@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
@@ -11,20 +12,24 @@ use log::{debug, warn};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
+use sail_system_store::SystemEvent;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
+    JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
-use crate::driver::output::build_job_output;
+use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions, JobState};
+use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::proto::{
+    encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
+};
 use crate::shuffle::ShuffleBackendKind;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
@@ -63,6 +68,39 @@ impl JobScheduler {
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
+        if let Some(job) = self.jobs.get(&job_id) {
+            let event_reporter = &self.event_reporter;
+            let session_id = &self.options.session_id;
+            event_reporter.report(SystemEvent::JobCreated {
+                session_id: session_id.clone(),
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                created_at: Utc::now(),
+            });
+            for (s, (stage, descriptor)) in job.graph.stages().iter().zip(&job.stages).enumerate() {
+                event_reporter.report(SystemEvent::StageCreated {
+                    session_id: session_id.clone(),
+                    job_id: u64::from(job_id),
+                    stage: s as u64,
+                    partitions: stage.plan.output_partitioning().partition_count() as u64,
+                    inputs: stage
+                        .inputs
+                        .iter()
+                        .map(|input| sail_system_store::types::StageInput {
+                            stage: input.stage as u64,
+                            mode: input.mode.to_string(),
+                        })
+                        .collect(),
+                    group: stage.group.clone(),
+                    mode: stage.mode.to_string(),
+                    distribution: stage.distribution.to_string(),
+                    placement: stage.placement.to_string(),
+                    status: descriptor.state.status().to_string(),
+                    created_at: Utc::now(),
+                });
+            }
+        }
+
         Ok((job_id, stream))
     }
 
@@ -73,6 +111,8 @@ impl JobScheduler {
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(attempt) = self
             .jobs
             .get_mut(&key.job_id)
@@ -84,13 +124,19 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
-        if attempt.state.is_terminal() && attempt.stopped_at.is_none() {
-            attempt.stopped_at = Some(Utc::now());
-        }
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
         }
+        event_reporter.report(SystemEvent::TaskUpdated {
+            session_id,
+            job_id: u64::from(key.job_id),
+            stage: key.stage as u64,
+            partition: key.partition as u64,
+            attempt: key.attempt as u64,
+            status: attempt.state.status().to_string(),
+            updated_at: Utc::now(),
+        });
     }
 
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
@@ -123,6 +169,8 @@ impl JobScheduler {
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
     pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -133,9 +181,19 @@ impl JobScheduler {
 
         let mut actions = vec![];
 
-        actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
+        actions.extend(Self::cascade_cancel_task_attempts(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
         actions.extend(Self::extend_job_output(job_id, job));
-        actions.extend(Self::clean_up_job_by_stage(job_id, job));
+        actions.extend(Self::clean_up_job_by_stage(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
 
         Self::update_task_regions(job, &self.options);
 
@@ -152,7 +210,12 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
-            job.stopped_at = Some(Utc::now());
+            event_reporter.report(SystemEvent::JobUpdated {
+                session_id,
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                updated_at: Utc::now(),
+            });
             return actions;
         }
 
@@ -164,10 +227,21 @@ impl JobScheduler {
             // This drops `JobOutputManager` in the job state,
             // so that `JobOutputStream` turns to the draining state as well.
             job.state = JobState::Draining;
+            event_reporter.report(SystemEvent::JobUpdated {
+                session_id,
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                updated_at: Utc::now(),
+            });
             return actions;
         }
 
-        actions.extend(Self::schedule_task_regions(job_id, job));
+        actions.extend(Self::schedule_task_regions(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
 
         actions
     }
@@ -202,7 +276,12 @@ impl JobScheduler {
         }
     }
 
-    fn cascade_cancel_task_attempts(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn cascade_cancel_task_attempts(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for region in &job.topology.regions {
@@ -224,7 +303,15 @@ impl JobScheduler {
                     for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
+                            event_reporter.report(SystemEvent::TaskUpdated {
+                                session_id: session_id.to_string(),
+                                job_id: u64::from(job_id),
+                                stage: t.stage as u64,
+                                partition: t.partition as u64,
+                                attempt: a as u64,
+                                status: attempt.state.status().to_string(),
+                                updated_at: Utc::now(),
+                            });
                             actions.push(JobAction::CancelTask {
                                 key: TaskKey {
                                     job_id,
@@ -242,7 +329,12 @@ impl JobScheduler {
         actions
     }
 
-    fn clean_up_job_by_stage(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn clean_up_job_by_stage(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (s, stage) in job.topology.stages.iter().enumerate() {
@@ -264,7 +356,13 @@ impl JobScheduler {
 
             if all_consumers_succeeded && !stage.consumers.is_empty() {
                 job.stages[s].state = StageState::Inactive;
-                job.stages[s].stopped_at = Some(Utc::now());
+                event_reporter.report(SystemEvent::StageUpdated {
+                    session_id: session_id.to_string(),
+                    job_id: u64::from(job_id),
+                    stage: s as u64,
+                    status: job.stages[s].state.status().to_string(),
+                    updated_at: Utc::now(),
+                });
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
@@ -276,7 +374,12 @@ impl JobScheduler {
         actions
     }
 
-    fn schedule_task_regions(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn schedule_task_regions(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (r, region) in job.topology.regions.iter().enumerate() {
@@ -305,16 +408,22 @@ impl JobScheduler {
             }
 
             for t in &region.tasks {
-                job.stages[t.stage].tasks[t.partition]
-                    .attempts
-                    .push(TaskAttemptDescriptor {
-                        state: TaskState::Created,
-                        messages: vec![],
-                        cause: None,
-                        job_output_fetched: false,
-                        created_at: Utc::now(),
-                        stopped_at: None,
-                    });
+                let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
+                attempts.push(TaskAttemptDescriptor {
+                    state: TaskState::Created,
+                    messages: vec![],
+                    cause: None,
+                    job_output_fetched: false,
+                });
+                event_reporter.report(SystemEvent::TaskCreated {
+                    session_id: session_id.to_string(),
+                    job_id: u64::from(job_id),
+                    stage: t.stage as u64,
+                    partition: t.partition as u64,
+                    attempt: (attempts.len() - 1) as u64,
+                    status: TaskState::Created.status().to_string(),
+                    created_at: Utc::now(),
+                });
             }
 
             actions.push(JobAction::ScheduleTaskRegion {
@@ -335,22 +444,20 @@ impl JobScheduler {
             .iter()
             .map(|t| t.stage)
             .collect::<IndexSet<_>>();
-        let mut stage_groups: IndexMap<StageGroupKey, StageGroup> = IndexMap::new();
+        let mut stage_partitions: IndexMap<StageGroupKey, IndexMap<usize, usize>> = IndexMap::new();
         for s in stages {
             let stage = &job.graph.stages()[s];
             let key = StageGroupKey {
                 placement: stage.placement,
                 group: stage.group.clone(),
             };
-            let group: &mut StageGroup = stage_groups.entry(key).or_default();
-            group.stages.insert(s);
-            let n = group.buckets.len();
             let p = stage.plan.output_partitioning().partition_count();
-            // ensure that the number of buckets is the maximum partitions among the stages
-            if p > n {
-                group.buckets.resize(p, Vec::new());
-            }
+            stage_partitions.entry(key).or_default().insert(s, p);
         }
+        let mut stage_groups = stage_partitions
+            .into_iter()
+            .map(|(key, partitions)| (key, StageGroup::new(partitions)))
+            .collect::<IndexMap<_, _>>();
 
         for t in &region.tasks {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
@@ -360,7 +467,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => unreachable!(),
+                        ShuffleBackendKind::Flight { .. } => unreachable!(),
                     },
                 };
                 let key = StageGroupKey {
@@ -368,9 +475,7 @@ impl JobScheduler {
                     group: stage.group.clone(),
                 };
                 if let Some(group) = stage_groups.get_mut(&key) {
-                    let partitions = stage.plan.output_partitioning().partition_count();
-                    let b = t.partition * group.buckets.len() / partitions;
-                    group.buckets[b].push(TaskSetEntry {
+                    group.add_task(TaskSetEntry {
                         key: TaskKey {
                             job_id,
                             stage: t.stage,
@@ -385,7 +490,12 @@ impl JobScheduler {
 
         let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
         for (key, value) in stage_groups {
-            for entries in value.buckets {
+            // A region may contain only some stage partitions. Empty buckets need no task slots.
+            for entries in value
+                .buckets
+                .into_iter()
+                .filter(|entries| !entries.is_empty())
+            {
                 tasks.push((key.placement, TaskSet { entries }));
             }
         }
@@ -470,7 +580,9 @@ impl JobScheduler {
     /// Determine the actions needed in the driver to clean up the job.
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
-    pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+    pub fn clean_up_job(&mut self, job_id: JobId, outcome: JobOutputOutcome) -> Vec<JobAction> {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -492,10 +604,19 @@ impl JobScheduler {
                 }
             }
         }
-        for stage in job.stages.iter_mut() {
-            stage.state = StageState::Inactive;
-            if stage.stopped_at.is_none() {
-                stage.stopped_at = Some(Utc::now());
+        for (s, stage) in job.stages.iter_mut().enumerate() {
+            match stage.state {
+                StageState::Active => {
+                    stage.state = StageState::Inactive;
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.clone(),
+                        job_id: u64::from(job_id),
+                        stage: s as u64,
+                        status: stage.state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
+                }
+                StageState::Inactive => {}
             }
         }
         actions.push(JobAction::CleanUpJob {
@@ -503,16 +624,29 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
-        if matches!(job.state, JobState::Draining) {
-            job.state = JobState::Succeeded;
-        } else {
-            job.state = JobState::Canceled;
-        }
-        job.stopped_at = Some(Utc::now());
+        job.state.finish_output(outcome);
+        event_reporter.report(SystemEvent::JobUpdated {
+            session_id,
+            job_id: u64::from(job_id),
+            status: job.state.status().to_string(),
+            updated_at: Utc::now(),
+        });
         actions
     }
 
-    /// Builds the serialized task definition and context for the given task key.
+    /// Returns the retry region containing a task partition.
+    pub fn task_region(&self, key: &TaskKey) -> Option<usize> {
+        let job = self.jobs.get(&key.job_id)?;
+        job.topology
+            .task_regions
+            .get(&super::topology::TaskTopology {
+                stage: key.stage,
+                partition: key.partition,
+            })
+            .copied()
+    }
+
+    /// Builds the stage definition against the current assignment snapshot.
     pub fn get_task_definition(
         &self,
         key: &TaskKey,
@@ -547,7 +681,10 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
-        for (_, job) in self.jobs.iter_mut() {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
+        for (job_id, job) in self.jobs.iter_mut() {
+            let job_id = u64::from(*job_id);
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 // For running jobs, the job output is dropped here.
                 // Internally, the job output manages the receiving end of the output stream.
@@ -558,18 +695,37 @@ impl JobScheduler {
                 // shuffle read nodes) are dropped. So the worker gRPC server will have no active
                 // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
-                job.stopped_at = Some(Utc::now());
+                event_reporter.report(SystemEvent::JobUpdated {
+                    session_id: session_id.to_string(),
+                    job_id,
+                    status: job.state.status().to_string(),
+                    updated_at: Utc::now(),
+                });
             }
-            for stage in job.stages.iter_mut() {
+            for (s, stage) in job.stages.iter_mut().enumerate() {
                 if matches!(stage.state, StageState::Active) {
                     stage.state = StageState::Inactive;
-                    stage.stopped_at = Some(Utc::now());
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.to_string(),
+                        job_id,
+                        stage: s as u64,
+                        status: stage.state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
                 }
-                for task in stage.tasks.iter_mut() {
-                    for attempt in task.attempts.iter_mut() {
+                for (partition, task) in stage.tasks.iter_mut().enumerate() {
+                    for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
+                            event_reporter.report(SystemEvent::TaskUpdated {
+                                session_id: session_id.to_string(),
+                                job_id,
+                                stage: s as u64,
+                                partition: partition as u64,
+                                attempt: a as u64,
+                                status: attempt.state.status().to_string(),
+                                updated_at: Utc::now(),
+                            });
                         }
                     }
                 }
@@ -636,12 +792,12 @@ impl<'a> TaskInputBuilder<'a> {
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+                ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
             },
         };
         Ok(TaskInput {
             stage: self.input.stage,
-            locator,
+            locator: Arc::new(locator),
         })
     }
 
@@ -723,12 +879,35 @@ impl<'a> TaskInputBuilder<'a> {
     fn build_task_input_keys(&self) -> ExecutionResult<Vec<Vec<TaskInputKey>>> {
         let input_partitions = self.producer.plan.output_partitioning().partition_count();
         let input_channels = self.producer.distribution.channels();
-        let output_partitions = self.consumer.plan.output_partitioning().partition_count();
 
         match self.input.mode {
             InputMode::Forward | InputMode::Merge => {
                 let mut groups = Vec::with_capacity(input_partitions);
                 for partition in 0..input_partitions {
+                    // Forward regions are assigned independently. Preserve input-local indices,
+                    // but do not resolve producers for consumer partitions outside this snapshot.
+                    if matches!(self.input.mode, InputMode::Forward)
+                        && input_partitions
+                            == self.consumer.plan.output_partitioning().partition_count()
+                        && !JobScheduler::get_latest_task_attempt(
+                            self.job,
+                            self.key.stage,
+                            partition,
+                        )
+                        .is_some_and(|attempt| {
+                            self.assignments
+                                .get(&TaskKey {
+                                    job_id: self.key.job_id,
+                                    stage: self.key.stage,
+                                    partition,
+                                    attempt,
+                                })
+                                .is_some()
+                        })
+                    {
+                        groups.push(vec![]);
+                        continue;
+                    }
                     let attempt = self.latest_attempt(partition)?;
                     let mut group = Vec::with_capacity(input_channels);
                     for channel in 0..input_channels {
@@ -773,9 +952,12 @@ impl<'a> TaskInputBuilder<'a> {
                 }
                 Ok(vec![keys])
             }
-            InputMode::Rescale => {
+            InputMode::Rescale {
+                partitions: output_partitions,
+            } => {
                 // Keep rescale input expansion aligned with CoalesceExec's contiguous partition
-                // grouping, where each output partition consumes an evenly divided input range.
+                // grouping. A parent such as UnionExec can change the containing stage's
+                // partition count, so use the target count recorded on this input edge.
                 let mut groups = Vec::with_capacity(output_partitions);
                 for output_partition in 0..output_partitions {
                     let start = output_partition * input_partitions / output_partitions;
@@ -850,6 +1032,17 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
+            OutputDistribution::Range { partitioning } => {
+                let channels = partitioning.partition_count();
+                let partitioning = encode_remote_partitioning(
+                    self.codec,
+                    &Partitioning::Range(partitioning.clone()),
+                )?;
+                TaskOutputDistribution::Range {
+                    partitioning: Arc::from(partitioning),
+                    channels,
+                }
+            }
             OutputDistribution::RoundRobinBatch { channels } => {
                 TaskOutputDistribution::RoundRobinBatch {
                     channels: *channels,
@@ -880,8 +1073,230 @@ struct StageGroupKey {
     group: String,
 }
 
-#[derive(Default)]
 struct StageGroup {
-    stages: IndexSet<usize>,
+    partition_offsets: HashMap<usize, usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+impl StageGroup {
+    fn new(stage_partitions: IndexMap<usize, usize>) -> Self {
+        let count = stage_partitions.values().copied().max().unwrap_or(0);
+        let mut partition_offsets = HashMap::new();
+        let mut offset = 0;
+        for (stage, partitions) in stage_partitions {
+            if partitions > 0 {
+                partition_offsets.insert(stage, offset);
+                offset = (offset + partitions) % count;
+            }
+        }
+        Self {
+            partition_offsets,
+            buckets: vec![vec![]; count],
+        }
+    }
+
+    fn add_task(&mut self, entry: TaskSetEntry) {
+        // Place each stage consecutively, continuing from the preceding stage's offset.
+        // Full regions have bucket sizes differing by at most one, with no two partitions
+        // of a stage sharing a bucket. For partition-sliced forward regions, all stages
+        // have the same partition count, so offsets are zero and matching partitions
+        // continue to share a bucket.
+        let bucket =
+            (self.partition_offsets[&entry.key.stage] + entry.key.partition) % self.buckets.len();
+        self.buckets[bucket].push(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::StageGroup;
+    use crate::id::{JobId, TaskKey};
+    use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    #[test]
+    fn forward_routing_uses_only_assigned_consumers_and_refreshes_producer_attempts()
+    -> crate::error::ExecutionResult<()> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        use super::{JobDescriptor, JobState, TaskAttemptDescriptor, TaskInputBuilder, TaskState};
+        use crate::id::WorkerId;
+        use crate::job_graph::{InputMode, JobGraph, JobGraphOptions, StageInput};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+        use crate::task::definition::TaskInputLocator;
+        use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
+
+        struct Assignments(HashMap<TaskKey, TaskAssignment>);
+        impl TaskAssignmentGetter for Assignments {
+            fn get(&self, key: &TaskKey) -> Option<&TaskAssignment> {
+                self.0.get(key)
+            }
+        }
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 4], Arc::new(Schema::empty()), None)?;
+        let graph = JobGraph::try_new(
+            Arc::new(RepartitionExec::try_new(
+                input,
+                Partitioning::RoundRobinBatch(4),
+            )?),
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let attempt = || TaskAttemptDescriptor {
+            state: TaskState::Created,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        };
+        for stage in &mut job.stages {
+            for task in &mut stage.tasks {
+                task.attempts.push(attempt());
+            }
+        }
+        let key = |stage, partition, attempt| TaskKey {
+            job_id: JobId::from(1),
+            stage,
+            partition,
+            attempt,
+        };
+        let worker = |id| TaskAssignment::Worker {
+            worker_id: WorkerId::from(id),
+            slot: 0,
+        };
+        let mut assignments = Assignments(HashMap::new());
+        for stage in 0..2 {
+            for partition in 0..2 {
+                assignments.0.insert(key(stage, partition, 0), worker(1));
+            }
+        }
+        // Exercise the routing builder with a forward edge of the same partition shape.
+        // Partitions 2 and 3 have attempts, but their regions have no assignments yet.
+        let edge = StageInput {
+            stage: 0,
+            mode: InputMode::Forward,
+        };
+        let consumer = key(1, 0, 0);
+        let original = TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?.build()?;
+        let TaskInputLocator::Worker { keys } = original.locator.as_ref() else {
+            return Err(crate::error::ExecutionError::InternalError(
+                "expected worker routing".into(),
+            ));
+        };
+        assert_eq!(keys.len(), 4);
+        assert!(!keys[0].is_empty());
+        assert!(!keys[1].is_empty());
+        assert!(keys[2].is_empty());
+        assert!(keys[3].is_empty());
+
+        job.stages[0].tasks[0].attempts.push(attempt());
+        assignments.0.insert(key(0, 0, 1), worker(2));
+        let retried = TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?.build()?;
+        let TaskInputLocator::Worker { keys: updated } = retried.locator.as_ref() else {
+            return Err(crate::error::ExecutionError::InternalError(
+                "expected worker routing".into(),
+            ));
+        };
+        assert!(
+            updated[0]
+                .iter()
+                .all(|(worker, key)| *worker == WorkerId::from(2) && key.attempt == 1)
+        );
+        assert!(
+            keys[0]
+                .iter()
+                .all(|(worker, key)| *worker == WorkerId::from(1) && key.attempt == 0)
+        );
+
+        // Missing routing for an assigned consumer is still an error, not an empty input.
+        assignments.0.remove(&key(0, 0, 1));
+        assert!(
+            TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?
+                .build()
+                .is_err()
+        );
+        Ok(())
+    }
+
+    fn task(stage: usize, partition: usize) -> TaskSetEntry {
+        TaskSetEntry {
+            key: TaskKey {
+                job_id: JobId::from(1),
+                stage,
+                partition,
+                attempt: 0,
+            },
+            output: TaskOutputKind::Local,
+        }
+    }
+
+    #[test]
+    fn stage_group_balances_buckets_without_sharing_stage_partitions() {
+        for partitions in [
+            vec![4, 4, 8],
+            vec![256, 256, 256, 768],
+            vec![5, 3, 7],
+            vec![8, 4, 4],
+            vec![4, 8, 4],
+        ] {
+            let mut group = StageGroup::new(partitions.iter().copied().enumerate().collect());
+            // Task insertion order must not affect the bucket offsets.
+            for (stage, count) in partitions.iter().copied().enumerate().rev() {
+                for partition in (0..count).rev() {
+                    group.add_task(task(stage, partition));
+                }
+            }
+
+            let count = partitions.iter().copied().max().unwrap_or(0);
+            let total = partitions.iter().sum::<usize>();
+            assert_eq!(group.buckets.len(), count);
+            let mut tasks = HashSet::new();
+            for bucket in &group.buckets {
+                assert!((total / count..=total.div_ceil(count)).contains(&bucket.len()));
+                let stages = bucket
+                    .iter()
+                    .map(|entry| entry.key.stage)
+                    .collect::<HashSet<_>>();
+                assert_eq!(stages.len(), bucket.len());
+                for entry in bucket {
+                    assert!(tasks.insert((entry.key.stage, entry.key.partition)));
+                }
+            }
+            assert_eq!(tasks.len(), total);
+        }
+    }
+
+    #[test]
+    fn stage_group_preserves_partition_sliced_forward_regions() {
+        for partition in 0..4 {
+            let mut group = StageGroup::new([(0, 4), (1, 4), (2, 4)].into());
+            for stage in 0..3 {
+                group.add_task(task(stage, partition));
+            }
+            assert_eq!(group.buckets[partition].len(), 3);
+            assert_eq!(
+                group
+                    .buckets
+                    .iter()
+                    .filter(|bucket| !bucket.is_empty())
+                    .count(),
+                1
+            );
+        }
+    }
 }

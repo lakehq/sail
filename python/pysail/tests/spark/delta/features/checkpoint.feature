@@ -173,6 +173,57 @@ Feature: Delta Lake Checkpoint
         | 2  |
         | 3  |
 
+  Rule: Multipart checkpoint sets are discovered and replayed atomically
+
+    Background:
+      Given variable location for temporary directory delta_multipart_checkpoint
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_multipart_checkpoint_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_multipart_checkpoint_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.checkpointInterval' = '1')
+        """
+      Given statement
+        """
+        INSERT INTO delta_multipart_checkpoint_test VALUES (1), (2)
+        """
+
+    Scenario: Complete multipart checkpoint uses the canonical file layout and is readable
+      Given classic checkpoint parquet file 00000000000000000001.checkpoint.parquet in delta_log is split into 3 parts
+      Then delta log JSON file _last_checkpoint in delta_log contains
+        | path    | value |
+        | version | 1     |
+        | parts   | 3     |
+        | size    | 3     |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.checkpoint.0000000001.0000000003.parquet
+        📄 00000000000000000001.checkpoint.0000000002.0000000003.parquet
+        📄 00000000000000000001.checkpoint.0000000003.0000000003.parquet
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        📄 _last_checkpoint
+        """
+      Given file 00000000000000000000.crc in delta_log is deleted
+      Given file 00000000000000000000.json in delta_log is deleted
+      Given file 00000000000000000001.crc in delta_log is deleted
+      When query
+        """
+        SELECT * FROM delta_multipart_checkpoint_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+
   Rule: Expired remove actions are pruned from checkpoint parquet based on table properties
 
     Background:

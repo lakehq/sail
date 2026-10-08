@@ -12,7 +12,7 @@ use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, TableFormatCreateMetadataMode,
+    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -607,12 +607,12 @@ impl CatalogProvider for GlueCatalogProvider {
             && options.format.eq_ignore_ascii_case("iceberg")
             && !options.is_write_precondition
         {
-            Ok(CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             })
         } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
-            Ok(CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::PathManaged,
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::PathManaged,
             })
         } else {
             Ok(CreateTableMetadataRequirement::None)

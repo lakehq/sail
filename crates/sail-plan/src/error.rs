@@ -102,6 +102,7 @@ impl From<CatalogError> for PlanError {
             | CatalogError::ReadOnly(message)
             | CatalogError::StaleMetadata(message)
             | CatalogError::CommitStateUnknown(message)
+            | CatalogError::CommitRejected(message)
             | CatalogError::CredentialUnavailable(message)
             | CatalogError::ConversionLag(message)
             | CatalogError::ConversionFailed(message)

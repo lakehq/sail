@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use log::debug;
+use opentelemetry_proto::tonic::metrics::v1::ResourceMetrics;
+use prost::Message;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
 use crate::driver::r#gen::driver_service_server::DriverService;
 use crate::driver::r#gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
-    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    RegisterWorkerRequest, RegisterWorkerResponse, ReportMetricsRequest, ReportMetricsResponse,
+    ReportTaskStatusRequest, ReportTaskStatusResponse, ReportWorkerHeartbeatRequest,
+    ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{DriverMessage, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
@@ -153,5 +155,29 @@ impl DriverService for DriverServer {
         let response = ReportTaskStatusResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
+    }
+
+    async fn report_metrics(
+        &self,
+        request: Request<ReportMetricsRequest>,
+    ) -> Result<Response<ReportMetricsResponse>, Status> {
+        let ReportMetricsRequest { driver_id, metrics } = request.into_inner();
+        // Validate that the destination driver still exists before accepting worker metrics.
+        self.registry.get(DriverId::from(driver_id)).await?;
+        let reporter = sail_telemetry::telemetry::global_system_metric_reporter()
+            .ok_or_else(|| Status::failed_precondition("metrics event store is not initialized"))?;
+        let metrics = metrics
+            .into_iter()
+            .map(|data| {
+                ResourceMetrics::decode(data.as_slice()).map_err(|error| {
+                    Status::invalid_argument(format!("invalid OpenTelemetry metrics data: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        reporter
+            .report(metrics)
+            .await
+            .map_err(|error| Status::internal(error.to_string()))?;
+        Ok(Response::new(ReportMetricsResponse {}))
     }
 }

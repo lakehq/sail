@@ -181,7 +181,7 @@ mod tests {
                 pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
                 commit: CommitAuthority::DeltaRatifiedCommit,
             },
-            ScanAuthority::ClientTableFormat,
+            ScanAuthority::ClientLakeSource,
         );
         context.access_session = Some(TableAccessSessionRef {
             fingerprint: session_fingerprint.to_string(),

@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
         } else {
             self.resolve_default_table_location(&table).await?
         };
-        let format = self.resolve_catalog_table_format(file_format)?;
+        let format = self.resolve_catalog_data_source_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         for partition in &partition_by {
@@ -175,7 +175,7 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
-        let format = self.resolve_catalog_table_format(file_format)?;
+        let format = self.resolve_catalog_data_source_format(file_format)?;
         let mut write_options = options;
         if let Some(location) = location {
             write_options.push(("path".to_string(), location));
@@ -303,7 +303,7 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a table file format clause to the concrete format name to write.
-    fn resolve_catalog_table_format(
+    fn resolve_catalog_data_source_format(
         &self,
         file_format: Option<spec::TableFileFormat>,
     ) -> PlanResult<String> {

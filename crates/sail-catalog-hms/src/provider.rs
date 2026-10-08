@@ -7,7 +7,7 @@ use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace, PartitionTransform, TableFormatCreateMetadataMode,
+    LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
     plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_common::runtime::RuntimeHandle;
@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    GenericTableFormat, alter_spark_column_default, build_database, build_generic_table,
+    GenericDataSourceFormat, alter_spark_column_default, build_database, build_generic_table,
     build_view, database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
     reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
 };
@@ -158,7 +158,7 @@ pub(crate) fn apply_alter_table_options(
         }
         AlterTableOptions::AddCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(
-                "CHECK constraints are handled by lakehouse table formats".to_string(),
+                "CHECK constraints are handled by lake sources".to_string(),
             ));
         }
     }
@@ -1048,7 +1048,7 @@ impl CatalogProvider for HmsCatalogProvider {
             options.columns,
             partition_columns.clone(),
             options.location,
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: format.logical_format,
                 storage: &format.storage_format,
             },
@@ -1072,8 +1072,8 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<CreateTableMetadataRequirement> {
         validate_create_table_options(options)?;
         if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
-            Ok(CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             })
         } else {
             Ok(plain_lakehouse_create_table_metadata_requirement(options))

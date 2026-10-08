@@ -1,5 +1,7 @@
 //! This module bridges DataFusion query execution metrics with OpenTelemetry.
 
+mod aggregate;
+mod buffer;
 mod default;
 mod filter;
 mod join;
@@ -7,6 +9,8 @@ mod projection;
 #[cfg(test)]
 pub(super) mod testing;
 
+use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::buffer::BufferExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
@@ -71,7 +75,14 @@ impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 T8 : T9);
 
 /// Build a metric emitter based on the type of the execution plan.
 pub fn build_metric_emitter(plan: &dyn ExecutionPlan) -> Box<dyn MetricEmitter> {
-    if plan.is::<ProjectionExec>() {
+    if plan.is::<AggregateExec>() {
+        Box::new((
+            aggregate::AggregateMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else if plan.is::<BufferExec>() {
+        Box::new((buffer::BufferMetricEmitter, default::DefaultMetricEmitter))
+    } else if plan.is::<ProjectionExec>() {
         Box::new((
             projection::ProjectionMetricEmitter,
             default::DefaultMetricEmitter,

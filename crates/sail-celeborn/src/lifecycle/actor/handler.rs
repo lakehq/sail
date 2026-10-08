@@ -2,14 +2,60 @@ use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
+use crate::common::{
+    ApplicationMetrics, PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations,
+};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
 use crate::lifecycle::{LifecycleManagerMessage, ReviveRequest};
-use crate::master::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::protocol::StatusCode;
-use crate::worker::{WorkerClient, WorkerClientOptions};
+use crate::worker::WorkerClientOptions;
 
 impl LifecycleManagerActor {
+    pub(super) fn handle_report_metrics(
+        &mut self,
+        metrics: ApplicationMetrics,
+        reply: oneshot::Sender<CelebornResult<()>>,
+    ) -> ActorAction {
+        self.application_metrics.add_assign(metrics);
+        let _ = reply.send(Ok(()));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_heartbeat(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
+        ctx.send_with_delay(
+            LifecycleManagerMessage::Heartbeat,
+            self.options.heartbeat_interval,
+        );
+        if self.heartbeat_metrics.is_some() {
+            return ActorAction::Continue;
+        }
+        let client = self.client.clone();
+        let application_id = self.options.application_id.clone();
+        let metrics = std::mem::take(&mut self.application_metrics);
+        self.heartbeat_metrics = Some(metrics.clone());
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            let result = client.heartbeat_application(application_id, metrics).await;
+            let _ = handle
+                .send(LifecycleManagerMessage::HeartbeatComplete { result })
+                .await;
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_heartbeat_complete(&mut self, result: CelebornResult<()>) -> ActorAction {
+        if let Err(error) = result {
+            if let Some(metrics) = self.heartbeat_metrics.take() {
+                self.application_metrics.add_assign(metrics);
+            }
+            warn!("failed to send Celeborn application heartbeat: {error}");
+        } else {
+            self.heartbeat_metrics = None;
+        }
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_get_shuffle_id(
         &mut self,
         job_id: u64,
@@ -81,6 +127,9 @@ impl LifecycleManagerActor {
         let hostname = self.options.hostname.clone();
         let user_identifier = self.user_identifier();
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let worker_clients = self.worker_clients.clone();
+        let partition_split_threshold = self.options.partition_split_threshold;
+        let partition_split_mode = self.options.partition_split_mode;
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let result = async {
@@ -105,18 +154,21 @@ impl LifecycleManagerActor {
                     else {
                         continue;
                     };
-                    WorkerClient::new(
-                        WorkerClientOptions::new(location)
-                            .with_endpoint_resolver(endpoint_resolver.clone()),
-                    )
-                    .reserve_slots(
-                        application_id.clone(),
-                        shuffle_id,
-                        locations.primary_locations.clone(),
-                        locations.replica_locations.clone(),
-                        user_identifier.clone(),
-                    )
-                    .await?;
+                    worker_clients
+                        .client(
+                            WorkerClientOptions::new(location)
+                                .with_endpoint_resolver(endpoint_resolver.clone()),
+                        )
+                        .reserve_slots(
+                            application_id.clone(),
+                            shuffle_id,
+                            locations.primary_locations.clone(),
+                            locations.replica_locations.clone(),
+                            user_identifier.clone(),
+                            partition_split_threshold,
+                            partition_split_mode,
+                        )
+                        .await?;
                 }
                 Ok(reservation)
             }
@@ -141,6 +193,8 @@ impl LifecycleManagerActor {
             self.registered_shuffles
                 .insert(shuffle_id, reservation.worker_locations.clone());
             self.reservations.insert(shuffle_id, reservation.clone());
+            self.application_metrics.shuffle_count =
+                self.application_metrics.shuffle_count.saturating_add(1);
             for reply in replies {
                 let _ = reply.send(Ok(reservation.clone()));
             }
@@ -207,6 +261,9 @@ impl LifecycleManagerActor {
         let hostname = self.options.hostname.clone();
         let user_identifier = self.user_identifier();
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let worker_clients = self.worker_clients.clone();
+        let partition_split_threshold = self.options.partition_split_threshold;
+        let partition_split_mode = self.options.partition_split_mode;
         let excluded_workers = self.excluded_workers.values().cloned().collect();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
@@ -236,18 +293,21 @@ impl LifecycleManagerActor {
                     else {
                         continue;
                     };
-                    WorkerClient::new(
-                        WorkerClientOptions::new(location)
-                            .with_endpoint_resolver(endpoint_resolver.clone()),
-                    )
-                    .reserve_slots(
-                        application_id.clone(),
-                        request.shuffle_id,
-                        locations.primary_locations.clone(),
-                        locations.replica_locations.clone(),
-                        user_identifier.clone(),
-                    )
-                    .await?;
+                    worker_clients
+                        .client(
+                            WorkerClientOptions::new(location)
+                                .with_endpoint_resolver(endpoint_resolver.clone()),
+                        )
+                        .reserve_slots(
+                            application_id.clone(),
+                            request.shuffle_id,
+                            locations.primary_locations.clone(),
+                            locations.replica_locations.clone(),
+                            user_identifier.clone(),
+                            partition_split_threshold,
+                            partition_split_mode,
+                        )
+                        .await?;
                 }
                 Ok(reservation)
             }
@@ -395,9 +455,11 @@ impl LifecycleManagerActor {
         self.committing_shuffles.insert(shuffle_id);
         let application_id = self.options.application_id.clone();
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let worker_clients = self.worker_clients.clone();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let result = async {
+                let mut metrics = ApplicationMetrics::default();
                 for locations in worker_locations.into_values() {
                     let Some(location) = locations
                         .primary_locations
@@ -406,20 +468,26 @@ impl LifecycleManagerActor {
                     else {
                         continue;
                     };
-                    WorkerClient::new(
-                        WorkerClientOptions::new(location.clone())
-                            .with_endpoint_resolver(endpoint_resolver.clone()),
-                    )
-                    .commit_files(
-                        application_id.clone(),
-                        shuffle_id,
-                        locations.primary_locations,
-                        locations.replica_locations,
-                        map_attempts.clone(),
-                    )
-                    .await?;
+                    let commit_metrics = worker_clients
+                        .client(
+                            WorkerClientOptions::new(location.clone())
+                                .with_endpoint_resolver(endpoint_resolver.clone()),
+                        )
+                        .commit_files(
+                            application_id.clone(),
+                            shuffle_id,
+                            locations.primary_locations,
+                            locations.replica_locations,
+                            map_attempts.clone(),
+                        )
+                        .await?;
+                    metrics.total_written = metrics
+                        .total_written
+                        .saturating_add(commit_metrics.total_written);
+                    metrics.file_count =
+                        metrics.file_count.saturating_add(commit_metrics.file_count);
                 }
-                Ok(())
+                Ok(metrics)
             }
             .await;
             let _ = handle
@@ -436,13 +504,18 @@ impl LifecycleManagerActor {
     pub(super) fn handle_mapper_end_complete(
         &mut self,
         shuffle_id: i32,
-        result: CelebornResult<()>,
+        result: CelebornResult<ApplicationMetrics>,
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         self.committing_shuffles.remove(&shuffle_id);
-        if result.is_ok() {
-            self.committed_shuffles.insert(shuffle_id);
-        }
+        let result = match result {
+            Ok(metrics) => {
+                self.committed_shuffles.insert(shuffle_id);
+                self.application_metrics.add_assign(metrics);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
         let _ = reply.send(result);
         ActorAction::Continue
     }
@@ -554,7 +627,7 @@ impl LifecycleManagerActor {
         };
         for location in failed_locations {
             self.excluded_workers
-                .entry(location.worker_id())
+                .entry(location.worker_identity())
                 .or_insert(location);
         }
     }
@@ -578,16 +651,17 @@ impl SlotReservation {
 }
 
 fn merge_worker_locations(
-    target: &mut std::collections::HashMap<String, WorkerSlotLocations>,
-    source: std::collections::HashMap<String, WorkerSlotLocations>,
+    target: &mut std::collections::HashMap<crate::common::WorkerIdentity, WorkerSlotLocations>,
+    source: std::collections::HashMap<crate::common::WorkerIdentity, WorkerSlotLocations>,
 ) {
-    for (worker_id, locations) in source {
-        let target_locations = target
-            .entry(worker_id)
-            .or_insert_with(|| WorkerSlotLocations {
-                primary_locations: Vec::new(),
-                replica_locations: Vec::new(),
-            });
+    for (worker_identity, locations) in source {
+        let target_locations =
+            target
+                .entry(worker_identity)
+                .or_insert_with(|| WorkerSlotLocations {
+                    primary_locations: Vec::new(),
+                    replica_locations: Vec::new(),
+                });
         append_locations(
             &mut target_locations.primary_locations,
             locations.primary_locations,

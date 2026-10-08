@@ -29,7 +29,7 @@ use datafusion::arrow::array::{
     UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::common::scalar::ScalarValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -155,6 +155,9 @@ impl ScalarConverter {
             StatValue::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
             StatValue::Boolean(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
             StatValue::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
+            StatValue::ExactNumber(value) => {
+                Self::string_json_to_arrow_scalar_value(value.get(), field_dt)
+            }
             StatValue::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
         }
     }
@@ -346,19 +349,7 @@ impl ScalarConverter {
         timestamp_str: &str,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<ScalarValue> {
-        let time_micro = ScalarValue::try_from_string(
-            timestamp_str.to_string(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-        )?;
-        let cast_arr = cast_with_options(
-            &time_micro.to_array()?,
-            field_dt,
-            &CastOptions {
-                safe: false,
-                ..Default::default()
-            },
-        )?;
-        ScalarValue::try_from_array(&cast_arr, 0)
+        ScalarValue::try_from_string(timestamp_str.to_string(), field_dt)
     }
 }
 
@@ -547,7 +538,8 @@ fn number_from_f64(value: f64) -> Value {
 ///
 /// This implements Delta-specific parsing rules for partition values stored in the log.
 pub fn parse_partition_value(raw: &str, field_dt: &ArrowDataType) -> DeltaResultLocal<ScalarValue> {
-    if raw.is_empty() || raw == NULL_PARTITION_VALUE_DATA_PATH {
+    // The log uses empty strings for NULL; directory markers remain literal values.
+    if raw.is_empty() {
         return ScalarValue::try_new_null(field_dt)
             .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
     }
@@ -596,12 +588,15 @@ mod tests {
     };
 
     #[test]
-    fn test_parse_partition_value_treats_hive_default_partition_as_null_for_strings() {
+    fn test_parse_partition_value_preserves_hive_default_partition_string() {
         #[expect(clippy::expect_used)]
         let value = parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8)
             .expect("partition value should parse");
 
-        assert_eq!(value, ScalarValue::Utf8(None));
+        assert_eq!(
+            value,
+            ScalarValue::Utf8(Some(NULL_PARTITION_VALUE_DATA_PATH.to_string()))
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.functions import lit
 from pyspark.sql.types import Row
 
 
@@ -58,6 +59,24 @@ def test_delta_partitioning_by_single_column(spark, tmp_path):
 
     filtered_df_gt = spark.read.format("delta").load(delta_table_path).filter("year > 2025")
     assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"  # noqa: PLR2004
+
+
+def test_delta_constant_partition_uses_multiple_writers(spark, tmp_path):
+    """Writers are not funneled through a single task per table partition.
+
+    Every row lands in the same table partition, so a plan that shards by partition key would
+    write a single file. Writer count follows the input plan instead, which has four partitions.
+    """
+    delta_path = tmp_path / "constant_partitioned_delta_table"
+    row_count = 32_768
+    input_partitions = 4
+    df = spark.range(0, row_count, 1, input_partitions).withColumn("day", lit("2026-09-06"))
+
+    df.write.format("delta").mode("overwrite").partitionBy("day").save(str(delta_path))
+
+    data_files = list((delta_path / "day=2026-09-06").glob("*.parquet"))
+    assert len(data_files) == input_partitions, "each input partition should write its own file"
+    assert spark.read.format("delta").load(str(delta_path)).count() == row_count
 
 
 def test_delta_partitioning_creates_correct_directory_structure(spark, delta_test_data, tmp_path):

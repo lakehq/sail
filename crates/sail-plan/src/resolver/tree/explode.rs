@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion::common::{Column, Result, UnnestOptions};
+use datafusion::common::{Column, NullHandling, Result, UnnestOptions};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
 use datafusion_common::{ExprSchema, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ident, lit, when};
+use datafusion_expr::{ident, lit};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
@@ -69,13 +69,13 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 return Ok(Transformed::no(func.call(args)));
             }
         };
-        let (with_position, preserve_nulls, is_inline) = match explode.kind() {
-            ExplodeKind::Explode => (false, false, false),
-            ExplodeKind::ExplodeOuter => (false, true, false),
-            ExplodeKind::PosExplode => (true, false, false),
-            ExplodeKind::PosExplodeOuter => (true, true, false),
-            ExplodeKind::Inline => (false, false, true),
-            ExplodeKind::InlineOuter => (false, true, true),
+        let (with_position, null_handling, is_inline) = match explode.kind() {
+            ExplodeKind::Explode => (false, NullHandling::Drop, false),
+            ExplodeKind::ExplodeOuter => (false, NullHandling::PreserveAndExpandEmpty, false),
+            ExplodeKind::PosExplode => (true, NullHandling::Drop, false),
+            ExplodeKind::PosExplodeOuter => (true, NullHandling::PreserveAndExpandEmpty, false),
+            ExplodeKind::Inline => (false, NullHandling::Drop, true),
+            ExplodeKind::InlineOuter => (false, NullHandling::PreserveAndExpandEmpty, true),
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
@@ -85,16 +85,12 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeDataType::List => arg,
             ExplodeDataType::Map => nested_fn::map_entries(arg),
         };
-        let arg = match preserve_nulls {
-            true => when(nested_fn::array_empty(arg.clone()).is_false(), arg).end()?,
-            false => arg,
-        };
         let arg = match with_position {
             true => ScalarUDF::from(ArrayItemWithPosition::new()).call(vec![arg]),
             false => arg,
         };
 
-        let name = self.state.register_field_name("");
+        let name = self.state.next_field_id();
         let mut inline_projections = vec![];
         let out = match (data_type, with_position, is_inline) {
             (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
@@ -109,14 +105,15 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                     .into_iter()
                     .map(|field| {
                         let field_name = field.name().to_string();
-                        let field_column = self.state.register_field_name("");
+                        let field_column = self.state.next_field_id();
                         inline_projections.push((
                             ScalarUDF::from(ArrayStructField::new())
                                 .call(vec![arg.clone(), lit(field_name.clone())])
                                 .alias(&field_column),
                             Column::from_name(&field_column),
                         ));
-                        ident(&field_column).alias(field_name)
+                        // Keep an alias after multi-expression expansion extracts the field name.
+                        ident(&field_column).alias(&field_column).alias(field_name)
                     })
                     .collect::<Vec<_>>()),
                 wrong_type => plan_err!(
@@ -164,14 +161,10 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         let plan = mem::replace(&mut self.plan, empty_logical_plan());
         // TODO: If specific columns need to be unnested multiple times (e. g at different depth), declare them here.
         //  Any unnested columns not being mentioned inside this option will be unnested with depth = 1.
-        let recursions = vec![];
         self.plan = unnest_with_options(
             LogicalPlan::Projection(Projection::try_new(projections, Arc::new(plan))?),
             columns_to_unnest,
-            UnnestOptions {
-                preserve_nulls,
-                recursions,
-            },
+            UnnestOptions::new().with_null_handling(null_handling),
         )?;
 
         let out = match out.one_or_more()? {

@@ -121,7 +121,10 @@ impl FlightSqlService for SailFlightSqlService {
             Box::pin(MetricsRecordingStream::new(
                 stream,
                 m.clone(),
-                MetricsRecordingContext { statement_type },
+                MetricsRecordingContext {
+                    session_id: Self::DEFAULT_SESSION_ID.to_string(),
+                    statement_type,
+                },
             ))
         } else {
             stream

@@ -15,7 +15,7 @@ use regex::Regex;
 
 use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
 use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::make_scalar_function;
+use crate::functions_utils::{StrMemo, make_scalar_function};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSplit {
@@ -130,6 +130,8 @@ where
             let is_limit_null = limit.len() == 1 && limit.is_null(0);
 
             let mut builder = ListBuilder::new(StringBuilder::new());
+            // Compile each distinct column pattern once per batch, not per row.
+            let mut regex_memo = StrMemo::new();
             for i in 0..args[0].len() {
                 if is_format_null
                     || is_limit_null
@@ -139,14 +141,15 @@ where
                 {
                     builder.append_null();
                 } else {
-                    let format_regex = format_scalar_opt.as_ref().map_or_else(
-                        || parse_regex(format.value(i)),
-                        |format_regex| Ok(format_regex.clone()),
+                    let format_regex = regex_memo.resolve(
+                        format_scalar_opt.as_ref(),
+                        || format.value(i),
+                        parse_regex,
                     )?;
                     let limit = limit_scalar_opt.unwrap_or_else(|| limit.value(i));
 
                     let values_format: Vec<Option<String>> =
-                        split_to_array(values.value(i), &format_regex, limit)?;
+                        split_to_array(values.value(i), format_regex, limit)?;
                     builder.append_value(values_format);
                 }
             }
@@ -174,4 +177,68 @@ pub fn split_to_array(value: &str, format: &Regex, limit: i32) -> Result<Vec<Opt
         .iter()
         .map(|value| Some(value.to_string()))
         .collect::<Vec<Option<String>>>())
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, ListArray, StringArray};
+
+    use super::*;
+
+    /// A delimiter supplied as a column selects the split pattern per row;
+    /// null inputs yield null outputs.
+    #[test]
+    fn split_with_column_pattern() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a-b-c"),
+            Some("a:b"),
+            None,
+            Some("x-y"),
+        ]));
+        let formats: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("-"),
+            Some(":"),
+            Some("-"),
+            Some("-"),
+        ]));
+        let limits: ArrayRef = Arc::new(Int32Array::from(vec![-1, -1, -1, -1]));
+        let output = spark_split_inner(&[values, formats, limits])?;
+        let output = output
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("list output");
+        assert_eq!(output.len(), 4);
+        let first = output.value(0);
+        let first = first
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string parts");
+        assert_eq!(
+            (first.len(), first.value(0), first.value(1), first.value(2)),
+            (3, "a", "b", "c")
+        );
+        let second = output.value(1);
+        let second = second
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string parts");
+        assert_eq!(
+            (second.len(), second.value(0), second.value(1)),
+            (2, "a", "b")
+        );
+        assert!(output.is_null(2));
+        // Row 3 reuses "-" after row 0 compiled it: the memoized regex must
+        // split exactly as a fresh compile would.
+        let fourth = output.value(3);
+        let fourth = fourth
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string parts");
+        assert_eq!(
+            (fourth.len(), fourth.value(0), fourth.value(1)),
+            (2, "x", "y")
+        );
+        Ok(())
+    }
 }

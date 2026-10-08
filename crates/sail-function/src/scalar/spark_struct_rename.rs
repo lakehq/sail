@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Fields};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -86,28 +86,27 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 .collect::<Result<_>>()?;
             let new_fields: Fields = tgt_fields
                 .iter()
-                .zip(src_fields.iter())
                 .zip(new_columns.iter())
-                .map(|((tgt, src), col)| {
+                .map(|(target_field, column)| {
                     Arc::new(
-                        Field::new(tgt.name(), col.data_type().clone(), src.is_nullable())
-                            .with_metadata(src.metadata().clone()),
+                        target_field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(column.data_type().clone()),
                     )
                 })
                 .collect();
             let renamed = StructArray::try_new(new_fields, new_columns, src.nulls().cloned())?;
             Ok(Arc::new(renamed))
         }
-        (DataType::List(src_field), DataType::List(tgt_field)) => {
+        (DataType::List(_), DataType::List(tgt_field)) => {
             let src = arr.as_list::<i32>();
             let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
             let new_field = Arc::new(
-                Field::new(
-                    tgt_field.name(),
-                    new_values.data_type().clone(),
-                    src_field.is_nullable(),
-                )
-                .with_metadata(src_field.metadata().clone()),
+                tgt_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(new_values.data_type().clone()),
             );
             let renamed = datafusion::arrow::array::GenericListArray::<i32>::try_new(
                 new_field,
@@ -117,16 +116,14 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             )?;
             Ok(Arc::new(renamed))
         }
-        (DataType::LargeList(src_field), DataType::LargeList(tgt_field)) => {
+        (DataType::LargeList(_), DataType::LargeList(tgt_field)) => {
             let src = arr.as_list::<i64>();
             let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
             let new_field = Arc::new(
-                Field::new(
-                    tgt_field.name(),
-                    new_values.data_type().clone(),
-                    src_field.is_nullable(),
-                )
-                .with_metadata(src_field.metadata().clone()),
+                tgt_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(new_values.data_type().clone()),
             );
             let renamed = datafusion::arrow::array::GenericListArray::<i64>::try_new(
                 new_field,
@@ -136,10 +133,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             )?;
             Ok(Arc::new(renamed))
         }
-        (
-            DataType::FixedSizeList(src_field, src_size),
-            DataType::FixedSizeList(tgt_field, tgt_size),
-        ) => {
+        (DataType::FixedSizeList(_, src_size), DataType::FixedSizeList(tgt_field, tgt_size)) => {
             if src_size != tgt_size {
                 return exec_err!(
                     "spark_struct_rename: fixed-size list length mismatch: {} vs {}",
@@ -157,12 +151,10 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 })?;
             let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
             let new_field = Arc::new(
-                Field::new(
-                    tgt_field.name(),
-                    new_values.data_type().clone(),
-                    src_field.is_nullable(),
-                )
-                .with_metadata(src_field.metadata().clone()),
+                tgt_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(new_values.data_type().clone()),
             );
             let renamed = FixedSizeListArray::try_new(
                 new_field,
@@ -172,7 +164,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             )?;
             Ok(Arc::new(renamed))
         }
-        (DataType::Map(src_entry, src_sorted), DataType::Map(tgt_entry, tgt_sorted)) => {
+        (DataType::Map(_, src_sorted), DataType::Map(tgt_entry, tgt_sorted)) => {
             if src_sorted != tgt_sorted {
                 return exec_err!(
                     "spark_struct_rename: map sortedness mismatch: {} vs {}",
@@ -196,12 +188,10 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                     )
                 })?;
             let new_entry_field = Arc::new(
-                Field::new(
-                    tgt_entry.name(),
-                    new_entries_struct.data_type().clone(),
-                    src_entry.is_nullable(),
-                )
-                .with_metadata(src_entry.metadata().clone()),
+                tgt_entry
+                    .as_ref()
+                    .clone()
+                    .with_data_type(new_entries_struct.data_type().clone()),
             );
             let renamed = datafusion::arrow::array::MapArray::try_new(
                 new_entry_field,
@@ -212,8 +202,43 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             )?;
             Ok(Arc::new(renamed))
         }
-        // For leaves and matching-type containers (e.g. primitive arrays under
-        // the same type), nothing to rename — return as-is.
-        _ => Ok(Arc::clone(arr)),
+        (source_type, target_type) if source_type == target_type => Ok(Arc::clone(arr)),
+        (source_type, target_type) => {
+            exec_err!("spark_struct_rename: leaf type mismatch: {source_type} vs {target_type}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    fn test_rename_positionally_uses_target_field_definition() -> Result<()> {
+        let source_field = Arc::new(Field::new("source", DataType::Int32, false));
+        let source = Arc::new(StructArray::try_new(
+            Fields::from(vec![source_field]),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+            None,
+        )?) as ArrayRef;
+        let target_type = DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+            "target",
+            DataType::Int32,
+            true,
+        ))]));
+
+        let renamed = rename_positionally(&source, &target_type)?;
+
+        assert_eq!(renamed.data_type(), &target_type);
+        Ok(())
+    }
+
+    #[test]
+    fn test_rename_positionally_rejects_leaf_type_changes() {
+        let source = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        assert!(rename_positionally(&source, &DataType::Int64).is_err());
     }
 }

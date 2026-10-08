@@ -4,7 +4,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -177,9 +177,13 @@ impl ScalarUDFImpl for SparkFromXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark: `XmlToStructs.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L70>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let schema_str = match args.scalar_arguments.get(1) {
             Some(Some(

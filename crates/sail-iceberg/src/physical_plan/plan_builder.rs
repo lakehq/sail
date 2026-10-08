@@ -27,7 +27,6 @@ use crate::operations::SnapshotUpdateKind;
 use crate::physical_plan::write_context::IcebergWriteContext;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
-use crate::utils::partition_transform::format_partition_expr;
 
 pub struct IcebergTableConfig {
     pub table_url: Url,
@@ -42,6 +41,9 @@ pub struct IcebergPlanBuilder<'a> {
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
+    expected_snapshot_id: Option<Option<i64>>,
+    removed_data_file_paths: Vec<String>,
+    dynamic_partition_overwrite: bool,
     #[expect(unused)]
     session: &'a dyn Session,
 }
@@ -59,8 +61,26 @@ impl<'a> IcebergPlanBuilder<'a> {
             table_config,
             sink_mode,
             sort_order,
+            expected_snapshot_id: None,
+            removed_data_file_paths: Vec::new(),
+            dynamic_partition_overwrite: false,
             session,
         }
+    }
+
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
+        self.expected_snapshot_id = expected_snapshot_id;
+        self
+    }
+
+    pub fn with_removed_data_file_paths(mut self, paths: Vec<String>) -> Self {
+        self.removed_data_file_paths = paths;
+        self
+    }
+
+    pub fn with_dynamic_partition_overwrite(mut self, enabled: bool) -> Self {
+        self.dynamic_partition_overwrite = enabled;
+        self
     }
 
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -72,19 +92,51 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        // Validate that partition transform expressions refer to real source columns.
-        // Do not reorder columns here: BDD "query result ordered" checks expect the original
-        // table column order from `SELECT *`.
         let schema = input.schema();
-        for field in &self.table_config.partition_columns {
-            if schema.index_of(&field.column).is_err() {
-                return Err(datafusion::common::DataFusionError::Plan(format!(
-                    "Partition column '{}' not found in schema",
-                    format_partition_expr(field)
-                )));
-            }
+        let source_columns = self.partition_source_columns()?;
+        if source_columns
+            .iter()
+            .all(|name| schema.index_of(name).is_ok())
+        {
+            return Ok(input);
         }
-        Ok(input)
+        let mut expressions = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                    field.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let writer_schema = self.table_config.write_context.writer_arrow_schema()?;
+        for source_name in source_columns {
+            if expressions.iter().any(|(_, name)| name == &source_name) {
+                continue;
+            }
+            let target = writer_schema.field_with_name(&source_name)?;
+            let value = match sail_common_datafusion::schema_evolution::field_default(target)? {
+                Some(value) => value,
+                None if target.is_nullable() => {
+                    datafusion_common::ScalarValue::try_from(target.data_type())?
+                }
+                None => {
+                    return Err(datafusion::common::DataFusionError::Plan(format!(
+                        "Required partition column '{}' is missing and has no write default",
+                        source_name
+                    )));
+                }
+            };
+            expressions.push((
+                Arc::new(datafusion::physical_expr::expressions::Literal::new(value)),
+                source_name,
+            ));
+        }
+        Ok(Arc::new(
+            datafusion::physical_plan::projection::ProjectionExec::try_new(expressions, input)?,
+        ))
     }
 
     fn add_repartition_node(
@@ -95,19 +147,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             Partitioning::RoundRobinBatch(4)
         } else {
             let schema = input.schema();
-            let mut seen = std::collections::HashSet::new();
-            let partition_source_columns = self
-                .table_config
-                .partition_columns
-                .iter()
-                .filter_map(|field| {
-                    if seen.insert(field.column.clone()) {
-                        Some(field.column.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+            let partition_source_columns = self.partition_source_columns()?;
             let exprs: Vec<Arc<dyn PhysicalExpr>> = partition_source_columns
                 .iter()
                 .map(|name| {
@@ -124,6 +164,33 @@ impl<'a> IcebergPlanBuilder<'a> {
         };
 
         Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
+    }
+
+    fn partition_source_columns(&self) -> Result<Vec<String>> {
+        let context = &self.table_config.write_context;
+        let mut columns = Vec::new();
+        if let Some(spec) = &context.writer_partition_spec {
+            for field in spec.fields() {
+                let path = context
+                    .writer_schema
+                    .field_path_by_id(field.source_id)
+                    .ok_or_else(|| {
+                        datafusion::common::DataFusionError::Plan(format!(
+                            "Cannot resolve partition source field ID {}",
+                            field.source_id
+                        ))
+                    })?;
+                let source = path.first().ok_or_else(|| {
+                    datafusion::common::DataFusionError::Internal(
+                        "Empty partition source path".to_string(),
+                    )
+                })?;
+                if !columns.contains(&source.name) {
+                    columns.push(source.name.clone());
+                }
+            }
+        }
+        Ok(columns)
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -151,10 +218,14 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        let snapshot_update_kind = if self.table_config.table_exists
-            && matches!(&self.sink_mode, PhysicalSinkMode::Overwrite)
-        {
-            SnapshotUpdateKind::FullOverwrite
+        let snapshot_update_kind = if self.table_config.table_exists {
+            match &self.sink_mode {
+                PhysicalSinkMode::Overwrite => SnapshotUpdateKind::FullOverwrite,
+                PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
+                    SnapshotUpdateKind::CopyOnWrite
+                }
+                _ => SnapshotUpdateKind::FastAppend,
+            }
         } else {
             SnapshotUpdateKind::FastAppend
         };
@@ -164,7 +235,10 @@ impl<'a> IcebergPlanBuilder<'a> {
                 self.table_config.table_url.clone(),
                 self.table_config.options.lakehouse_table.clone(),
                 snapshot_update_kind,
-            ),
+            )
+            .with_expected_snapshot_id(self.expected_snapshot_id)
+            .with_removed_data_file_paths(self.removed_data_file_paths.clone())
+            .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),
         ))
     }
 }

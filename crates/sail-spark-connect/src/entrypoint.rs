@@ -5,12 +5,14 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::server::ServerBuilder;
-pub use sail_session::session_manager::SessionManagerOptions;
+pub use sail_session::session_manager::{ServerSessionFactoryFn, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
 use crate::server::SparkConnectServer;
-use crate::session_manager::create_spark_session_manager;
+use crate::session_manager::{
+    create_spark_session_factory, create_spark_session_manager_with_factory,
+};
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
 /// The meat of the gRPC server.
@@ -23,8 +25,31 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
+    serve_with_session_factory(
+        listener,
+        signal,
+        config,
+        runtime,
+        create_spark_session_factory,
+    )
+    .await
+}
+
+/// The same as [`serve`], with the session factory chosen by the caller.
+pub async fn serve_with_session_factory<F>(
+    listener: TcpListener,
+    signal: F,
+    config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
+    session_factory_fn: ServerSessionFactoryFn,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = ()>,
+{
     let mut system = ActorSystem::new();
-    let session_manager = create_spark_session_manager(config, runtime, &mut system).await?;
+    let session_manager =
+        create_spark_session_manager_with_factory(config, runtime, &mut system, session_factory_fn)
+            .await?;
     let result = {
         let server = SparkConnectServer::new(session_manager.clone());
         let service = SparkConnectServiceServer::new(server)

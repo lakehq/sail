@@ -8,6 +8,7 @@ mod registry;
 mod server;
 mod task_assigner;
 pub(super) mod worker_pool;
+mod worker_scaler;
 
 #[expect(clippy::allow_attributes)]
 pub(crate) mod r#gen {

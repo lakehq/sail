@@ -1,5 +1,67 @@
 Feature: CAST expressions
 
+  Rule: Timestamp timezone conversion
+
+    Scenario: casting TIMESTAMP_NTZ to TIMESTAMP resolves the session-zone gap and overlap
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT label, unix_micros(CAST(value AS TIMESTAMP)) AS result
+        FROM VALUES
+          ('gap', TIMESTAMP_NTZ '2021-03-14 02:30:00'),
+          ('overlap', TIMESTAMP_NTZ '2021-11-07 01:30:00')
+          AS t(label, value)
+        ORDER BY label
+        """
+      Then query result ordered
+        | label   | result           |
+        | gap     | 1615717800000000 |
+        | overlap | 1636273800000000 |
+
+    Scenario Outline: casting TIMESTAMP_NTZ to TIMESTAMP supports fixed offset <timezone>
+      Given config spark.sql.session.timeZone = <timezone>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          unix_micros(CAST(value AS TIMESTAMP)) AS cast_result,
+          unix_micros(TRY_CAST(value AS TIMESTAMP)) AS try_result,
+          CAST(CAST(NULL AS TIMESTAMP_NTZ) AS TIMESTAMP) IS NULL AS null_result
+        FROM VALUES (TIMESTAMP_NTZ '1970-01-01 00:00:00') AS t(value)
+        """
+      Then query result
+        | cast_result | try_result | null_result |
+        | <result>    | <result>   | true        |
+
+      Examples:
+        | timezone | ansi  | result       |
+        | +01      | true  | -3600000000  |
+        | +0130    | false | -5400000000  |
+        | +01:30   | true  | -5400000000  |
+        | -0130    | false | 5400000000   |
+        | -00:00   | true  | 0            |
+        | +18:00   | false | -64800000000 |
+
+  Rule: DATE cast ANSI behavior
+
+    Scenario: casting a malformed string to DATE returns null when ANSI mode is disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('not-a-date' AS DATE) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: casting a malformed string to DATE fails when ANSI mode is enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('not-a-date' AS DATE) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
   @function(nullability)
   Rule: Output schema
 

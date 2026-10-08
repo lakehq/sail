@@ -2,7 +2,6 @@ Feature: VALUES relation output schema
 
   Rule: Column nullability
 
-    @sail-bug
     Scenario: non-null VALUES literals produce a non-nullable column
       When query
         """

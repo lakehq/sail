@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{ScalarValue, internal_err};
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -50,7 +52,15 @@ impl ScalarUDFImpl for RaiseError {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Null)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `RaiseError.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L86>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Null, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

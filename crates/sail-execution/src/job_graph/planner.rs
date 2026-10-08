@@ -1,27 +1,23 @@
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
-use datafusion::logical_expr::execution_props::ScalarSubqueryResults;
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion::physical_expr::window::WindowExpr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
-use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, with_new_children_if_necessary,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -49,6 +45,8 @@ impl JobGraph {
     ) -> ExecutionResult<Self> {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
+        let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
+        let plan = materialize_shared_file_scan_builds(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -66,6 +64,80 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+/// A single-partition build no longer needs a physical coalesce, but should
+/// still be scanned once and broadcast rather than read again by every task.
+fn materialize_shared_file_scan_builds(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    Ok(plan
+        .transform_up(|plan| {
+            let shared_build = plan
+                .downcast_ref::<HashJoinExec>()
+                .is_some_and(|join| join.mode == PartitionMode::CollectLeft)
+                || plan.is::<CrossJoinExec>()
+                || plan.is::<NestedLoopJoinExec>()
+                || plan.is::<PiecewiseMergeJoinExec>();
+            if !shared_build {
+                return Ok(Transformed::no(plan));
+            }
+            let (left, right) = plan.children().two()?;
+            if left.is::<CoalescePartitionsExec>()
+                || left.output_partitioning().partition_count() != 1
+                || right.output_partitioning().partition_count() <= 1
+                || !left.exists(|node| {
+                    Ok(node.downcast_ref::<DataSourceExec>().is_some_and(|source| {
+                        source
+                            .data_source()
+                            .downcast_ref::<FileScanConfig>()
+                            .is_some()
+                    }))
+                })?
+            {
+                return Ok(Transformed::no(plan));
+            }
+            let children = vec![
+                Arc::new(CoalescePartitionsExec::new(Arc::clone(left))) as Arc<dyn ExecutionPlan>,
+                Arc::clone(right),
+            ];
+            Ok(Transformed::yes(replace_children_if_necessary(
+                plan, children,
+            )?))
+        })?
+        .data)
+}
+
+fn ensure_single_probe_partition_for_nested_loop_join(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let result = plan.transform_up(|plan| {
+        let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        if !matches!(
+            join.join_type(),
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
+                | JoinType::Full
+        ) || join.right().output_partitioning().partition_count() == 1
+        {
+            return Ok(Transformed::no(plan));
+        }
+
+        // Build-side output needs a match bitmap shared by all probe partitions.
+        // Workers cannot share that state, so one task must consume the whole probe side.
+        let children = vec![
+            Arc::clone(join.left()),
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(join.right()))),
+        ];
+        Ok(Transformed::yes(replace_children_if_necessary(
+            plan, children,
+        )?))
+    })?;
+    Ok(result.data)
 }
 
 fn ensure_single_input_partition_for_global_limit(
@@ -410,7 +482,9 @@ fn plan_job_graph_stages(
                 );
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
-            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::Range(_) => {
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
         };
@@ -451,10 +525,10 @@ fn plan_job_graph_stages(
         }
     } else if subtree.plan.is::<SortPreservingMergeExec>() {
         let child = subtree.only_child()?;
-        let plan = subtree
-            .plan
-            .clone()
-            .with_new_children(vec![create_merge_input(child, graph, scalar_context)?])?;
+        let plan = replace_children_if_necessary(
+            subtree.plan.clone(),
+            vec![create_merge_input(child, graph, scalar_context)?],
+        )?;
         PlannedSubtree::new(plan, subtree.node_has_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalesceExec>() {
         let child = subtree.only_child()?;
@@ -492,8 +566,8 @@ fn rebuild_subtree(
         .into_iter()
         .map(|child| child.plan)
         .collect::<Vec<_>>();
-    let plan = with_new_children_if_necessary(plan, children)?;
-    let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan);
+    let plan = replace_children_if_necessary(plan, children)?;
+    let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
     let subtree_has_pending_scalar_subquery_expr =
         node_has_scalar_subquery_expr || child_has_pending_scalar_subquery_expr.iter().any(|x| *x);
     Ok(RebuiltSubtree {
@@ -637,101 +711,20 @@ fn wrap_pending_scalar_subqueries(
     ))
 }
 
-fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
-        return physical_expr_has_scalar_subquery(filter.predicate());
-    }
-    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
-        return projection
-            .expr()
-            .iter()
-            .any(|expr| physical_expr_has_scalar_subquery(&expr.expr));
-    }
-    if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
-        return aggregate_has_scalar_subquery_expr(aggregate);
-    }
-    if let Some(sort) = plan.downcast_ref::<SortExec>() {
-        return sort
-            .expr()
-            .iter()
-            .any(|sort| physical_expr_has_scalar_subquery(&sort.expr));
-    }
-    if let Some(sort) = plan.downcast_ref::<SortPreservingMergeExec>() {
-        return sort
-            .expr()
-            .iter()
-            .any(|sort| physical_expr_has_scalar_subquery(&sort.expr));
-    }
-    if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-        return hash_join_has_scalar_subquery_expr(join);
-    }
-    if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() {
-        return join
-            .filter()
-            .is_some_and(|filter| physical_expr_has_scalar_subquery(filter.expression()));
-    }
-    if let Some(join) = plan.downcast_ref::<PiecewiseMergeJoinExec>() {
-        return physical_expr_has_scalar_subquery(&join.on.0)
-            || physical_expr_has_scalar_subquery(&join.on.1);
-    }
-    if let Some(window) = plan.downcast_ref::<WindowAggExec>() {
-        return window
-            .window_expr()
-            .iter()
-            .any(window_expr_has_scalar_subquery);
-    }
-    if let Some(window) = plan.downcast_ref::<BoundedWindowAggExec>() {
-        return window
-            .window_expr()
-            .iter()
-            .any(window_expr_has_scalar_subquery);
-    }
-    false
-}
-
-fn aggregate_has_scalar_subquery_expr(aggregate: &AggregateExec) -> bool {
-    aggregate
-        .group_expr()
-        .expr()
-        .iter()
-        .any(|(expr, _)| physical_expr_has_scalar_subquery(expr))
-        || aggregate
-            .group_expr()
-            .null_expr()
-            .iter()
-            .any(|(expr, _)| physical_expr_has_scalar_subquery(expr))
-        || aggregate.aggr_expr().iter().any(|expr| {
-            expr.expressions()
-                .iter()
-                .any(physical_expr_has_scalar_subquery)
-                || expr
-                    .order_bys()
-                    .iter()
-                    .any(|sort| physical_expr_has_scalar_subquery(&sort.expr))
-        })
-        || aggregate
-            .filter_expr()
-            .iter()
-            .flatten()
-            .any(physical_expr_has_scalar_subquery)
-}
-
-fn hash_join_has_scalar_subquery_expr(join: &HashJoinExec) -> bool {
-    join.on().iter().any(|(left, right)| {
-        physical_expr_has_scalar_subquery(left) || physical_expr_has_scalar_subquery(right)
-    }) || join
-        .filter()
-        .is_some_and(|filter| physical_expr_has_scalar_subquery(filter.expression()))
-}
-
-fn window_expr_has_scalar_subquery(expr: &Arc<dyn WindowExpr>) -> bool {
-    let expressions = expr.all_expressions();
-    expressions
-        .args
-        .iter()
-        .chain(expressions.partition_by_exprs.iter())
-        .chain(expressions.order_by_exprs.iter())
-        .any(physical_expr_has_scalar_subquery)
+fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    // Include expressions pushed into data sources, not just expressions on
+    // filters and projections. Every stage using a scalar result needs its own
+    // ScalarSubqueryExec, even if predicate pushdown removed the FilterExec.
+    let mut found = false;
+    plan.apply_expressions(&mut |expr| {
+        if physical_expr_has_scalar_subquery(expr) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })?;
+    Ok(found)
 }
 
 fn physical_expr_has_scalar_subquery(expr: &Arc<dyn PhysicalExpr>) -> bool {
@@ -791,7 +784,13 @@ fn create_rescale_input(
         OutputMode::Pipelined,
     )?;
     let properties = stage_properties_with_unknown_partitioning(graph, stage, output_partitions);
-    Ok(stage_input_exec(stage, InputMode::Rescale, properties))
+    Ok(stage_input_exec(
+        stage,
+        InputMode::Rescale {
+            partitions: output_partitions,
+        },
+        properties,
+    ))
 }
 
 fn create_shuffle(
@@ -808,6 +807,7 @@ fn create_shuffle(
             OutputDistribution::RoundRobinBatch { channels }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
+        Partitioning::Range(partitioning) => OutputDistribution::Range { partitioning },
     };
     let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(
@@ -853,14 +853,16 @@ fn create_row_shuffle(
 
 fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
-        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight { .. } => {
+            OutputMode::Pipelined
+        }
         ShuffleBackendKind::Celeborn { .. } => OutputMode::Blocking,
     }
 }
 
 fn scalar_subquery_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
-        ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Flight { .. } => OutputMode::Pipelined,
         ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
             OutputMode::Blocking
         }
@@ -977,14 +979,19 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::common::ScalarValue;
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
-    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+    use datafusion::logical_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::{binary, col};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-    use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+    use datafusion::physical_expr::{
+        Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
@@ -994,6 +1001,7 @@ mod tests {
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
+    use sail_celeborn::common::PartitionSplitMode;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
@@ -1015,7 +1023,12 @@ mod tests {
 
     fn flight_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
-            shuffle_backend: ShuffleBackendKind::Flight,
+            shuffle_backend: ShuffleBackendKind::Flight {
+                compression: ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            },
         }
     }
 
@@ -1032,10 +1045,56 @@ mod tests {
     fn celeborn_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
             shuffle_backend: ShuffleBackendKind::Celeborn {
-                master_host: "localhost".to_string(),
-                master_port: 1,
+                master_endpoints: vec!["localhost:1".to_string()],
+                compression: sail_celeborn::common::CompressionCodec::Lz4,
                 endpoint_overrides: vec![],
+                heartbeat_interval_secs: 10,
+                partition_split_threshold: 1_i64 << 30,
+                partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn nested_loop_build_output_has_one_probe_partition() {
+        use datafusion::common::JoinType;
+        use datafusion::physical_plan::joins::NestedLoopJoinExec;
+
+        for (join_type, partitions) in [
+            (JoinType::Left, 1),
+            (JoinType::LeftAnti, 1),
+            (JoinType::LeftSemi, 1),
+            (JoinType::LeftMark, 1),
+            (JoinType::Full, 1),
+            (JoinType::Inner, 4),
+            (JoinType::Right, 4),
+            (JoinType::RightAnti, 4),
+            (JoinType::RightSemi, 4),
+            (JoinType::RightMark, 4),
+        ] {
+            let right = Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            );
+            let join = Arc::new(
+                NestedLoopJoinExec::try_new(empty_plan(), right, None, &join_type, None).unwrap(),
+            );
+            let graph = JobGraph::try_new(join, flight_shuffle_options()).unwrap();
+            let stage = graph.stages.last().unwrap();
+            let join = stage.plan.downcast_ref::<NestedLoopJoinExec>().unwrap();
+            assert_eq!(
+                join.right().output_partitioning().partition_count(),
+                partitions
+            );
+            let probe = join
+                .right()
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            let input = &stage.inputs[*probe.input()];
+            assert!(matches!(input.mode, InputMode::Shuffle));
+            assert!(matches!(
+                graph.stages[input.stage].distribution,
+                OutputDistribution::RoundRobinBatch { channels } if channels == partitions
+            ));
         }
     }
 
@@ -1082,6 +1141,35 @@ mod tests {
                 mode: InputMode::Shuffle,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_preserves_range_shuffle() {
+        let schema = schema();
+        let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
+        let range = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )
+        .unwrap();
+        let graph = JobGraph::try_new(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::Range(range.clone())).unwrap(),
+            ),
+            flight_shuffle_options(),
+        )
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert!(matches!(
+            &graph.stages()[0].distribution,
+            OutputDistribution::Range { .. }
+        ));
+        let OutputDistribution::Range { partitioning } = &graph.stages()[0].distribution else {
+            return;
+        };
+        assert_eq!((*partitioning).clone(), range);
+        assert_eq!(graph.stages()[0].distribution.channels(), 2);
     }
 
     #[test]
@@ -1196,7 +1284,7 @@ mod tests {
             graph.stages()[1].inputs.as_slice(),
             [StageInput {
                 stage: 0,
-                mode: InputMode::Rescale,
+                mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
     }

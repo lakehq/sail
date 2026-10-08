@@ -42,6 +42,9 @@ futures = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
 
+[dev-dependencies]
+sail-telemetry = { path = "../sail-telemetry" }
+
 [build-dependencies]
 prost-build = { workspace = true }
 tonic-prost-build = { workspace = true }

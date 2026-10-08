@@ -32,7 +32,7 @@ where
             name: format!("Sequence({}, {})", T::syntax().name, S::syntax().name),
             node: SyntaxNode::Sequence(vec![
                 SyntaxNode::NonTerminal(TypeId::of::<T>()),
-                SyntaxNode::OneOrMore(Box::new(SyntaxNode::Sequence(vec![
+                SyntaxNode::ZeroOrMore(Box::new(SyntaxNode::Sequence(vec![
                     SyntaxNode::NonTerminal(TypeId::of::<S>()),
                     SyntaxNode::NonTerminal(TypeId::of::<T>()),
                 ]))),

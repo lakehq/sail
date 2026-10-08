@@ -85,3 +85,26 @@ Feature: encode with an argument coming from a column
         root
          |-- result: binary (nullable = true)
         """
+
+  Rule: Argument count validation
+
+    # Guardrail, not a wording test: `return_field_from_args` runs before `coerce_types`, so
+    # without an arity check there this indexed out of bounds and killed the connection
+    # instead of raising. A dead RPC carries no message, so this regex fails on the panic.
+    # Loose on purpose — it is the widest wording both engines share.
+    Scenario: encode rejects a single argument
+      When query
+        """
+        SELECT encode('a') AS result
+        """
+      Then query error `encode`.*requires 2
+
+    # Spark reports arity through WRONG_NUM_ARGS; Sail emits its own wording. Systemic across
+    # the whole function surface, so it is recorded rather than worked around here.
+    @sail-bug
+    Scenario: encode reports arity through WRONG_NUM_ARGS
+      When query
+        """
+        SELECT encode('a') AS result
+        """
+      Then query error \[WRONG_NUM_ARGS.*The `encode` requires 2 parameters but the actual number is 1

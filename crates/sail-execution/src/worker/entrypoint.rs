@@ -23,12 +23,14 @@ pub async fn run_worker(
                     "traceparent: {x}"
                 ))));
             };
-            Span::root("worker", span_context).with_property(|| {
-                (
-                    SpanAttribute::CLUSTER_WORKER_ID,
-                    options.worker_id.to_string(),
-                )
-            })
+            Span::root("worker", span_context)
+                .with_property(|| {
+                    (
+                        SpanAttribute::CLUSTER_WORKER_ID,
+                        options.worker_id.to_string(),
+                    )
+                })
+                .with_property(|| (SpanAttribute::SESSION_ID, options.session_id.clone()))
         }
         Err(std::env::VarError::NotPresent) => Span::noop(),
         Err(e) => {

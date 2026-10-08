@@ -5,11 +5,13 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::Partitioning;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
@@ -81,6 +83,22 @@ impl ExecutionPlan for CoalesceExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -126,9 +144,21 @@ impl ExecutionPlan for CoalesceExec {
         }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![if partition.is_none() {
+            ChildStats::At(None)
+        } else {
+            ChildStats::Skip
+        }]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_none() {
+            Ok(Arc::clone(&input_stats[0]))
         } else {
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }

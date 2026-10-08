@@ -15,8 +15,7 @@ Feature: get with an argument coming from a column
         | result |
         | 1      |
 
-    # Sail applies the first row's value to every row: Sail returns ['1', '1'].
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: get takes argument 2 from a column containing NULL
       When query
         """

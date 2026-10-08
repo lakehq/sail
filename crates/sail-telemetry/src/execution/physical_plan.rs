@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Result, Statistics, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -23,8 +23,12 @@ use datafusion::physical_plan::filter_pushdown::{
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputDistributionRequirements, PlanProperties,
+};
+use datafusion_proto::protobuf::PhysicalPlanNode;
 use fastrace::Span;
 use fastrace_futures::StreamExt;
 use futures::Stream;
@@ -38,6 +42,7 @@ use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
     pub metrics: Option<MetricManager>,
+    pub session_id: Option<String>,
     pub job_id: Option<u64>,
     pub stage: Option<usize>,
     pub attempt: Option<usize>,
@@ -125,8 +130,16 @@ impl ExecutionPlan for TracingExec {
         check_default_invariants(self, check)
     }
 
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        Vec::new()
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::UnspecifiedDistribution])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -145,7 +158,31 @@ impl ExecutionPlan for TracingExec {
         vec![&self.inner]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let child = children.one()?;
+        Ok(Arc::new(TracingExec::new(child, self.options.clone())))
+    }
+
+    fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -173,6 +210,11 @@ impl ExecutionPlan for TracingExec {
     ) -> Result<SendableRecordBatchStream> {
         let span = Span::enter_with_local_parent(self.inner.name().to_string())
             .with_property(|| (SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+        let span = if let Some(session_id) = self.options.session_id.clone() {
+            span.with_property(|| (SpanAttribute::SESSION_ID, session_id))
+        } else {
+            span
+        };
         let stream = {
             let _guard = span.set_local_parent();
             self.inner.execute(partition, context)?
@@ -204,8 +246,30 @@ impl ExecutionPlan for TracingExec {
         self.inner.metrics()
     }
 
+    #[expect(
+        deprecated,
+        reason = "TracingExec transparently exposes legacy child statistics"
+    )]
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.inner.partition_statistics(partition)
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        match input_stats {
+            [inner] => Ok(Arc::clone(inner)),
+            _ => plan_err!(
+                "TracingExec expected statistics for one input, but got {}",
+                input_stats.len()
+            ),
+        }
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -233,6 +297,13 @@ impl ExecutionPlan for TracingExec {
 
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion::physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalPlanNode>> {
+        Ok(None)
     }
 
     fn gather_filters_for_pushdown(
@@ -275,6 +346,9 @@ impl TracingExec {
 
     fn build_metric_attributes(&self) -> Vec<KeyValue> {
         let mut attributes = vec![];
+        if let Some(session_id) = &self.options.session_id {
+            attributes.push((MetricAttribute::SESSION_ID, session_id.clone().into()));
+        }
         if let Some(job_id) = self.options.job_id {
             attributes.push((MetricAttribute::EXECUTION_JOB_ID, job_id.to_string().into()));
         }

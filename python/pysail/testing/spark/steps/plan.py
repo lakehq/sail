@@ -40,7 +40,7 @@ def normalize_plan_text(plan_text: str) -> str:
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
-        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        r"pytest-of-[^/]+/pytest-\d+/(?:popen-gw\d+/)?[^/]+/",
         re.IGNORECASE,
     )
 
@@ -129,6 +129,12 @@ def normalize_plan_text(plan_text: str) -> str:
         r"<id>_\1.\2.parquet",
         text,
     )
+    # Normalize Sail default CSV filenames: <16-char random>_<partition>.csv.
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_(\d+)\.csv",
+        r"<id>_\1.csv",
+        text,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
@@ -149,6 +155,16 @@ def normalize_plan_text(plan_text: str) -> str:
 
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+        # Row-group byte offsets depend on compression and parallel write order.
+        # Retain the ranges and file-group layout without snapshotting exact bytes.
+        block = re.sub(r"(\.parquet):\d+\.\.\d+(?=[,\]])", r"\1:<range>", block)
+        # PyIceberg filenames retain their task and file counters; only the write UUID varies.
+        block = re.sub(
+            r"(?<![\w.-])(\d{5}-\d+-)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+            r"\1<uuid>\2",
+            block,
+            flags=re.IGNORECASE,
+        )
         # Extract the group list between the first "[" and the last "]"
         start = block.find("[")
         end = block.rfind("]")

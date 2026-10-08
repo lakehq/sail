@@ -1,53 +1,78 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::ipc::CompressionType;
+use datafusion::arrow::ipc::writer::IpcWriteOptions;
+use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
 use sail_celeborn::endpoint::{EndpointResolver, StaticEndpointResolver};
+use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
-    Flight,
+    Flight {
+        compression: ShuffleCompression,
+        connection_count: NonZeroUsize,
+        initial_stream_window_size: Option<u32>,
+        initial_connection_window_size: Option<u32>,
+    },
     Storage {
         path: Option<String>,
         max_file_size: usize,
         compression: ShuffleCompression,
     },
     Celeborn {
-        master_host: String,
-        master_port: u16,
+        master_endpoints: Vec<String>,
+        compression: CompressionCodec,
+        heartbeat_interval_secs: u64,
         endpoint_overrides: Vec<ShuffleEndpointOverride>,
+        partition_split_threshold: i64,
+        partition_split_mode: PartitionSplitMode,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ShuffleEndpointOverride {
-    pub internal_host: String,
-    pub internal_port: u16,
-    pub external_host: String,
-    pub external_port: u16,
+    pub internal: String,
+    pub external: String,
 }
 
 impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
     fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
-            sail_common::config::ShuffleBackend::Flight => Self::Flight,
+            sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
+                compression: flight.compression.clone().into(),
+                connection_count: flight.connection_count,
+                initial_stream_window_size: flight.initial_stream_window_size,
+                initial_connection_window_size: flight.initial_connection_window_size,
+            },
             sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
                 max_file_size: storage.max_file_size,
                 compression: storage.compression.clone().into(),
             },
             sail_common::config::ShuffleBackend::Celeborn(celeborn) => Self::Celeborn {
-                master_host: celeborn.master_host.clone(),
-                master_port: celeborn.master_port,
+                master_endpoints: celeborn.master_endpoints.clone(),
+                compression: match celeborn.compression {
+                    CelebornCompressionCodec::None => CompressionCodec::None,
+                    CelebornCompressionCodec::Lz4 => CompressionCodec::Lz4,
+                    CelebornCompressionCodec::Zstd { level } => CompressionCodec::Zstd { level },
+                },
+                heartbeat_interval_secs: celeborn.heartbeat_interval_secs,
                 endpoint_overrides: celeborn
                     .endpoint_overrides
                     .iter()
                     .map(|r#override| ShuffleEndpointOverride {
-                        internal_host: r#override.internal_host.clone(),
-                        internal_port: r#override.internal_port,
-                        external_host: r#override.external_host.clone(),
-                        external_port: r#override.external_port,
+                        internal: r#override.internal.clone(),
+                        external: r#override.external.clone(),
                     })
                     .collect(),
+                partition_split_threshold: celeborn.partition_split_threshold,
+                partition_split_mode: match celeborn.partition_split_mode {
+                    CelebornPartitionSplitMode::Soft => PartitionSplitMode::Soft,
+                    CelebornPartitionSplitMode::Hard => PartitionSplitMode::Hard,
+                },
             },
         }
     }
@@ -58,6 +83,58 @@ pub fn celeborn_application_id(session_id: &str) -> String {
 }
 
 impl ShuffleBackendKind {
+    pub fn flight_compression(&self) -> ShuffleCompression {
+        match self {
+            Self::Flight { compression, .. } => *compression,
+            Self::Storage { .. } | Self::Celeborn { .. } => ShuffleCompression::None,
+        }
+    }
+
+    pub fn flight_connection_count(&self) -> NonZeroUsize {
+        match self {
+            Self::Flight {
+                connection_count, ..
+            } => *connection_count,
+            Self::Storage { .. } | Self::Celeborn { .. } => NonZeroUsize::MIN,
+        }
+    }
+
+    pub fn flight_initial_stream_window_size(&self) -> Option<u32> {
+        match self {
+            Self::Flight {
+                initial_stream_window_size,
+                ..
+            } => *initial_stream_window_size,
+            Self::Storage { .. } | Self::Celeborn { .. } => None,
+        }
+    }
+
+    pub fn flight_initial_connection_window_size(&self) -> Option<u32> {
+        match self {
+            Self::Flight {
+                initial_connection_window_size,
+                ..
+            } => *initial_connection_window_size,
+            Self::Storage { .. } | Self::Celeborn { .. } => None,
+        }
+    }
+
+    pub fn celeborn_master_endpoints_string(&self) -> String {
+        let Self::Celeborn {
+            master_endpoints, ..
+        } = self
+        else {
+            return "[]".to_string();
+        };
+        #[expect(
+            clippy::expect_used,
+            reason = "Celeborn master endpoints derive Serialize and TOML values support arrays"
+        )]
+        toml::Value::try_from(master_endpoints)
+            .expect("serializing Celeborn master endpoints")
+            .to_string()
+    }
+
     pub fn celeborn_endpoint_overrides_string(&self) -> String {
         let Self::Celeborn {
             endpoint_overrides, ..
@@ -86,14 +163,9 @@ impl ShuffleBackendKind {
         }
         let overrides = endpoint_overrides
             .iter()
-            .map(|r#override| {
-                (
-                    (r#override.internal_host.clone(), r#override.internal_port),
-                    (r#override.external_host.clone(), r#override.external_port),
-                )
-            })
+            .map(|r#override| (r#override.internal.clone(), r#override.external.clone()))
             .collect::<HashMap<_, _>>();
-        Some(Arc::new(StaticEndpointResolver::new(overrides)))
+        Some(Arc::new(StaticEndpointResolver::from_mappings(overrides)))
     }
 }
 
@@ -114,33 +186,93 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
     }
 }
 
+impl ShuffleCompression {
+    pub fn ipc_write_options(self) -> Result<IpcWriteOptions, ArrowError> {
+        IpcWriteOptions::default().try_with_compression(match self {
+            Self::None => None,
+            Self::Lz4 => Some(CompressionType::LZ4_FRAME),
+            Self::Zstd => Some(CompressionType::ZSTD),
+        })
+    }
+}
+
+impl std::fmt::Display for ShuffleCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Lz4 => "lz4",
+            Self::Zstd => "zstd",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ShuffleBackendKind, ShuffleEndpointOverride};
+    use super::{
+        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride,
+    };
 
     #[test]
     fn test_celeborn_endpoint_overrides_string() {
         let backend = ShuffleBackendKind::Celeborn {
-            master_host: "master".to_string(),
-            master_port: 12097,
+            master_endpoints: vec!["master:12097".to_string()],
+            compression: CompressionCodec::Lz4,
+            heartbeat_interval_secs: 10,
             endpoint_overrides: vec![ShuffleEndpointOverride {
-                internal_host: "celeborn-worker".to_string(),
-                internal_port: 12000,
-                external_host: "127.0.0.1".to_string(),
-                external_port: 32000,
+                internal: "celeborn-worker:12000".to_string(),
+                external: "127.0.0.1:32000".to_string(),
             }],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: PartitionSplitMode::Soft,
         };
 
         assert_eq!(
             backend.celeborn_endpoint_overrides_string(),
-            "[{ external_host = \"127.0.0.1\", external_port = 32000, internal_host = \"celeborn-worker\", internal_port = 12000 }]"
+            "[{ external = \"127.0.0.1:32000\", internal = \"celeborn-worker:12000\" }]"
+        );
+    }
+
+    #[test]
+    fn test_celeborn_master_endpoints_string() {
+        let backend = ShuffleBackendKind::Celeborn {
+            master_endpoints: vec!["master-1:12097".to_string(), "master-2:12097".to_string()],
+            compression: CompressionCodec::Lz4,
+            heartbeat_interval_secs: 10,
+            endpoint_overrides: vec![],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: PartitionSplitMode::Soft,
+        };
+
+        assert_eq!(
+            backend.celeborn_master_endpoints_string(),
+            "[\"master-1:12097\", \"master-2:12097\"]"
         );
     }
 
     #[test]
     fn test_non_celeborn_endpoint_overrides_string_is_empty() {
         assert_eq!(
-            ShuffleBackendKind::Flight.celeborn_endpoint_overrides_string(),
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            }
+            .celeborn_endpoint_overrides_string(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn test_non_celeborn_master_endpoints_string_is_empty() {
+        assert_eq!(
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            }
+            .celeborn_master_endpoints_string(),
             "[]"
         );
     }

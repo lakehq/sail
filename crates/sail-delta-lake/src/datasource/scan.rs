@@ -37,12 +37,15 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
+use parquet::arrow::RowNumber;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
 use crate::conversion::ScalarConverter;
+use crate::datasource::deletion_vector::{DeltaFileDeletionVector, DeltaParquetSource};
 use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
@@ -52,7 +55,6 @@ use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
-    pub pruning_mask: Option<&'a [bool]>,
     pub projection: Option<&'a Vec<usize>>,
     pub limit: Option<usize>,
     pub pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
@@ -66,7 +68,7 @@ pub struct FileScanParams<'a> {
 /// Strategy for providing table-level statistics to DataFusion.
 #[derive(Debug, Clone, Copy)]
 pub enum TableStatsMode {
-    /// Use snapshot/log-derived statistics (can be expensive for large snapshots).
+    /// Use snapshot/log-derived statistics for the provided `Add` actions.
     Snapshot,
     /// Aggregate statistics only from the provided `Add` actions (chunk-local).
     AddsOnly,
@@ -111,6 +113,9 @@ pub(crate) fn file_scan_logical_names(
     if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
         names.push(commit_timestamp_column_name.clone());
     }
+    if let Some(row_index_column_name) = &scan_config.row_index_column_name {
+        names.push(row_index_column_name.clone());
+    }
     names
 }
 
@@ -136,10 +141,17 @@ fn logical_file_schema_for_scan(
             logical_fields_by_physical_name
                 .get(physical_field.name())
                 .map(|logical_field| {
-                    Arc::new(
+                    let field =
                         with_variant_extension_if_marked_storage(logical_field.as_ref().clone())
-                            .with_name(physical_field.name()),
-                    )
+                            .with_name(physical_field.name());
+                    let field = if column_mapping_mode == ColumnMappingMode::Id
+                        && field.data_type().is_nested()
+                    {
+                        with_physical_name_aliases(field)
+                    } else {
+                        field
+                    };
+                    Arc::new(field)
                 })
                 .unwrap_or_else(|| Arc::clone(physical_field))
         })
@@ -149,6 +161,49 @@ fn logical_file_schema_for_scan(
         fields,
         physical_file_schema.metadata().clone(),
     ))
+}
+
+/// Adds the physical name of a nested field and its children as schema evolution aliases in
+/// column mapping ID mode.
+///
+/// Fields are matched by Parquet field ID in ID mode. The Parquet reader drops the field IDs
+/// of nested fields when it coerces INT96 timestamps (as written by Spark by default), and
+/// the alias lets such fields be matched by their physical name instead. Aliases only apply
+/// to Parquet fields without a field ID. Top-level primitive fields keep their field IDs, so
+/// they are left unchanged to avoid casts in the scan.
+fn with_physical_name_aliases(field: Field) -> Field {
+    let data_type = match field.data_type() {
+        ArrowDataType::Struct(children) => ArrowDataType::Struct(
+            children
+                .iter()
+                .map(|child| Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        ArrowDataType::List(child) => {
+            ArrowDataType::List(Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+        }
+        ArrowDataType::LargeList(child) => {
+            ArrowDataType::LargeList(Arc::new(with_physical_name_aliases(child.as_ref().clone())))
+        }
+        ArrowDataType::FixedSizeList(child, size) => ArrowDataType::FixedSizeList(
+            Arc::new(with_physical_name_aliases(child.as_ref().clone())),
+            *size,
+        ),
+        ArrowDataType::Map(entries, sorted) => ArrowDataType::Map(
+            Arc::new(with_physical_name_aliases(entries.as_ref().clone())),
+            *sorted,
+        ),
+        other => other.clone(),
+    };
+    let mut metadata = field.metadata().clone();
+    let physical_name = arrow_field_physical_name(&field, ColumnMappingMode::Id).to_string();
+    if !metadata.contains_key(FIELD_ALIASES_METADATA_KEY)
+        && let Ok(aliases) = serde_json::to_string(&[physical_name])
+    {
+        metadata.insert(FIELD_ALIASES_METADATA_KEY.to_string(), aliases);
+    }
+    field.with_data_type(data_type).with_metadata(metadata)
 }
 
 pub(crate) fn file_scan_projection_for_schema(
@@ -191,7 +246,6 @@ pub fn build_file_scan_config(
         None => Arc::new(snapshot.schema().clone()),
     };
     let config = scan_config.clone();
-    let table_partition_cols = snapshot.metadata().partition_columns();
     let partition_columns_mapped = snapshot.physical_partition_columns();
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
@@ -211,17 +265,25 @@ pub fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        // Files with deletion vectors are accepted: DV filtering is applied post-scan
-        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
-        // Note: the physical numRecords in stats is the total file record count
-        // (not accounting for DV deletions), which is correct for scan planning.
-
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
-        let action_stats = stats_for_add(action, &file_schema, &physical_to_logical)?;
+        let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {
             per_file_stats.push(Arc::clone(&stats));
             part.statistics = Some(stats);
+        }
+        if let Some(descriptor) = &action.deletion_vector {
+            let physical_rows = part
+                .statistics
+                .as_ref()
+                .and_then(|stats| match stats.num_rows {
+                    Precision::Exact(rows) => Some(rows),
+                    _ => None,
+                });
+            part.extensions.insert(DeltaFileDeletionVector {
+                descriptor: descriptor.clone(),
+                physical_rows,
+            });
         }
 
         // Add file column if configured
@@ -265,11 +327,16 @@ pub fn build_file_scan_config(
     });
 
     // Build table partition columns schema
-    let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
-    for col in table_partition_cols {
-        let field = complete_schema.field_with_name(col).map_err(|_| {
-            DataFusionError::Plan(format!("Partition column {col} not found in schema"))
-        })?;
+    let mut table_partition_cols_schema = Vec::with_capacity(partition_columns_mapped.len());
+    for column in &partition_columns_mapped {
+        let field = complete_schema
+            .field_with_name(&column.logical_name)
+            .map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Partition column {} not found in schema",
+                    column.logical_name
+                ))
+            })?;
         let corrected = if config.wrap_partition_values {
             match field.data_type() {
                 ArrowDataType::Utf8
@@ -283,8 +350,13 @@ pub fn build_file_scan_config(
         } else {
             field.data_type().clone()
         };
-        table_partition_cols_schema
-            .push(Arc::new(field.as_ref().clone().with_data_type(corrected)));
+        table_partition_cols_schema.push(Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(&column.physical_name)
+                .with_data_type(corrected),
+        ));
     }
 
     // Add file column to partition schema if configured
@@ -321,7 +393,27 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::new(logical_file_schema, table_partition_cols_schema);
+    let has_deletion_vectors = files.iter().any(|add| add.deletion_vector.is_some());
+    let mut table_schema = TableSchema::builder(logical_file_schema)
+        .with_table_partition_cols(table_partition_cols_schema)
+        .build();
+    let mut row_index_name = config.row_index_column_name.clone();
+    if row_index_name.is_none() && has_deletion_vectors {
+        let mut name = "__sail_delta_physical_row_index".to_string();
+        while table_schema.table_schema().field_with_name(&name).is_ok() {
+            name.push('_');
+        }
+        row_index_name = Some(name);
+    }
+    let row_index = table_schema.table_schema().fields().len();
+    if let Some(name) = &row_index_name {
+        table_schema = TableSchema::builder(Arc::clone(table_schema.file_schema()))
+            .with_table_partition_cols(table_schema.table_partition_cols().clone())
+            .with_virtual_columns(vec![Arc::new(
+                Field::new(name, ArrowDataType::Int64, false).with_extension_type(RowNumber),
+            )])
+            .build();
+    }
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema
@@ -332,7 +424,7 @@ pub fn build_file_scan_config(
         TableStatsMode::Snapshot => {
             let snapshot_schema = Arc::new(snapshot.schema().clone());
             snapshot
-                .datafusion_table_statistics(params.pruning_mask)
+                .datafusion_table_statistics_for_adds(files)
                 .map(|stats| {
                     map_statistics_to_schema_with_name_mapping(
                         &stats,
@@ -386,7 +478,15 @@ pub fn build_file_scan_config(
     }
 
     let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-        Arc::new(parquet_source);
+        if has_deletion_vectors {
+            Arc::new(DeltaParquetSource::new(
+                parquet_source,
+                row_index,
+                log_store.config().location.clone(),
+            ))
+        } else {
+            Arc::new(parquet_source)
+        };
 
     // Build the final FileScanConfig
     let object_store_url = create_object_store_url(&log_store.config().location)?;
@@ -618,11 +718,7 @@ fn looks_like_absolute_uri(path: &str) -> bool {
         && rest.starts_with('/')
 }
 
-fn stats_for_add(
-    action: &Add,
-    file_schema: &SchemaRef,
-    physical_to_logical: &HashMap<String, String>,
-) -> Result<Option<Arc<Statistics>>> {
+fn stats_for_add(action: &Add, file_schema: &SchemaRef) -> Result<Option<Arc<Statistics>>> {
     let stats = action
         .get_stats()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -633,60 +729,45 @@ fn stats_for_add(
     let mut column_statistics = Vec::with_capacity(file_schema.fields().len());
     for field in file_schema.fields() {
         let field_name = field.name();
-        let logical_name = physical_to_logical.get(field_name);
-        let name_candidates = logical_name
-            .iter()
-            .map(|name| name.as_str())
-            .chain(std::iter::once(field_name.as_str()));
-        let mut min_value = Precision::Absent;
-        let mut max_value = Precision::Absent;
-        let mut null_count = Precision::Absent;
-
-        for name in name_candidates {
-            if min_value == Precision::Absent
-                && let Some(value) = stats.min_values.get(name).and_then(|value| {
-                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
-                        value,
-                        field.data_type(),
-                    )
+        let bound = |value| {
+            if stats.tight_bounds {
+                Precision::Exact(value)
+            } else {
+                Precision::Inexact(value)
+            }
+        };
+        let mut min_value = stats
+            .min_values
+            .get(field_name)
+            .and_then(|value| {
+                ScalarConverter::column_value_stat_to_arrow_scalar_value(value, field.data_type())
                     .ok()
                     .flatten()
-                })
-                && !value.is_null()
-            {
-                min_value = if stats.tight_bounds {
-                    Precision::Exact(value)
-                } else {
-                    Precision::Inexact(value)
-                };
-            }
-            if max_value == Precision::Absent
-                && let Some(value) = stats.max_values.get(name).and_then(|value| {
-                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
-                        value,
-                        field.data_type(),
-                    )
+            })
+            .filter(|value| !value.is_null())
+            .map(bound)
+            .unwrap_or(Precision::Absent);
+        let mut max_value = stats
+            .max_values
+            .get(field_name)
+            .and_then(|value| {
+                ScalarConverter::column_value_stat_to_arrow_scalar_value(value, field.data_type())
                     .ok()
                     .flatten()
-                })
-                && !value.is_null()
-            {
-                max_value = if stats.tight_bounds {
-                    Precision::Exact(value)
-                } else {
-                    Precision::Inexact(value)
-                };
-            }
-            if null_count == Precision::Absent
-                && let Some(value) = stats.null_count_value(name)
-            {
-                null_count = if stats.tight_bounds {
+            })
+            .filter(|value| !value.is_null())
+            .map(bound)
+            .unwrap_or(Precision::Absent);
+        let null_count = stats
+            .null_count_value(field_name)
+            .map(|value| {
+                if stats.tight_bounds {
                     Precision::Exact(value.max(0) as usize)
                 } else {
                     Precision::Inexact(value.max(0) as usize)
-                };
-            }
-        }
+                }
+            })
+            .unwrap_or(Precision::Absent);
 
         if arrow_type_contains_timestamp(field.data_type()) {
             min_value = min_value.to_inexact();
@@ -727,9 +808,9 @@ mod tests {
     use object_store::path::Path;
 
     use super::{
-        add_column_statistics, map_statistics_to_schema,
+        FIELD_ALIASES_METADATA_KEY, add_column_statistics, map_statistics_to_schema,
         map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
-        sanitize_statistics_for_schema, stats_for_add,
+        sanitize_statistics_for_schema, stats_for_add, with_physical_name_aliases,
     };
     use crate::conversion::ScalarConverter;
     use crate::spec::Add;
@@ -998,7 +1079,7 @@ mod tests {
             commit_timestamp: None,
         };
 
-        let stats = stats_for_add(&add, &file_schema, &HashMap::new())
+        let stats = stats_for_add(&add, &file_schema)
             .unwrap()
             .expect("stats should be present");
         let column = &stats.column_statistics[0];
@@ -1012,5 +1093,65 @@ mod tests {
             Precision::Inexact(ScalarValue::Int32(Some(7)))
         );
         assert_eq!(column.null_count, Precision::Inexact(0));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn test_stats_for_add_does_not_fallback_to_a_colliding_logical_name() {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "col-target",
+            DataType::Int64,
+            true,
+        )]));
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(
+                r#"{"numRecords":1,"minValues":{"col-source":0},"maxValues":{"col-source":0},"nullCount":{"col-source":0}}"#
+                    .to_string(),
+            ),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        };
+        let stats = stats_for_add(&add, &file_schema)
+            .unwrap()
+            .expect("stats should be present");
+        let column = &stats.column_statistics[0];
+
+        assert_eq!(column.min_value, Precision::Absent);
+        assert_eq!(column.max_value, Precision::Absent);
+        assert_eq!(column.null_count, Precision::Absent);
+    }
+
+    #[test]
+    fn physical_name_aliases_are_added_to_nested_fields() {
+        let mapped = |name: &str, physical: &str, data_type: DataType| {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([(
+                "delta.columnMapping.physicalName".to_string(),
+                physical.to_string(),
+            )]))
+        };
+        let child = mapped("a", "col-a", DataType::Int32);
+        let field = mapped("s", "col-s", DataType::Struct(vec![child].into()));
+
+        let field = with_physical_name_aliases(field);
+
+        assert_eq!(
+            field.metadata().get(FIELD_ALIASES_METADATA_KEY),
+            Some(&r#"["col-s"]"#.to_string())
+        );
+        let child_aliases = match field.data_type() {
+            DataType::Struct(children) => children[0].metadata().get(FIELD_ALIASES_METADATA_KEY),
+            _ => None,
+        };
+        assert_eq!(child_aliases, Some(&r#"["col-a"]"#.to_string()));
     }
 }

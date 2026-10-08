@@ -80,7 +80,7 @@ pub(crate) async fn write_delete_parquet_file(
     let delete_file_path = write_location::manifest_file_path(data_url, &relative_path);
 
     DataFileWriter::new(partition_spec_id, delete_file_path, partition)
-        .finish(meta)
+        .finish_without_bounds(meta)
         .map(|outcome| outcome.data_file)
         .map_err(DataFusionError::Execution)
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::Result;
@@ -10,6 +10,7 @@ use datafusion_datasource_avro::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
 
 #[derive(Debug, Default, Clone)]
 pub struct AvroReadFormat;
@@ -47,7 +48,10 @@ impl ReadFormat for AvroReadFormat {
                 schemas.push(schema);
             }
         }
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(try_merge_normalized(
+            schemas,
+            NanosecondTimestamps::Report,
+        )?))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
@@ -61,7 +65,7 @@ impl ReadFormat for AvroReadFormat {
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

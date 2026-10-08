@@ -14,14 +14,14 @@ use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
 use rand::distr::Uniform;
 use sail_common::actor::ActorSystem;
-use sail_common::config::ClusterConfigEnv;
+use sail_common::config::{ClusterConfigEnv, ExecutionConfigEnv};
 use sail_common::telemetry::ContextPropagationEnv;
 use sail_common::utils::retry::RetryStrategy;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
-use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+use crate::shuffle::ShuffleBackendKind;
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
 #[derive(Debug, Clone)]
@@ -129,6 +129,7 @@ impl KubernetesWorkerService {
     fn build_pod_env(&self, id: WorkerId, options: WorkerLaunchOptions) -> Vec<EnvVar> {
         let WorkerLaunchOptions {
             enable_tls,
+            batch_size,
             driver_id,
             session_id,
             driver_external_host,
@@ -176,6 +177,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::ENABLE_TLS.to_string(),
                 value: Some(enable_tls.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ExecutionConfigEnv::BATCH_SIZE.to_string(),
+                value: Some(batch_size.to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -243,7 +249,7 @@ impl KubernetesWorkerService {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
                     match &shuffle_backend {
-                        ShuffleBackendKind::Flight => "flight",
+                        ShuffleBackendKind::Flight { .. } => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
                         ShuffleBackendKind::Celeborn { .. } => "celeborn",
                     }
@@ -252,6 +258,36 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
+        if let ShuffleBackendKind::Flight {
+            compression,
+            connection_count,
+            initial_stream_window_size,
+            initial_connection_window_size,
+        } = &shuffle_backend
+        {
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),
+                value: Some(compression.to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT.to_string(),
+                value: Some(connection_count.to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE
+                    .to_string(),
+                value: Some(initial_stream_window_size.unwrap_or(0).to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE
+                    .to_string(),
+                value: Some(initial_connection_window_size.unwrap_or(0).to_string()),
+                value_from: None,
+            });
+        }
         if let ShuffleBackendKind::Storage {
             path,
             max_file_size,
@@ -273,39 +309,52 @@ impl KubernetesWorkerService {
                 },
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__COMPRESSION.to_string(),
-                    value: Some(
-                        match compression {
-                            ShuffleCompression::None => "none",
-                            ShuffleCompression::Lz4 => "lz4",
-                            ShuffleCompression::Zstd => "zstd",
-                        }
-                        .to_string(),
-                    ),
+                    value: Some(compression.to_string()),
                     value_from: None,
                 },
             ]);
         }
         if let ShuffleBackendKind::Celeborn {
-            master_host,
-            master_port,
+            compression,
+            heartbeat_interval_secs,
+            partition_split_threshold,
+            partition_split_mode,
             ..
         } = &shuffle_backend
         {
             env.extend([
                 EnvVar {
-                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_HOST.to_string(),
-                    value: Some(master_host.clone()),
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS.to_string(),
+                    value: Some(shuffle_backend.celeborn_master_endpoints_string()),
                     value_from: None,
                 },
                 EnvVar {
-                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_PORT.to_string(),
-                    value: Some(master_port.to_string()),
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__COMPRESSION.to_string(),
+                    value: Some(compression.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS
+                        .to_string(),
+                    value: Some(heartbeat_interval_secs.to_string()),
                     value_from: None,
                 },
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES
                         .to_string(),
                     value: Some(shuffle_backend.celeborn_endpoint_overrides_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD
+                        .to_string(),
+                    value: Some(partition_split_threshold.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE
+                        .to_string(),
+                    value: Some(partition_split_mode.to_string()),
                     value_from: None,
                 },
             ]);

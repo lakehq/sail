@@ -65,6 +65,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(|registry| {
                 vec![
                     registry.execution_filter_input_row_count.name(),

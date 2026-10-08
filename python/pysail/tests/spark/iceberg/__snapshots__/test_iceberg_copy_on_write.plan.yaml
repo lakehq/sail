@@ -1,0 +1,169 @@
+# serializer version: 1
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-None-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-None-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-None-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-id < 3-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-id < 3-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-id < 3-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-part = 'A'-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-part = 'A'-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-part = 'A'-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-true-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-true-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[copy-on-write-true-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-None-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-None-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-None-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-id < 3-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-id < 3-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-id < 3-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-part = 'A'-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-part = 'A'-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-part = 'A'-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-true-1]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-true-2]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_metadata_delete_does_not_read_parquet[merge-on-read-true-3]"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/cow_metadata_delete/)
+      DataSourceExec: partitions=1, partition_sizes=[1]

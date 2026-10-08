@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import IntegerType, StructField, StructType
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,6 +48,17 @@ def _latest_added_parquet_files(base: Path) -> list[Path]:
         if added:
             return added
     return []
+
+
+def _latest_add_stats(base: Path) -> dict:
+    for log_file in sorted((base / "_delta_log").glob("*.json"), reverse=True):
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if stats := action.get("add", {}).get("stats"):
+                    return json.loads(stats)
+    message = f"add stats not found in {base / '_delta_log'}"
+    raise AssertionError(message)
 
 
 def _assert_parquet_struct_matches_delta(
@@ -136,6 +148,61 @@ def test_create_table_with_column_mapping_name(spark, tmp_path: Path):
     assert config.get("delta.columnMapping.mode") == "name"
     assert "delta.columnMapping.maxColumnId" in config
     assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
+
+
+def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_explicit_stats"
+    source = spark.createDataFrame([Row(id=1, payload=Row(value=10, ignored=20), other=30)])
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", "name")
+        .option("delta.dataSkippingStatsColumns", "PAYLOAD.VALUE")
+        .save(str(base))
+    )
+
+    schema = json.loads(_latest_metadata(base)["schemaString"])
+    payload = next(field for field in schema["fields"] if field["name"] == "payload")
+    payload_physical = payload["metadata"]["delta.columnMapping.physicalName"]
+    value = next(field for field in payload["type"]["fields"] if field["name"] == "value")
+    value_physical = value["metadata"]["delta.columnMapping.physicalName"]
+
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == {payload_physical: {value_physical: 10}}
+    assert stats["maxValues"] == {payload_physical: {value_physical: 10}}
+    assert stats["nullCount"] == {payload_physical: {value_physical: 0}}
+    assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [Row(value=10)]
+
+
+def test_explicit_stats_columns_parse_escaped_top_level_names(spark, tmp_path: Path):
+    base = tmp_path / "delta_explicit_stats_escaped_names"
+    schema = StructType(
+        [
+            StructField("a.b", IntegerType(), True),
+            StructField("c,", IntegerType(), True),
+            StructField("ignored", IntegerType(), True),
+        ]
+    )
+    source = spark.createDataFrame([(1, 2, 3)], schema=schema)
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.dataSkippingStatsColumns", "`a.b`,`c,`")
+        .save(str(base))
+    )
+
+    expected_values = {"a.b": 1, "c,": 2}
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == expected_values
+    assert stats["maxValues"] == expected_values
+    assert stats["nullCount"] == {"a.b": 0, "c,": 0}
+
+    spark.createDataFrame([(4, 5, 6)], schema=schema).write.format("delta").mode("append").save(str(base))
+    appended_values = {"a.b": 4, "c,": 5}
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == appended_values
+    assert stats["maxValues"] == appended_values
+    assert stats["nullCount"] == {"a.b": 0, "c,": 0}
 
 
 def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
@@ -343,6 +410,30 @@ def test_nested_mapping_with_metadata_as_data_read(spark, tmp_path: Path):
         {"id": 1, "payload": {"level": {"value": 10}}},
         {"id": 2, "payload": {"level": {"value": 20}}},
     ]
+    filtered = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(base))
+        .where(F.col("payload.level.value") > F.lit(10))
+        .collect()
+    )
+    assert [row.asDict(recursive=True) for row in filtered] == [{"id": 2, "payload": {"level": {"value": 20}}}]
+
+
+def test_dotted_column_mapping_with_metadata_as_data_filter(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_metadata_as_data_dotted"
+    source = spark.createDataFrame([(1, "a"), (2, "b")], ["event.id", "label"])
+    (source.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    rows = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(base))
+        .where(F.col("`event.id`") == F.lit(2))
+        .collect()
+    )
+
+    assert [row.asDict() for row in rows] == [{"event.id": 2, "label": "b"}]
 
 
 def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
@@ -448,6 +539,20 @@ def test_partitioned_table_with_column_mapping_name(spark, tmp_path: Path):
         {"id": 3, "region": "us", "data": "c"},
         {"id": 4, "region": "asia", "data": "d"},
     ]
+
+    for metadata_as_data in ("false", "true"):
+        filtered = (
+            spark.read.format("delta")
+            .option("metadataAsDataRead", metadata_as_data)
+            .load(str(base))
+            .where(F.col("region") == "us")
+            .orderBy("id")
+            .collect()
+        )
+        assert [row.asDict() for row in filtered] == [
+            {"id": 1, "region": "us", "data": "a"},
+            {"id": 3, "region": "us", "data": "c"},
+        ]
 
 
 def test_remove_actions_for_partitioned_column_mapping_table_use_physical_keys(spark, tmp_path: Path):

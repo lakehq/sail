@@ -178,8 +178,9 @@ mod tests {
 
         let shredded_variant = VariantArray::try_new(shredded.column(0).as_ref())?;
         let unshredded = unshred_variant(&shredded_variant)?;
-        assert!(unshredded.value_field().is_some());
-        assert!(unshredded.typed_value_field().is_none());
+        let value_column = unshredded.value_column();
+        assert_eq!(value_column.null_count(), 0);
+        assert!(unshredded.typed_value_column().is_none());
 
         Ok(())
     }

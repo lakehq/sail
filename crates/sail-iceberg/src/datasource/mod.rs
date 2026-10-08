@@ -10,9 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod copy_on_write;
 pub mod expressions;
-pub mod provider;
+pub(crate) mod parquet;
+pub(crate) mod partition_defaults;
+pub(crate) mod predicate;
 pub mod pruning;
+pub mod scan;
 pub mod type_converter;
 
-pub use provider::*;
+pub use scan::*;

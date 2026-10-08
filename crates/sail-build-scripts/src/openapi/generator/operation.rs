@@ -346,11 +346,11 @@ impl OperationDefinition {
         let error_body = if self.error_responses.is_empty() {
             quote! {
                 response.error_for_status_ref()?;
-                Err(ApiError::Unknown(Response {
+                Err(ApiError::Unknown(Box::new(Response {
                     inner: (),
                     status,
                     headers,
-                }))
+                })))
             }
         } else {
             let arms = self
@@ -363,18 +363,18 @@ impl OperationDefinition {
                     #(#arms)*
                     _ => {
                         response.error_for_status_ref()?;
-                        return Err(ApiError::Unknown(Response {
+                        return Err(ApiError::Unknown(Box::new(Response {
                             inner: (),
                             status,
                             headers,
-                        }));
+                        })));
                     }
                 };
-                Err(ApiError::Response(Response {
+                Err(ApiError::Response(Box::new(Response {
                     inner,
                     status,
                     headers,
-                }))
+                })))
             }
         };
 
@@ -620,11 +620,11 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
             match response.json::<#rust_type>().await {
                 Ok(value) => value,
                 Err(_) => {
-                    return Err(ApiError::Unknown(Response {
+                    return Err(ApiError::Unknown(Box::new(Response {
                         inner: (),
                         status,
                         headers,
-                    }));
+                    })));
                 }
             }
         }

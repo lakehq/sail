@@ -88,37 +88,40 @@
                 ]
               ],
               "condition": {
-                "unresolvedFunction": {
-                  "functionName": [
-                    "=="
-                  ],
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "t",
-                          "c"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
-                      "literal": {
-                        "int32": {
-                          "value": 2
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "t",
+                            "c"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 2
+                          }
                         }
                       }
-                    }
-                  ],
-                  "namedArguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false,
-                  "isInternal": null,
-                  "ignoreNulls": null,
-                  "filter": null,
-                  "orderBy": null
-                }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "t . c = 2 "
               }
             },
             "planId": null

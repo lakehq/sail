@@ -15,7 +15,7 @@ use regex::Regex;
 
 use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
 use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::make_scalar_function;
+use crate::functions_utils::{StrMemo, make_scalar_function};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkRegexpExtract {
@@ -146,6 +146,8 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
             let is_idx_null = idx_len == 1 && idx.is_null(0);
 
             let mut builder = StringBuilder::new();
+            // Compile each distinct column pattern once per batch, not per row.
+            let mut regex_memo = StrMemo::new();
             for i in 0..args[0].len() {
                 let pattern_is_null = if pattern_len == 1 {
                     is_pattern_null
@@ -161,15 +163,16 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
                 if pattern_is_null || idx_is_null || values.is_null(i) {
                     builder.append_null();
                 } else {
-                    let re = pattern_scalar_opt.as_ref().map_or_else(
-                        || parse_regex(SparkRegexpExtract::NAME, pattern.value_(i)),
-                        |re| Ok(re.clone()),
+                    let re = regex_memo.resolve(
+                        pattern_scalar_opt.as_ref(),
+                        || pattern.value_(i),
+                        |p| parse_regex(SparkRegexpExtract::NAME, p),
                     )?;
                     let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
                     builder.append_value(extract_first_match(
                         SparkRegexpExtract::NAME,
                         values.value(i),
-                        &re,
+                        re,
                         group_idx,
                     )?);
                 }
@@ -209,6 +212,8 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
             let is_idx_null = idx_len == 1 && idx.is_null(0);
 
             let mut builder = ListBuilder::new(StringBuilder::new());
+            // Compile each distinct column pattern once per batch, not per row.
+            let mut regex_memo = StrMemo::new();
             for i in 0..args[0].len() {
                 let pattern_is_null = if pattern_len == 1 {
                     is_pattern_null
@@ -224,15 +229,16 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
                 if pattern_is_null || idx_is_null || values.is_null(i) {
                     builder.append_null();
                 } else {
-                    let re = pattern_scalar_opt.as_ref().map_or_else(
-                        || parse_regex(SparkRegexpExtractAll::NAME, pattern.value_(i)),
-                        |re| Ok(re.clone()),
+                    let re = regex_memo.resolve(
+                        pattern_scalar_opt.as_ref(),
+                        || pattern.value_(i),
+                        |p| parse_regex(SparkRegexpExtractAll::NAME, p),
                     )?;
                     let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
                     let matches = extract_all_matches(
                         SparkRegexpExtractAll::NAME,
                         values.value(i),
-                        &re,
+                        re,
                         group_idx,
                     )?;
                     builder.append_value(matches);
@@ -395,4 +401,82 @@ fn extract_all_matches(
         results.push(Some(extract_capture(function_name, &caps, group_idx)?));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use datafusion::arrow::array::{Int64Array, ListArray, StringArray};
+
+    use super::*;
+
+    fn strings(values: Vec<Option<&str>>) -> ArrayRef {
+        Arc::new(StringArray::from(values))
+    }
+
+    /// A pattern supplied as a column selects the regex per row; null patterns
+    /// yield null outputs and an invalid pattern in the column errors.
+    #[test]
+    fn extract_with_column_pattern() -> Result<()> {
+        let values = strings(vec![Some("a11b"), Some("a22b"), Some("xyz"), Some("a33b")]);
+        let patterns = strings(vec![
+            Some("([0-9]+)"),
+            Some("([0-9]+)"),
+            None,
+            Some("([a-z]+)"),
+        ]);
+        let idx: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 1, 1, 1]));
+        let output = regexp_extract_inner(&[values.clone(), patterns, idx.clone()])?;
+        let output = output
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string output");
+        assert_eq!(output.value(0), "11");
+        assert_eq!(output.value(1), "22");
+        assert!(output.is_null(2));
+        assert_eq!(output.value(3), "a");
+
+        let invalid = strings(vec![Some("("), Some("("), Some("("), Some("(")]);
+        assert!(regexp_extract_inner(&[values, invalid, idx]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn extract_all_with_column_pattern() -> Result<()> {
+        let values = strings(vec![Some("1a2"), Some("3b4"), Some("5c6")]);
+        let patterns = strings(vec![Some("[0-9]"), Some("[a-z]"), Some("[0-9]")]);
+        let idx: ArrayRef = Arc::new(Int64Array::from(vec![0i64, 0, 0]));
+        let output = regexp_extract_all_inner(&[values, patterns, idx])?;
+        let output = output
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("list output");
+        let digits = output.value(0);
+        let digits = digits
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string matches");
+        assert_eq!(
+            (digits.len(), digits.value(0), digits.value(1)),
+            (2, "1", "2")
+        );
+        let letters = output.value(1);
+        let letters = letters
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string matches");
+        assert_eq!((letters.len(), letters.value(0)), (1, "b"));
+        // Row 2 reuses "[0-9]" after row 0 compiled it: the memoized regex
+        // must extract exactly as a fresh compile would.
+        let reused = output.value(2);
+        let reused = reused
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string matches");
+        assert_eq!(
+            (reused.len(), reused.value(0), reused.value(1)),
+            (2, "5", "6")
+        );
+        Ok(())
+    }
 }

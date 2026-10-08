@@ -5,6 +5,7 @@ use log::{error, warn};
 
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, WorkerId};
 use crate::job_graph::TaskPlacement;
 use crate::task::scheduling::{
@@ -12,18 +13,8 @@ use crate::task::scheduling::{
 };
 
 impl TaskAssigner {
-    pub fn request_workers(&mut self) -> usize {
-        let enqueued_slots = self
-            .task_queue
-            .iter()
-            .map(|region| {
-                region
-                    .tasks
-                    .iter()
-                    .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
-                    .count()
-            })
-            .sum::<usize>();
+    pub fn count_worker_demands(&self) -> usize {
+        let enqueued_slots = self.enqueued_worker_slots();
         let vacant_slots = self
             .workers
             .values()
@@ -43,35 +34,45 @@ impl TaskAssigner {
         let allowed_workers = if self.options.worker_max_count == 0 {
             usize::MAX
         } else {
-            self.options
-                .worker_max_count
-                .saturating_sub(self.requested_worker_count)
-                .saturating_sub(active_workers)
+            self.options.worker_max_count.saturating_sub(active_workers)
         };
-        let required_workers = required_slots
+        required_slots
             .div_ceil(self.options.worker_task_slots)
-            .min(allowed_workers);
-        self.requested_worker_count = self.requested_worker_count.saturating_add(required_workers);
-        required_workers
+            .min(allowed_workers)
     }
 
-    pub fn track_worker_failed_to_start(&mut self) {
-        self.requested_worker_count = self.requested_worker_count.saturating_sub(1);
+    pub fn request_initial_workers(&self, worker_initial_count: usize) -> usize {
+        let active_workers = self
+            .workers
+            .values()
+            .filter(|worker| matches!(worker, WorkerResource::Active { .. }))
+            .count();
+        let requested_workers = worker_initial_count.saturating_sub(active_workers);
+        if self.options.worker_max_count == 0 {
+            requested_workers
+        } else {
+            requested_workers.min(self.options.worker_max_count.saturating_sub(active_workers))
+        }
     }
 
     pub fn activate_worker(&mut self, worker_id: WorkerId) {
-        self.requested_worker_count = self.requested_worker_count.saturating_sub(1);
-        if self.workers.contains_key(&worker_id) {
-            warn!("worker {worker_id} is already active");
-            return;
-        }
-        self.workers.insert(
-            worker_id,
-            WorkerResource::Active {
-                task_slots: vec![TaskSlot::default(); self.options.worker_task_slots],
-                local_streams: IndexSet::new(),
+        let resource = WorkerResource::Active {
+            task_slots: vec![TaskSlot::default(); self.options.worker_task_slots],
+            local_streams: IndexSet::new(),
+        };
+        match self.workers.entry(worker_id) {
+            indexmap::map::Entry::Vacant(entry) => {
+                warn!("worker {worker_id} was not pending");
+                entry.insert(resource);
+            }
+            indexmap::map::Entry::Occupied(mut entry) => match entry.get() {
+                WorkerResource::Active { .. } => warn!("worker {worker_id} is already active"),
+                WorkerResource::Inactive => {
+                    warn!("worker {worker_id} was inactive");
+                    entry.insert(resource);
+                }
             },
-        );
+        }
     }
 
     pub fn deactivate_worker(&mut self, worker_id: WorkerId) {
@@ -89,8 +90,25 @@ impl TaskAssigner {
         }
     }
 
-    pub fn enqueue_tasks(&mut self, region: TaskRegion) {
-        self.task_queue.push_back(region);
+    pub fn enqueue_tasks(&mut self, region: &TaskRegion) -> ExecutionResult<()> {
+        let required_slots = region
+            .tasks
+            .iter()
+            .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+            .count();
+        let max_slots = self
+            .options
+            .worker_max_count
+            .saturating_mul(self.options.worker_task_slots);
+        if self.options.worker_max_count != 0 && required_slots > max_slots {
+            return Err(ExecutionError::InvalidArgument(format!(
+                "task region requires {required_slots} worker task slots, but the configured maximum is \
+                 {max_slots} given a maximum of {} workers with {} task slots per worker",
+                self.options.worker_max_count, self.options.worker_task_slots,
+            )));
+        }
+        self.task_queue.push_back(region.clone());
+        Ok(())
     }
 
     pub fn exclude_task(&mut self, key: &TaskKey) {
@@ -251,6 +269,19 @@ impl TaskAssigner {
         }
     }
 
+    fn enqueued_worker_slots(&self) -> usize {
+        self.task_queue
+            .iter()
+            .map(|region| {
+                region
+                    .tasks
+                    .iter()
+                    .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+                    .count()
+            })
+            .sum()
+    }
+
     /// Builds a snapshot of available task slots across the driver and active workers for assignment.
     fn build_worker_task_slot_assigner(&self) -> TaskSlotAssigner {
         let slots = self
@@ -296,9 +327,12 @@ impl TaskSlotAssigner {
     }
 
     fn next(&mut self) -> Option<(WorkerId, usize)> {
+        // All workers have the same slot capacity. Prefer the least occupied
+        // worker, accounting for both existing tasks and this assignment batch.
         self.slots
             .iter_mut()
-            .find_map(|(worker_id, slots)| slots.pop().map(|slot| (*worker_id, slot)))
+            .max_by_key(|(_, slots)| slots.len())
+            .and_then(|(worker_id, slots)| slots.pop().map(|slot| (*worker_id, slot)))
     }
 
     fn try_assign_task_region(
@@ -331,5 +365,192 @@ impl TaskSlotAssigner {
             }
         }
         Ok(assignments)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
+    use crate::id::{JobId, TaskKey, WorkerId};
+    use crate::job_graph::TaskPlacement;
+    use crate::task::scheduling::{
+        TaskAssignment, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
+    };
+
+    fn task_assigner(worker_task_slots: usize, worker_max_count: usize) -> TaskAssigner {
+        TaskAssigner::new(TaskAssignerOptions::new(
+            worker_task_slots,
+            worker_max_count,
+        ))
+    }
+
+    fn worker_region(slots: usize) -> TaskRegion {
+        TaskRegion {
+            tasks: (0..slots)
+                .map(|partition| {
+                    (
+                        TaskPlacement::Worker,
+                        TaskSet {
+                            entries: vec![TaskSetEntry {
+                                key: TaskKey {
+                                    job_id: JobId::from(1),
+                                    stage: 0,
+                                    partition,
+                                    attempt: 0,
+                                },
+                                output: TaskOutputKind::Local,
+                            }],
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn worker_demand_accounts_for_vacant_slots() {
+        let mut assigner = task_assigner(8, 4);
+        assert!(assigner.enqueue_tasks(&worker_region(8)).is_ok());
+
+        assert_eq!(assigner.count_worker_demands(), 1);
+        assigner.activate_worker(WorkerId::from(1));
+        assert_eq!(assigner.count_worker_demands(), 0);
+    }
+
+    #[test]
+    fn worker_demand_respects_active_worker_limit() {
+        let mut assigner = task_assigner(1, 2);
+        for tasks in worker_region(4).tasks.chunks(2) {
+            assert!(
+                assigner
+                    .enqueue_tasks(&TaskRegion {
+                        tasks: tasks.to_vec(),
+                    })
+                    .is_ok()
+            );
+        }
+        assigner.activate_worker(WorkerId::from(1));
+
+        assert_eq!(assigner.count_worker_demands(), 1);
+    }
+
+    #[test]
+    fn initial_workers_respect_the_worker_limit() {
+        let mut assigner = task_assigner(8, 4);
+        assigner.activate_worker(WorkerId::from(1));
+
+        assert_eq!(assigner.request_initial_workers(4), 3);
+    }
+
+    #[test]
+    fn assignments_spread_across_workers_with_excess_capacity() {
+        let mut assigner = task_assigner(128, 4);
+        for id in 1..=4 {
+            assigner.activate_worker(WorkerId::from(id));
+        }
+        let region = worker_region(8);
+        // Assign separate regions to also exercise balancing across batches.
+        for tasks in region.tasks.chunks(2) {
+            assert!(
+                assigner
+                    .enqueue_tasks(&TaskRegion {
+                        tasks: tasks.to_vec(),
+                    })
+                    .is_ok()
+            );
+            assert_eq!(assigner.assign_tasks().len(), 2);
+        }
+        for id in 1..=4 {
+            assert_eq!(assigner.find_worker_tasks(WorkerId::from(id)).len(), 2);
+        }
+    }
+
+    #[test]
+    fn assignments_prefer_workers_with_more_free_slots() {
+        let mut assigner = task_assigner(8, 2);
+        assigner.activate_worker(WorkerId::from(1));
+        assert!(assigner.enqueue_tasks(&worker_region(6)).is_ok());
+        assert_eq!(assigner.assign_tasks().len(), 6);
+
+        assigner.activate_worker(WorkerId::from(2));
+        let mut region = worker_region(8);
+        for (_, set) in &mut region.tasks {
+            for entry in &mut set.entries {
+                entry.key.stage = 1;
+            }
+        }
+        assert!(assigner.enqueue_tasks(&region).is_ok());
+        let assignments = assigner.assign_tasks();
+        let slots = assignments
+            .iter()
+            .filter_map(|assignment| match assignment.assignment {
+                TaskAssignment::Worker { worker_id, slot } => Some((worker_id, slot)),
+                TaskAssignment::Driver => None,
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(slots.len(), 8);
+        for id in 1..=2 {
+            assert_eq!(assigner.find_worker_tasks(WorkerId::from(id)).len(), 7);
+        }
+    }
+
+    #[test]
+    fn regions_wait_for_capacity_without_partial_assignment() {
+        let mut assigner = task_assigner(2, 2);
+        assigner.activate_worker(WorkerId::from(1));
+        assert!(assigner.enqueue_tasks(&worker_region(4)).is_ok());
+        assert!(assigner.assign_tasks().is_empty());
+        assert!(assigner.find_worker_tasks(WorkerId::from(1)).is_empty());
+
+        assigner.activate_worker(WorkerId::from(2));
+        assert_eq!(assigner.assign_tasks().len(), 4);
+    }
+
+    #[test]
+    fn impossible_regions_are_rejected_even_behind_waiting_regions() {
+        let mut assigner = task_assigner(2, 2);
+        assert!(assigner.enqueue_tasks(&worker_region(4)).is_ok());
+        assert!(matches!(
+            assigner.enqueue_tasks(&worker_region(5)),
+            Err(error) if error.to_string().contains(
+                "task region requires 5 worker task slots, but the configured maximum is 4"
+            )
+        ));
+        assert_eq!(assigner.task_queue.len(), 1);
+        assert_eq!(assigner.count_worker_demands(), 2);
+    }
+
+    #[test]
+    fn capacity_check_counts_worker_sets_only() {
+        let mut assigner = task_assigner(1, 1);
+        let mut region = worker_region(2);
+        region.tasks[0].0 = TaskPlacement::Driver;
+        let entry = region.tasks[1].1.entries[0].clone();
+        region.tasks[1].1.entries.push(TaskSetEntry {
+            key: TaskKey {
+                stage: 1,
+                ..entry.key
+            },
+            output: entry.output,
+        });
+        assert!(assigner.enqueue_tasks(&region).is_ok());
+        assigner.activate_worker(WorkerId::from(1));
+        assert_eq!(assigner.assign_tasks().len(), 2);
+    }
+
+    #[test]
+    fn capacity_check_allows_unlimited_workers_and_large_limits() {
+        assert!(
+            task_assigner(1, 0)
+                .enqueue_tasks(&worker_region(10))
+                .is_ok()
+        );
+        assert!(
+            task_assigner(2, usize::MAX)
+                .enqueue_tasks(&worker_region(10))
+                .is_ok()
+        );
     }
 }

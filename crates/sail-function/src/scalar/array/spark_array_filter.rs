@@ -244,7 +244,7 @@ fn empty_filtered_list(list_array: &ArrayRef, field: FieldRef) -> Result<ArrayRe
 
 /// Filters flat list values using a boolean predicate, returning filtered values and
 /// recomputed per-sublist offsets. Null predicate values are treated as false.
-fn filter_list_values<O: OffsetSizeTrait>(
+pub(crate) fn filter_list_values<O: OffsetSizeTrait>(
     values: &ArrayRef,
     predicate: &BooleanArray,
     offsets: &OffsetBuffer<O>,
@@ -289,6 +289,7 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion_expr::{Expr, HigherOrderUDF, col, lambda, lit};
     use datafusion_physical_expr::create_physical_expr;
 
@@ -335,6 +336,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

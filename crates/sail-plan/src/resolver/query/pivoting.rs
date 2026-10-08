@@ -53,9 +53,12 @@ impl PlanResolver<'_> {
             _ => make_pivot_struct(pivot_columns),
         };
 
-        let aggregates = self
-            .resolve_named_expressions(aggregate, &schema, state)
-            .await?;
+        let aggregates = {
+            let mut scope = state.enter_config_scope();
+            scope.state().config_mut().preserve_count_argument_columns = grouping.is_none();
+            self.resolve_named_expressions(aggregate, &schema, scope.state())
+                .await?
+        };
 
         // Spark allows aggregate expressions and pure literals, but rejects columns outside an
         // aggregate function.
@@ -434,10 +437,10 @@ impl PlanResolver<'_> {
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
 
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        // Spark's Expand cannot expose input columns removed by UNPIVOT.
+        state.register_missing_input_boundary(&plan);
+        Ok(plan)
     }
 }
 

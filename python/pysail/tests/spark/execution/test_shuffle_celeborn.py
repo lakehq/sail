@@ -32,8 +32,7 @@ def remote(
     """Run Spark Connect with a Celeborn shuffle backend."""
     endpoint_overrides = "[{}]".format(
         ", ".join(
-            f'{{ internal_host = "{hostname}", internal_port = {port}, '
-            f'external_host = "{worker.host}", external_port = {mapped_port} }}'
+            f'{{ internal = "{hostname}:{port}", external = "{worker.host}:{mapped_port}" }}'
             for hostname, worker in celeborn_workers.items()
             for port, mapped_port in [
                 (12000, worker.rpc_port),
@@ -46,8 +45,9 @@ def remote(
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_HOST": celeborn_master.host,
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_PORT": str(celeborn_master.port),
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS": (
+            f'["{celeborn_master.host}:{celeborn_master.port}"]'
+        ),
         "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
     }
     with spark_connect_server(envs=envs) as server:
@@ -93,8 +93,16 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
     assert _application_shuffle_ids(celeborn_master, session_id) == []
 
     with ThreadPoolExecutor(max_workers=1) as executor:
+        # Sum needs the range values even when its row count is known exactly.
         result = executor.submit(
-            lambda: spark.range(2).repartition(2).groupBy().count().select(identity("count").alias("count")).collect()
+            lambda: (
+                spark.range(2)
+                .repartition(2)
+                .groupBy()
+                .agg(F.sum("id").alias("total"))
+                .select(identity("total").alias("total"))
+                .collect()
+            )
         )
         deadline = time.monotonic() + 2
         while not (shuffle_ids := _application_shuffle_ids(celeborn_master, session_id)):
@@ -103,7 +111,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
             time.sleep(0.05)
 
         assert shuffle_ids, "the shuffle was never registered with the Celeborn master"
-        assert result.result() == [Row(count=2)]
+        assert result.result() == [Row(total=1)]
 
     deadline = time.monotonic() + 5
     while shuffle_ids := _application_shuffle_ids(celeborn_master, session_id):

@@ -2,7 +2,7 @@ use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
 use crate::options::r#gen::{JsonReadOptions, JsonWriteOptions};
 
@@ -16,7 +16,7 @@ mod write;
 pub use read::JsonReadFormat;
 pub use write::JsonWriteFormat;
 
-pub type JsonTableFormat = ListingTableFormat<JsonFormatFactory>;
+pub type JsonDataSource = ListingDataSource<JsonFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct JsonFormatFactory;

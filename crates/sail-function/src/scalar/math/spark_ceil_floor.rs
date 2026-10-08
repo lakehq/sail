@@ -259,7 +259,7 @@ impl ScalarUDFImpl for SparkCeil {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Err(generic_internal_err(
             "ceil",
-            "`return_type` should not be called, call `return_type_from_args` instead",
+            "`return_type` should not be called; `return_field_from_args` is used instead",
         ))
     }
 
@@ -321,7 +321,7 @@ impl ScalarUDFImpl for SparkFloor {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Err(generic_internal_err(
             "floor",
-            "`return_type` should not be called, call `return_type_from_args` instead",
+            "`return_type` should not be called; `return_field_from_args` is used instead",
         ))
     }
 

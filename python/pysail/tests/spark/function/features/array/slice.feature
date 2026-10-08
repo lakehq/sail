@@ -15,8 +15,7 @@ Feature: slice with an argument coming from a column
         | result |
         | [2, 3] |
 
-    # Sail rejects the column: Sail errors: Invalid argument error: Non-nullable field of ListArray "item" cannot contain nulls
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario Outline: slice takes argument <n> from a column containing NULL
       When query
         """

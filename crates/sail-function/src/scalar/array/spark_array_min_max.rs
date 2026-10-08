@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -13,6 +16,14 @@ use crate::functions_nested_utils::make_scalar_function;
 enum ArrayOp {
     Min,
     Max,
+}
+
+fn element_return_type(name: &str, data_type: Option<&DataType>) -> Result<DataType> {
+    match data_type {
+        Some(DataType::List(field) | DataType::LargeList(field)) => Ok(field.data_type().clone()),
+        Some(DataType::Null) => Ok(DataType::Null),
+        _ => plan_err!("{name} can only accept List or LargeList."),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -43,12 +54,18 @@ impl ScalarUDFImpl for ArrayMin {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMin can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `ArrayMin.nullable = true`, unconditional (an empty array yields NULL).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2349>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_type =
+            element_return_type("ArrayMin", args.arg_fields.first().map(|f| f.data_type()))?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -88,12 +105,18 @@ impl ScalarUDFImpl for ArrayMax {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMax can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `ArrayMax.nullable = true`, unconditional (an empty array yields NULL).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2422>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_type =
+            element_return_type("ArrayMax", args.arg_fields.first().map(|f| f.data_type()))?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

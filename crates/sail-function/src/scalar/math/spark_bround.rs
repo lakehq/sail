@@ -2,9 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, as_primitive_array};
 use datafusion::arrow::compute::binary;
-use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Float32Type, Float64Type, Int32Type, Int64Type,
+};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
@@ -38,7 +42,21 @@ impl ScalarUDFImpl for SparkBRound {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `RoundBase.nullable = true`, unconditional; `BRound` inherits it and declares no
+    /// `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1563>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
         if !(1..=2).contains(&arg_types.len()) {
             return Err(invalid_arg_count_exec_err(
                 "spark_bround",
@@ -47,19 +65,22 @@ impl ScalarUDFImpl for SparkBRound {
             ));
         }
         let t = &arg_types[0];
-        match t {
+        let data_type = match t {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            _ => Err(unsupported_data_type_exec_err(
-                "spark_bround",
-                "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
-                t,
-            )),
-        }
+            | DataType::Decimal256(_, _) => DataType::Float64,
+            DataType::Int32 => DataType::Int32,
+            DataType::Int64 => DataType::Int64,
+            _ => {
+                return Err(unsupported_data_type_exec_err(
+                    "spark_bround",
+                    "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
+                    t,
+                ));
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

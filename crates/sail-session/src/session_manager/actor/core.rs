@@ -6,6 +6,7 @@ use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
+use sail_system_store::SystemEvent;
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::{
@@ -31,7 +32,6 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
     }
 }
 
-#[tonic::async_trait]
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
     type Options = (SessionManagerOptions, SessionManagerComponents);
@@ -46,6 +46,7 @@ impl Actor for SessionManagerActor {
             session_factory,
             job_runner_factory,
             driver_gateway,
+            event_reporter,
         } = components;
         Self {
             options,
@@ -56,10 +57,17 @@ impl Actor for SessionManagerActor {
             driver_gateway,
             driver_id_generator: IdGenerator::new(),
             shutdown_notifier: None,
+            event_reporter,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        for (key, value) in &self.options.options {
+            self.event_reporter.report(SystemEvent::OptionCreated {
+                key: key.clone(),
+                value: value.clone(),
+            });
+        }
         let Some(driver_gateway) = &mut self.driver_gateway else {
             return;
         };
@@ -69,13 +77,26 @@ impl Actor for SessionManagerActor {
         info!("driver server is ready on port {}", driver_gateway.port());
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             SessionManagerMessage::GetOrCreateSession {
                 session_id,
                 user_id,
                 result,
             } => self.handle_get_or_create_session(ctx, session_id, user_id, result),
+            SessionManagerMessage::CompleteSessionCreation {
+                session_id,
+                user_id,
+                context,
+                driver_id,
+                activation,
+            } => self.handle_complete_session_creation(
+                ctx, session_id, user_id, context, driver_id, activation,
+            ),
             SessionManagerMessage::ProbeIdleSession {
                 session_id,
                 instant,
@@ -83,15 +104,8 @@ impl Actor for SessionManagerActor {
             SessionManagerMessage::DeleteSession { session_id, result } => {
                 self.handle_delete_session(ctx, session_id, result)
             }
-            SessionManagerMessage::SetSessionHistory {
-                session_id,
-                history,
-            } => self.handle_set_session_history(ctx, session_id, history),
             SessionManagerMessage::SetSessionFailure { session_id } => {
                 self.handle_set_session_failure(ctx, session_id)
-            }
-            SessionManagerMessage::ObserveState { observer } => {
-                self.handle_observe_state(ctx, observer)
             }
             SessionManagerMessage::GetDriver { driver_id, result } => {
                 self.handle_get_driver(driver_id, result)

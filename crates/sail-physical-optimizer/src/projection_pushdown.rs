@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Result, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -11,7 +11,8 @@ use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, with_new_children_if_necessary,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, replace_children_if_necessary,
 };
 
 /// Runs DataFusion projection pushdown without moving physical lambda variables
@@ -72,7 +73,7 @@ fn install_lambda_optimizer_boundary(
     let boundary: Arc<dyn ExecutionPlan> = Arc::new(LambdaProjectionBoundaryExec::new(Arc::clone(
         projection.input(),
     )));
-    let plan = with_new_children_if_necessary(plan, vec![boundary])?;
+    let plan = replace_children_if_necessary(plan, vec![boundary])?;
     Ok(Transformed::yes(plan))
 }
 
@@ -143,12 +144,30 @@ impl ExecutionPlan for LambdaJoinFilterBoundaryExec {
         self.join.children()
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.join.apply_expressions(f)
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let join = Arc::clone(&self.join).replace_children(children, options)?;
+        Ok(Arc::new(Self::new(join)))
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let join = Arc::clone(&self.join).with_new_children(children)?;
-        Ok(Arc::new(Self::new(join)))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -202,9 +221,17 @@ impl ExecutionPlan for LambdaProjectionBoundaryExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return internal_err!(
@@ -214,6 +241,16 @@ impl ExecutionPlan for LambdaProjectionBoundaryExec {
             );
         }
         Ok(Arc::new(Self::new(children.swap_remove(0))))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

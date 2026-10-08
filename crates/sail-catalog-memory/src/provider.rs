@@ -399,7 +399,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     })
                 }
                 AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
-                    "CHECK constraints are handled by lakehouse table formats".to_string(),
+                    "CHECK constraints are handled by lake sources".to_string(),
                 )),
             },
             _ => Err(CatalogError::NotSupported(

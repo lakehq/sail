@@ -1,12 +1,15 @@
+use arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
+use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::Explode;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -19,6 +22,7 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
+use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
@@ -239,6 +243,9 @@ impl PlanResolver<'_> {
                                     ignore_nulls,
                                     filter,
                                     order_by,
+                                    preserve_count_argument_columns: state
+                                        .config()
+                                        .preserve_count_argument_columns,
                                     function_context: FunctionContextInput {
                                         argument_display_names: &argument_display_names,
                                         plan_config: &self.config,
@@ -258,6 +265,7 @@ impl PlanResolver<'_> {
                 }
             }
         };
+        let func = coerce_timestamp_string_predicate(func, schema, &self.config)?;
 
         // DataFusion lambda variables carry no type until resolved against the schema.
         // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
@@ -291,11 +299,22 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            &function_name,
-            argument_display_names.iter().map(|x| x.as_str()).collect(),
-            is_distinct,
-        )?;
+        // A single-field inline uses the scalar rewrite path, so preserve its
+        // default field name here. Explicit aliases are applied by the caller.
+        let name = if matches!(canonical_function_name.as_str(), "inline" | "inline_outer")
+            && let Expr::ScalarFunction(function) = &func
+            && function.func.inner().is::<Explode>()
+            && let DataType::Struct(fields) = func.get_type(schema)?
+            && let [field] = fields.as_ref()
+        {
+            field.name().to_string()
+        } else {
+            service.plan_formatter().function_to_string(
+                &function_name,
+                argument_display_names.iter().map(|x| x.as_str()).collect(),
+                is_distinct,
+            )?
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
@@ -357,9 +376,40 @@ impl PlanResolver<'_> {
         let mut exprs: Vec<expr::Expr> = vec![];
 
         for expression in expressions {
+            let is_named_reference = matches!(
+                &expression,
+                spec::Expr::UnresolvedAttribute { .. }
+                    | spec::Expr::UnresolvedNamedLambdaVariable(_)
+            );
+            // Preserve named references before resolution lowers field access to functions.
+            let field_name = match &expression {
+                spec::Expr::UnresolvedAttribute { name, .. }
+                | spec::Expr::UnresolvedNamedLambdaVariable(
+                    spec::UnresolvedNamedLambdaVariable { name },
+                ) => name.parts().last().map(|x| x.as_ref().to_string()),
+                spec::Expr::UnresolvedExtractValue { extraction, .. } => {
+                    match extraction.as_ref() {
+                        spec::Expr::Literal(spec::Literal::Utf8 { value }) => value.clone(),
+                        spec::Expr::UnresolvedAttribute { name, .. } => match name.parts() {
+                            [field] => Some(field.as_ref().to_string()),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             let NamedExpr { name, expr, .. } = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
+            // A string map key is not a struct field name in the Column API.
+            let field_name = if is_named_reference
+                || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())
+            {
+                field_name
+            } else {
+                None
+            };
 
             match expr {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
@@ -367,6 +417,7 @@ impl PlanResolver<'_> {
                 // - struct(alias.*) expands to all visible columns from that qualifier
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
+                    let schema = &Self::local_schema(schema, state);
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),
@@ -416,6 +467,13 @@ impl PlanResolver<'_> {
 
                 other => {
                     names.push(name.one()?);
+                    // A reference may resolve to an alias with different casing.
+                    let other = match field_name {
+                        Some(field_name) if !matches!(other, Expr::Column(_)) => {
+                            other.alias(field_name)
+                        }
+                        _ => other,
+                    };
                     exprs.push(other);
                 }
             }

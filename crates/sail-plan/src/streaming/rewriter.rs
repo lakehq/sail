@@ -113,6 +113,7 @@ impl TreeNodeRewriter for StreamingRewriter {
                             projected_schema: _,
                             filters,
                             fetch,
+                            statistics_requests: _,
                         } = scan;
                         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                             node: Arc::new(StreamSourceWrapperNode::try_new(

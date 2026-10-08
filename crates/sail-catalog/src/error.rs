@@ -67,6 +67,8 @@ pub enum CatalogError {
     StaleMetadata(String),
     #[error("commit state unknown: {0}")]
     CommitStateUnknown(String),
+    #[error("commit rejected: {0}")]
+    CommitRejected(String),
     #[error("credential unavailable: {0}")]
     CredentialUnavailable(String),
     #[error("cross-format metadata conversion lag: {0}")]

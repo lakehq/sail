@@ -5,14 +5,14 @@ use datafusion::arrow::array::{
     BinaryBuilder, OffsetSizeTrait, StringArray, as_dictionary_array, as_largestring_array,
     as_string_array,
 };
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{
     as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
     as_string_view_array,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -51,7 +51,15 @@ impl ScalarUDFImpl for SparkUnHex {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Unhex.nullable = true`, unconditional (not narrowed by `failOnError`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1247>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

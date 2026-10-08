@@ -163,14 +163,10 @@ impl Iterator for JoinSetIter {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.bits == 0 {
-            None
-        } else {
-            let index = self.bits.trailing_zeros() as usize;
-            // Clear the lowest set bit to advance the iterator
-            self.bits &= self.bits - 1;
-            Some(index)
-        }
+        let index = self.bits.lowest_one()? as usize;
+        // Clear the lowest set bit to advance the iterator
+        self.bits &= self.bits - 1;
+        Some(index)
     }
 }
 

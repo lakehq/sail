@@ -232,7 +232,7 @@ fn to_radix_string(mut n: i64, radix: u32) -> String {
     loop {
         let rem: u8 = (n % radix) as u8;
         digits.push(
-            std::char::from_digit(rem as u32, 36)
+            char::from_digit(rem as u32, 36)
                 .map(|c| c.to_ascii_uppercase())
                 .unwrap_or('?'),
         );

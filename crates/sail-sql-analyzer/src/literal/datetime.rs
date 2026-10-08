@@ -93,7 +93,7 @@ where
     <T as FromStr>::Err: std::fmt::Debug,
     E: ParserExtra<'a, &'a str> + 'a,
 {
-    just('-')
+    one_of(['-', '+'])
         .or_not()
         .then(
             one_of('0'..='9')

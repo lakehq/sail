@@ -19,8 +19,9 @@ pub mod type_widening;
 
 pub(crate) use converter::adapt_array_to_physical_field;
 pub use converter::{
-    arrow_field_physical_name, arrow_schema_from_struct_type, arrow_schema_reorder_partitions,
-    attach_column_mapping_metadata, get_physical_arrow_schema as get_physical_schema,
+    PhysicalPartitionColumn, arrow_field_physical_name, arrow_schema_from_struct_type,
+    arrow_schema_reorder_partitions, attach_column_mapping_metadata,
+    get_physical_arrow_schema as get_physical_schema, logical_to_physical_arrow_paths,
     make_physical_arrow_schema, restore_logical_record_batch,
 };
 pub use manager::{

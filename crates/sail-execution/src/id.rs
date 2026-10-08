@@ -66,6 +66,7 @@ macro_rules! define_id_type {
 define_id_type!(JobId, u64);
 define_id_type!(DriverId, u64);
 define_id_type!(WorkerId, u64);
+define_id_type!(WorkerDemandId, u64);
 
 #[derive(Debug)]
 pub struct IdGenerator<T: IdType> {
@@ -97,6 +98,24 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Identifies a task attempt within a stage.
+#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
+pub struct TaskAttempt {
+    pub partition: usize,
+    pub attempt: usize,
+}
+
+impl TaskAttempt {
+    pub fn task_key(&self, job_id: JobId, stage: usize) -> TaskKey {
+        TaskKey {
+            job_id,
+            stage,
+            partition: self.partition,
+            attempt: self.attempt,
+        }
     }
 }
 

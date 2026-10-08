@@ -36,7 +36,7 @@ pub fn py_record_batch_to_rust(
     _py: Python<'_>,
     py_batch: &Bound<'_, PyAny>,
 ) -> Result<RecordBatch> {
-    use sail_pyarrow::FromPyArrow;
+    use arrow_pyarrow::FromPyArrow;
 
     RecordBatch::from_pyarrow_bound(py_batch).map_err(|e| {
         DataFusionError::External(Box::new(std::io::Error::other(format!(
@@ -48,7 +48,7 @@ pub fn py_record_batch_to_rust(
 
 /// Convert a Rust Arrow Schema to a Python PyArrow Schema.
 pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> {
-    use sail_pyarrow::ToPyArrow;
+    use arrow_pyarrow::ToPyArrow;
 
     ToPyArrow::to_pyarrow(schema.as_ref(), py)
         .map(|obj| obj.unbind())
@@ -62,7 +62,7 @@ pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>
 
 /// Convert a Python PyArrow Schema to a Rust Arrow Schema.
 pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Result<SchemaRef> {
-    use sail_pyarrow::FromPyArrow;
+    use arrow_pyarrow::FromPyArrow;
 
     let schema = Schema::from_pyarrow_bound(py_schema).map_err(|e| {
         DataFusionError::External(Box::new(std::io::Error::other(format!(
@@ -79,7 +79,7 @@ pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Resul
 /// Uses the Arrow C Data Interface for zero-copy conversion.
 /// This is used for the Arrow-based write path (DataSourceArrowWriter).
 pub fn rust_record_batch_to_py(py: Python<'_>, batch: &RecordBatch) -> Result<Py<PyAny>> {
-    use sail_pyarrow::ToPyArrow;
+    use arrow_pyarrow::ToPyArrow;
 
     batch
         .to_pyarrow(py)
@@ -477,6 +477,17 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
 
+    // With no columns, only cardinality matters; no Python values need decoding.
+    if schema.fields().is_empty() {
+        let options =
+            arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(pickled_rows.len()));
+        return Ok(RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &options,
+        )?);
+    }
+
     Python::attach(|py| {
         let cloudpickle = import_cloudpickle(py)?;
 
@@ -604,6 +615,25 @@ mod tests {
 
     fn init_python() {
         Python::initialize();
+    }
+
+    #[test]
+    fn test_zero_column_rows_preserve_count() -> Result<()> {
+        // Protocol 4 pickle of an empty tuple from a zero-column data source.
+        // This path must not require Python initialization or PySpark.
+        let rows = vec![vec![0x80, 0x04, b')', b'.']; 3];
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &rows)?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_zero_column_empty_rows() -> Result<()> {
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &[])?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 0);
+        Ok(())
     }
 
     #[test]

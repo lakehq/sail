@@ -27,7 +27,7 @@ def test_builtin_higher_order_function_is_not_shadowed_by_a_udf(spark):
     # `match` keeps this from passing on an unrelated analysis error (a bare
     # `raises` would); it tolerates both engines' wording (Sail "list", Spark
     # "array").
-    with pytest.raises(AnalysisException, match="(?i)list|array"):
+    with pytest.raises(AnalysisException, match=r"(?i)list|array"):
         spark.sql("SELECT transform(1, 2) AS r").collect()
 
     # The built-in higher-order function still works normally.
@@ -51,5 +51,5 @@ def test_builtin_higher_order_function_wins_even_at_a_non_hof_arity(spark):
     # The `match` guards against passing on an unrelated analysis error; it
     # tolerates both engines' wording for the arity mismatch (Sail "two values",
     # Spark "WRONG_NUM_ARGS"/"number of arguments").
-    with pytest.raises(AnalysisException, match="(?i)two values|number of arg|WRONG_NUM"):
+    with pytest.raises(AnalysisException, match=r"(?i)two values|number of arg|WRONG_NUM"):
         spark.sql("SELECT exists(5) AS r").collect()

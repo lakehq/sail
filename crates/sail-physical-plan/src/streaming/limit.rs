@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, Partitioning};
+use datafusion::physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::Boundedness;
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -105,6 +107,22 @@ impl ExecutionPlan for StreamLimitExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -148,8 +166,16 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 

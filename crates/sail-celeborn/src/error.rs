@@ -10,6 +10,8 @@ pub enum CelebornError {
     Protobuf(#[from] prost::DecodeError),
     #[error("request timed out")]
     Timeout,
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
     #[error("invalid transport response: {0}")]
     Protocol(String),
     #[error("master error: status {status}")]

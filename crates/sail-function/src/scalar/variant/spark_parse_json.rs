@@ -582,4 +582,13 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_parse_json_scientific_notation_is_numeric() -> Result<()> {
+        let Some(serde_json::Value::Number(number)) = try_parse_json_lenient("1.5e-1") else {
+            return exec_err!("expected a JSON number");
+        };
+        assert_eq!(number.as_f64(), Some(0.15));
+        Ok(())
+    }
 }

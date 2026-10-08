@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use arrow::array::{Array, BinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::Schema;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -101,6 +102,22 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -305,6 +322,9 @@ fn decode_write_result_batch(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion::physical_plan::execution_plan::{
+        ChildrenPropertiesMode, ReplaceChildrenOptions,
+    };
 
     use super::*;
     use crate::formats::python::write_exec::build_write_result_batch;
@@ -326,7 +346,7 @@ mod tests {
             exec.properties().partitioning,
             Partitioning::UnknownPartitioning(1)
         ));
-        let required_distribution = exec.required_input_distribution();
+        let required_distribution = exec.input_distribution_requirements().into_per_child();
         assert_eq!(required_distribution.len(), 1);
         assert!(matches!(
             required_distribution[0],
@@ -336,7 +356,7 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn test_with_new_children() {
+    fn test_replace_children() {
         let schema = Arc::new(Schema::new(vec![
             Field::new(COL_PARTITION_ID, DataType::UInt64, false),
             Field::new(COL_COMMIT_MESSAGE, DataType::Binary, true),
@@ -350,7 +370,13 @@ mod tests {
         ));
         let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
-        let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
+        let new_exec = exec
+            .clone()
+            .replace_children(
+                vec![input2],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+            .unwrap();
         assert!(
             new_exec
                 .downcast_ref::<PythonDataSourceWriteCommitExec>()

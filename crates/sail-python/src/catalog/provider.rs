@@ -455,7 +455,8 @@ fn parse_partition_transform(value: &str) -> PyResult<PartitionTransform> {
 }
 
 fn parse_data_type(value: &str) -> PyResult<DataType> {
-    match value.trim().to_ascii_lowercase().as_str() {
+    let value = value.trim();
+    match value.to_ascii_lowercase().as_str() {
         "boolean" | "bool" => Ok(DataType::Boolean),
         "int8" | "tinyint" => Ok(DataType::Int8),
         "int16" | "smallint" => Ok(DataType::Int16),
@@ -467,8 +468,8 @@ fn parse_data_type(value: &str) -> PyResult<DataType> {
         "binary" => Ok(DataType::Binary),
         "date32" | "date" => Ok(DataType::Date32),
         "timestamp" | "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        other => Err(PyValueError::new_err(format!(
-            "unsupported catalog column data type: {other}"
-        ))),
+        _ => value.parse().map_err(|_| {
+            PyValueError::new_err(format!("unsupported catalog column data type: {value}"))
+        }),
     }
 }

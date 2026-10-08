@@ -13,23 +13,33 @@
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
-use datafusion::physical_expr::expressions::NotExpr;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
-use crate::physical_plan::{
-    DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec, DeltaWriterExecOptions,
-    prepare_delta_write_context,
+use super::utils::{
+    LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
-use crate::spec::DeltaOperation;
+use crate::datasource::{
+    DeltaScanConfig, PATH_COLUMN, df_logical_schema, physical_predicate_uses_struct_value,
+    rewrite_predicate_for_column_mapping,
+};
+use crate::physical_plan::{
+    DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
+    DeltaCommitContext, DeltaDecodePath, DeltaDiscoveryExec, DeltaScanByAddsExec,
+    DeltaWriterExecOptions, prepare_delta_write_context,
+};
+use crate::spec::{ColumnMappingMode, DeltaOperation};
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
@@ -50,9 +60,11 @@ pub async fn build_delete_plan(
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let condition_expr = condition.expr.clone();
-    let physical_condition = ctx
+    // DELETE removes rows only when the predicate is true; false and null rows remain.
+    let retention_condition = condition_expr.clone().is_not_true();
+    let physical_retention_condition = ctx
         .session()
-        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
+        .create_physical_expr(retention_condition, &table_df_schema)?;
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
@@ -73,13 +85,12 @@ pub async fn build_delete_plan(
         ctx.session(),
         meta_scan_w,
         snapshot_state,
+        snapshot_state.schema(),
         condition_expr.clone(),
     )?;
-    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_w,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -87,13 +98,16 @@ pub async fn build_delete_plan(
 
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-    let meta_scan_r: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan_r, snapshot_state, condition_expr)?;
-    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let meta_scan_r: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan_r,
+        snapshot_state,
+        snapshot_state.schema(),
+        condition_expr,
+    )?;
+    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_r,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -131,13 +145,27 @@ pub async fn build_delete_plan(
     let adapter = adapter_factory
         .create(table_schema.clone(), scan_exec.schema())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let adapted_condition = adapter
-        .rewrite(physical_condition.clone())
+    let adapted_retention_condition = adapter
+        .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
+    let change_data = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+        let deleted = Arc::new(datafusion::physical_expr::expressions::NotExpr::new(
+            adapted_retention_condition.clone(),
+        ));
+        let scan = datafusion::physical_plan::execution_plan::reset_plan_states(scan_exec.clone())?;
+        let matches = Arc::new(FilterExec::try_new(deleted, scan)?);
+        Some(super::change_data::tag_change_rows(
+            matches,
+            &table_schema,
+            "delete",
+        )?)
+    } else {
+        None
+    };
     let filter_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+        Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
+    let writer_input = prepare_delta_writer_input(filter_exec, &partition_columns, None)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
@@ -151,13 +179,25 @@ pub async fn build_delete_plan(
         &partition_columns,
         &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.table_exists(),
-        &filter_exec.schema(),
+        &writer_input.schema(),
         operation,
     )?;
 
+    let change_data_writer = change_data
+        .map(|input| {
+            super::change_data::build_change_data_writer(
+                ctx,
+                input,
+                writer_options.clone(),
+                &write_context,
+                &partition_columns,
+            )
+        })
+        .transpose()?;
     assemble_commit_plan(
-        filter_exec,
+        writer_input,
         Some(find_files_remove),
+        change_data_writer,
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         writer_options,
@@ -218,48 +258,165 @@ pub async fn build_delete_plan_mor(
 
     let log_replay_options = LogReplayOptions {
         include_stats_json: true,
+        include_extended_add_metadata: true,
         ..Default::default()
     };
-
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan, snapshot_state, condition_expr)?;
-
-    // Wrap with DeltaDiscoveryExec for metadata pipeline visibility.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let meta_scan =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options.clone())
+            .await?;
+    let meta_scan = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        snapshot_state,
+        snapshot_state.schema(),
+        condition_expr.clone(),
+    )?;
+    let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
-        false, // not partition_only for MoR
+        false,
     )?);
-
-    // Spread Add actions across partitions so DeletionVectorWriterExec can process files
-    // in parallel — same pattern as the CoW DELETE path with DeltaScanByAddsExec.
     let target_partitions = ctx.session().config().target_partitions().max(1);
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-        find_files_exec,
-        Partitioning::RoundRobinBatch(target_partitions),
+    // Assign files before scanning so matching rows stay with their metadata partition.
+    let discovery_path = DeltaDecodePath::expression(PATH_COLUMN, &find_files.schema())?;
+    let find_files = Arc::new(RepartitionExec::try_new(
+        find_files,
+        Partitioning::Hash(vec![discovery_path], target_partitions),
     )?);
+    let scan_config = DeltaScanConfig {
+        file_column_name: Some(PATH_COLUMN.to_string()),
+        row_index_column_name: Some(MERGE_ROW_INDEX_COLUMN.to_string()),
+        hash_partition_files: true,
+        enable_parquet_pushdown: true,
+        ..Default::default()
+    };
+    let scan_schema = df_logical_schema(
+        snapshot_state,
+        &scan_config.file_column_name,
+        &scan_config.row_index_column_name,
+        &None,
+        &None,
+        Some(Arc::clone(&table_schema)),
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let mut projection = collect_columns(&physical_condition)
+        .into_iter()
+        .map(|column| column.index())
+        .collect::<Vec<_>>();
+    let change_data_enabled = crate::change_data_feed::enabled(snapshot_state.metadata());
+    if change_data_enabled {
+        projection = (0..table_schema.fields().len()).collect();
+    }
+    projection.sort_unstable();
+    projection.dedup();
+    projection.push(scan_schema.index_of(PATH_COLUMN)?);
+    projection.push(scan_schema.index_of(MERGE_ROW_INDEX_COLUMN)?);
+    let scan_schema = Arc::new(scan_schema.project(&projection)?);
+    let column_mapping_mode = snapshot_state.effective_column_mapping_mode();
+    // Struct fields in the data files of column-mapped tables use physical names, so a
+    // condition using a whole struct value is only evaluated on the scan output below.
+    let pushdown_filter = if column_mapping_mode != ColumnMappingMode::None
+        && physical_predicate_uses_struct_value(&physical_condition, &table_schema)
+    {
+        None
+    } else {
+        Some(rewrite_predicate_for_column_mapping(
+            Arc::clone(&physical_condition),
+            &table_schema,
+            column_mapping_mode,
+        )?)
+    };
+    let scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
+        find_files,
+        ctx.table_url().clone(),
+        version,
+        Arc::clone(&table_schema),
+        Arc::clone(&scan_schema),
+        scan_config,
+        Some(projection),
+        None,
+        pushdown_filter,
+        ctx.lakehouse_table().cloned(),
+        snapshot_state.load_config().catalog_managed_commits.clone(),
+    ));
+    let physical_condition = SchemaEvolutionPhysicalExprAdapterFactory {}
+        .create(Arc::clone(&table_schema), Arc::clone(&scan_schema))?
+        .rewrite(physical_condition)?;
+    let matches: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(physical_condition, scan)?);
+    let change_data_writer = if change_data_enabled {
+        let input = datafusion::physical_plan::execution_plan::reset_plan_states(matches.clone())?;
+        let input = super::change_data::tag_change_rows(input, &table_schema, "delete")?;
+        let options = DeltaWriterExecOptions::from(ctx.options().clone());
+        let write_context = prepare_delta_write_context(
+            ctx.table_url(),
+            Some(snapshot_state.as_ref()),
+            &options,
+            ctx.metadata_configuration(),
+            &partition_columns,
+            &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
+            true,
+            &table_schema,
+            None,
+        )?;
+        Some(super::change_data::build_change_data_writer(
+            ctx,
+            input,
+            options,
+            &write_context,
+            &partition_columns,
+        )?)
+    } else {
+        None
+    };
+    let positions = [PATH_COLUMN, MERGE_ROW_INDEX_COLUMN]
+        .into_iter()
+        .map(|name| {
+            Ok((
+                Arc::new(Column::new(name, scan_schema.index_of(name)?)) as _,
+                name.to_string(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let matches: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(positions, matches)?);
 
-    let operation = Some(DeltaOperation::Delete {
-        predicate: condition.source,
-    });
-
-    // DeletionVectorWriterExec handles: scan each file → find matching rows → write DVs → emit actions
-    let dv_writer: Arc<dyn ExecutionPlan> =
-        Arc::new(crate::physical_plan::DeletionVectorWriterExec::new(
-            find_files_exec,
-            ctx.table_url().clone(),
-            physical_condition,
-            table_schema.clone(),
+    // The writer consumes metadata and matching rows independently across workers.
+    let metadata =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
+    let metadata = build_metadata_filter(
+        ctx.session(),
+        metadata,
+        snapshot_state,
+        snapshot_state.schema(),
+        condition_expr,
+    )?;
+    let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &metadata.schema())?;
+    let metadata = Arc::new(RepartitionExec::try_new(
+        metadata,
+        Partitioning::Hash(vec![metadata_path], target_partitions),
+    )?);
+    let dv_writer: Arc<dyn ExecutionPlan> = Arc::new(DeletionVectorRowsWriterExec::new(
+        matches,
+        metadata,
+        ctx.table_url().clone(),
+        DeletionVectorRowsWriterConfig::new(
+            PATH_COLUMN,
+            MERGE_ROW_INDEX_COLUMN,
+            DeletionVectorRowOperationMode::Delete,
             version,
             Some(snapshot_state.physical_partition_columns()),
-            operation,
-        )?);
+            Some(DeltaOperation::Delete {
+                predicate: condition.source,
+            }),
+        ),
+    )?);
+
+    let dv_writer = if let Some(change_data) = change_data_writer {
+        datafusion::physical_plan::union::UnionExec::try_new(vec![dv_writer, change_data])?
+    } else {
+        dv_writer
+    };
 
     // Wrap in CoalescePartitions → DeltaCommitExec for final commit
     let coalesced: Arc<dyn ExecutionPlan> = Arc::new(

@@ -131,6 +131,36 @@ def test_null_and_boolean(spark, tmp_path):
         catalog.drop_table("default.prune_null_bool")
 
 
+def test_missing_null_counts_do_not_prune_null_rows(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.prune_missing_null_counts"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="region", field_type=StringType(), required=False),
+        ),
+        properties={"write.metadata.metrics.default": "none"},
+    )
+    try:
+        table.append(
+            pa.table(
+                {
+                    "id": pa.array([1], type=pa.int64()),
+                    "region": pa.array([None], type=pa.string()),
+                }
+            )
+        )
+        files = table.inspect.files().to_pylist()
+        assert len(files) == 1
+        assert files[0]["null_value_counts"] == []
+
+        rows = spark.read.format("iceberg").load(table.location()).filter("region IS NULL").select("id").collect()
+        assert [row.id for row in rows] == [1]
+    finally:
+        catalog.drop_table(identifier)
+
+
 def test_correctness_small(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
@@ -280,3 +310,24 @@ def test_limit_pushdown_behavior(spark, tmp_path):
         assert df.count() == 7
     finally:
         catalog.drop_table("default.prune_limit")
+
+
+def test_truncated_manifest_bounds_do_not_replace_string_aggregates(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.truncated_bounds"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(1, "id", LongType(), required=False), NestedField(2, "s", StringType(), required=False)
+        ),
+        properties={"write.metadata.metrics.default": "truncate(2)"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2], "s": ["abcdef", "xyzzzz"]}))
+        file = next(iter(table.scan().plan_files())).file
+        assert file.lower_bounds[2] == b"ab"
+        assert file.upper_bounds[2] == b"xz"
+        rows = spark.read.format("iceberg").load(table.location()).selectExpr("min(s)", "max(s)").collect()
+        assert [tuple(row) for row in rows] == [("abcdef", "xyzzzz")]
+    finally:
+        catalog.drop_table(identifier)

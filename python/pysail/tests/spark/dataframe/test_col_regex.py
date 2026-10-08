@@ -1,5 +1,28 @@
 """Tests for colRegex column selection functionality."""
 
+import pytest
+
+
+@pytest.mark.parametrize("alias", [None, "source"])
+def test_select_columns_from_table(spark, tmp_path, alias):
+    df = spark.createDataFrame([(1, 2, 3)], ["test\n_column", "col1", "col2"])
+    table_name = "col_regex_table"
+    df.write.format("parquet").option("path", str(tmp_path / "data")).saveAsTable(table_name)
+    try:
+        table = spark.read.table(table_name)
+        if alias is not None:
+            table = table.alias(alias)
+        for pattern, columns, rows in [
+            ("`tes.*\n.*mn`", ["test\n_column"], [(1,)]),
+            ("`col[12]`", ["col1", "col2"], [(2, 3)]),
+            ("`missing.*`", [], [()]),
+        ]:
+            result = table.select(table.colRegex(pattern))
+            assert result.columns == columns
+            assert result.collect() == rows
+    finally:
+        spark.sql(f"DROP TABLE {table_name}")
+
 
 def test_select_columns_not_starting_with_col1(spark):
     """Select columns using regex pattern that excludes Col1."""
