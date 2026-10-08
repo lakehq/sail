@@ -1432,6 +1432,42 @@ def test_python_write_save_path_passed(spark, tmp_path):
     assert received_options["path"] == "/my/test/path"
 
 
+def test_python_read_load_path_passed(spark):
+    """Test that `.load("/my/path")` passes the path to DataSource via options["path"]."""
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+    class LoadPathReader(DataSourceReader):
+        def __init__(self, seen):
+            self.seen = seen
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict({"path": [self.seen]}, schema=pa.schema([("path", pa.string())]))
+
+    class LoadPathDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "load_path_check"
+
+        def schema(self):
+            return pa.schema([("path", pa.string())])
+
+        def reader(self, schema):  # noqa: ARG002
+            return LoadPathReader(self.options.get("path", "<missing>"))
+
+    spark.dataSource.register(LoadPathDataSource)
+
+    rows = spark.read.format("load_path_check").load("/my/test/path").collect()
+    assert [row.path for row in rows] == ["/my/test/path"]
+
+    # An explicit option keeps precedence over the positional path.
+    rows = spark.read.format("load_path_check").option("path", "/explicit").load("/positional").collect()
+    assert [row.path for row in rows] == ["/explicit"]
+
+
 def test_python_write_commit_failure_triggers_abort(spark, tmp_path):
     """Test that abort is called when commit() raises an exception."""
     state_path = tmp_path / "commit_failure_state.json"

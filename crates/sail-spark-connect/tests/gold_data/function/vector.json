@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_l2_distance"
+        "success": "ok"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {

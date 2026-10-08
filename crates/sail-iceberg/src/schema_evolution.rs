@@ -82,9 +82,7 @@ impl SchemaEvolver {
                     field.name()
                 ))
             })?;
-            if !Self::field_types_equivalent(table_field.data_type(), field.data_type())
-                && !Self::is_safe_write_cast(table_field.data_type(), field.data_type())
-            {
+            if !Self::write_type_compatible(table_field, field, iceberg_schema) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
                     field.name(),
@@ -101,12 +99,7 @@ impl SchemaEvolver {
 
             let has_default = iceberg_schema
                 .field_by_name(field.name())
-                .and_then(|nested| {
-                    nested
-                        .write_default
-                        .as_ref()
-                        .or(nested.initial_default.as_ref())
-                })
+                .and_then(|nested| nested.write_default.as_ref())
                 .is_some();
 
             if !field.is_nullable() && !has_default {
@@ -118,6 +111,45 @@ impl SchemaEvolver {
         }
 
         Ok(())
+    }
+
+    fn write_type_compatible(table: &Field, input: &Field, iceberg: &IcebergSchema) -> bool {
+        match (table.data_type(), input.data_type()) {
+            (DataType::Struct(target), DataType::Struct(source)) => {
+                source.iter().all(|field| {
+                    target
+                        .iter()
+                        .any(|candidate| candidate.name() == field.name())
+                }) && target.iter().all(|field| {
+                    match source.iter().find(|source| source.name() == field.name()) {
+                        Some(source) => Self::write_type_compatible(field, source, iceberg),
+                        None => {
+                            field.is_nullable()
+                                || crate::datasource::type_converter::iceberg_field_id(field)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|id| iceberg.field_by_id(id))
+                                    .is_some_and(|field| {
+                                        field.write_default.as_ref().is_some_and(|value| {
+                                            !matches!(value, crate::spec::Literal::Null)
+                                        })
+                                    })
+                        }
+                    }
+                })
+            }
+            (
+                DataType::List(target) | DataType::LargeList(target),
+                DataType::List(source) | DataType::LargeList(source),
+            ) => Self::write_type_compatible(target, source, iceberg),
+            (DataType::Map(target, _), DataType::Map(source, _)) => {
+                Self::write_type_compatible(target, source, iceberg)
+            }
+            _ => {
+                Self::field_types_equivalent(table.data_type(), input.data_type())
+                    || Self::is_safe_write_cast(table.data_type(), input.data_type())
+            }
+        }
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
@@ -149,7 +181,7 @@ impl SchemaEvolver {
     }
 
     fn field_has_default(field: &NestedField) -> bool {
-        field.write_default.is_some() || field.initial_default.is_some()
+        field.write_default.is_some()
     }
 
     fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
@@ -545,6 +577,39 @@ impl SchemaEvolver {
         Self::assign_schema_field_ids_starting_at(schema, 1)
     }
 
+    pub fn assign_replacement_schema_ids(
+        schema: &IcebergSchema,
+        metadata: &TableMetadata,
+    ) -> Result<IcebergSchema> {
+        let current = metadata
+            .current_schema()
+            .ok_or_else(|| DataFusionError::Plan("Missing current Iceberg schema".to_string()))?;
+        let mut next_field_id = metadata.last_column_id + 1;
+        let mut fields = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            let mut field = field.as_ref().clone();
+            if let Some(existing) = current.field_by_name(&field.name) {
+                field.id = existing.id;
+                Self::reuse_nested_ids_from_existing(existing, &mut field, &mut next_field_id)?;
+            } else {
+                Self::reassign_ids_recursive(&mut field, &mut next_field_id);
+            }
+            fields.push(Arc::new(field));
+        }
+        if let Some(existing) = metadata.schemas.iter().find(|existing| {
+            existing.fields() == fields.as_slice() && existing.identifier_field_ids().len() == 0
+        }) {
+            return Ok(existing.clone());
+        }
+        IcebergSchema::builder()
+            .with_schema_id(Self::next_schema_id(metadata))
+            .with_fields(fields)
+            .build()
+            .map_err(|error| {
+                DataFusionError::Plan(format!("Failed to assign Iceberg field ids: {error}"))
+            })
+    }
+
     pub fn assign_schema_field_ids_starting_at(
         schema: &IcebergSchema,
         mut next_field_id: i32,
@@ -701,7 +766,7 @@ impl SchemaEvolver {
                 *candidate.field_type =
                     Type::Map(MapType::new(Arc::new(new_key), Arc::new(new_value)));
             }
-            _ => {}
+            _ => Self::assign_nested_ids(candidate, next_field_id),
         }
         Ok(())
     }
@@ -728,7 +793,7 @@ impl SchemaEvolver {
         current_schema: &IcebergSchema,
         input_schema: &ArrowSchema,
     ) -> Result<SchemaEvolutionOutcome> {
-        use crate::datasource::type_converter::{arrow_type_to_iceberg, iceberg_schema_to_arrow};
+        use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
 
         let mut identifier_names = HashSet::new();
         for id in current_schema.identifier_field_ids() {
@@ -741,7 +806,7 @@ impl SchemaEvolver {
         let mut new_fields = Vec::new();
 
         for field in input_schema.fields() {
-            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+            let mut nested = arrow_field_to_iceberg(field).map_err(|e| {
                 DataFusionError::Plan(format!(
                     "Failed to convert column '{}' to an Iceberg type: {e}",
                     field.name()
@@ -755,12 +820,7 @@ impl SchemaEvolver {
                 next_field_id += 1;
                 id
             };
-            let mut nested = NestedField::new(
-                field_id,
-                field.name().clone(),
-                iceberg_type,
-                !field.is_nullable(),
-            );
+            nested.id = field_id;
             if let Some(existing) = existing_field {
                 Self::reuse_nested_ids_from_existing(
                     existing.as_ref(),

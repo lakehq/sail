@@ -29,6 +29,7 @@ use crate::spec::types::{ListType, MapType, PrimitiveType, StructType, Type};
 /// Convert an Iceberg `Literal` to a DataFusion `ScalarValue` using explicit Iceberg type context.
 pub fn to_scalar(literal: &Literal, iceberg_type: &Type) -> Result<ScalarValue> {
     match (literal, iceberg_type) {
+        (Literal::Null, _) => ScalarValue::try_from(&iceberg_type_to_arrow(iceberg_type)?),
         (Literal::Primitive(prim), Type::Primitive(prim_type)) => {
             Ok(primitive_literal_to_scalar(prim, prim_type))
         }

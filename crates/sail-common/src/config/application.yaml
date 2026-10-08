@@ -310,6 +310,41 @@
     before running dependent stages.
   experimental: true
 
+- key: cluster.shuffle_backend.flight.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for Arrow Flight shuffle streams. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.connection_count
+  type: number
+  default: "1"
+  description: |
+    The number of HTTP/2 connections that each Flight shuffle client can open to a
+    peer. Must be greater than zero. Shuffle requests are distributed across these
+    connections in round-robin order, and connections are opened as needed.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.initial_stream_window_size
+  type: number
+  default: "0"
+  description: |
+    The initial HTTP/2 receive window size in bytes for each stream in the Flight
+    shuffle client. Set to `0` to use the transport default. The
+    maximum value is `2147483647`.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.initial_connection_window_size
+  type: number
+  default: "0"
+  description: |
+    The initial HTTP/2 receive window size in bytes shared by all streams on each
+    connection in the Flight shuffle client. Set to `0` to use the transport default. The
+    maximum value is `2147483647`.
+  experimental: true
+
 - key: cluster.shuffle_backend.storage.path
   type: string
   default: ""
@@ -912,6 +947,17 @@
   description: |
     Whether to prefer hash join over sort-merge join when both inputs require repartitioning.
     Hash join is generally faster but can require substantially more memory.
+  experimental: true
+
+- key: optimizer.enable_window_topn
+  type: boolean
+  default: "false"
+  description: |
+    Whether to optimize partitioned `ROW_NUMBER` and `RANK` windows with an upper-bound
+    filter using a per-partition top-k operator instead of sorting all input rows.
+    This can improve performance when the partition keys have low cardinality.
+    High-cardinality partition keys, large limits, or large rank tie groups can increase
+    memory usage and runtime. The top-k operator does not support spilling to disk.
   experimental: true
 
 - key: optimizer.expand_views_at_output

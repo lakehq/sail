@@ -7,32 +7,77 @@
           "command": {
             "insertInto": {
               "input": {
-                "project": {
+                "hint": {
                   "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
+                    "hint": {
+                      "input": {
+                        "hint": {
+                          "input": {
+                            "project": {
+                              "input": {
+                                "read": {
+                                  "namedTable": {
+                                    "name": [
+                                      "t"
+                                    ],
+                                    "temporal": null,
+                                    "sample": null,
+                                    "options": []
+                                  },
+                                  "isStreaming": false
+                                },
+                                "planId": null
+                              },
+                              "expressions": [
+                                {
+                                  "unresolvedStar": {
+                                    "target": null,
+                                    "planId": null,
+                                    "wildcardOptions": {
+                                      "ilikePattern": null,
+                                      "excludeColumns": null,
+                                      "exceptColumns": null,
+                                      "replaceColumns": null,
+                                      "renameColumns": null
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "planId": null
+                          },
+                          "name": "COALESCE",
+                          "parameters": [
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 10
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
                       },
-                      "isStreaming": false
+                      "name": "COALESCE",
+                      "parameters": [
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 500
+                            }
+                          }
+                        }
+                      ]
                     },
                     "planId": null
                   },
-                  "expressions": [
+                  "name": "REPARTITION",
+                  "parameters": [
                     {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
+                      "literal": {
+                        "int32": {
+                          "value": 100
                         }
                       }
                     }

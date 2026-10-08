@@ -152,6 +152,27 @@ def test_insert_into_parquet_table_with_schema_inferred_from_files(spark, tmp_pa
     ]
 
 
+def test_insert_into_parquet_table_with_binary_schema_inferred_from_files(spark, tmp_path):
+    # Binary mirrors the string case above: the raw write records the column as BinaryView while
+    # the INSERT records plain Binary, so the directory only merges if inference coerces the view
+    # type. Guards against dropping the BinaryView rewrite in normalize_unsupported_fields.
+    location = str(tmp_path / "parquet_binary_schema_inference")
+    source = spark.createDataFrame([(1, b"Alice")], schema="id LONG, data BINARY")
+    source.write.parquet(location)
+
+    spark.sql(f"""
+        CREATE TABLE parquet_binary_schema_inference
+        USING PARQUET
+        LOCATION '{escape_sql_string_literal(location)}'
+    """)
+    spark.sql("INSERT INTO parquet_binary_schema_inference VALUES (2, X'426f62')")
+
+    assert spark.sql("SELECT id, data FROM parquet_binary_schema_inference ORDER BY id").collect() == [
+        (1, bytearray(b"Alice")),
+        (2, bytearray(b"Bob")),
+    ]
+
+
 @pytest.mark.integration
 def test_save_as_table_without_path_surfaces_managed(spark):
     table_name = "t_managed_default"

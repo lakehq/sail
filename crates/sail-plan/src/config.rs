@@ -44,6 +44,8 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
+    pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
     pub legacy_size_of_null: bool,
     /// Type coercion policy for values written into table columns.
@@ -58,6 +60,8 @@ pub struct PlanConfig {
     /// The maximum number of distinct values collected for a pivot without an explicit
     /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
     pub pivot_max_values: usize,
+    /// Default partition count for partitioning hints (`spark.sql.shuffle.partitions`).
+    pub shuffle_partitions: usize,
     /// Whether a table-valued function may receive more than one `TABLE (...)` argument
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
@@ -88,12 +92,14 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: true,
+            legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
             pivot_max_values: 10000,
+            shuffle_partitions: 200,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
         }

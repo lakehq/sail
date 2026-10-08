@@ -5,7 +5,7 @@ rank: 2
 
 # Why Sail?
 
-Today's cloud environments and data workloads pose challenges not anticipated by solutions developed a decade ago. Organizations choose Sail because it accelerates execution, reduces resource consumption, simplifies data infrastructure, and supports straightforward migration.
+Cloud environments and data workloads today pose challenges not anticipated by solutions developed a decade ago. Organizations choose Sail because it accelerates execution, reduces resource consumption, simplifies data infrastructure, and supports straightforward migration.
 
 ## Performance
 
@@ -19,7 +19,7 @@ Python UDFs (user-defined functions) perform well in Sail. The [PyO3](https://py
 
 ## Memory Efficiency
 
-Rust's zero-cost abstractions allow for modular Sail internals with a low memory footprint. The Sail process starts within seconds and uses only a few dozen megabytes of memory when idle. This means you can scale Sail workers quickly as the load increases.
+Zero-cost abstractions in Rust allow for modular Sail internals with a low memory footprint. The Sail process starts within seconds and uses only a few dozen megabytes of memory when idle. This means you can scale Sail workers quickly as the load increases.
 
 There is no need for JVM tuning anymore. You no longer need to worry about memory usage from overhead in JVM objects or squeeze performance out of Spark memory configuration.
 
@@ -27,7 +27,7 @@ In our [Benchmark Results](../benchmark-results/), Sail delivers a 10x speed-up 
 
 ## Robustness
 
-Sail benefits from Rust's approach to memory management. The _ownership_ rules and reference _lifetimes_ enforced at compile time eliminate whole categories of memory bugs. Combined with libraries such as [Tokio](https://tokio.rs/), Sail gets _fearless concurrency_, meaning that safe async code is a natural ingredient of Sail internals. The end result is a correct and performant compute engine runtime that you can trust.
+Sail benefits from how Rust manages memory. The _ownership_ rules and reference _lifetimes_ enforced at compile time eliminate whole categories of memory bugs. Combined with libraries such as [Tokio](https://tokio.rs/), Sail gets _fearless concurrency_, meaning that safe async code is a natural ingredient of Sail internals. The end result is a correct and performant compute engine runtime that you can trust.
 
 ## Compatibility
 

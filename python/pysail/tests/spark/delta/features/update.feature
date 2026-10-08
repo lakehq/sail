@@ -52,6 +52,23 @@ Feature: Delta Lake Update
         | 2  | 25    | 200            | change-updated |
         | 3  | 35    | 300            | change-updated |
 
+    Scenario: Subquery UPDATE decorrelates target references and copies untouched rows
+      Given statement
+        """
+        UPDATE delta_update_basic AS t
+        SET value = (SELECT MAX(s.value) FROM VALUES (2, 99), (2, 101) AS s(id, value) WHERE s.id = t.id)
+        WHERE t.id IN (SELECT id FROM VALUES (2), (2), (NULL) AS source(id))
+        """
+      When query
+        """
+        SELECT id, value FROM delta_update_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | 10    |
+        | 2  | 101   |
+        | 3  | 30    |
+
     Scenario: UPDATE assignments use the original row values
       Given statement
         """

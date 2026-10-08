@@ -76,7 +76,7 @@ impl PhysicalExpr for IcebergPartitionTransformExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.input.nullable(input_schema)
+        Ok(self.transform == Transform::Void || self.input.nullable(input_schema)?)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -93,7 +93,7 @@ impl PhysicalExpr for IcebergPartitionTransformExpr {
 
         let values = (0..input.len())
             .map(|index| {
-                if input.is_null(index) {
+                if self.transform == Transform::Void || input.is_null(index) {
                     return ScalarValue::try_new_null(&output_type);
                 }
                 let scalar = ScalarValue::try_from_array(input.as_ref(), index)?;

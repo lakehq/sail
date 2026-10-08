@@ -20,7 +20,7 @@ Then install and run Sail by following the [Getting Started](/introduction/getti
 
 ## Connecting to Sail
 
-Ibis's PySpark backend accepts any `SparkSession`.
+The Ibis PySpark backend accepts any `SparkSession`.
 Build one that points at your running Sail server using the `sc://` URL, and pass it to `ibis.pyspark.connect`.
 
 ```python
@@ -39,7 +39,7 @@ Replace `localhost:50051` with the address of your Sail server.
 :::
 
 ::: tip
-For exploratory work in a notebook or REPL, enable Ibis's interactive mode so expressions render as tables instead of unevaluated objects.
+For exploratory work in a notebook or REPL, enable interactive mode in Ibis so expressions render as tables instead of unevaluated objects.
 
 ```python
 ibis.options.interactive = True
@@ -109,4 +109,4 @@ Sail serves Spark Connect over gRPC on the configured address. Network-level acc
 
 - **Keep your code portable.** The same Ibis expressions can target DuckDB, BigQuery, Snowflake, and other backends. Using Sail does not lock you in.
 - **Skip the JVM.** `sail spark server` plus Ibis gives you the full dataframe experience locally with no JVM to manage.
-- **Drop-in for existing PySpark-backend users.** Point your `SparkSession` at Sail and your Ibis workflow runs on Sail's engine.
+- **Drop-in for existing PySpark-backend users.** Point your `SparkSession` at Sail and your Ibis workflow runs on the Sail engine.

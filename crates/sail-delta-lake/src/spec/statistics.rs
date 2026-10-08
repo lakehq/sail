@@ -154,11 +154,17 @@ pub struct Stats {
 
 impl Stats {
     pub fn from_json_str(value: &str) -> Result<Self, serde_json::error::Error> {
-        serde_json::from_str::<PartialStats>(value).map(|stats| stats.into_stats())
+        serde_json::from_str::<PartialStats>(value)?
+            .into_stats()
+            .ok_or_else(|| serde::de::Error::missing_field("numRecords"))
     }
 
     pub fn from_json_opt(value: Option<&str>) -> Result<Option<Self>, serde_json::error::Error> {
-        value.map(Self::from_json_str).transpose()
+        // Incomplete optional statistics cannot supply an exact row count for a scan.
+        value
+            .map(serde_json::from_str::<PartialStats>)
+            .transpose()
+            .map(|stats| stats.and_then(PartialStats::into_stats))
     }
 
     pub fn to_json_string(&self) -> Result<String, serde_json::error::Error> {
@@ -206,7 +212,7 @@ impl Stats {
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct PartialStats {
-    pub num_records: i64,
+    pub num_records: Option<i64>,
     pub min_values: Option<HashMap<String, ColumnValueStat>>,
     pub max_values: Option<HashMap<String, ColumnValueStat>>,
     pub null_count: Option<HashMap<String, ColumnCountStat>>,
@@ -215,7 +221,7 @@ struct PartialStats {
 }
 
 impl PartialStats {
-    fn into_stats(self) -> Stats {
+    fn into_stats(self) -> Option<Stats> {
         let PartialStats {
             num_records,
             min_values,
@@ -223,14 +229,14 @@ impl PartialStats {
             null_count,
             tight_bounds,
         } = self;
-        Stats {
-            num_records,
+        Some(Stats {
+            num_records: num_records?,
             min_values: min_values.unwrap_or_default(),
             max_values: max_values.unwrap_or_default(),
             null_count: null_count.unwrap_or_default(),
             // Per Delta Protocol, tightBounds defaults to true when absent.
             tight_bounds: tight_bounds.unwrap_or(true),
-        }
+        })
     }
 }
 
@@ -668,6 +674,26 @@ mod tests {
         let stats = Stats::from_json_str(r#"{"numRecords":3,"minValues":{"value":1}}"#).unwrap();
 
         assert!(stats.tight_bounds);
+    }
+
+    #[test]
+    fn optional_stats_keep_missing_row_counts_unknown() -> Result<(), serde_json::Error> {
+        for json in [
+            r#"{}"#,
+            r#"{"numRecords":null}"#,
+            r#"{"minValues":{"v":1}}"#,
+        ] {
+            assert_eq!(Stats::from_json_opt(Some(json))?, None);
+            assert!(Stats::from_json_str(json).is_err());
+        }
+        assert_eq!(Stats::from_json_opt(None)?, None);
+        assert_eq!(
+            Stats::from_json_opt(Some(r#"{"numRecords":0}"#))?.map(|stats| stats.num_records),
+            Some(0),
+        );
+        assert!(Stats::from_json_opt(Some("{")).is_err());
+        assert!(Stats::from_json_opt(Some(r#"{"numRecords":"bad"}"#)).is_err());
+        Ok(())
     }
 
     #[test]

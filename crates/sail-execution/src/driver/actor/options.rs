@@ -13,6 +13,7 @@ use crate::worker_manager::WorkerManager;
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
+    pub batch_size: usize,
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
@@ -55,6 +56,7 @@ impl DriverOptions {
         }
         Ok(Self {
             enable_tls: config.cluster.enable_tls,
+            batch_size: config.execution.batch_size,
             session_id,
             driver_id,
             driver_server_port,

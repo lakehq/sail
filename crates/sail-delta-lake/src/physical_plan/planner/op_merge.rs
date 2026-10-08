@@ -55,6 +55,7 @@ pub struct RowLevelWriteInfo {
     pub condition: Option<ExprWithSource>,
     /// Pre-expanded physical plan carrying row intent for MERGE and UPDATE.
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
+    pub change_data_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths for row-level rewrites or DV updates.
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
@@ -158,9 +159,22 @@ pub(crate) async fn build_row_level_rewrite_plan(
         operation.clone(),
     )?;
 
+    let change_data_writer = row_level_info
+        .change_data_plan
+        .map(|input| {
+            super::change_data::build_change_data_writer(
+                ctx,
+                input,
+                options.clone(),
+                &write_context,
+                &partition_columns,
+            )
+        })
+        .transpose()?;
     assemble_commit_plan(
         writer_input,
         remove_source,
+        change_data_writer,
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         options,
@@ -248,6 +262,19 @@ pub(crate) async fn assemble_row_level_mor_plan(
         operation.clone(),
     )?;
 
+    let change_data_writer = row_level_info
+        .change_data_plan
+        .map(|input| {
+            super::change_data::build_change_data_writer(
+                ctx,
+                input,
+                options.clone(),
+                &write_context,
+                &partition_columns,
+            )
+        })
+        .transpose()?;
+
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
         ctx.table_url().clone(),
@@ -318,6 +345,12 @@ pub(crate) async fn assemble_row_level_mor_plan(
         writer
     };
 
+    let commit_input = if let Some(change_data) = change_data_writer {
+        UnionExec::try_new(vec![commit_input, change_data])?
+    } else {
+        commit_input
+    };
+
     Ok(Arc::new(DeltaCommitExec::new(
         Arc::new(CoalescePartitionsExec::new(commit_input)),
         ctx.table_url().clone(),
@@ -331,7 +364,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
     )))
 }
 
-fn hash_repartition_by_column(
+pub(super) fn hash_repartition_by_column(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
     partition_count: usize,
@@ -348,7 +381,7 @@ fn hash_repartition_by_column(
     )?))
 }
 
-fn sort_by_column_preserving_partitioning(
+pub(super) fn sort_by_column_preserving_partitioning(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
 ) -> Result<Arc<dyn ExecutionPlan>> {

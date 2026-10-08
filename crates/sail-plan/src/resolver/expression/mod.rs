@@ -24,6 +24,8 @@ mod udf;
 mod wildcard;
 mod window;
 
+pub(super) use predicate::spark_interval_metadata_for_expression;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {
     /// The name of the expression to be used in projection.
@@ -90,12 +92,12 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
-    #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///
     /// Dispatches to type-specific resolvers based on the expression variant (e.g., Cast, Literal,
     /// Function). Returns a `NamedExpr` containing the resolved expression and display name(s)
     /// for projection/aliasing.
+    #[async_recursion]
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,
@@ -199,7 +201,8 @@ impl PlanResolver<'_> {
             }
             Expr::DefaultColumnValue => self.resolve_expression_default_column_value(),
             Expr::Placeholder(placeholder) => {
-                self.resolve_expression_placeholder(placeholder).await
+                self.resolve_expression_placeholder(placeholder, state)
+                    .await
             }
             Expr::Rollup(rollup) => self.resolve_expression_rollup(rollup, schema, state).await,
             Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state).await,

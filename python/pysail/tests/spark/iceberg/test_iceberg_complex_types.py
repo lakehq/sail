@@ -1,3 +1,4 @@
+import json
 import uuid
 from decimal import Decimal
 
@@ -271,3 +272,18 @@ def test_pruning_exotic_types(spark, sql_catalog):
             assert [row.id for row in rows] == [2]
     finally:
         sql_catalog.drop_table(identifier)
+
+
+def test_nested_collection_schema_merge_allocates_fresh_ids(spark, tmp_path):
+    location = tmp_path / "nested_collection_ids"
+    spark.createDataFrame([([[1]],)], "a ARRAY<ARRAY<INT>>").write.format("iceberg").save(str(location))
+    spark.createDataFrame([([[2]], 42)], "a ARRAY<ARRAY<INT>>, b INT").write.format("iceberg").mode("append").option(
+        "mergeSchema", "true"
+    ).save(str(location))
+    metadata_path = max((location / "metadata").glob("v*.metadata.json"), key=lambda p: int(p.name.split(".")[0][1:]))
+    metadata = json.loads(metadata_path.read_text())
+    schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == metadata["current-schema-id"])
+    fields = schema["fields"]
+    assert fields[1]["id"] > fields[0]["type"]["element"]["element-id"]
+    rows = spark.read.format("iceberg").load(str(location)).orderBy("b").collect()
+    assert [(row.a, row.b) for row in rows] == [([[1]], None), ([[2]], 42)]

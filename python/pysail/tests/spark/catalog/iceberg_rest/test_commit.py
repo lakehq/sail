@@ -15,6 +15,9 @@ import boto3
 import pytest
 import requests
 from botocore.config import Config
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.manifest import DataFileContent, read_manifest_list
+from pyiceberg.table import StaticTable
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
@@ -469,9 +472,10 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
 
 
-def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
+def test_delete_advances_rest_catalog_metadata_location_with_position_delete(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
 ) -> None:
     table_name = "delete_t"
     spark.sql("DROP TABLE IF EXISTS iceberg_commit_test.delete_t")
@@ -515,19 +519,37 @@ def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
     )
     summary = snapshot["summary"]
     assert summary["added-delete-files"] == "1"
-    assert summary["added-equality-delete-files"] == "1"
-    assert summary["added-equality-deletes"] == "1"
+    assert summary["added-position-delete-files"] == "1"
+    assert summary["added-position-deletes"] == "1"
     assert "deleted-records" not in summary
-    assert "added-position-delete-files" not in summary
+    assert "added-equality-delete-files" not in summary
+    assert "added-equality-deletes" not in summary
     assert summary["total-data-files"] == "1"
     assert summary["total-delete-files"] == "1"
+    assert summary["total-position-deletes"] == "1"
+    assert summary["total-equality-deletes"] == "0"
     assert summary["total-records"] == "3"
 
+    expected_rows = [(1, "keep-a", "keep"), (3, "keep-c", "keep")]
     rows = spark.sql("SELECT id, name, flag FROM iceberg_commit_test.delete_t ORDER BY id").collect()
-    assert [(row["id"], row["name"], row["flag"]) for row in rows] == [
-        (1, "keep-a", "keep"),
-        (3, "keep-c", "keep"),
-    ]
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == expected_rows
+
+    table = StaticTable.from_metadata(
+        after_location,
+        properties={
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        },
+    )
+    (task,) = table.scan().plan_files()
+    (delete_file,) = task.delete_files
+    assert delete_file.content == DataFileContent.POSITION_DELETES
+    assert delete_file.record_count == 1
+    assert not delete_file.equality_ids
+    rows = table.scan().to_arrow().sort_by([("id", "ascending")]).to_pylist()
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == expected_rows
 
 
 def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
@@ -626,7 +648,7 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     ]
 
 
-def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
+def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
     spark: SparkSession,
     gated_remote: str,
     commit_gate_proxy: tuple[str, _CommitGate],
@@ -684,12 +706,15 @@ def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
 
                 blocked_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
                 slow_created_keys = blocked_keys - before_keys
-                assert any(key.endswith(".parquet") for key in slow_created_keys)
-                assert any("/metadata/manifest-" in key for key in slow_created_keys)
-                assert any("/metadata/snap-" in key for key in slow_created_keys)
+                slow_data_keys = {key for key in slow_created_keys if key.endswith(".parquet")}
+                slow_commit_keys = slow_created_keys - slow_data_keys
+                assert slow_data_keys
+                assert any("/metadata/manifest-" in key for key in slow_commit_keys)
+                assert any("/metadata/snap-" in key for key in slow_commit_keys)
 
                 spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'fast')")  # noqa: S608
                 fast_commit = _load_table(iceberg_rest_endpoint, table_name)
+                fast_commit_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location) - slow_created_keys
             finally:
                 gate.release.set()
 
@@ -716,11 +741,15 @@ def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
     cleanup_deadline = time.monotonic() + 10
     while True:
         after_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
-        remaining_slow_keys = slow_created_keys & after_keys
-        if not remaining_slow_keys or time.monotonic() >= cleanup_deadline:
+        after_data_keys = {key for key in after_keys if key.endswith(".parquet")}
+        remaining_commit_keys = after_keys - after_data_keys - fast_commit_keys
+        if not remaining_commit_keys or time.monotonic() >= cleanup_deadline:
             break
         time.sleep(0.05)
-    assert not remaining_slow_keys
+    assert not remaining_commit_keys
+    # Writer output can be reused by commit retries and is not owned by this commit attempt.
+    assert slow_data_keys <= after_keys
+    assert before_keys <= fast_commit_keys <= after_keys
 
     after = _load_table(iceberg_rest_endpoint, table_name)
     after_metadata = after["metadata"]
@@ -729,7 +758,23 @@ def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
     assert after_metadata["metadata-log"][-1]["metadata-file"] == before["metadata-location"]
     assert after_snapshot["parent-snapshot-id"] == before_snapshot_id
     assert proposed_snapshot["snapshot-id"] not in {snapshot["snapshot-id"] for snapshot in after_metadata["snapshots"]}
-    assert sum(key.endswith(".parquet") for key in after_keys) == int(after_snapshot["summary"]["total-data-files"])
+
+    file_io = PyArrowFileIO(
+        {
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        }
+    )
+    committed_data_keys = {
+        urllib.parse.urlparse(entry.data_file.file_path).path.lstrip("/")
+        for manifest in read_manifest_list(file_io.new_input(after_snapshot["manifest-list"]))
+        for entry in manifest.fetch_manifest_entry(file_io)
+    }
+    assert committed_data_keys.isdisjoint(slow_data_keys)
+    assert len(committed_data_keys) == int(after_snapshot["summary"]["total-data-files"])
+    assert committed_data_keys == {key for key in fast_commit_keys if key.endswith(".parquet")}
 
     rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
     assert [(row.id, row.name) for row in rows] == [(1, "base"), (2, "fast")]

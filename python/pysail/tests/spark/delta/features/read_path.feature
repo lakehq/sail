@@ -1,5 +1,201 @@
 Feature: Delta Lake read path (driver vs metadata-as-data)
 
+  Rule: Exact partition filters preserve logical types and three-valued logic
+    Background:
+      Given variable location for temporary directory typed_partition_filters
+      Given final statement
+        """
+        DROP TABLE IF EXISTS typed_partition_filters
+        """
+
+    Scenario Outline: Partition and data filters compose without losing exact conditions
+      Given statement template
+        """
+        CREATE TABLE typed_partition_filters (p INT, q INT, v INT)
+        USING DELTA PARTITIONED BY (p, q) LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead '<metadata_as_data>')
+        """
+      Given statement
+        """
+        INSERT INTO typed_partition_filters VALUES
+          (10, 2, 100), (10, 2, -1), (2, 10, 200), (3, 2, 300), (1, 1, 1), (NULL, 2, 400)
+        """
+      When query
+        """
+        SELECT p, q, v FROM typed_partition_filters WHERE p > q AND v > 0 ORDER BY v
+        """
+      Then query result collected ordered
+        | p  | q | v   |
+        | 10 | 2 | 100 |
+        | 3  | 2 | 300 |
+      When query
+        """
+        SELECT p, COUNT(*) AS n FROM typed_partition_filters
+        WHERE NOT (p <= q) GROUP BY p ORDER BY p
+        """
+      Then query result collected ordered
+        | p  | n |
+        | 3  | 1 |
+        | 10 | 2 |
+      When query
+        """
+        SELECT COUNT(*) AS n FROM typed_partition_filters WHERE p NOT IN (1, NULL)
+        """
+      Then query result collected
+        | n |
+        | 0 |
+      When query
+        """
+        SELECT v FROM typed_partition_filters WHERE p > q OR v = 200 ORDER BY v
+        """
+      Then query result collected ordered
+        | v   |
+        | -1  |
+        | 100 |
+        | 200 |
+        | 300 |
+      When query
+        """
+        EXPLAIN SELECT p, q, v FROM typed_partition_filters WHERE p > q AND v > 0 ORDER BY v
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT p, COUNT(*) AS n FROM typed_partition_filters
+        WHERE NOT (p <= q) GROUP BY p ORDER BY p
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS n FROM typed_partition_filters WHERE p NOT IN (1, NULL)
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT v FROM typed_partition_filters WHERE p > q OR v = 200 ORDER BY v
+        """
+      Then query plan matches snapshot
+
+      Examples:
+        | metadata_as_data |
+        | false            |
+        | true             |
+
+  Rule: Partition metadata aggregation works through view aliases
+    Background:
+      Given variable location for temporary directory delta_metadata_grouping
+      Given final statement
+        """
+        DROP VIEW IF EXISTS metadata_grouping_alias
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_metadata_grouping
+        """
+
+    Scenario Outline: Partition metadata aggregation preserves counts and distinct values
+      Given statement template
+        """
+        CREATE TABLE delta_metadata_grouping (id INT, part STRING)
+        USING DELTA PARTITIONED BY (part) LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead '<metadata_as_data>')
+        """
+      Given statement
+        """
+        INSERT INTO delta_metadata_grouping VALUES (1, 'a'), (2, 'a'), (3, 'b'), (4, NULL), (5, NULL)
+        """
+      Given statement
+        """
+        CREATE TEMP VIEW metadata_grouping_alias AS SELECT part AS p FROM delta_metadata_grouping
+        """
+      When query
+        """
+        SELECT p, COUNT(*) AS n FROM metadata_grouping_alias GROUP BY p ORDER BY p
+        """
+      Then query result collected ordered
+        | p    | n |
+        | NULL | 2 |
+        | a    | 2 |
+        | b    | 1 |
+      When query
+        """
+        SELECT DISTINCT p FROM metadata_grouping_alias ORDER BY p
+        """
+      Then query result collected ordered
+        | p    |
+        | NULL |
+        | a    |
+        | b    |
+      When query
+        """
+        SELECT COUNT(*) AS n FROM metadata_grouping_alias
+        """
+      Then query result collected ordered
+        | n |
+        | 5 |
+      When query
+        """
+        EXPLAIN SELECT p, COUNT(*) AS n FROM metadata_grouping_alias GROUP BY p
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT DISTINCT p FROM metadata_grouping_alias
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS n FROM metadata_grouping_alias
+        """
+      Then query plan matches snapshot
+
+      Examples:
+        | metadata_as_data |
+        | false            |
+        | true             |
+
+    Scenario: Partition filtered extrema and bounded row existence use metadata
+      Given statement template
+        """
+        CREATE TABLE delta_metadata_grouping (id INT, part STRING)
+        USING DELTA PARTITIONED BY (part) LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_metadata_grouping VALUES (1, 'a'), (2, 'a'), (3, 'b'), (NULL, 'a')
+        """
+      Given statement
+        """
+        CREATE TEMP VIEW metadata_grouping_alias AS SELECT id AS value, part AS p FROM delta_metadata_grouping
+        """
+      When query
+        """
+        SELECT COUNT(*) AS n, COUNT(value) AS nonnull, MIN(value) AS lo, MAX(value) AS hi
+        FROM metadata_grouping_alias WHERE p = 'a'
+        """
+      Then query result collected
+        | n | nonnull | lo | hi |
+        | 3 | 2       | 1  | 2  |
+      When query
+        """
+        SELECT 1 AS present FROM metadata_grouping_alias WHERE p = 'a' LIMIT 2 OFFSET 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+        | 1       |
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS n, COUNT(value) AS nonnull, MIN(value) AS lo, MAX(value) AS hi
+        FROM metadata_grouping_alias WHERE p = 'a'
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM metadata_grouping_alias WHERE p = 'a' LIMIT 2 OFFSET 1
+        """
+      Then query plan matches snapshot
+
   Rule: EXPLAIN shows driver path when table has no metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_driver

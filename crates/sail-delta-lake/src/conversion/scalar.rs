@@ -538,7 +538,8 @@ fn number_from_f64(value: f64) -> Value {
 ///
 /// This implements Delta-specific parsing rules for partition values stored in the log.
 pub fn parse_partition_value(raw: &str, field_dt: &ArrowDataType) -> DeltaResultLocal<ScalarValue> {
-    if raw.is_empty() || raw == NULL_PARTITION_VALUE_DATA_PATH {
+    // The log uses empty strings for NULL; directory markers remain literal values.
+    if raw.is_empty() {
         return ScalarValue::try_new_null(field_dt)
             .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
     }
@@ -587,12 +588,15 @@ mod tests {
     };
 
     #[test]
-    fn test_parse_partition_value_treats_hive_default_partition_as_null_for_strings() {
+    fn test_parse_partition_value_preserves_hive_default_partition_string() {
         #[expect(clippy::expect_used)]
         let value = parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8)
             .expect("partition value should parse");
 
-        assert_eq!(value, ScalarValue::Utf8(None));
+        assert_eq!(
+            value,
+            ScalarValue::Utf8(Some(NULL_PARTITION_VALUE_DATA_PATH.to_string()))
+        );
     }
 
     #[test]

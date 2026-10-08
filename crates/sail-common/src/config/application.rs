@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use figment::providers::Env;
@@ -307,9 +308,26 @@ mod retry_strategy {
     from = "shuffle_backend::ShuffleBackend"
 )]
 pub enum ShuffleBackend {
-    Flight,
+    Flight(FlightShuffleBackend),
     Storage(StorageShuffleBackend),
     Celeborn(CelebornShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightShuffleBackend {
+    pub compression: ShuffleCompression,
+    pub connection_count: NonZeroUsize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_stream_window_size: Option<u32>,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_connection_window_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +459,7 @@ mod shuffle_backend {
     #[serde(deny_unknown_fields)]
     pub struct ShuffleBackend {
         pub r#type: Type,
+        pub flight: super::FlightShuffleBackend,
         pub storage: super::StorageShuffleBackend,
         pub celeborn: super::CelebornShuffleBackend,
     }
@@ -448,7 +467,7 @@ mod shuffle_backend {
     impl From<ShuffleBackend> for super::ShuffleBackend {
         fn from(value: ShuffleBackend) -> Self {
             match value.r#type {
-                Type::Flight => super::ShuffleBackend::Flight,
+                Type::Flight => super::ShuffleBackend::Flight(value.flight),
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
                 Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
             }
@@ -458,8 +477,9 @@ mod shuffle_backend {
     impl From<super::ShuffleBackend> for ShuffleBackend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
-                super::ShuffleBackend::Flight => ShuffleBackend {
+                super::ShuffleBackend::Flight(flight) => ShuffleBackend {
                     r#type: Type::Flight,
+                    flight,
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -476,6 +496,12 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
                     storage,
                     celeborn: super::CelebornShuffleBackend {
                         master_endpoints: vec![],
@@ -488,6 +514,12 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
                     r#type: Type::Celeborn,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -797,6 +829,7 @@ pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
+    pub enable_window_topn: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -975,6 +1008,13 @@ pub enum OtlpProtocol {
     HttpJson,
 }
 
+/// Environment variables for application execution configuration.
+pub struct ExecutionConfigEnv;
+
+impl ExecutionConfigEnv {
+    pub const BATCH_SIZE: &'static str = "SAIL_EXECUTION__BATCH_SIZE";
+}
+
 /// Environment variables for application cluster configuration.
 pub struct ClusterConfigEnv;
 
@@ -999,6 +1039,10 @@ impl ClusterConfigEnv {
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
+        SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,

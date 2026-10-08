@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
 use prost::Message;
 
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskKey};
+use crate::id::{JobId, TaskAttempt, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::service::{TaskStreamFlightClient, TaskStreamOwner};
 use crate::task::definition::TaskDefinition;
 use crate::worker::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
 use crate::worker::r#gen::{
-    CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
-    StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
+    CleanUpJobRequest, CleanUpJobResponse, RunTaskBatchRequest, RunTaskBatchResponse,
+    StopTaskRequest, StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 
 #[derive(Clone)]
@@ -41,24 +43,37 @@ impl WorkerClient {
 }
 
 impl WorkerClient {
-    /// Sends a task to a remote worker for execution via gRPC.
-    pub async fn run_task(
+    /// Sends a batch of task attempts from one stage to a remote worker via gRPC.
+    pub async fn run_task_batch(
         &self,
-        key: TaskKey,
-        definition: TaskDefinition,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
+        definition: Arc<TaskDefinition>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        let definition = crate::task::r#gen::TaskDefinition::from(definition).encode_to_vec();
-        let request = RunTaskRequest {
-            job_id: key.job_id.into(),
-            stage: key.stage as u64,
-            attempt: key.attempt as u64,
-            partition: key.partition as u64,
+        let definition =
+            crate::task::r#gen::TaskDefinition::from(definition.as_ref().clone()).encode_to_vec();
+        log::debug!(
+            "task batch tasks={} encoded definition bytes={}",
+            tasks.len(),
+            definition.len()
+        );
+        let request = RunTaskBatchRequest {
+            job_id: job_id.into(),
+            stage: stage as u64,
+            tasks: tasks
+                .into_iter()
+                .map(|task| crate::worker::r#gen::TaskAttempt {
+                    partition: task.partition as u64,
+                    attempt: task.attempt as u64,
+                })
+                .collect(),
             definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
         };
-        let response = self.inner.get().await?.run_task(request).await?;
-        let RunTaskResponse {} = response.into_inner();
+        let response = self.inner.get().await?.run_task_batch(request).await?;
+        let RunTaskBatchResponse {} = response.into_inner();
         Ok(())
     }
 

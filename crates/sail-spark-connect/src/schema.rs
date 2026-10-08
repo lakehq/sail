@@ -42,7 +42,7 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         _ => return write!(f, "?"),
     };
     match kind {
-        Kind::Null(_) => write!(f, "null"),
+        Kind::Null(_) => write!(f, "void"),
         Kind::Binary(_) => write!(f, "binary"),
         Kind::Boolean(_) => write!(f, "boolean"),
         Kind::Byte(_) => write!(f, "byte"),

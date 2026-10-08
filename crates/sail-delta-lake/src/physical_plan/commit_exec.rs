@@ -608,7 +608,7 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Arrow-native action rows + optional CommitMeta row only.
+                // A batch may coalesce action rows from multiple writer partitions.
                 if batch.column_by_name(COL_ACTION).is_some() {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
@@ -629,11 +629,11 @@ impl ExecutionPlan for DeltaCommitExec {
                             _ => actions.push(ca),
                         }
                     }
-                    if let Some(ExecCommitMeta {
+                    for ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
-                    }) = decoded_meta
+                    } in decoded_meta
                     {
                         total_rows = total_rows.saturating_add(row_count);
                         if operation.is_none() {
