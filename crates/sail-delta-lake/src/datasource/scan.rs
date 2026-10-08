@@ -30,6 +30,7 @@ use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource, wrap_partition_type_in_dict,
     wrap_partition_value_in_dict,
@@ -38,6 +39,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
+use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
     FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -231,7 +233,7 @@ pub(crate) fn file_scan_projection_for_schema(
 }
 
 /// Build a FileScanConfig from pruned files and scan configuration
-pub fn build_file_scan_config(
+pub async fn build_file_scan_config(
     snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     files: &[Add],
@@ -468,8 +470,22 @@ pub fn build_file_scan_config(
 
     sanitize_statistics_for_schema(table_schema.table_schema(), &mut stats);
 
-    let mut parquet_source =
-        ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
+    let object_store_url = create_object_store_url(&log_store.config().location)?;
+    let metadata_size_hint = parquet_options.global.metadata_size_hint;
+    let store = session
+        .runtime_env()
+        .object_store(object_store_url.clone())?;
+    let metadata_cache = session
+        .runtime_env()
+        .cache_manager
+        .get_file_metadata_cache();
+    let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+        Arc::clone(&store),
+        Arc::clone(&metadata_cache),
+    ));
+    let mut parquet_source = ParquetSource::new(table_schema)
+        .with_table_parquet_options(parquet_options)
+        .with_parquet_file_reader_factory(reader_factory);
 
     if let Some(predicate) = params.pushdown_filter
         && config.enable_parquet_pushdown
@@ -489,7 +505,6 @@ pub fn build_file_scan_config(
         };
 
     // Build the final FileScanConfig
-    let object_store_url = create_object_store_url(&log_store.config().location)?;
     let mut file_groups: Vec<FileGroup> = file_groups.into_values().map(FileGroup::from).collect();
     // If all files were filtered out, we still need to emit at least one partition
     // to pass datafusion sanity checks.
@@ -507,6 +522,19 @@ pub fn build_file_scan_config(
                 FileScanConfig::split_groups_by_statistics(&file_schema, &file_groups, sort_order)?;
         }
     }
+
+    file_groups = load_parquet_scan_metadata(
+        file_groups,
+        &store,
+        &metadata_cache,
+        metadata_size_hint,
+        session
+            .config_options()
+            .execution
+            .meta_fetch_concurrency
+            .into(),
+    )
+    .await?;
 
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)

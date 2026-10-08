@@ -254,17 +254,20 @@ impl ScanByAddsStreamState {
 
         let snapshot = self
             .snapshot
-            .as_deref()
-            .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?;
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?
+            .clone();
         let column_mapping_mode = snapshot.effective_column_mapping_mode();
         let log_store = self
             .log_store
             .as_ref()
-            .ok_or_else(|| DataFusionError::Internal("missing log_store".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("missing log_store".into()))?
+            .clone();
         let session_state = self
             .session_state
             .as_ref()
-            .ok_or_else(|| DataFusionError::Internal("missing session_state".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("missing session_state".into()))?
+            .clone();
         let file_schema = self
             .file_schema
             .as_ref()
@@ -315,7 +318,10 @@ impl ScanByAddsStreamState {
         let scan = if adds.is_empty() {
             None
         } else {
-            Some(self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?)
+            Some(
+                self.build_bulk_scan(&snapshot, &log_store, &session_state, &adds, file_schema)
+                    .await?,
+            )
         };
 
         let scan_schema = Arc::clone(&self.scan_schema);
@@ -344,8 +350,8 @@ impl ScanByAddsStreamState {
         Ok(())
     }
 
-    fn build_bulk_scan(
-        &self,
+    async fn build_bulk_scan(
+        &mut self,
         snapshot: &DeltaSnapshot,
         log_store: &LogStoreRef,
         session_state: &dyn datafusion::catalog::Session,
@@ -383,6 +389,7 @@ impl ScanByAddsStreamState {
             session_state,
             file_schema,
         )
+        .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         if let Some(config) = file_scan_config.file_source.repartitioned(

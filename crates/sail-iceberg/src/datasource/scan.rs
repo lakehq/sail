@@ -1135,7 +1135,7 @@ impl IcebergScan {
                 })
                 .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
-            let mut plan = create_data_scan(file_scan_config)?;
+            let mut plan = create_data_scan(session, file_scan_config).await?;
             if let Some(predicate) = conjunction(parquet_pushdown_filters.clone()) {
                 let schema = plan.schema().to_dfschema()?;
                 let predicate = simplify_expr(session, &schema, predicate)?;
@@ -1170,7 +1170,7 @@ impl IcebergScan {
                     .with_file_groups(file_groups)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            branches.push(create_data_scan(file_scan_config)?);
+            branches.push(create_data_scan(session, file_scan_config).await?);
         }
 
         // Branch B: one branch per dirty file.
@@ -1187,7 +1187,8 @@ impl IcebergScan {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
+            let data_scan: Arc<dyn ExecutionPlan> =
+                create_data_scan(session, file_scan_config).await?;
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
@@ -1371,7 +1372,7 @@ impl IcebergScan {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan = create_data_scan(file_scan_config)?;
+            let data_scan = create_data_scan(session, file_scan_config).await?;
             branches.push(Arc::new(
                 IcebergMergeMetadataExec::try_new_partitioned_files(
                     data_scan,
@@ -1406,7 +1407,8 @@ impl IcebergScan {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
+            let data_scan: Arc<dyn ExecutionPlan> =
+                create_data_scan(session, file_scan_config).await?;
             let with_metadata: Arc<dyn ExecutionPlan> =
                 Arc::new(IcebergMergeMetadataExec::try_new(
                     data_scan,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::common::config::ConfigNonZeroUsize;
+use datafusion::common::config::{ConfigNonZeroUsize, SpillCompression};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::AppConfig;
@@ -15,17 +15,21 @@ use crate::session_factory::SessionFactory;
 pub struct WorkerSessionFactory {
     runtime_env: RuntimeEnvFactory,
     batch_size: usize,
+    spill_compression: SpillCompression,
     repartition_buffer_size: usize,
 }
 
 impl WorkerSessionFactory {
     pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
         let batch_size = config.execution.batch_size;
+        let spill_compression =
+            super::spill_compression(config.runtime.temporary_files.spill_compression);
         let repartition_buffer_size = config.cluster.task_stream_buffer;
         let runtime_env = RuntimeEnvFactory::new(config, runtime.clone());
         Self {
             runtime_env,
             batch_size,
+            spill_compression,
             repartition_buffer_size,
         }
     }
@@ -43,6 +47,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
                 self.repartition_buffer_size,
             )));
         config.options_mut().execution.batch_size = ConfigNonZeroUsize::try_new(self.batch_size)?;
+        config.options_mut().execution.spill_compression = self.spill_compression;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)

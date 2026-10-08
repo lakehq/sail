@@ -65,6 +65,16 @@
     will be raised if a query attempts to spill to disk.
   experimental: true
 
+- key: runtime.temporary_files.spill_compression
+  type: string
+  default: "uncompressed"
+  description: |
+    The compression codec for temporary spill files, which use the Arrow IPC stream format.
+    Valid values are `uncompressed`, `lz4_frame`, and `zstd`.
+    `lz4_frame` offers faster compression and decompression with larger spill files.
+    `zstd` produces smaller spill files at the cost of slower compression and decompression.
+  experimental: true
+
 - key: cluster.enable_tls
   type: boolean
   default: "false"

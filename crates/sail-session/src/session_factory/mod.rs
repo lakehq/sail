@@ -16,3 +16,16 @@ pub trait SessionFactory<I>: Send {
     /// This method takes an opaque parameter of type `I` for session-specific information.
     fn create(&mut self, info: I) -> Result<SessionContext>;
 }
+
+fn spill_compression(
+    compression: sail_common::config::SpillCompression,
+) -> datafusion::common::config::SpillCompression {
+    use datafusion::common::config::SpillCompression;
+    use sail_common::config::SpillCompression as SailSpillCompression;
+
+    match compression {
+        SailSpillCompression::Uncompressed => SpillCompression::Uncompressed,
+        SailSpillCompression::Lz4Frame => SpillCompression::Lz4Frame,
+        SailSpillCompression::Zstd => SpillCompression::Zstd,
+    }
+}

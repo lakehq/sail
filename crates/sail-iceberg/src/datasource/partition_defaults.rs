@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::Session;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
 };
@@ -14,6 +16,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
+use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
     encode_field_default,
@@ -93,7 +96,39 @@ impl IdentityPartitionDefaults {
     }
 }
 
-pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
+pub(super) async fn create_data_scan(
+    session: &dyn Session,
+    mut config: FileScanConfig,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let parquet = config
+        .file_source
+        .downcast_ref::<ParquetSource>()
+        .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
+    let store = session
+        .runtime_env()
+        .object_store(config.object_store_url.clone())?;
+    let metadata_cache = session
+        .runtime_env()
+        .cache_manager
+        .get_file_metadata_cache();
+    config.file_groups = load_parquet_scan_metadata(
+        config.file_groups,
+        &store,
+        &metadata_cache,
+        parquet.table_parquet_options().global.metadata_size_hint,
+        session
+            .config_options()
+            .execution
+            .meta_fetch_concurrency
+            .into(),
+    )
+    .await?;
+    let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+    config.file_source = Arc::new(
+        parquet
+            .clone()
+            .with_parquet_file_reader_factory(reader_factory),
+    );
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();
@@ -104,7 +139,12 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
                 .cloned()
                 .unwrap_or_default();
             let mut file = file.clone();
+            // Partition defaults are consumed here; retain only the row-group planning metadata.
+            let metadata = file.extensions.get_arc::<ParquetScanMetadata>();
             file.extensions = Default::default();
+            if let Some(metadata) = metadata {
+                file.extensions.insert_arc(metadata);
+            }
             files.entry(defaults).or_default().push(file);
         }
         for (defaults, files) in files {
@@ -135,19 +175,27 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
                     .any(|field| needs_default(field, defaults))
             }))
     {
-        let mut config = config;
         for group in &mut config.file_groups {
-            *group = FileGroup::from(
+            let statistics = group.file_statistics(None).cloned().map(Arc::new);
+            let mut cleaned_group = FileGroup::from(
                 group
                     .files()
                     .iter()
                     .cloned()
                     .map(|mut file| {
+                        let metadata = file.extensions.get_arc::<ParquetScanMetadata>();
                         file.extensions = Default::default();
+                        if let Some(metadata) = metadata {
+                            file.extensions.insert_arc(metadata);
+                        }
                         file
                     })
                     .collect::<Vec<_>>(),
             );
+            if let Some(statistics) = statistics {
+                cleaned_group = cleaned_group.with_statistics(statistics);
+            }
+            *group = cleaned_group;
         }
         return Ok(DataSourceExec::from_data_source(config));
     }
@@ -172,6 +220,9 @@ pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn Executi
             .map(|_| Partitioning::UnknownPartitioning(file_groups.len()));
         let mut source = ParquetSource::new(table_schema)
             .with_table_parquet_options(parquet.table_parquet_options().clone());
+        if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
+            source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
+        }
         if let Some(predicate) = parquet.filter() {
             source = source.with_predicate(predicate);
         }
