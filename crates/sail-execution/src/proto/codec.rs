@@ -3811,6 +3811,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        // Driver-local tasks do not register default aggregate functions.
+        if buf.is_empty() {
+            static DEFAULT_FUNCTIONS: LazyLock<HashMap<String, Arc<AggregateUDF>>> =
+                LazyLock::new(|| {
+                    let mut functions = HashMap::new();
+                    for udaf in SessionStateDefaults::default_aggregate_functions() {
+                        for name in std::iter::once(udaf.name())
+                            .chain(udaf.aliases().iter().map(String::as_str))
+                        {
+                            functions.insert(name.to_string(), Arc::clone(&udaf));
+                        }
+                    }
+                    functions
+                });
+            if let Some(udaf) = DEFAULT_FUNCTIONS.get(name) {
+                return Ok(Arc::clone(udaf));
+            }
+        }
         let udaf = ExtendedAggregateUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udaf: {e}"))?;
         let ExtendedAggregateUdf { udaf_kind } = udaf;
