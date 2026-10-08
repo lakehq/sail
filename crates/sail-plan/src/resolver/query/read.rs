@@ -20,7 +20,9 @@ use sail_common_datafusion::lakerelation::{
     LakeRelationAccess, LakeRelationResolution, LakeRelationTimeTravel,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::logical_plan::{
+    rename_logical_plan, rename_logical_plan_reusing_projection,
+};
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -82,7 +84,11 @@ impl PlanResolver<'_> {
                     "SQL time travel is not supported for CTEs",
                 ));
             }
-            let plan = cte.clone();
+            let mut plan = cte.plan.as_ref().clone();
+            if let Some(names) = cte.renew_reference(state)? {
+                plan = rename_logical_plan_reusing_projection(plan, &names)?;
+                state.register_missing_input_boundary(&plan);
+            }
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
             } else {
@@ -247,7 +253,11 @@ impl PlanResolver<'_> {
                     ));
                 }
                 let names = state.register_fields(plan.schema().inner().fields());
-                rename_logical_plan(plan.as_ref().clone(), &names)?
+                let plan = rename_logical_plan(plan.as_ref().clone(), &names)?;
+                // The stored plan's internal field IDs belong to another resolver
+                // state. Missing-reference recovery must see only the fresh output.
+                state.register_missing_input_boundary(&plan);
+                plan
             }
         };
 
@@ -308,7 +318,11 @@ impl PlanResolver<'_> {
             Ok(plan)
         } else {
             let names = state.register_field_names(columns.iter().map(|c| &c.name));
-            Ok(rename_logical_plan(plan, &names)?)
+            let plan = rename_logical_plan(plan, &names)?;
+            // Spark renames view columns below the view's alias, so missing-reference
+            // recovery must not see the definition's column names under this output.
+            state.register_missing_input_boundary(&plan);
+            Ok(plan)
         }
     }
 
@@ -635,7 +649,11 @@ impl PlanResolver<'_> {
 
         if !has_duplicates {
             let names = state.register_fields(table_scan.schema().fields());
-            Ok(rename_logical_plan(table_scan, &names)?)
+            let plan = rename_logical_plan(table_scan, &names)?;
+            // Physical column names (including names such as "#0") are not
+            // resolver field IDs. Only the renamed output is a resolution input.
+            state.register_missing_input_boundary(&plan);
+            Ok(plan)
         } else {
             Ok(table_scan)
         }

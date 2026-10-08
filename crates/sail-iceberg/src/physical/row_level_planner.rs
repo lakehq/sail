@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
+use datafusion::common::{Result, not_impl_err, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
@@ -17,11 +16,9 @@ use crate::lake_source::{
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
 use crate::physical_plan::action_schema::{CommitMeta, encode_commit_meta};
-use crate::physical_plan::equality_delete_writer_exec::validate_equality_delete_schema;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
-    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec,
-    IcebergWriterExecOptions, prepare_iceberg_write_context,
+    IcebergCommitExec, IcebergWriterExec, IcebergWriterExecOptions, prepare_iceberg_write_context,
 };
 use crate::table::Table;
 
@@ -31,26 +28,23 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    match (node.mode(), node.command()) {
-        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
-            plan_iceberg_delete(session, node, physical_inputs).await
+    match node.mode() {
+        RowLevelWriteMode::MergeOnRead => {
+            plan_iceberg_merge_on_read(session, node, physical_inputs).await
         }
-        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge | RowLevelCommand::Update) => {
-            plan_iceberg_merge(session, node, physical_inputs).await
-        }
-        (RowLevelWriteMode::CopyOnWrite, _) => {
+        RowLevelWriteMode::CopyOnWrite => {
             plan_iceberg_copy_on_write(session, node, physical_inputs).await
         }
     }
 }
 
-async fn plan_iceberg_merge(
+async fn plan_iceberg_merge_on_read(
     session: &dyn Session,
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let [write_plan] = physical_inputs else {
-        return plan_err!("Iceberg MERGE requires exactly one write-plan input");
+        return plan_err!("Iceberg merge-on-read requires exactly one write-plan input");
     };
     let table_url =
         IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
@@ -68,6 +62,11 @@ async fn plan_iceberg_merge(
     )
     .await?;
     ensure_current_row_level_mode(&table, node)?;
+    if node.command() == RowLevelCommand::Delete
+        && let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await?
+    {
+        return Ok(plan);
+    }
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session, node)?;
 
@@ -94,78 +93,6 @@ async fn plan_iceberg_merge(
     Ok(Arc::new(
         IcebergCommitExec::new(
             writer,
-            table_url,
-            writer_options.lakehouse_table.clone(),
-            SnapshotUpdateKind::RowDelta,
-        )
-        .with_expected_snapshot_id(node.expected_snapshot_id()),
-    ))
-}
-
-async fn plan_iceberg_delete(
-    session: &dyn Session,
-    node: &RowLevelWriteNode,
-    physical_inputs: &[Arc<dyn ExecutionPlan>],
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let [delete_rows] = physical_inputs else {
-        return plan_err!("Iceberg DELETE requires exactly one write-plan input");
-    };
-
-    let table_url =
-        IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
-    let metadata_location = metadata_location_from_options(node.target_options());
-    let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
-    let metadata_location_for_load = resolve_iceberg_metadata_location(
-        node.target_lakehouse_table(),
-        metadata_location,
-        catalog_managed_table,
-    )?;
-    let table = Table::load_with_metadata_location(
-        session.runtime_env().as_ref(),
-        table_url.clone(),
-        metadata_location_for_load,
-    )
-    .await?;
-    ensure_current_row_level_mode(&table, node)?;
-    if let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await? {
-        return Ok(plan);
-    }
-    if table.metadata().format_version == crate::spec::FormatVersion::V3 {
-        return plan_iceberg_merge(session, node, physical_inputs).await;
-    }
-    let current_schema = table.metadata().current_schema().ok_or_else(|| {
-        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
-    })?;
-    validate_equality_delete_schema(current_schema)?;
-
-    let writer_options = resolve_row_level_writer_options(session, node)?;
-    let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
-    let current_arrow_schema =
-        crate::datasource::type_converter::iceberg_schema_to_arrow(current_schema)?;
-    let write_context = prepare_iceberg_write_context(
-        &table_url,
-        Some(table.metadata()),
-        &writer_options,
-        &partition_columns,
-        &PhysicalSinkMode::Append,
-        &current_arrow_schema,
-    )?;
-
-    let delete_input: Arc<dyn ExecutionPlan> =
-        Arc::new(CoalescePartitionsExec::new(Arc::clone(delete_rows)));
-    let delete_writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergEqualityDeleteWriterExec::new(
-        delete_input,
-        table_url.clone(),
-        writer_options.table_properties.clone(),
-        writer_options.write_data_path.clone(),
-        writer_options.write_folder_storage_path.clone(),
-        write_context,
-        writer_options.lakehouse_table.clone(),
-    )?);
-
-    Ok(Arc::new(
-        IcebergCommitExec::new(
-            Arc::new(CoalescePartitionsExec::new(delete_writer)),
             table_url,
             writer_options.lakehouse_table.clone(),
             SnapshotUpdateKind::RowDelta,

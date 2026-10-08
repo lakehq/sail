@@ -57,6 +57,7 @@ use crate::table::DeltaSnapshot;
 pub fn assemble_commit_plan(
     writer_input: Arc<dyn ExecutionPlan>,
     remove_source: Option<Arc<dyn ExecutionPlan>>,
+    change_data_writer: Option<Arc<dyn ExecutionPlan>>,
     remove_partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     table_url: Url,
     options: DeltaWriterExecOptions,
@@ -89,6 +90,12 @@ pub fn assemble_commit_plan(
         UnionExec::try_new(vec![writer, remover])?
     } else {
         writer
+    };
+
+    let commit_input = if let Some(change_data) = change_data_writer {
+        UnionExec::try_new(vec![commit_input, change_data])?
+    } else {
+        commit_input
     };
 
     Ok(Arc::new(DeltaCommitExec::new(

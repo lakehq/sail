@@ -59,7 +59,6 @@ use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC
 use crate::spec::FormatVersion;
 use crate::spec::transform::Transform;
 use crate::utils::get_object_store_from_context;
-use crate::utils::partition_transform::iceberg_transform_from_partition_field;
 
 #[derive(Debug)]
 pub struct IcebergWriterExec {
@@ -172,7 +171,7 @@ impl IcebergWriterExec {
             }
             keys
         } else {
-            Self::merge_distribution_keys(input.schema().as_ref(), &partition_columns)?
+            Self::merge_distribution_keys(input.schema().as_ref(), &write_context)?
         };
         let mut writer = Self::new(
             input,
@@ -303,7 +302,7 @@ impl IcebergWriterExec {
 
     fn merge_distribution_keys(
         input_schema: &Schema,
-        partition_columns: &[CatalogPartitionField],
+        context: &IcebergWriteContext,
     ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         fn required_column(input_schema: &Schema, name: &str) -> Result<Arc<dyn PhysicalExpr>> {
             let index = input_schema.index_of(name).map_err(|_| {
@@ -342,7 +341,8 @@ impl IcebergWriterExec {
                 )));
             }
         };
-        if partition_columns.is_empty() {
+        let partition_keys = Self::data_partition_keys(input_schema, context)?;
+        if partition_keys.is_empty() {
             if has_delete_metadata {
                 distribution_keys.push(required_column(input_schema, MERGE_FILE_COLUMN)?);
             } else {
@@ -351,18 +351,7 @@ impl IcebergWriterExec {
             return Ok(distribution_keys);
         }
 
-        for partition_field in partition_columns {
-            let source = required_column(input_schema, &partition_field.column)?;
-            let transform = iceberg_transform_from_partition_field(partition_field);
-            if transform == Transform::Identity {
-                distribution_keys.push(source);
-            } else {
-                let expression: Arc<dyn PhysicalExpr> =
-                    Arc::new(IcebergPartitionTransformExpr::new(source, transform));
-                expression.data_type(input_schema)?;
-                distribution_keys.push(expression);
-            }
-        }
+        distribution_keys.extend(partition_keys);
         Ok(distribution_keys)
     }
 

@@ -5,8 +5,7 @@ rank: 2
 
 # Iceberg
 
-You can use the `iceberg` format in Sail to work with [Apache Iceberg](https://iceberg.apache.org/).
-You can use the Spark DataFrame API or Spark SQL to read and write Iceberg tables.
+Sail reads and writes [Apache Iceberg](https://iceberg.apache.org/) tables through the `iceberg` format, using either the Spark DataFrame API or Spark SQL. It supports Parquet tables in format versions 1, 2, and 3, including snapshot reads, schema evolution, time travel, and DML statements. New tables use version 2 by default. See [supported features](./features) for details by version and operation.
 
 ## Topics
 

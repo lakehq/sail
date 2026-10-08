@@ -6,8 +6,8 @@ use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Action, Add, DeltaOperation, Metadata, Protocol, Remove, add_struct_type, metadata_struct_type,
-    protocol_struct_type, remove_struct_type,
+    Action, Add, AddCDCFile, DeltaOperation, Metadata, Protocol, Remove, add_struct_type,
+    metadata_struct_type, protocol_struct_type, remove_struct_type,
 };
 use crate::transaction::OperationMetrics;
 
@@ -36,6 +36,21 @@ fn action_struct_field(name: &str, schema: crate::spec::StructType, nullable: bo
     action_field(name, data_type, nullable)
 }
 
+fn cdc_struct_type() -> crate::spec::StructType {
+    let fields = add_struct_type()
+        .fields()
+        .filter(|field| {
+            matches!(
+                field.name().as_str(),
+                "path" | "partitionValues" | "size" | "dataChange" | "tags"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    #[expect(clippy::expect_used)]
+    crate::spec::StructType::try_new(fields).expect("CDC action fields are unique")
+}
+
 fn action_union_type() -> ArrowDataType {
     ArrowDataType::Union(
         vec![
@@ -56,6 +71,7 @@ fn action_union_type() -> ArrowDataType {
                 4,
                 action_field("commit_meta", ExecCommitMetaTransport::data_type(), false),
             ),
+            (5, action_struct_field("cdc", cdc_struct_type(), false)),
         ]
         .into_iter()
         .collect(),
@@ -140,6 +156,8 @@ enum PhysicalExecAction {
     Metadata(Metadata),
     #[serde(rename = "commit_meta")]
     CommitMeta(ExecCommitMetaTransport),
+    #[serde(rename = "cdc")]
+    Cdc(AddCDCFile),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +198,7 @@ impl TryFrom<Action> for PhysicalExecAction {
         match action {
             Action::Add(add) => Ok(Self::Add(add)),
             Action::Remove(remove) => Ok(Self::Remove(remove)),
+            Action::Cdc(cdc) => Ok(Self::Cdc(cdc)),
             Action::Protocol(protocol) => Ok(Self::Protocol(protocol)),
             Action::Metadata(metadata) => Ok(Self::Metadata(metadata)),
             unsupported => Err(DataFusionError::Plan(format!(
@@ -231,6 +250,7 @@ pub fn decode_actions_and_meta_from_batch(
         match row.action {
             PhysicalExecAction::Add(add) => out_actions.push(Action::Add(add)),
             PhysicalExecAction::Remove(remove) => out_actions.push(Action::Remove(remove)),
+            PhysicalExecAction::Cdc(cdc) => out_actions.push(Action::Cdc(cdc)),
             PhysicalExecAction::Protocol(protocol) => out_actions.push(Action::Protocol(protocol)),
             PhysicalExecAction::Metadata(metadata) => out_actions.push(Action::Metadata(metadata)),
             PhysicalExecAction::CommitMeta(cm) => {
