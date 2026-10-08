@@ -258,10 +258,33 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
-        if let ShuffleBackendKind::Flight { compression } = &shuffle_backend {
+        if let ShuffleBackendKind::Flight {
+            compression,
+            connection_count,
+            initial_stream_window_size,
+            initial_connection_window_size,
+        } = &shuffle_backend
+        {
             env.push(EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),
                 value: Some(compression.to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT.to_string(),
+                value: Some(connection_count.to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE
+                    .to_string(),
+                value: Some(initial_stream_window_size.unwrap_or(0).to_string()),
+                value_from: None,
+            });
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE
+                    .to_string(),
+                value: Some(initial_connection_window_size.unwrap_or(0).to_string()),
                 value_from: None,
             });
         }
