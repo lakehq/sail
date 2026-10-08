@@ -186,18 +186,31 @@ def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
-@pytest.mark.parametrize("hint", ["COALESCE(2L)", "REPARTITION(2L)", "REPARTITION(2L, id)"])
+@pytest.mark.parametrize(
+    "hint",
+    ["COALESCE(2L)", "REPARTITION(2L)", "REPARTITION(2L, id)", "REPARTITION(+2L)", "REPARTITION(+2L, id)"],
+)
 def test_sql_hint_accepts_int64_partition_count(spark, hint):
     result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(0, 12, 1, 4)")  # noqa: S608
     assert partition_count(result) == 2  # noqa: PLR2004
     assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
-@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
-def test_sql_hint_rejects_zero_int64_partition_count(spark, hint):
+@pytest.mark.parametrize("hint", ["COALESCE({count})", "REPARTITION({count})", "REPARTITION({count}, id)"])
+@pytest.mark.parametrize("count", ["0", "-0", "-1", "-1Y", "-1S"])
+def test_sql_hint_rejects_non_positive_partition_count(spark, hint, count):
+    hint = hint.format(count=count)
     with pytest.raises(IllegalArgumentException):
-        spark.sql(f"SELECT /*+ {hint}(0L) */ id FROM range(6)").collect()  # noqa: S608
+        spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE({count})", "REPARTITION({count})", "REPARTITION({count}, id)"])
+@pytest.mark.parametrize("count", ["0L", "+0L", "-1L", "-2147483649L"])
+def test_sql_hint_rejects_non_positive_int64_partition_count(spark, hint, count):
+    hint = hint.format(count=count)
+    with pytest.raises(IllegalArgumentException):
+        spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
@@ -348,7 +361,7 @@ def test_repartition_column_hint_rejects_invalid_parameters(spark, parameters, e
         spark.range(12).hint("REPARTITION", *parameters).collect()
 
 
-@pytest.mark.parametrize("parameters", ["id, 3"])
+@pytest.mark.parametrize("parameters", ["id, 3", "-1.0", "-1.0, id", "-id", "-(1 + 1)", "-CAST(1 AS INT)"])
 def test_repartition_sql_hint_rejects_invalid_parameters(spark, parameters):
     with pytest.raises(AnalysisException):
         spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id FROM range(12)").collect()  # noqa: S608

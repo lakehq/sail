@@ -154,15 +154,7 @@ impl PlanResolver<'_> {
 
         if name.eq_ignore_ascii_case("REPARTITION") {
             let mut parameters = parameters.into_iter().peekable();
-            // Sail also recognizes Int64 counts; Spark only recognizes Int8/Int16/Int32.
-            let num_partitions = if let Some(spec::Expr::Literal(literal)) = parameters.peek()
-                && matches!(
-                    literal,
-                    spec::Literal::Int8 { .. }
-                        | spec::Literal::Int16 { .. }
-                        | spec::Literal::Int32 { .. }
-                        | spec::Literal::Int64 { .. }
-                ) {
+            let num_partitions = if parameters.peek().is_some_and(is_partition_count_literal) {
                 let parameter = parameters
                     .next()
                     .ok_or_else(|| PlanError::internal("missing hint parameter"))?;
@@ -283,6 +275,28 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("with watermark"))
     }
+}
+
+fn is_partition_count_literal(expr: &spec::Expr) -> bool {
+    // SQL signs are represented as unary functions before expression resolution.
+    let expr = if let spec::Expr::UnresolvedFunction(function) = expr
+        && matches!(function.function_name.parts(), [name] if matches!(name.as_ref(), "+" | "-"))
+        && let [argument] = function.arguments.as_slice()
+    {
+        argument
+    } else {
+        expr
+    };
+    // Sail also recognizes Int64 counts; Spark only recognizes Int8/Int16/Int32.
+    matches!(
+        expr,
+        spec::Expr::Literal(
+            spec::Literal::Int8 { .. }
+                | spec::Literal::Int16 { .. }
+                | spec::Literal::Int32 { .. }
+                | spec::Literal::Int64 { .. }
+        )
+    )
 }
 
 // Int64 hint counts are a Sail extension: plans use usize and worker messages use u64.
