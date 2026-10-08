@@ -187,6 +187,65 @@ def test_cdf_timestamp_bounds_and_missing_commit(spark, tmp_path):
         _feed(spark, path, 0, 2).collect()
 
 
+@pytest.mark.parametrize("bounds", ["versions", "starting_version", "starting_timestamp", "ending_timestamp", "mixed"])
+@pytest.mark.parametrize("offsets", [(0, 0, 0), (0, -1, -2)], ids=["tied", "reversed"])
+def test_cdf_monotonizes_commit_timestamps(spark, tmp_path, bounds, offsets):
+    path = tmp_path / "equal_timestamps"
+    spark.range(1).write.format("delta").option("delta.enableChangeDataFeed", "true").save(str(path))
+    for start in [1, 2]:
+        spark.range(start, start + 1).write.format("delta").mode("append").save(str(path))
+    timestamp_ms = 1_700_000_000_000
+    for version, offset in enumerate(offsets):
+        timestamp_ns = (timestamp_ms + offset) * 1_000_000
+        os.utime(path / "_delta_log" / f"{version:020}.json", ns=(timestamp_ns, timestamp_ns))
+
+    # Non-ICT commit timestamps must increase by at least one millisecond.
+    boundary = datetime.fromtimestamp((timestamp_ms + 1) / 1000, UTC).isoformat()
+    reader = spark.read.format("delta").option("readChangeFeed", "true")
+    if bounds in ("starting_timestamp", "mixed"):
+        reader = reader.option("startingTimestamp", boundary)
+        versions = [1, 2]
+        if bounds == "mixed":
+            reader = reader.option("endingVersion", 1)
+            versions = [1]
+    elif bounds == "starting_version":
+        reader = reader.option("startingVersion", 1)
+        versions = [1, 2]
+    else:
+        reader = reader.option("startingVersion", 0)
+        versions = [0, 1, 2]
+        if bounds == "ending_timestamp":
+            reader = reader.option("endingTimestamp", boundary)
+            versions = [0, 1]
+    rows = (
+        reader.load(str(path))
+        .selectExpr("id", "_commit_version", "unix_micros(_commit_timestamp)")
+        .orderBy("id")
+        .collect()
+    )
+    assert [tuple(row) for row in rows] == [(v, v, (timestamp_ms + v) * 1000) for v in versions]
+
+
+@pytest.mark.parametrize("column_mapping", ["none", "name", "id"])
+def test_cdf_timestamp_interval_without_commits_is_empty(spark, tmp_path, column_mapping):
+    path = tmp_path / "timestamp_gap"
+    spark.range(1).write.format("delta").option("delta.enableChangeDataFeed", "true").option(
+        "delta.columnMapping.mode", column_mapping
+    ).save(str(path))
+    spark.range(1, 2).write.format("delta").mode("append").save(str(path))
+    timestamp_ms = 1_700_000_000_000
+    for version in range(2):
+        timestamp_ns = (timestamp_ms + version * 10_000) * 1_000_000
+        os.utime(path / "_delta_log" / f"{version:020}.json", ns=(timestamp_ns, timestamp_ns))
+    start = datetime.fromtimestamp((timestamp_ms + 1) / 1000, UTC).isoformat()
+    end = datetime.fromtimestamp((timestamp_ms + 2) / 1000, UTC).isoformat()
+    feed = _feed(spark, path, None, startingTimestamp=start, endingTimestamp=end)
+    assert feed.collect() == []
+    assert feed.columns == ["id", "_change_type", "_commit_version", "_commit_timestamp"]
+    with pytest.raises(Exception, match="Invalid change data feed timestamp range"):
+        _feed(spark, path, None, startingTimestamp=end, endingTimestamp=start).collect()
+
+
 @pytest.mark.parametrize("column", ["_change_type", "_commit_version", "_commit_timestamp"])
 def test_cdf_reserved_columns(spark, tmp_path, column):
     with pytest.raises(Exception, match="reserves column"):
@@ -204,6 +263,56 @@ def test_cdf_additive_schema(spark, tmp_path):
         "mergeSchema", "true"
     ).save(str(path))
     assert sorted((row.id, row.value) for row in _feed(spark, path).collect()) == [(0, None), (1, "new")]
+
+
+@pytest.mark.parametrize("column_mapping", ["none", "name", "id"])
+@pytest.mark.parametrize("container", ["struct", "array", "map"])
+def test_cdf_nested_additive_schema(spark, tmp_path, column_mapping, container):
+    path = tmp_path / "nested_cdf"
+    old_type, new_type = "STRUCT<a: LONG>", "STRUCT<a: LONG, b: STRING>"
+    old_value, new_value = (10,), (20, "new")
+    projected = "s"
+    if container == "array":
+        old_type, new_type = f"ARRAY<{old_type}>", f"ARRAY<{new_type}>"
+        old_value, new_value = [old_value], [new_value]
+        projected = "s[0]"
+    elif container == "map":
+        old_type, new_type = f"MAP<STRING, {old_type}>", f"MAP<STRING, {new_type}>"
+        old_value, new_value = {"k": old_value}, {"k": new_value}
+        projected = "s['k']"
+    spark.createDataFrame([(1, old_value)], f"id LONG, s {old_type}").coalesce(1).write.format("delta").option(
+        "delta.enableChangeDataFeed", "true"
+    ).option("delta.columnMapping.mode", column_mapping).save(str(path))
+    spark.createDataFrame([(2, new_value)], f"id LONG, s {new_type}").coalesce(1).write.format("delta").mode(
+        "append"
+    ).option("mergeSchema", "true").save(str(path))
+
+    feed = _feed(spark, path)
+    rows = feed.selectExpr("id", f"{projected}.a", f"{projected}.b", "_change_type").orderBy("id").collect()
+    assert [tuple(row) for row in rows] == [
+        (1, 10, None, "insert"),
+        (2, 20, "new", "insert"),
+    ]
+
+
+@pytest.mark.parametrize("column_mapping", ["none", "name", "id"])
+@pytest.mark.parametrize("change", ["rename", "type"])
+def test_cdf_rejects_nested_incompatible_schema(spark, tmp_path, column_mapping, change):
+    path = tmp_path / "incompatible_nested_cdf"
+    spark.createDataFrame([(1, (10,))], "id LONG, s STRUCT<a: LONG>").write.format("delta").option(
+        "delta.enableChangeDataFeed", "true"
+    ).option("delta.columnMapping.mode", column_mapping).save(str(path))
+    metadata = next(action["metaData"] for action in _actions(path, 0) if "metaData" in action)
+    schema = json.loads(metadata["schemaString"])
+    nested = schema["fields"][1]["type"]["fields"][0]
+    if change == "rename":
+        nested["name"] = "renamed"
+    else:
+        nested["type"] = "string"
+    metadata["schemaString"] = json.dumps(schema)
+    (path / "_delta_log" / "00000000000000000001.json").write_text(json.dumps({"metaData": metadata}) + "\n")
+    with pytest.raises(Exception, match="incompatible schema"):
+        _feed(spark, path).collect()
 
 
 def test_cdf_inferred_deletion_vectors(spark, tmp_path):

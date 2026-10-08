@@ -24,8 +24,9 @@ use crate::datasource::{
     COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, DeltaScanConfig, df_logical_schema,
 };
 use crate::delta_log::{
-    LogStoreRef, get_actions, resolve_commit_timestamp_from_actions,
-    resolve_effective_protocol_and_metadata,
+    LogStoreRef, get_actions, list_delta_log_entries_from, parse_commit_version_from_location,
+    resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
+    version_uses_in_commit_timestamps,
 };
 use crate::options::r#gen::DeltaReadOptions;
 use crate::physical::scan_planner::{align_delta_scan_output, build_eager_adds_input};
@@ -124,26 +125,92 @@ impl ChangeDataFeedSource {
         if options.ending_version.is_some() && options.ending_timestamp.is_some() {
             return plan_err!("Specify only one of endingVersion and endingTimestamp");
         }
+        let starting_timestamp = options
+            .starting_timestamp
+            .as_deref()
+            .map(parse_timestamp_as_of)
+            .transpose()?;
+        let ending_timestamp = options
+            .ending_timestamp
+            .as_deref()
+            .map(parse_timestamp_as_of)
+            .transpose()?;
+        if let (Some(start), Some(end)) = (starting_timestamp, ending_timestamp)
+            && start > end
+        {
+            return plan_err!(
+                "Invalid change data feed timestamp range: endingTimestamp precedes startingTimestamp"
+            );
+        }
+        if options.starting_version.is_none() && starting_timestamp.is_none() {
+            return plan_err!("Change data feed requires startingVersion or startingTimestamp");
+        }
         validate_schema(snapshot.schema())?;
         let latest = snapshot.version();
+        // Normalize version ranges with a 100-version lookback.
+        // Timestamp bounds need the retained history before locating their versions.
+        let (timestamp_start, timestamp_end) =
+            if starting_timestamp.is_some() || ending_timestamp.is_some() {
+                (0, latest)
+            } else {
+                (
+                    options
+                        .starting_version
+                        .unwrap_or(0)
+                        .saturating_sub(100)
+                        .max(0),
+                    options.ending_version.unwrap_or(latest).min(latest),
+                )
+            };
+        let timestamps =
+            non_ict_timestamps(&snapshot, &log_store, timestamp_start, timestamp_end).await?;
         let mut table = DeltaTable::new(log_store.clone(), snapshot.load_config().clone());
         table.load_version(latest).await?;
-        let start = match (options.starting_version, &options.starting_timestamp) {
+        let start = match (options.starting_version, starting_timestamp) {
             (Some(version), _) => version,
-            (_, Some(timestamp)) => timestamp_bound(&mut table, latest, timestamp, true).await?,
+            (_, Some(timestamp)) => {
+                timestamp_bound(
+                    &table,
+                    latest,
+                    &timestamps,
+                    timestamp.timestamp_millis(),
+                    true,
+                )
+                .await?
+            }
             _ => {
                 return plan_err!("Change data feed requires startingVersion or startingTimestamp");
             }
         };
-        let end = match (options.ending_version, &options.ending_timestamp) {
+        let end = match (options.ending_version, ending_timestamp) {
             (Some(version), _) => version.min(latest),
-            (_, Some(timestamp)) => timestamp_bound(&mut table, latest, timestamp, false).await?,
+            (_, Some(timestamp)) => {
+                timestamp_bound(
+                    &table,
+                    latest,
+                    &timestamps,
+                    timestamp.timestamp_millis(),
+                    false,
+                )
+                .await?
+            }
             _ => latest,
         };
-        if start < 0 || end < 0 || start > end || start > latest {
+        let empty_range = starting_timestamp.is_some()
+            && ending_timestamp.is_some()
+            && end.checked_add(1) == Some(start);
+        if start < 0 || end < 0 || (start > end && !empty_range) || start > latest {
             return plan_err!(
                 "Invalid change data feed version range [{start}, {end}]; latest version is {latest}"
             );
+        }
+        if empty_range {
+            return Ok(Self {
+                schema: feed_schema(snapshot.schema()),
+                snapshot,
+                log_store,
+                changes: Vec::new(),
+            });
         }
         let snapshot =
             if snapshot.effective_column_mapping_mode() != crate::spec::ColumnMappingMode::None {
@@ -176,7 +243,7 @@ impl ChangeDataFeedSource {
             })?;
             let meta = result.meta.clone();
             let actions = get_actions(version, &result.bytes().await?)?;
-            let timestamp = resolve_commit_timestamp_from_actions(
+            let mut timestamp = resolve_commit_timestamp_from_actions(
                 version,
                 &meta,
                 Some(current.protocol()),
@@ -191,6 +258,11 @@ impl ChangeDataFeedSource {
             .ok_or_else(|| {
                 datafusion::common::DataFusionError::Plan("Missing Delta metadata".into())
             })?;
+            if !version_uses_in_commit_timestamps(version, &protocol, &metadata)
+                && let Some(normalized) = timestamps.get(&version)
+            {
+                timestamp = *normalized;
+            }
             current = Arc::new(DeltaSnapshot::from_metadata_only_parts(
                 log_store.as_ref(),
                 snapshot.load_config().clone(),
@@ -525,12 +597,9 @@ impl ChangeDataFeedSource {
 
 fn validate_read_schema(historical: &Schema, read: &Schema, version: i64) -> Result<()> {
     for field in historical.fields() {
-        let compatible = read.field_with_name(field.name()).is_ok_and(|target| {
-            field.data_type() == target.data_type()
-                && ["delta.columnMapping.id", "delta.columnMapping.physicalName"]
-                    .iter()
-                    .all(|key| field.metadata().get(*key) == target.metadata().get(*key))
-        });
+        let compatible = read
+            .field_with_name(field.name())
+            .is_ok_and(|target| read_compatible_field(field, target));
         if !compatible {
             return plan_err!(
                 "Change data feed cannot read incompatible schema at version {version}: column {}",
@@ -539,6 +608,32 @@ fn validate_read_schema(historical: &Schema, read: &Schema, version: i64) -> Res
         }
     }
     Ok(())
+}
+
+fn read_compatible_field(historical: &Field, read: &Field) -> bool {
+    if historical.is_nullable() && !read.is_nullable()
+        || ["delta.columnMapping.id", "delta.columnMapping.physicalName"]
+            .iter()
+            .any(|key| historical.metadata().get(*key) != read.metadata().get(*key))
+    {
+        return false;
+    }
+    match (historical.data_type(), read.data_type()) {
+        (DataType::Struct(historical), DataType::Struct(read)) => historical.iter().all(|field| {
+            read.iter()
+                .find(|target| target.name() == field.name())
+                .is_some_and(|target| read_compatible_field(field, target))
+        }),
+        (DataType::List(historical), DataType::List(read))
+        | (DataType::LargeList(historical), DataType::LargeList(read)) => {
+            read_compatible_field(historical, read)
+        }
+        (DataType::Map(historical, historical_sorted), DataType::Map(read, read_sorted)) => {
+            historical_sorted == read_sorted && read_compatible_field(historical, read)
+        }
+        (DataType::Null, _) => true,
+        (historical, read) => historical == read,
+    }
 }
 
 async fn removed_file(table: &mut DeltaTable, version: i64, remove: Remove) -> Result<Add> {
@@ -572,21 +667,76 @@ async fn removed_file(table: &mut DeltaTable, version: i64, remove: Remove) -> R
         })
 }
 
+async fn non_ict_timestamps(
+    snapshot: &DeltaSnapshot,
+    log_store: &LogStoreRef,
+    start: i64,
+    end: i64,
+) -> Result<BTreeMap<i64, i64>> {
+    let store = log_store.object_store(None);
+    let mut timestamps = list_delta_log_entries_from(store.clone(), start)
+        .await?
+        .into_iter()
+        .filter_map(|meta| {
+            let version = parse_commit_version_from_location(&meta.location)?;
+            (version <= end).then_some((version, meta.last_modified.timestamp_millis()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(commits) = &snapshot.load_config().catalog_managed_commits {
+        for commit in &commits.commits {
+            if (start..=end).contains(&commit.version) {
+                let meta = store
+                    .head(&catalog_managed_commit_path(&commit.file_name))
+                    .await?;
+                timestamps.insert(commit.version, meta.last_modified.timestamp_millis());
+            }
+        }
+    }
+    let mut previous: Option<i64> = None;
+    for timestamp in timestamps.values_mut() {
+        if let Some(previous) = previous
+            && *timestamp <= previous
+        {
+            *timestamp = previous.checked_add(1).ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(
+                    "Delta commit timestamp exceeds millisecond range".into(),
+                )
+            })?;
+        }
+        previous = Some(*timestamp);
+    }
+    Ok(timestamps)
+}
+
+async fn cdf_version_timestamp(
+    table: &DeltaTable,
+    timestamps: &BTreeMap<i64, i64>,
+    version: i64,
+) -> Result<i64> {
+    let snapshot = table.snapshot()?;
+    if !version_uses_in_commit_timestamps(version, snapshot.protocol(), snapshot.metadata())
+        && let Some(timestamp) = timestamps.get(&version)
+    {
+        return Ok(*timestamp);
+    }
+    Ok(table.get_version_timestamp(version).await?)
+}
+
 async fn timestamp_bound(
-    table: &mut DeltaTable,
+    table: &DeltaTable,
     latest: i64,
-    timestamp: &str,
+    timestamps: &BTreeMap<i64, i64>,
+    timestamp: i64,
     starting: bool,
 ) -> Result<i64> {
-    let timestamp = parse_timestamp_as_of(timestamp)?.timestamp_millis();
-    if starting && timestamp > table.get_version_timestamp(latest).await? {
+    if starting && timestamp > cdf_version_timestamp(table, timestamps, latest).await? {
         return plan_err!("startingTimestamp is after the latest Delta commit");
     }
     let (mut low, mut high) = (0, latest);
     let mut result = if starting { latest + 1 } else { -1 };
     while low <= high {
         let middle = low + (high - low) / 2;
-        let value = table.get_version_timestamp(middle).await?;
+        let value = cdf_version_timestamp(table, timestamps, middle).await?;
         if (starting && value >= timestamp) || (!starting && value > timestamp) {
             if starting {
                 result = middle;
