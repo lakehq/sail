@@ -15,7 +15,7 @@ import pytest
     ],
     ids=["json_object_keys", "json_tuple"],
 )
-def test_json_functions_after_shuffle(spark, expression, expected):
+def test_json_functions(spark, expression, expected):
     df = spark.createDataFrame(
         [(0, '{"a":1,"b":"text"}'), (1, "{}"), (2, "invalid"), (3, None)],
         "id INT, value STRING",
