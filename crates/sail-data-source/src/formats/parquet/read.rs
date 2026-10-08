@@ -217,9 +217,7 @@ impl ReadFormat for ParquetReadFormat {
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let store = ctx
-            .runtime_env()
-            .object_store(input.object_store_url.clone())?;
+        let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 
         input.file_groups = load_parquet_scan_metadata(
             input.file_groups,

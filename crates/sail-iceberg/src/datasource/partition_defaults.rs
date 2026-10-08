@@ -106,7 +106,7 @@ pub(super) async fn create_data_scan(
         .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
     let store = session
         .runtime_env()
-        .object_store(config.object_store_url.clone())?;
+        .object_store(&config.object_store_url)?;
     let metadata_cache = session
         .runtime_env()
         .cache_manager
