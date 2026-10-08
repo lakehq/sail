@@ -3,15 +3,32 @@ import uuid
 import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql import Row
+from pyspark.sql.connect.session import SparkSession
 
-from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.session import patch_spark_connect_session, spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
-@pytest.fixture
-def observer(remote):
-    with spark_session_factory(remote) as sessions:
-        yield sessions.create()
+@pytest.fixture(scope="module")
+def remote():
+    # Temporary views do not depend on the package's custom catalog configuration.
+    with spark_connect_server() as server:
+        yield server.remote
+
+
+@pytest.fixture(scope="module")
+def observer(spark, remote):
+    endpoint = "sc://localhost" if is_jvm_spark() else remote
+    session = SparkSession.builder.remote(endpoint).create()
+    patch_spark_connect_session(session)
+    try:
+        assert session.session_id != spark.session_id
+        yield session
+    finally:
+        # The module's primary session owns the local JVM server.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.delenv("SPARK_LOCAL_REMOTE", raising=False)
+            session.stop()
 
 
 # Ported from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_basic.py,

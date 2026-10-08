@@ -6,20 +6,25 @@ import pytest
 from pyspark.errors.exceptions.connect import UnsupportedOperationException
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
-from pyspark.sql.connect.client import ChannelBuilder
 from pyspark.sql.connect.session import SparkSession
 
+from pysail.testing.spark.session import patch_spark_connect_session
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="module")
 def artifact_sessions(spark, remote):
-    endpoint = f"sc://localhost:{ChannelBuilder.default_port()}" if is_jvm_spark() else remote
+    endpoint = "sc://localhost" if is_jvm_spark() else remote
     second = SparkSession.builder.remote(endpoint).create()
+    patch_spark_connect_session(second)
     try:
+        assert second.session_id != spark.session_id
         yield spark, second
     finally:
-        second.stop()
+        # The module's primary session owns the local JVM server.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.delenv("SPARK_LOCAL_REMOTE", raising=False)
+            second.stop()
 
 
 # Ported from Spark 3 (3.5.9): pyspark/sql/tests/connect/client/test_artifact.py,
