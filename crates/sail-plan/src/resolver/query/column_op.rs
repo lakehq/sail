@@ -101,7 +101,10 @@ impl PlanResolver<'_> {
             //
             // The plan IDs of the input are kept, since they are what a `df["col"]` reference
             // resolves against.
-            let plan_ids = state.get_field_info(input_field.name())?.plan_ids();
+            let plan_ids = state
+                .get_field_info(input_field.name())?
+                .plan_ids()
+                .collect::<Vec<_>>();
             let field_id = state.register_field_name(target_name.clone());
             for plan_id in plan_ids {
                 state.register_plan_id_for_field(&field_id, plan_id)?;
