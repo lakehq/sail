@@ -40,3 +40,34 @@ data:
                 RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
             ProjectionExec: expr=[id@0 as #5]
               RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
+---
+name: "test_repartition_column_hint_plan"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: #1
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[range.#0]
+        Projection: range.#0 + Int32(1) AS value AS #1, range.#0
+          Projection: range.id AS #0
+            TableScan: range
+
+    == Analyzed Logical Plan ==
+    #1: Int64
+    Projection: #1
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[range.#0]
+        Projection: range.#0 + CAST(Int32(1) AS Int64) AS value AS #1, range.#0
+          Projection: range.id AS #0
+            TableScan: range
+
+    == Optimized Logical Plan ==
+    Projection: #1
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[range.#0]
+        Projection: range.id + Int64(1) AS #1, range.id AS #0
+          TableScan: range projection=[id]
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as value]
+      ProjectionExec: expr=[#1@0 as #1]
+        RepartitionExec: partitioning=Hash([#0@1], 3), input_partitions=1
+          ProjectionExec: expr=[id@0 + 1 as #1, id@0 as #0]
+            RangeExec: start=0, end=12, step=1, num_partitions=1, projection=[0]
