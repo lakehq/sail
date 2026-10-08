@@ -324,7 +324,7 @@ impl ScanByAddsStreamState {
                     file_schema,
                     &self.scan_config,
                     &self.scan_schema,
-                    self.pushdown_filter.clone(),
+                    self.pushdown_filter.as_ref().map(Arc::clone),
                     self.scan_parallelism,
                     &self.scan_metrics,
                     &self.context,
@@ -740,7 +740,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let catalog_managed_commits = self.catalog_managed_commits.clone();
         let limit = self.limit;
-        let pushdown_filter = self.pushdown_filter.clone();
+        let pushdown_filter = self.pushdown_filter.as_ref().map(Arc::clone);
         let scan_parallelism = context
             .session_config()
             .target_partitions()
