@@ -164,6 +164,7 @@ impl LakeSource for IcebergLakeSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        _config: &datafusion::prelude::SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
         let LakeSourceCreateTableInfo {
@@ -278,6 +279,7 @@ impl LakeSource for IcebergLakeSource {
     async fn alter_table(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        _config: &datafusion::prelude::SessionConfig,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,

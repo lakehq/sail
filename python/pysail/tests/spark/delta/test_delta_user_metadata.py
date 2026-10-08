@@ -1,13 +1,35 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from time import monotonic, sleep
 from typing import TYPE_CHECKING
 
 import pytest
+from pyspark.errors.exceptions.connect import SparkConnectGrpcException
+from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.connect import proto
 from pyspark.sql.types import Row
+
+from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.utils.common import pyspark_version
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+USER_METADATA_CONFIG = "spark.databricks.delta.commitInfo.userMetadata"
+
+
+@pytest.fixture(autouse=True)
+def restore_metadata_config(spark):
+    previous = spark.conf.get(USER_METADATA_CONFIG, None)
+    yield
+    if previous is None:
+        spark.conf.unset(USER_METADATA_CONFIG)
+    else:
+        spark.conf.set(USER_METADATA_CONFIG, previous)
 
 
 def _read_latest_commit_info(table_path: Path) -> dict:
@@ -64,8 +86,7 @@ def test_user_metadata_is_per_commit(spark, tmp_path):
     assert "userMetadata" not in second_commit
 
 
-def test_empty_user_metadata_is_omitted(spark, tmp_path):
-    """An empty option value parses to `None`, so `userMetadata` is not written."""
+def test_empty_user_metadata_is_preserved(spark, tmp_path):
     delta_path = tmp_path / "delta_user_metadata_empty"
 
     spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option("userMetadata", "").save(
@@ -73,7 +94,7 @@ def test_empty_user_metadata_is_omitted(spark, tmp_path):
     )
 
     commit_info = _read_latest_commit_info(delta_path)
-    assert "userMetadata" not in commit_info
+    assert commit_info["userMetadata"] == ""
 
 
 @pytest.mark.parametrize(
@@ -90,3 +111,282 @@ def test_user_metadata_alias_keys(spark, tmp_path, alias_key):
 
     commit_info = _read_latest_commit_info(delta_path)
     assert commit_info.get("userMetadata") == f"label-via-{alias_key}"
+
+
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+def test_session_user_metadata_write_lifecycle(spark, tmp_path, mode):
+    path = tmp_path / "lifecycle"
+    df = spark.createDataFrame([Row(id=1)])
+    for metadata in ["run=first", "run=second", "", None]:
+        if metadata is None:
+            spark.conf.unset(USER_METADATA_CONFIG)
+        else:
+            spark.conf.set(USER_METADATA_CONFIG, metadata)
+        df.write.format("delta").mode(mode).save(str(path))
+        commit = _read_latest_commit_info(path)
+        if metadata is None:
+            assert "userMetadata" not in commit
+        else:
+            assert commit["userMetadata"] == metadata
+    assert spark.read.format("delta").load(str(path)).count() == (4 if mode == "append" else 1)
+
+
+def test_session_user_metadata_config_registry(spark):
+    spark.conf.unset(USER_METADATA_CONFIG)
+    assert spark.conf.isModifiable(USER_METADATA_CONFIG)
+    assert spark.conf.get(USER_METADATA_CONFIG) is None
+    assert spark.conf.get(USER_METADATA_CONFIG, "fallback") == "fallback"
+
+    for value in ["registered-setting", ""]:
+        spark.conf.set(USER_METADATA_CONFIG, value)
+        assert spark.conf.get(USER_METADATA_CONFIG) == value
+        response = spark.client.config(proto.ConfigRequest.Operation(get_all=proto.ConfigRequest.GetAll()))
+        assert dict(response.pairs)[USER_METADATA_CONFIG] == value
+
+    spark.conf.unset(USER_METADATA_CONFIG)
+    assert spark.conf.get(USER_METADATA_CONFIG) is None
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [(["new", None], "new"), ([None, "new"], "old"), (["new", None, "ignored"], "new")],
+)
+def test_session_user_metadata_after_failed_config_batch(spark, tmp_path, values, expected):
+    spark.conf.set(USER_METADATA_CONFIG, "old")
+    pairs = [
+        proto.KeyValue(key=USER_METADATA_CONFIG, value=value)
+        if value is not None
+        else proto.KeyValue(key="spark.sql.ansi.strictIndexOperator", value="false")
+        for value in values
+    ]
+    with pytest.raises(SparkConnectGrpcException, match="configuration has been removed"):
+        spark.client.config(proto.ConfigRequest.Operation(set=proto.ConfigRequest.Set(pairs=pairs)))
+    assert spark.conf.get(USER_METADATA_CONFIG) == expected
+
+    path = tmp_path / "failed_batch"
+    spark.range(1).write.format("delta").save(str(path))
+    assert _read_latest_commit_info(path)["userMetadata"] == expected
+    ddl_path = tmp_path / "failed_batch_ddl"
+    table = "delta_metadata_failed_batch"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING DELTA LOCATION '{ddl_path}'")
+        assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
+        spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('label' = 'after-failure')")
+        assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_session_user_metadata_after_concurrent_config_updates(spark, tmp_path):
+    writers = 4
+    barrier = Barrier(writers)
+
+    def update_config(index):
+        barrier.wait(timeout=30)
+        for iteration in range(20):
+            if (index + iteration) % 2:
+                spark.conf.set(USER_METADATA_CONFIG, f"{index}-{iteration}")
+            else:
+                spark.conf.unset(USER_METADATA_CONFIG)
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        for attempt in range(4):
+            futures = [pool.submit(update_config, index) for index in range(writers)]
+            for future in futures:
+                future.result(timeout=30)
+            expected = spark.conf.get(USER_METADATA_CONFIG, None)
+            path = tmp_path / f"concurrent_{attempt}"
+            spark.range(1).write.format("delta").save(str(path))
+            assert _read_latest_commit_info(path).get("userMetadata") == expected
+
+
+@pytest.mark.parametrize("next_metadata", ["next-operation", None])
+def test_session_user_metadata_is_captured_before_execution(spark, tmp_path, next_metadata):
+    started = tmp_path / "started"
+    released = tmp_path / "released"
+    path = tmp_path / "snapshot"
+
+    @F.udf("long", useArrow=False)
+    def wait_for_release(value):
+        started.touch()
+        deadline = monotonic() + 30
+        while not released.exists():
+            if monotonic() > deadline:
+                msg = "timed out waiting for configuration update"
+                raise TimeoutError(msg)
+            sleep(0.01)
+        return value
+
+    spark.conf.set(USER_METADATA_CONFIG, "running-operation")
+    df = spark.range(1).select(wait_for_release("id").alias("id"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(lambda: df.write.format("delta").save(str(path)))
+        try:
+            deadline = monotonic() + 30
+            while not started.exists():
+                if future.done():
+                    future.result()
+                    pytest.fail("write completed without executing its UDF")
+                assert monotonic() < deadline, "timed out waiting for the write to start"
+                sleep(0.01)
+            if next_metadata is None:
+                spark.conf.unset(USER_METADATA_CONFIG)
+            else:
+                spark.conf.set(USER_METADATA_CONFIG, next_metadata)
+        finally:
+            released.touch()
+        future.result(timeout=30)
+
+    assert _read_latest_commit_info(path)["userMetadata"] == "running-operation"
+    spark.range(1).write.format("delta").mode("append").save(str(path))
+    assert _read_latest_commit_info(path).get("userMetadata") == next_metadata
+    assert spark.read.format("delta").load(str(path)).collect() == [(0,), (0,)]
+
+
+@pytest.mark.parametrize("alias", ["userMetadata", "user_metadata"])
+@pytest.mark.parametrize("metadata", ["per-write", "", '  {"任务": "load", "run": 42}\n'])
+def test_writer_user_metadata_overrides_session(spark, tmp_path, alias, metadata):
+    path = tmp_path / "override"
+    spark.conf.set(USER_METADATA_CONFIG, "session-default")
+    df = spark.createDataFrame([Row(id=1)])
+    df.write.format("delta").option(alias, metadata).save(str(path))
+    assert _read_latest_commit_info(path)["userMetadata"] == metadata
+
+    df.write.format("delta").mode("append").save(str(path))
+    assert _read_latest_commit_info(path)["userMetadata"] == "session-default"
+    assert spark.conf.get(USER_METADATA_CONFIG) == "session-default"
+
+
+@pytest.mark.parametrize("deletion_vectors", [False, True])
+def test_session_user_metadata_sql_operations(spark, tmp_path, deletion_vectors):
+    path = tmp_path / "sql_operations"
+    table = "delta_metadata_sql"
+    spark.conf.set(USER_METADATA_CONFIG, "sql-commits")
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, value STRING) USING DELTA LOCATION '{path}' "
+            f"TBLPROPERTIES ('delta.enableDeletionVectors' = '{str(deletion_vectors).lower()}')"
+        )
+        assert _read_latest_commit_info(path)["userMetadata"] == "sql-commits"
+        for query, operation in [
+            ("INSERT INTO delta_metadata_sql VALUES (1, 'a'), (2, 'b')", "WRITE"),
+            ("UPDATE delta_metadata_sql SET value = 'updated' WHERE id = 1", "UPDATE"),
+            (
+                f"MERGE INTO {table} t USING (SELECT 2 id, 'merged' value UNION ALL SELECT 3, 'c') s "
+                "ON t.id = s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *",
+                "MERGE",
+            ),
+            ("DELETE FROM delta_metadata_sql WHERE id = 2", "DELETE"),
+        ]:
+            spark.sql(query)
+            commit = _read_latest_commit_info(path)
+            assert commit["operation"] == operation
+            assert commit["userMetadata"] == "sql-commits"
+        assert spark.table(table).orderBy("id").collect() == [(1, "updated"), (3, "c")]
+
+        spark.conf.set(USER_METADATA_CONFIG, "delete-all")
+        spark.sql("DELETE FROM delta_metadata_sql")
+        assert _read_latest_commit_info(path)["userMetadata"] == "delete-all"
+        assert spark.table(table).count() == 0
+        spark.conf.unset(USER_METADATA_CONFIG)
+        spark.sql("INSERT INTO delta_metadata_sql VALUES (4, 'unlabeled')")
+        assert "userMetadata" not in _read_latest_commit_info(path)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("as_select", [False, True])
+def test_session_user_metadata_create_and_replace(spark, tmp_path, as_select):
+    path = tmp_path / "create_replace"
+    table = "delta_metadata_create_replace"
+    columns = "" if as_select else "(id BIGINT)"
+    query = "AS SELECT 1L AS id" if as_select else ""
+    try:
+        for command, metadata in [("CREATE TABLE", "create"), ("CREATE OR REPLACE TABLE", "replace")]:
+            spark.conf.set(USER_METADATA_CONFIG, metadata)
+            spark.sql(f"{command} {table} {columns} USING DELTA LOCATION '{path}' {query}")
+            assert _read_latest_commit_info(path)["userMetadata"] == metadata
+            assert spark.table(table).collect() == ([(1,)] if as_select else [])
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "alteration",
+    [
+        "SET TBLPROPERTIES ('label' = 'updated')",
+        "UNSET TBLPROPERTIES ('label')",
+        "ALTER COLUMN id TYPE BIGINT",
+        "ALTER COLUMN value SET DEFAULT 'fallback'",
+        "ALTER COLUMN value DROP DEFAULT",
+        "ADD CONSTRAINT positive_id CHECK (id > 0)",
+    ],
+)
+def test_session_user_metadata_alter_table(spark, tmp_path, alteration):
+    path = tmp_path / "alter"
+    table = "delta_metadata_alter"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, value STRING DEFAULT 'initial') USING DELTA LOCATION '{path}' "
+            "TBLPROPERTIES ('label' = 'initial', 'delta.feature.allowColumnDefaults' = 'supported', "
+            "'delta.enableTypeWidening' = 'true')"
+        )
+        spark.conf.set(USER_METADATA_CONFIG, "ddl-commit")
+        spark.sql(f"ALTER TABLE {table} {alteration}")
+        commit = _read_latest_commit_info(path)
+        assert commit["operation"] != "CREATE TABLE"
+        assert commit["userMetadata"] == "ddl-commit"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.mergeInto requires Spark 4+")
+def test_session_user_metadata_dataframe_merge_into(spark, tmp_path):
+    path = tmp_path / "dataframe_merge"
+    table = "delta_metadata_dataframe_merge"
+    try:
+        spark.createDataFrame([(1, "aaa"), (2, "bbb")], "id INT, val STRING").write.format("delta").option(
+            "path", str(path)
+        ).saveAsTable(table)
+        spark.conf.set(USER_METADATA_CONFIG, "my_id=123")
+        source = spark.createDataFrame([(2, "bbb_updated"), (3, "ccc")], "id INT, val STRING")
+        (
+            source.alias("source")
+            .mergeInto(table, F.expr(f"{table}.id = source.id"))
+            .whenMatched()
+            .updateAll()
+            .whenNotMatched()
+            .insertAll()
+            .merge()
+        )
+        commit = _read_latest_commit_info(path)
+        assert commit["operation"] == "MERGE"
+        assert commit["userMetadata"] == "my_id=123"
+        assert spark.table(table).orderBy("id").collect() == [(1, "aaa"), (2, "bbb_updated"), (3, "ccc")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_session_user_metadata_isolation(remote, tmp_path):
+    path = tmp_path / "isolation"
+    with spark_session_factory(remote) as sessions:
+        first, second = sessions.create(), sessions.create()
+        first.conf.set(USER_METADATA_CONFIG, "first-session")
+        for session, expected in [(first, "first-session"), (second, None), (first, "first-session")]:
+            session.range(1).write.format("delta").mode("append").save(str(path))
+            assert _read_latest_commit_info(path).get("userMetadata") == expected
+
+
+def test_save_as_table_user_metadata_is_per_commit(spark, tmp_path):
+    path = tmp_path / "save_as_table"
+    table = "delta_metadata_save_as_table"
+    spark.conf.set(USER_METADATA_CONFIG, "session-default")
+    try:
+        spark.range(1).write.format("delta").option("path", str(path)).option("userMetadata", "explicit").saveAsTable(
+            table
+        )
+        assert _read_latest_commit_info(path)["userMetadata"] == "explicit"
+        spark.sql("INSERT INTO delta_metadata_save_as_table VALUES (2)")
+        assert _read_latest_commit_info(path)["userMetadata"] == "session-default"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
