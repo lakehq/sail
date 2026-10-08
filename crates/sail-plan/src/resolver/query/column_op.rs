@@ -8,6 +8,7 @@ use datafusion_expr::{
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -77,9 +78,12 @@ impl PlanResolver<'_> {
             // A container is never a pass-through for Spark: `reconcileColumnType` rebuilds
             // every struct, array and map with `CreateStruct`, `ArrayTransform` or
             // `MapFromArrays` even when the type already matches, so the column always ends up
-            // in an `Alias` and always loses the qualifier.
+            // in an `Alias` and always loses the qualifier. VARIANT is stored as an Arrow struct
+            // but is not a container for Spark.
             let (expr, qualifier) = if input_field.data_type() == target_field.data_type() {
-                let qualifier = if input_field.data_type().is_nested() {
+                let qualifier = if input_field.data_type().is_nested()
+                    && !is_variant_storage_field(input_field)
+                {
                     None
                 } else {
                     input_qualifier.cloned()

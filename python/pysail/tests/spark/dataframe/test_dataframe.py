@@ -7,7 +7,7 @@ from pyspark.sql.functions import col, lit, row_number
 from pyspark.sql.types import ArrayType, IntegerType, LongType, MapType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 def test_dataframe_drop(spark):
@@ -325,11 +325,14 @@ def test_to_schema_drops_the_qualifier_of_a_container_it_does_not_change(spark):
     # A container is never a pass-through for Spark: `reconcileColumnType` rebuilds an array with
     # `ArrayTransform` and a map with `MapFromArrays` even when the type already matches, so the
     # column ends up in an `Alias` and loses the qualifier, unlike a flat column of the same type.
-    df = spark.createDataFrame([([1, 2], {"k": 1}, 3)], "v array<int>, m map<string,int>, a int").alias("t")
+    df = spark.createDataFrame(
+        [([1, 2], {"k": 1}, (1, 2), 3)], "v array<int>, m map<string,int>, s struct<x:int,y:int>, a int"
+    ).alias("t")
     unchanged = StructType(
         [
             StructField("v", ArrayType(IntegerType())),
             StructField("m", MapType(StringType(), IntegerType())),
+            StructField("s", StructType([StructField("x", IntegerType()), StructField("y", IntegerType())])),
             StructField("a", IntegerType()),
         ]
     )
@@ -339,9 +342,24 @@ def test_to_schema_drops_the_qualifier_of_a_container_it_does_not_change(spark):
         out.select("t.v").collect()
     with pytest.raises(AnalysisException):
         out.select("t.m").collect()
+    with pytest.raises(AnalysisException):
+        out.select("t.s").collect()
     # The flat column of the same type is still an attribute, so it keeps the qualifier.
     assert out.select("t.a").collect() == [Row(a=3)]
     assert out.select("t.*").columns == ["a"]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="VARIANT was added in Spark 4.0")
+def test_to_schema_keeps_the_qualifier_of_a_variant_it_does_not_change(spark):
+    # VARIANT is stored as an Arrow struct, but for Spark it is neither a struct, an array nor a
+    # map: `reconcileColumnType` takes the `case (other, target)` arm and returns the column
+    # as it is, so it stays an attribute and keeps the qualifier.
+    df = spark.sql("SELECT parse_json('{}') AS v, 1 AS a").alias("t")
+    out = df.to(df.schema)
+
+    assert len(out.select("t.v").collect()) == 1
+    assert out.select("t.a").collect() == [Row(a=1)]
+    assert out.select("t.*").columns == ["v", "a"]
 
 
 def test_to_schema_rejects_an_ambiguous_input_column(spark):
@@ -350,8 +368,16 @@ def test_to_schema_rejects_an_ambiguous_input_column(spark):
     df = spark.createDataFrame([(1, 2)], "a int, b int")
     duplicated = df.select(df["a"], df["a"])
 
-    with pytest.raises(AnalysisException, match="AMBIGUOUS_COLUMN_OR_FIELD"):
+    with pytest.raises(AnalysisException, match=r"AMBIGUOUS_COLUMN_OR_FIELD.*`a` is ambiguous and has 2 matches"):
         duplicated.to(StructType([StructField("a", LongType())])).collect()
+
+
+def test_to_schema_reports_the_number_of_matches_of_an_ambiguous_input_column(spark):
+    df = spark.createDataFrame([(1, 2)], "a int, b int")
+    triplicated = df.select(df["a"], df["a"], df["a"])
+
+    with pytest.raises(AnalysisException, match=r"AMBIGUOUS_COLUMN_OR_FIELD.*`a` is ambiguous and has 3 matches"):
+        triplicated.to(StructType([StructField("a", LongType())])).collect()
 
 
 def test_to_schema_rejects_an_ambiguous_column_from_a_join(spark):
@@ -359,7 +385,7 @@ def test_to_schema_rejects_an_ambiguous_column_from_a_join(spark):
     right = spark.createDataFrame([(1, 3)], "a int, c int")
     joined = left.join(right, left["a"] == right["a"])
 
-    with pytest.raises(AnalysisException, match="AMBIGUOUS_COLUMN_OR_FIELD"):
+    with pytest.raises(AnalysisException, match=r"AMBIGUOUS_COLUMN_OR_FIELD.*`a` is ambiguous and has 2 matches"):
         joined.to(StructType([StructField("a", LongType())])).collect()
 
 
@@ -402,6 +428,18 @@ def test_to_schema_can_read_one_input_column_into_two_target_fields(spark):
     assert out.collect() == [Row(a=1, A=1)]
 
 
+def test_to_schema_can_repeat_a_target_field_name(spark):
+    # `reorderFields` iterates the target schema and never checks it for duplicates, so the same
+    # name twice reads the same input column twice. On main the plan failed to build.
+    df = spark.createDataFrame([(1,)], "a int")
+
+    out = df.to(StructType([StructField("a", LongType()), StructField("a", LongType())]))
+
+    # `Row.asDict()` collapses duplicate names, so compare by position.
+    assert [tuple(row) for row in out.collect()] == [(1, 1)]
+    assert out.select("*").columns == ["a", "a"]
+
+
 def test_to_schema_ambiguity_does_not_depend_on_case_when_the_names_are_equal(spark):
     # Case sensitivity decides which columns match, not whether a match is ambiguous: two columns
     # with the very same name are ambiguous under either setting.
@@ -441,11 +479,12 @@ def test_to_schema_fills_a_target_field_that_case_sensitivity_leaves_unmatched(s
     df = spark.createDataFrame([(1,)], "name int")
     target = StructType([StructField("NAME", IntegerType())])
 
+    original = spark.conf.get("spark.sql.caseSensitive")
     spark.conf.set("spark.sql.caseSensitive", "true")
     try:
         assert df.to(target).collect() == [Row(NAME=None)]
     finally:
-        spark.conf.unset("spark.sql.caseSensitive")
+        spark.conf.set("spark.sql.caseSensitive", original)
 
 
 def test_sort_by_an_alias_that_shadows_the_column_it_reads(spark):
