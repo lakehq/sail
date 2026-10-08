@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
+use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{Expr, LogicalPlan, Projection};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
@@ -262,16 +262,11 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                let plan_ids = if let Expr::Column(Column { name: field_id, .. }) = &expr {
-                    let info = state.get_field_info(field_id)?;
-                    info.plan_ids()
+                let field_id = if let Expr::Column(Column { name: field_id, .. }) = &expr {
+                    state.register_identity_field(name, field_id)?
                 } else {
-                    vec![]
+                    state.register_field_name(name)
                 };
-                let field_id = state.register_field_name(name);
-                for plan_id in plan_ids {
-                    state.register_plan_id_for_field(&field_id, plan_id)?;
-                }
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));
@@ -281,5 +276,61 @@ impl PlanResolver<'_> {
                 }
             })
             .collect()
+    }
+
+    /// Builds a projection whose expressions are mostly aliased input columns.
+    /// An aliased column keeps its input field, so reuse it instead of looking up
+    /// every column in the input schema, which is quadratic in the width.
+    pub(super) fn projection_reusing_input_fields(
+        expr: Vec<Expr>,
+        input: LogicalPlan,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = input.schema();
+        // Let DataFusion project the functional dependencies when there are any.
+        if !schema.functional_dependencies().is_empty() {
+            return Ok(LogicalPlan::Projection(Projection::try_new(
+                expr,
+                Arc::new(input),
+            )?));
+        }
+        // Field IDs are unique, so a column almost always names a single field.
+        // Leave duplicate names to DataFusion's lookup.
+        let mut indices = HashMap::with_capacity(schema.fields().len());
+        for (index, field) in schema.fields().iter().enumerate() {
+            indices
+                .entry(field.name().as_str())
+                .and_modify(|x| *x = None)
+                .or_insert(Some(index));
+        }
+        let fields = expr
+            .iter()
+            .map(|expr| {
+                if let Expr::Alias(Alias {
+                    expr: inner,
+                    relation,
+                    name,
+                    metadata: None,
+                }) = expr
+                    && let Expr::Column(column) = inner.as_ref()
+                    && let Some(Some(index)) = indices.get(column.name.as_str())
+                    && let (qualifier, field) = schema.qualified_field(*index)
+                    && qualifier == column.relation.as_ref()
+                {
+                    let field = field.as_ref().clone().with_name(name);
+                    Ok((relation.clone(), Arc::new(field)))
+                } else {
+                    expr.to_field(schema)
+                }
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        )?);
+        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+            expr,
+            Arc::new(input),
+            schema,
+        )?))
     }
 }

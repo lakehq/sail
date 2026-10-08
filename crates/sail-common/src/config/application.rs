@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use figment::providers::Env;
@@ -316,6 +317,17 @@ pub enum ShuffleBackend {
 #[serde(deny_unknown_fields)]
 pub struct FlightShuffleBackend {
     pub compression: ShuffleCompression,
+    pub connection_count: NonZeroUsize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_stream_window_size: Option<u32>,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_connection_window_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,6 +498,9 @@ mod shuffle_backend {
                     r#type: Type::Storage,
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
                     },
                     storage,
                     celeborn: super::CelebornShuffleBackend {
@@ -501,6 +516,9 @@ mod shuffle_backend {
                     r#type: Type::Celeborn,
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
                     },
                     storage: super::StorageShuffleBackend {
                         path: None,
@@ -811,6 +829,7 @@ pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
+    pub enable_window_topn: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -1021,6 +1040,9 @@ impl ClusterConfigEnv {
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,
         SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
+        SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,

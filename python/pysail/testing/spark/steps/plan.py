@@ -40,7 +40,7 @@ def normalize_plan_text(plan_text: str) -> str:
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
-        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        r"pytest-of-[^/]+/pytest-\d+/(?:popen-gw\d+/)?[^/]+/",
         re.IGNORECASE,
     )
 
@@ -155,6 +155,9 @@ def normalize_plan_text(plan_text: str) -> str:
 
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+        # Row-group byte offsets depend on compression and parallel write order.
+        # Retain the ranges and file-group layout without snapshotting exact bytes.
+        block = re.sub(r"(\.parquet):\d+\.\.\d+(?=[,\]])", r"\1:<range>", block)
         # PyIceberg filenames retain their task and file counters; only the write UUID varies.
         block = re.sub(
             r"(?<![\w.-])(\d{5}-\d+-)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",

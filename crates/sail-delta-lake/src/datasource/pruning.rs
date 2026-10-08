@@ -640,7 +640,9 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::logical_expr::Operator;
     use datafusion::physical_expr::PhysicalExpr;
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column as PhysicalColumn, Literal};
+    use datafusion::physical_expr::expressions::{
+        BinaryExpr, Column as PhysicalColumn, IsNotNullExpr, IsNullExpr, Literal,
+    };
     use datafusion_common::pruning::PruningStatistics;
     use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 
@@ -803,6 +805,56 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .ok_or_else(|| DataFusionError::Internal("array should be UInt64".to_string()))?;
         assert_eq!(values.value(0), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_array_of_struct_null_counts_prune_files() -> Result<()> {
+        let field = Field::new(
+            "arr_s",
+            DataType::List(Arc::new(Field::new(
+                "element",
+                DataType::Struct(vec![Field::new("x", DataType::Int32, true)].into()),
+                true,
+            ))),
+            true,
+        )
+        .with_metadata(HashMap::from([
+            ("delta.columnMapping.id".to_string(), "1".to_string()),
+            (
+                "delta.columnMapping.physicalName".to_string(),
+                "col-arr-s".to_string(),
+            ),
+        ]));
+        let schema = Arc::new(Schema::new(vec![field]));
+        let adds = vec![
+            add_with_stats(r#"{"numRecords":2,"nullCount":{"col-arr-s":0}}"#),
+            add_with_stats(r#"{"numRecords":2,"nullCount":{"col-arr-s":2}}"#),
+        ];
+        let column = Arc::new(PhysicalColumn::new("arr_s", 0)) as Arc<dyn PhysicalExpr>;
+        let is_null = Arc::new(IsNullExpr::new(Arc::clone(&column))) as Arc<dyn PhysicalExpr>;
+        let is_not_null = Arc::new(IsNotNullExpr::new(column)) as Arc<dyn PhysicalExpr>;
+
+        for mode in [ColumnMappingMode::Name, ColumnMappingMode::Id] {
+            assert_eq!(
+                prune_adds_by_physical_predicate(
+                    &adds,
+                    Arc::clone(&schema),
+                    Arc::clone(&is_null),
+                    mode,
+                )?,
+                vec![false, true]
+            );
+            assert_eq!(
+                prune_adds_by_physical_predicate(
+                    &adds,
+                    Arc::clone(&schema),
+                    Arc::clone(&is_not_null),
+                    mode,
+                )?,
+                vec![true, false]
+            );
+        }
         Ok(())
     }
 

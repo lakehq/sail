@@ -8,15 +8,31 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
-@pytest.fixture(scope="module", params=[None, "none", "lz4", "zstd"], ids=["default", "none", "lz4", "zstd"])
+@pytest.fixture(
+    scope="module",
+    params=[
+        (None, None, None, None),
+        ("none", 1, 65535, None),
+        ("lz4", 3, None, 1048576),
+        ("zstd", 4, 4194304, 16777216),
+    ],
+    ids=["default", "none-one-connection", "lz4-three-connections", "zstd-four-connections"],
+)
 def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
-    if request.param is not None:
-        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = request.param
+    compression, connection_count, stream_window_size, connection_window_size = request.param
+    if compression is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = compression
+    if connection_count is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(connection_count)
+    if stream_window_size is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE"] = str(stream_window_size)
+    if connection_window_size is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE"] = str(connection_window_size)
     with spark_connect_server(envs=envs) as server:
         yield server.remote
 
@@ -42,6 +58,20 @@ def test_shuffle_preserves_rows_across_multiple_batches(spark):
     actual = spark.createDataFrame(rows).repartition(8, "id").orderBy("id").collect()
 
     assert actual == rows
+
+
+@pytest.mark.timeout(60)
+def test_shuffle_remains_usable_after_repeated_limits(spark):
+    row_count, limit = 100_000, 10
+    shuffled = spark.range(row_count, numPartitions=8).repartition(16, "id")
+    for _ in range(8):
+        rows = shuffled.limit(limit).collect()
+        assert len(rows) == limit
+        assert len({row.id for row in rows}) == limit
+        assert all(0 <= row.id < row_count for row in rows)
+
+    # A later query must still be able to fully consume the shared Flight connections.
+    assert shuffled.groupBy().sum("id").first()[0] == row_count * (row_count - 1) // 2
 
 
 @pytest.mark.timeout(30)

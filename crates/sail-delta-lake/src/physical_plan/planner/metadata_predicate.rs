@@ -10,19 +10,19 @@ use datafusion::common::{
 use datafusion::functions::core::expr_fn::nullif;
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
-use datafusion::logical_expr::utils::{conjunction, disjunction};
+use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunction};
 use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
-use crate::datasource::simplify_expr;
+use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
 use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
 use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
-use crate::spec::{DataSkippingNumIndexedCols, StructType, stats_schema};
+use crate::spec::{ColumnMappingMode, DataSkippingNumIndexedCols, StructType, stats_schema};
 use crate::table::DeltaSnapshot;
 
 pub(crate) fn predicate_requires_stats(expr: &Expr, partition_columns: &[String]) -> bool {
@@ -40,6 +40,21 @@ pub(crate) fn build_metadata_filter(
     predicate: Expr,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_columns = snapshot.metadata().partition_columns().clone();
+    let predicate = if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
+        predicate
+    } else {
+        // File statistics of column-mapped tables use physical struct field names, so a
+        // conjunct using a whole struct value cannot be evaluated against them. Dropping a
+        // top-level conjunct only keeps more files, and the rows are filtered after the scan.
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        conjunction(
+            split_conjunction(&predicate)
+                .into_iter()
+                .filter(|conjunct| !predicate_uses_struct_value(conjunct, &df_schema))
+                .cloned(),
+        )
+        .unwrap_or_else(|| lit(true))
+    };
     let needs_stats = predicate_requires_stats(&predicate, &partition_columns);
     let stats_paths = logical_to_physical_arrow_paths(
         snapshot.schema(),

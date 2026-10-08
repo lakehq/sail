@@ -278,6 +278,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -300,6 +303,9 @@ data:
                       DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE

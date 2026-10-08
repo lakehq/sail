@@ -27,6 +27,7 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -261,6 +262,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::vector::l2_distance::VectorL2Distance;
+use sail_function::scalar::vector::norm::VectorNorm;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -3029,7 +3031,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
         match udf_kind {
-            UdfKind::Standard(r#gen::StandardUdf {}) => {}
+            UdfKind::Standard(r#gen::StandardUdf {}) => {
+                if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
+                    return Ok(Arc::new(kind.udf()));
+                }
+            }
             UdfKind::PySpark(r#gen::PySparkUdf {
                 kind,
                 name,
@@ -3291,6 +3297,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "vector_l2_distance" => Ok(Arc::new(ScalarUDF::from(VectorL2Distance::new()))),
+            "vector_norm" => Ok(Arc::new(ScalarUDF::from(VectorNorm::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
@@ -3349,6 +3356,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "repeat" => Ok(Arc::new(ScalarUDF::from(RepeatFunc::new()))),
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
@@ -3474,7 +3482,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+        let udf_kind: UdfKind = if (node.as_async().is_some()
+            && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
+            || node_inner.is::<ArrayElement>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -3488,6 +3498,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
+            || node_inner.is::<VectorNorm>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -3510,6 +3521,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
+            || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
@@ -5600,6 +5612,38 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    #[test]
+    fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let decoded = round_trip_udf(kind.udf())?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_some());
+            assert_eq!(decoded.signature(), kind.udf().signature());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_udf_named_jev_preserves_python_codec() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let udf = PySparkUDF::new(
+                PySparkUdfKind::Batch,
+                kind.name().to_owned(),
+                vec![1, 2, 3],
+                true,
+                vec![DataType::Utf8],
+                DataType::Utf8,
+                Arc::new(PySparkUdfConfig::default()),
+            );
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_none());
+            let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
+            assert_eq!(decoded.payload(), &[1, 2, 3]);
+        }
+        Ok(())
+    }
+
     fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
         udf.inner()
             .downcast_ref::<T>()
@@ -6584,6 +6628,16 @@ mod tests {
 
         assert!(decoded.inner().downcast_ref::<VectorL2Distance>().is_some());
         assert_eq!(decoded.name(), "vector_l2_distance");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_norm_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorNorm::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorNorm>().is_some());
+        assert_eq!(decoded.name(), "vector_norm");
 
         Ok(())
     }

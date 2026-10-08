@@ -17,9 +17,11 @@ def test_grouped_pandas_sliding_time_window_keys(spark, session_timezone):  # no
         assert all((pdf.ts >= start) & (pdf.ts < end))
         return pd.DataFrame({"start": [start], "end": [end], "ids": [sorted(pdf.id.tolist())]})
 
+    # Windows cannot convert pre-epoch timestamps to local datetimes during collect().
     actual = (
         df.groupBy(window)
         .applyInPandas(summarize, "start timestamp, end timestamp, ids array<long>")
+        .selectExpr("CAST(start AS STRING) AS start", "CAST(end AS STRING) AS end", "ids")
         .orderBy("start")
         .collect()
     )
@@ -27,6 +29,7 @@ def test_grouped_pandas_sliding_time_window_keys(spark, session_timezone):  # no
         df.groupBy(window.alias("w"))
         .agg(F.sort_array(F.collect_list("id")).alias("ids"))
         .select("w.start", "w.end", "ids")
+        .selectExpr("CAST(start AS STRING) AS start", "CAST(end AS STRING) AS end", "ids")
         .orderBy("start")
         .collect()
     )
@@ -46,6 +49,10 @@ def test_grouped_pandas_reuses_window_struct_in_data_and_key(spark):
         assert all(value == key[0] for value in pdf.w)
         return pdf
 
-    actual = df.groupBy("w").applyInPandas(identity, df.schema).orderBy("id", "w.start").collect()
-    expected = df.orderBy("id", "w.start").collect()
+    result = df.groupBy("w").applyInPandas(identity, df.schema)
+    assert result.schema == df.schema
+    # Keep pre-epoch values in the UDF, but avoid the client local-datetime conversion.
+    columns = ["id", "CAST(ts AS STRING) AS ts", "CAST(w.start AS STRING) AS start", "CAST(w.end AS STRING) AS end"]
+    actual = result.selectExpr(*columns).orderBy("id", "start").collect()
+    expected = df.selectExpr(*columns).orderBy("id", "start").collect()
     assert actual == expected
