@@ -103,7 +103,13 @@ pub(super) async fn create_data_scan(
         .file_source
         .downcast_ref::<ParquetSource>()
         .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
-    // Metadata-only deletes can discard whole-file scans without reading their footers.
+    // Explicit partitioning or preserved order prevents row-group repartitioning, so leave
+    // footer reads to execution. Row-level delete scans set these flags and may be discarded
+    // when the planner chooses a metadata-only delete, which must not read Parquet files.
+    // Eager footer reads can fail on missing or inaccessible files before the planner
+    // can choose a metadata-only delete.
+    // WARNING: Do not remove this guard; eager footer reads will break metadata-only deletes
+    // when data files are unavailable.
     if config.output_partitioning.is_none() && !config.preserve_order {
         let store = session
             .runtime_env()

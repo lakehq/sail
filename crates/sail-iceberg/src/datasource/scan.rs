@@ -1398,7 +1398,13 @@ impl IcebergScan {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    // Keep whole-file units for delete routing and per-file metadata.
+                    // Keep whole files together for delete routing and per-file metadata.
+                    // These flags also make create_data_scan skip eager footer reads, allowing
+                    // the planner to discard this scan for a metadata-only delete.
+                    // Eager footer reads can fail on missing or inaccessible files before the planner
+                    // can choose a metadata-only delete.
+                    // WARNING: Do not change these flags to allow eager footer reads; metadata-only
+                    // deletes will fail when data files are unavailable.
                     .with_output_partitioning(Some(output_partitioning))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
@@ -1433,8 +1439,13 @@ impl IcebergScan {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    // Existing position deletes and MERGE row positions both require the
-                    // original file order and absolute offsets.
+                    // Preserve file order and absolute row positions for existing deletes and MERGE.
+                    // These flags also make create_data_scan skip eager footer reads, allowing
+                    // the planner to discard this scan for a metadata-only delete.
+                    // Eager footer reads can fail on missing or inaccessible files before the planner
+                    // can choose a metadata-only delete.
+                    // WARNING: Do not change these flags to allow eager footer reads; metadata-only
+                    // deletes will fail when data files are unavailable.
                     .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
