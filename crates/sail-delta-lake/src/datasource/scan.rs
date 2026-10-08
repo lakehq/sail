@@ -472,9 +472,7 @@ pub async fn build_file_scan_config(
 
     let object_store_url = create_object_store_url(&log_store.config().location)?;
     let metadata_size_hint = parquet_options.global.metadata_size_hint;
-    let store = session
-        .runtime_env()
-        .object_store(object_store_url.clone())?;
+    let store = session.runtime_env().object_store(&object_store_url)?;
     let metadata_cache = session
         .runtime_env()
         .cache_manager
