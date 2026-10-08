@@ -497,7 +497,7 @@ async fn build_replayed_adds_input(
     )?))
 }
 
-fn build_eager_adds_input(
+pub(crate) fn build_eager_adds_input(
     adds: &[Add],
     target_partitions: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -538,7 +538,7 @@ fn build_eager_adds_input(
     Ok(input)
 }
 
-fn align_delta_scan_output(
+pub(crate) fn align_delta_scan_output(
     input: Arc<dyn ExecutionPlan>,
     target_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
