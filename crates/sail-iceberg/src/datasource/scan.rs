@@ -21,6 +21,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -762,6 +763,7 @@ impl IcebergScan {
         &self,
         session: &dyn Session,
         nan_free: bool,
+        reader_factory: Arc<CachedParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -774,13 +776,18 @@ impl IcebergScan {
         } else {
             schema
         };
-        Arc::new(ParquetSource::new(schema.build()).with_table_parquet_options(parquet_options))
+        Arc::new(
+            ParquetSource::new(schema.build())
+                .with_table_parquet_options(parquet_options)
+                .with_parquet_file_reader_factory(reader_factory),
+        )
     }
 
     fn build_merge_parquet_source(
         &self,
         session: &dyn Session,
         file_column_name: &str,
+        reader_factory: Arc<CachedParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -803,7 +810,11 @@ impl IcebergScan {
             ])
             .with_virtual_columns(vec![parquet_row_position_field(&self.output_schema)])
             .build();
-        Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
+        Arc::new(
+            ParquetSource::new(table_schema)
+                .with_table_parquet_options(parquet_options)
+                .with_parquet_file_reader_factory(reader_factory),
+        )
     }
 
     fn expanded_projection(
@@ -1105,19 +1116,27 @@ impl IcebergScan {
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
+        if dirty_units.is_empty()
+            && parquet_pushdown_filters.is_empty()
+            && let Some(scan) = self.constant_projection_scan(&all_data_files, projection, limit)?
+        {
+            return Ok(scan);
+        }
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            session.runtime_env().object_store(&object_store_url)?,
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+        ));
+
         if dirty_units.is_empty() {
-            if parquet_pushdown_filters.is_empty()
-                && let Some(scan) =
-                    self.constant_projection_scan(&all_data_files, projection, limit)?
-            {
-                return Ok(scan);
-            }
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
             let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(session, nan_free);
+            let parquet_source = self.build_parquet_source(session, nan_free, reader_factory);
             let expanded_projection =
                 self.expanded_projection(projection, &parquet_pushdown_filters);
             let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
@@ -1164,7 +1183,8 @@ impl IcebergScan {
         if !clean_files.is_empty() {
             let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(session, false);
+            let parquet_source =
+                self.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
@@ -1178,7 +1198,8 @@ impl IcebergScan {
             let delete_scan = self.equality_scan(&eq_deletes)?;
             let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
-            let parquet_source = delete_scan.build_parquet_source(session, false);
+            let parquet_source =
+                delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1341,6 +1362,13 @@ impl IcebergScan {
             }
         }
 
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            session.runtime_env().object_store(&object_store_url)?,
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+        ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
 
@@ -1356,8 +1384,11 @@ impl IcebergScan {
                     &self.arrow_schema,
                 )?);
             }
-            let parquet_source =
-                delete_scan.build_merge_parquet_source(session, file_column_name.as_str());
+            let parquet_source = delete_scan.build_merge_parquet_source(
+                session,
+                file_column_name.as_str(),
+                Arc::clone(&reader_factory),
+            );
             let output_partitioning = output_partitioning_from_partition_fields(
                 parquet_source.table_schema().table_schema(),
                 parquet_source.table_schema().table_partition_cols(),
@@ -1397,7 +1428,8 @@ impl IcebergScan {
                 )?);
             }
             let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
-            let parquet_source = delete_scan.build_parquet_source(session, false);
+            let parquet_source =
+                delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])

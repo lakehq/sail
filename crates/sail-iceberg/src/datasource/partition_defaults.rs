@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
 };
@@ -123,12 +122,6 @@ pub(super) async fn create_data_scan(
             .into(),
     )
     .await?;
-    let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-    config.file_source = Arc::new(
-        parquet
-            .clone()
-            .with_parquet_file_reader_factory(reader_factory),
-    );
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();
