@@ -103,25 +103,28 @@ pub(super) async fn create_data_scan(
         .file_source
         .downcast_ref::<ParquetSource>()
         .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
-    let store = session
-        .runtime_env()
-        .object_store(&config.object_store_url)?;
-    let metadata_cache = session
-        .runtime_env()
-        .cache_manager
-        .get_file_metadata_cache();
-    config.file_groups = load_parquet_scan_metadata(
-        config.file_groups,
-        &store,
-        &metadata_cache,
-        parquet.table_parquet_options().global.metadata_size_hint,
-        session
-            .config_options()
-            .execution
-            .meta_fetch_concurrency
-            .into(),
-    )
-    .await?;
+    // Metadata-only deletes can discard whole-file scans without reading their footers.
+    if config.output_partitioning.is_none() && !config.preserve_order {
+        let store = session
+            .runtime_env()
+            .object_store(&config.object_store_url)?;
+        let metadata_cache = session
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        config.file_groups = load_parquet_scan_metadata(
+            config.file_groups,
+            &store,
+            &metadata_cache,
+            parquet.table_parquet_options().global.metadata_size_hint,
+            session
+                .config_options()
+                .execution
+                .meta_fetch_concurrency
+                .into(),
+        )
+        .await?;
+    }
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();
