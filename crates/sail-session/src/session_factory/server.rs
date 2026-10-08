@@ -1,8 +1,6 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::common::config::ConfigNonZeroUsize;
-use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
@@ -128,7 +126,10 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config)?;
-        self.apply_execution_parquet_config(&mut config);
+        super::apply_parquet_config(
+            &mut config.options_mut().execution.parquet,
+            &self.config.parquet,
+        );
         self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
@@ -201,55 +202,5 @@ impl ServerSessionFactory {
             optimizer.enable_join_dynamic_filter_pushdown = false;
         }
         Ok(())
-    }
-
-    fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
-        let parquet = &mut config.options_mut().execution.parquet;
-
-        parquet.created_by = concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
-        parquet.enable_page_index = self.config.parquet.enable_page_index;
-        parquet.pruning = self.config.parquet.pruning;
-        parquet.skip_metadata = self.config.parquet.skip_metadata;
-        parquet.metadata_size_hint = self.config.parquet.metadata_size_hint;
-        parquet.pushdown_filters = self.config.parquet.pushdown_filters;
-        parquet.reorder_filters = self.config.parquet.reorder_filters;
-        parquet.schema_force_view_types = self.config.parquet.schema_force_view_types;
-        parquet.binary_as_string = self.config.parquet.binary_as_string;
-        parquet.max_predicate_cache_size = Some(self.config.parquet.max_predicate_cache_size);
-        parquet.coerce_int96 = Some("us".to_string());
-        parquet.data_pagesize_limit = self.config.parquet.data_page_size_limit;
-        parquet.write_batch_size = self.config.parquet.write_batch_size;
-        parquet.writer_version =
-            DFParquetWriterVersion::from_str(self.config.parquet.writer_version.as_str())
-                .unwrap_or_default();
-        parquet.skip_arrow_metadata = self.config.parquet.skip_arrow_metadata;
-        parquet.compression = Some(self.config.parquet.compression.clone());
-        parquet.dictionary_enabled = Some(self.config.parquet.dictionary_enabled);
-        parquet.dictionary_page_size_limit = self.config.parquet.dictionary_page_size_limit;
-        parquet.statistics_enabled = Some(self.config.parquet.statistics_enabled.clone());
-        parquet.max_row_group_size = self.config.parquet.max_row_group_size;
-        parquet.column_index_truncate_length = self.config.parquet.column_index_truncate_length;
-        parquet.statistics_truncate_length = self.config.parquet.statistics_truncate_length;
-        parquet.data_page_row_count_limit = self.config.parquet.data_page_row_count_limit;
-        parquet.encoding = self.config.parquet.encoding.clone();
-        parquet.bloom_filter_on_read = self.config.parquet.bloom_filter_on_read;
-        parquet.bloom_filter_on_write = self.config.parquet.bloom_filter_on_write;
-        parquet.bloom_filter_fpp = Some(self.config.parquet.bloom_filter_fpp);
-        parquet.bloom_filter_ndv = Some(self.config.parquet.bloom_filter_ndv);
-        parquet.allow_single_file_parallelism = self.config.parquet.allow_single_file_parallelism;
-        parquet.maximum_parallel_row_group_writers =
-            self.config.parquet.maximum_parallel_row_group_writers;
-        parquet.maximum_buffered_record_batches_per_stream = self
-            .config
-            .parquet
-            .maximum_buffered_record_batches_per_stream;
-        parquet.content_defined_chunking.enabled =
-            self.config.parquet.content_defined_chunking.enabled;
-        parquet.content_defined_chunking.min_chunk_size =
-            self.config.parquet.content_defined_chunking.min_chunk_size;
-        parquet.content_defined_chunking.max_chunk_size =
-            self.config.parquet.content_defined_chunking.max_chunk_size;
-        parquet.content_defined_chunking.norm_level =
-            self.config.parquet.content_defined_chunking.norm_level;
     }
 }

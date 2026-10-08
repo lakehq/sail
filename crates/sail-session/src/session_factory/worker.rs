@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::common::config::{ConfigNonZeroUsize, SpillCompression};
+use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::AppConfig;
@@ -14,23 +14,15 @@ use crate::session_factory::SessionFactory;
 
 pub struct WorkerSessionFactory {
     runtime_env: RuntimeEnvFactory,
-    batch_size: usize,
-    spill_compression: SpillCompression,
-    repartition_buffer_size: usize,
+    config: Arc<AppConfig>,
 }
 
 impl WorkerSessionFactory {
     pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
-        let batch_size = config.execution.batch_size;
-        let spill_compression =
-            super::spill_compression(config.runtime.temporary_files.spill_compression);
-        let repartition_buffer_size = config.cluster.task_stream_buffer;
-        let runtime_env = RuntimeEnvFactory::new(config, runtime.clone());
+        let runtime_env = RuntimeEnvFactory::new(Arc::clone(&config), runtime);
         Self {
             runtime_env,
-            batch_size,
-            spill_compression,
-            repartition_buffer_size,
+            config,
         }
     }
 }
@@ -44,10 +36,13 @@ impl SessionFactory<()> for WorkerSessionFactory {
         let mut config = SessionConfig::default()
             .with_extension(Arc::new(DeltaTableCache::default()))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
-                self.repartition_buffer_size,
+                self.config.cluster.task_stream_buffer,
             )));
-        config.options_mut().execution.batch_size = ConfigNonZeroUsize::try_new(self.batch_size)?;
-        config.options_mut().execution.spill_compression = self.spill_compression;
+        let execution = &mut config.options_mut().execution;
+        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
+        execution.spill_compression =
+            super::spill_compression(self.config.runtime.temporary_files.spill_compression);
+        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet);
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -55,5 +50,43 @@ impl SessionFactory<()> for WorkerSessionFactory {
             .build();
         let session = SessionContext::new_with_state(state);
         Ok(session)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn worker_applies_parquet_config() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = AppConfig::load()?;
+        config.parquet.enable_page_index = false;
+        config.parquet.pruning = false;
+        config.parquet.metadata_size_hint = Some(32768);
+        config.parquet.pushdown_filters = true;
+        config.parquet.schema_force_view_types = false;
+        config.parquet.binary_as_string = true;
+        config.parquet.compression = "gzip(3)".to_string();
+        config.parquet.max_row_group_size = 2048;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
+        let state = session.state_ref();
+        let state = state.read();
+        let parquet = &state.config_options().execution.parquet;
+        assert!(!parquet.enable_page_index);
+        assert!(!parquet.pruning);
+        assert_eq!(parquet.metadata_size_hint, Some(32768));
+        assert!(parquet.pushdown_filters);
+        assert!(!parquet.schema_force_view_types);
+        assert!(parquet.binary_as_string);
+        assert_eq!(parquet.compression.as_deref(), Some("gzip(3)"));
+        assert_eq!(parquet.max_row_group_size, 2048);
+        assert_eq!(parquet.coerce_int96.as_deref(), Some("us"));
+        assert_eq!(
+            parquet.created_by,
+            concat!("sail version ", env!("CARGO_PKG_VERSION"))
+        );
+        Ok(())
     }
 }
