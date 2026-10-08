@@ -7,8 +7,9 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use futures::stream;
-use log::debug;
+use log::{debug, warn};
 use sail_common::spec;
+use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
@@ -20,7 +21,10 @@ use crate::executor::{
     Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, ExecutorOutputStream,
     to_arrow_batch,
 };
+use crate::service::handle_config_set;
+use crate::service::time_zone::is_valid_time_zone;
 use crate::session::SparkSession;
+use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
@@ -28,7 +32,7 @@ use crate::spark::connect::{
     CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
     CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
     CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
-    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    GetResourcesCommand, KeyValue, LocalRelation, MergeIntoTableCommand, Relation,
     RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
@@ -110,6 +114,95 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
+/// Applies `SET TIME ZONE ...`, `SET spark.sql.session.timeZone = ...` and
+/// `RESET spark.sql.session.timeZone` to the Spark configuration of the session, the same way
+/// as `spark.conf.set`, and returns the plan of the result that Spark returns for the statement:
+/// the `(key, value)` row for `SET`, and no rows for `RESET`.
+/// Any other plan is returned as is.
+/// Only plans executed by `handle_execute_plan` are covered; the other callers of
+/// `resolve_and_execute_plan` (Flight SQL, streaming writes, the plan gold tests) are not.
+///
+/// The Spark configuration lives in [`SparkSession`], which the plan resolver cannot reach,
+/// so the statement is handled here before the plan is resolved.
+// TODO: Route every `SET <key> = <value>` and `RESET [<key>]` on a Spark configuration key through
+//   `SparkRuntimeConfig`, not only the session time zone. `SET` on other keys is still sent to
+//   DataFusion as a variable, and `RESET` of any other key, or of all of them, is not implemented.
+// TODO: Spark keeps the quotes of `SET <key> = '<value>'` as part of the value for every key. The
+//   SQL analyzer does that for the session time zone only.
+fn apply_session_time_zone_command(
+    ctx: &SessionContext,
+    plan: spec::Plan,
+) -> SparkResult<spec::Plan> {
+    let spec::Plan::Command(spec::CommandPlan { node, plan_id: _ }) = &plan else {
+        return Ok(plan);
+    };
+    let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE;
+    match node {
+        spec::CommandNode::SetVariable { variable, value } if variable == key => {
+            // Spark rejects a zone it cannot resolve when the configuration is set, and the session
+            // keeps its zone. `SparkRuntimeConfig::set` does not validate time zones yet, so the
+            // statement checks the zone itself, or the session would be left with a zone that
+            // breaks every query that needs one.
+            // TODO: Move this check into `SparkRuntimeConfig::set`, which covers `spark.conf.set`
+            //   and these statements at once.
+            if !is_valid_time_zone(value) {
+                warn!(
+                    "invalid time zone {:?} for {variable}: the statement is rejected and the \
+                    session keeps its time zone, as Spark does",
+                    value.chars().take(64).collect::<String>()
+                );
+                return Err(SparkError::invalid(format!(
+                    "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{variable}\" \
+                    is invalid. Cannot resolve the given timezone. SQLSTATE: 22022"
+                )));
+            }
+            set_session_time_zone(ctx, value.clone())?;
+            let literal = |value: &str| {
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(value.to_string()),
+                })
+            };
+            Ok(spec::Plan::Query(spec::QueryPlan::new(
+                spec::QueryNode::TableAlias {
+                    input: Box::new(spec::QueryPlan::new(spec::QueryNode::Values(vec![vec![
+                        literal(variable),
+                        literal(value),
+                    ]]))),
+                    name: spec::Identifier::from("set"),
+                    columns: vec![
+                        spec::Identifier::from("key"),
+                        spec::Identifier::from("value"),
+                    ],
+                },
+            )))
+        }
+        spec::CommandNode::ResetVariable {
+            variable: Some(variable),
+        } if variable == key => {
+            // The default session time zone is the zone of the host, the same value that
+            // a new session starts with.
+            set_session_time_zone(ctx, get_system_timezone()?)?;
+            Ok(spec::Plan::Query(spec::QueryPlan::new(
+                spec::QueryNode::Empty {
+                    produce_one_row: false,
+                },
+            )))
+        }
+        _ => Ok(plan),
+    }
+}
+
+fn set_session_time_zone(ctx: &SessionContext, value: String) -> SparkResult<()> {
+    handle_config_set(
+        ctx,
+        vec![KeyValue {
+            key: SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string(),
+            value: Some(value),
+        }],
+    )?;
+    Ok(())
+}
+
 async fn handle_execute_plan(
     ctx: &SessionContext,
     plan: spec::Plan,
@@ -120,6 +213,7 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
+    let plan = apply_session_time_zone_command(ctx, plan)?;
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);

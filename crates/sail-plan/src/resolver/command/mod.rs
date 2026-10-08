@@ -285,6 +285,13 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
+            CommandNode::ResetVariable { .. } => {
+                // The Spark session handles `RESET spark.sql.session.timeZone` before the plan is
+                // resolved. Any other `RESET` ends up here.
+                Err(PlanError::todo(
+                    "RESET other than spark.sql.session.timeZone",
+                ))
+            }
             CommandNode::Update {
                 table,
                 table_alias,
