@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -175,6 +176,18 @@ impl CatalogManager {
     ) -> CatalogResult<()> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.alter_table(&database, &table, options).await
+    }
+
+    pub async fn alter_table_with_schema<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .alter_table_with_schema(&database, &table, options, schema)
+            .await
     }
 
     pub async fn alter_table_atomically<T: AsRef<str>>(

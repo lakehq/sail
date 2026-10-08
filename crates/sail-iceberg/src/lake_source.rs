@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
@@ -300,12 +300,19 @@ impl LakeSource for IcebergLakeSource {
             return Ok(
                 sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
                     catalog_updated: true,
+                    ..Default::default()
                 },
             );
         }
-        self.alter_path_table(ctx.runtime_env(), path, &operation)
+        let schema = self
+            .alter_path_table(ctx.runtime_env(), path, &operation)
             .await?;
-        Ok(Default::default())
+        Ok(
+            sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                schema: Some(schema),
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -585,7 +592,7 @@ impl IcebergLakeSource {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: &LakeSourceAlterTableOperation,
-    ) -> Result<()> {
+    ) -> Result<SchemaRef> {
         let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
         let object_store = runtime_env
             .object_store_registry
@@ -618,6 +625,15 @@ impl IcebergLakeSource {
                 }
                 _ => crate::ddl::apply_operation(&mut table_meta, operation)?,
             }
+
+            let schema = table_meta.current_schema().ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Iceberg table metadata is missing current schema".to_string(),
+                )
+            })?;
+            let schema = Arc::new(crate::datasource::type_converter::iceberg_schema_to_arrow(
+                schema,
+            )?);
 
             let current_version =
                 metadata_file_version_from_path(&latest_metadata_file).unwrap_or(0);
@@ -702,7 +718,7 @@ impl IcebergLakeSource {
 
             write_version_hint(&store_ctx.prefixed, &next_version.to_string()).await;
 
-            return Ok(());
+            return Ok(schema);
         }
     }
 

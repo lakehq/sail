@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use moka::future::Cache;
 use moka::policy::EvictionPolicy;
 use sail_common::config::CatalogCacheConfig;
@@ -405,6 +406,23 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
         self.inner.alter_table(database, table, options).await?;
+        if let Some(c) = self.table_cache.as_ref() {
+            let c: &Cache<Namespace, Vec<TableStatus>> = c;
+            c.invalidate(database).await;
+        }
+        Ok(())
+    }
+
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.inner
+            .alter_table_with_schema(database, table, options, schema)
+            .await?;
         if let Some(c) = self.table_cache.as_ref() {
             let c: &Cache<Namespace, Vec<TableStatus>> = c;
             c.invalidate(database).await;

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
@@ -282,6 +283,28 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.alter_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
+    }
+
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .alter_table_with_schema(&database, &table, options, schema)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute alter_table_with_schema: {e}"))
+            })?
     }
 
     async fn alter_table_atomically(

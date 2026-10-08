@@ -493,6 +493,7 @@ impl LakeSource for DeltaLakeSource {
         Ok(
             sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
                 catalog_updated: catalog_managed_commit_context(lakehouse_table.as_ref()).is_some(),
+                ..Default::default()
             },
         )
     }
@@ -1123,6 +1124,9 @@ impl DeltaLakeSource {
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
+        if column_path.len() != 1 {
+            return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+        }
         let table = crate::ddl::open_table(ctx, path, lakehouse_table).await?;
 
         let snapshot = table

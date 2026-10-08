@@ -65,6 +65,8 @@ pub struct LakeSourceCreateTableResult {
 pub struct LakeSourceAlterTableResult {
     /// The lake source committed catalog metadata together with the format metadata.
     pub catalog_updated: bool,
+    /// Committed schema for catalogs that keep a copy of the table's columns.
+    pub schema: Option<SchemaRef>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.

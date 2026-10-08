@@ -4,6 +4,7 @@ mod options;
 mod runtime;
 
 pub use cache::*;
+use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
@@ -186,6 +187,18 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
+
+    /// Synchronizes a lakehouse alteration with its committed storage schema.
+    /// Catalogs that cache columns should reconcile them before applying the options.
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        _schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.alter_table(database, table, options).await
+    }
 
     /// Applies all changes in one catalog mutation, including metadata-pointer preconditions.
     async fn alter_table_atomically(

@@ -517,7 +517,13 @@ impl CatalogCommand {
                     // DESCRIBE/SHOW metadata.
                     if !result.catalog_updated {
                         let catalog_options = catalog_sync_alter_options(&format, &options)?;
-                        manager.alter_table(&table, catalog_options).await?;
+                        if let Some(schema) = result.schema {
+                            manager
+                                .alter_table_with_schema(&table, catalog_options, schema)
+                                .await?;
+                        } else {
+                            manager.alter_table(&table, catalog_options).await?;
+                        }
                     }
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }
