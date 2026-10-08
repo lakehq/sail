@@ -294,15 +294,21 @@ fn reference_snapshot_id(metadata: &TableMetadata, reference: &str) -> Result<i6
 }
 
 fn ancestor_chain(metadata: &TableMetadata, start: i64) -> Result<Vec<&Snapshot>> {
-    let mut current = Some(start);
+    let mut current = Some(snapshot(metadata, start)?);
     let mut visited = HashSet::new();
     let mut ancestors = Vec::new();
-    while let Some(snapshot_id) = current {
+    while let Some(current_snapshot) = current {
+        let snapshot_id = current_snapshot.snapshot_id();
         if !visited.insert(snapshot_id) {
             return plan_err!("Cycle detected in Iceberg snapshot ancestry at {snapshot_id}");
         }
-        let current_snapshot = snapshot(metadata, snapshot_id)?;
-        current = current_snapshot.parent_snapshot_id();
+        // Expiration may remove a parent while retaining its descendants.
+        current = current_snapshot.parent_snapshot_id().and_then(|parent| {
+            metadata
+                .snapshots
+                .iter()
+                .find(|snapshot| snapshot.snapshot_id() == parent)
+        });
         ancestors.push(current_snapshot);
     }
     Ok(ancestors)

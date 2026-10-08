@@ -1,7 +1,10 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+import pyarrow as pa
 import pytest
+from pyiceberg.schema import Schema
+from pyiceberg.types import LongType, NestedField
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -341,3 +344,194 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
             ).collect()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def _read_latest_metadata(table_path):
+    return json.loads(_latest_metadata_file(table_path).read_text(encoding="utf-8"))
+
+
+@pytest.fixture(params=["default", "home"])
+def procedure_catalog_namespace(request):
+    return request.param
+
+
+@pytest.fixture
+def catalog_resolution_spark(procedure_catalog_namespace):
+    catalogs = (
+        '[{name="first", type="memory", initial_database=["default"]}, '
+        f'{{name="second", type="memory", initial_database=["{procedure_catalog_namespace}"]}}]'
+    )
+    with (
+        spark_connect_server(
+            envs={
+                "SAIL_CATALOG__DEFAULT_CATALOG": "first",
+                "SAIL_CATALOG__DEFAULT_DATABASE": '["default"]',
+                "SAIL_CATALOG__LIST": catalogs,
+            }
+        ) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        yield sessions.create()
+
+
+@pytest.mark.parametrize("procedure", ["ancestors_of", "rewrite_data_files"])
+def test_explicit_procedure_catalog_uses_its_default_namespace(
+    catalog_resolution_spark, procedure_catalog_namespace, tmp_path, procedure
+):
+    spark = catalog_resolution_spark
+    table_name = "procedure_namespace_target"
+    spark.sql("CREATE DATABASE first.custom")
+    spark.sql("CREATE DATABASE second.custom")
+    tables = []
+    try:
+        for database, rows in [(procedure_catalog_namespace, [1, 2, 3]), ("custom", [10])]:
+            table = f"second.{database}.{table_name}"
+            location = tmp_path / database
+            spark.sql(
+                f"CREATE TABLE {table} (id BIGINT) USING iceberg "
+                f"LOCATION '{escape_sql_string_literal(location.as_uri())}'"
+            )
+            tables.append(table)
+            for value in rows:
+                spark.sql(f"INSERT INTO {table} VALUES ({value})")  # noqa: S608
+
+        expected_snapshots = _read_latest_metadata(tmp_path / procedure_catalog_namespace)["snapshots"]
+        unrelated_snapshot = _read_latest_metadata(tmp_path / "custom")["current-snapshot-id"]
+        spark.sql("USE DATABASE custom")
+
+        if procedure == "ancestors_of":
+            result = spark.sql(f"CALL second.system.ancestors_of('{table_name}')").collect()
+            assert {row.snapshot_id for row in result} == {snapshot["snapshot-id"] for snapshot in expected_snapshots}
+        else:
+            result = spark.sql(
+                f"CALL second.system.rewrite_data_files(table => '{table_name}', options => map('rewrite-all', 'true'))"
+            ).first()
+            assert _read_latest_metadata(tmp_path / "custom")["current-snapshot-id"] == unrelated_snapshot, (
+                "The procedure in second must not mutate second.custom when the current catalog is first"
+            )
+            assert result.rewritten_data_files_count == len(expected_snapshots)
+            assert len(spark.table(f"second.{procedure_catalog_namespace}.{table_name}.files").collect()) == 1
+    finally:
+        for table in tables:
+            spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "America/Los_Angeles"])
+@pytest.mark.parametrize("argument", ["DATE '2024-01-01'", "'2024-01-01 00:00:00'", "TIMESTAMP '2024-01-01 00:00:00'"])
+def test_rollback_timestamp_coercion_uses_session_timezone(spark, tmp_path, timezone, argument):
+    table = "procedure_timestamp_coercion"
+    location = tmp_path / table
+    original_timezone = spark.conf.get("spark.sql.session.timeZone")
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(location.as_uri())}'"
+    )
+    try:
+        for value in range(3):
+            spark.sql(f"INSERT INTO {table} VALUES ({value})")  # noqa: S608
+        metadata_file = sorted((location / "metadata").glob("*.metadata.json"))[-1]
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        instants = ["2023-12-31T22:00:00+00:00", "2024-01-01T04:00:00+00:00", "2024-01-01T12:00:00+00:00"]
+        timestamp_by_id = {
+            snapshot["snapshot-id"]: int(datetime.fromisoformat(instant).timestamp() * 1000)
+            for snapshot, instant in zip(metadata["snapshots"], instants, strict=True)
+        }
+        for snapshot in metadata["snapshots"]:
+            snapshot["timestamp-ms"] = timestamp_by_id[snapshot["snapshot-id"]]
+        for entry in metadata["snapshot-log"]:
+            entry["timestamp-ms"] = timestamp_by_id[entry["snapshot-id"]]
+        metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+
+        spark.conf.set("spark.sql.session.timeZone", timezone)
+        result = spark.sql(f"CALL system.rollback_to_timestamp(table => '{table}', timestamp => {argument})").first()
+
+        # Midnight in Los Angeles is 08:00 UTC, between the second and third snapshots.
+        expected_index = 0 if timezone == "UTC" else 1
+        assert result.current_snapshot_id == metadata["snapshots"][expected_index]["snapshot-id"]
+        assert [row.id for row in spark.table(table).orderBy("id").collect()] == list(range(expected_index + 1))
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", original_timezone)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("options", ["map()", "map('min-input-files', 2)", "map('rewrite-all', true)"])
+def test_procedure_coerces_options_to_string_map(spark, tmp_path, options):
+    table = "procedure_options_coercion"
+    location = (tmp_path / table).as_uri()
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(location)}'")
+    try:
+        result = spark.sql(f"CALL system.rewrite_data_files(table => '{table}', options => {options})").first()
+
+        assert tuple(result) == (0, 0, 0, 0, 0)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("procedure", ["ancestors_of", "rollback_to_snapshot", "rollback_to_timestamp", "fast_forward"])
+def test_snapshot_procedures_stop_at_expired_ancestor(spark, sql_catalog, procedure):
+    table_name = "snapshot_expired_ancestor"
+    table = sql_catalog.create_table(f"default.{table_name}", Schema(NestedField(1, "id", LongType(), required=False)))
+    for identifier in range(3):
+        table.append(pa.table({"id": [identifier]}))
+    snapshots = table.snapshots()
+    first, second, current = snapshots
+    table.manage_snapshots().create_branch(second.snapshot_id, "audit").commit()
+    table.maintenance.expire_snapshots().by_id(first.snapshot_id).commit()
+    assert table.snapshot_by_id(first.snapshot_id) is None
+    # Spark preserves the parent ID when its ancestor expires; PyIceberg clears it.
+    with table.io.new_input(table.metadata_location).open() as source:
+        metadata = json.load(source)
+    for snapshot in metadata["snapshots"]:
+        if snapshot["snapshot-id"] == second.snapshot_id:
+            snapshot["parent-snapshot-id"] = first.snapshot_id
+    with table.io.new_output(table.metadata_location).create(overwrite=True) as output:
+        output.write(json.dumps(metadata).encode())
+
+    location = escape_sql_string_literal(table.location())
+    spark.sql(f"CREATE TABLE {table_name} USING iceberg LOCATION '{location}'")
+    try:
+        assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == list(range(3))
+        if procedure == "ancestors_of":
+            rows = spark.sql(f"CALL system.ancestors_of('{table_name}')").collect()
+            assert [row.snapshot_id for row in rows] == [current.snapshot_id, second.snapshot_id]
+        elif procedure == "rollback_to_snapshot":
+            row = spark.sql(f"CALL system.rollback_to_snapshot('{table_name}', {second.snapshot_id})").first()
+            assert row.current_snapshot_id == second.snapshot_id
+            assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [0, 1]
+        elif procedure == "rollback_to_timestamp":
+            cutoff = datetime.fromtimestamp(current.timestamp_ms / 1000 + 1, timezone.utc)
+            row = spark.sql(
+                f"CALL system.rollback_to_timestamp('{table_name}', TIMESTAMP '{cutoff.isoformat()}')"
+            ).first()
+            assert row.current_snapshot_id == current.snapshot_id
+        else:
+            row = spark.sql(f"CALL system.fast_forward('{table_name}', 'audit', 'main')").first()
+            assert row.previous_ref == second.snapshot_id
+            assert row.updated_ref == current.snapshot_id
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize("table_name", ["same_name", "name.with.dots"])
+def test_metadata_qualifiers_distinguish_catalogs(catalog_resolution_spark, tmp_path, table_name):
+    spark = catalog_resolution_spark
+    spark.sql("CREATE DATABASE IF NOT EXISTS second.default")
+    tables = [f"{catalog}.default.`{table_name}`" for catalog in ["first", "second"]]
+    try:
+        snapshots = []
+        for index, table in enumerate(tables):
+            location = tmp_path / str(index)
+            spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{location.as_uri()}'")
+            spark.sql(f"INSERT INTO {table} VALUES ({index})")  # noqa: S608
+            snapshots.append(_read_latest_metadata(location)["current-snapshot-id"])
+        left, right = [f"{table}.snapshots" for table in tables]
+        row = spark.sql(
+            f"SELECT {left}.snapshot_id AS l, {right}.snapshot_id AS r FROM {left} CROSS JOIN {right}"  # noqa: S608
+        ).first()
+        assert tuple(row) == tuple(snapshots)
+        rows = spark.sql(f"SELECT {left}.*, {right}.* FROM {left} CROSS JOIN {right}").collect()  # noqa: S608
+        assert len(rows) == 1
+        with pytest.raises(Exception, match=r"(?i)ambiguous"):
+            spark.sql(f"SELECT `{table_name}`.snapshots.snapshot_id FROM {left} CROSS JOIN {right}").collect()  # noqa: S608
+    finally:
+        for table in tables:
+            spark.sql(f"DROP TABLE IF EXISTS {table}")

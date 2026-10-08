@@ -18,17 +18,18 @@ use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
     encode_field_default,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::datasource::type_converter::{iceberg_field_id, iceberg_type_to_arrow};
 use crate::spec::{DataFile, PartitionSpec, Transform};
 use crate::utils::conversions::to_scalar;
 
 /// Consumed during scan construction; defaults travel to workers in field metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct IdentityPartitionDefaults(BTreeMap<i32, String>);
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct IdentityPartitionDefaults(BTreeMap<i32, String>);
 
 impl IdentityPartitionDefaults {
-    pub(super) fn from_file(
+    pub(crate) fn from_file(
         file: &DataFile,
         specs: &[PartitionSpec],
         schema: &crate::spec::Schema,
@@ -93,7 +94,7 @@ impl IdentityPartitionDefaults {
     }
 }
 
-pub(super) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
+pub(crate) fn create_data_scan(config: FileScanConfig) -> Result<Arc<dyn ExecutionPlan>> {
     let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
     for group in &config.file_groups {
         let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();

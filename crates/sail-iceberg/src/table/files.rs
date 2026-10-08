@@ -117,6 +117,7 @@ pub(crate) async fn manifest_entries(
             let file = &mut entry.data_file;
             file.partition_spec_id = descriptor.partition_spec_id;
             if file.content == DataContentType::Data
+                && entry.status != ManifestStatus::Deleted
                 && file.first_row_id.is_none()
                 && let Some(first_row_id) = next_row_id
             {
@@ -308,7 +309,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_manifests_use_zero_sequence_and_row_ids_advance_before_filtering() -> Result<()> {
+    async fn old_manifests_use_zero_sequence_and_deleted_entries_do_not_inherit_row_ids()
+    -> Result<()> {
         let entries = read_entries(
             FormatVersion::V1,
             vec![entry(ManifestStatus::Existing, None, None)],
@@ -334,7 +336,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.data_file.first_row_id)
                 .collect::<Vec<_>>(),
-            vec![Some(100), Some(500), Some(110)]
+            vec![None, Some(500), Some(100)]
         );
         assert!(
             read_entries(

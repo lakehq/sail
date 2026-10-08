@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Result, exec_err, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -13,7 +14,10 @@ use datafusion::physical_plan::{
 use serde::{Deserialize, Serialize};
 
 use super::manifest_scan_exec::manifest_scan_schema;
+pub use crate::datasource::partition_defaults::IdentityPartitionDefaults;
 use crate::spec::{DataContentType, DataFile, DataFileFormat};
+
+pub(crate) const COL_IDENTITY_PARTITION_DEFAULTS: &str = "identity_partition_defaults";
 
 /// Immutable data-file input; column metrics are unnecessary for an unfiltered rewrite.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -22,6 +26,7 @@ pub struct IcebergFileTask {
     pub size: u64,
     pub records: u64,
     pub spec_id: i32,
+    pub identity_partition_defaults: IdentityPartitionDefaults,
 }
 
 impl From<&DataFile> for IcebergFileTask {
@@ -31,6 +36,7 @@ impl From<&DataFile> for IcebergFileTask {
             size: file.file_size_in_bytes,
             records: file.record_count,
             spec_id: file.partition_spec_id,
+            identity_partition_defaults: Default::default(),
         }
     }
 }
@@ -47,8 +53,14 @@ impl IcebergFileTasksExec {
         if groups.is_empty() {
             return plan_err!("Iceberg file tasks require at least one group");
         }
+        let mut fields = manifest_scan_schema().fields().to_vec();
+        fields.push(Arc::new(Field::new(
+            COL_IDENTITY_PARTITION_DEFAULTS,
+            DataType::Utf8,
+            false,
+        )));
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(manifest_scan_schema()),
+            EquivalenceProperties::new(Arc::new(Schema::new(fields))),
             Partitioning::UnknownPartitioning(groups.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -122,6 +134,9 @@ impl ExecutionPlan for IcebergFileTasksExec {
         let batch_size = context.session_config().batch_size().max(1);
         let stream = async_stream::try_stream! {
             for files in groups[partition].chunks(batch_size) {
+                let defaults = files.iter().map(|file| serde_json::to_string(&file.identity_partition_defaults))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
                 yield RecordBatch::try_new(batch_schema.clone(), vec![
                     Arc::new(StringArray::from(files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>())),
                     Arc::new(StringArray::from(vec![DataFileFormat::Parquet.as_action_str(); files.len()])),
@@ -130,6 +145,7 @@ impl ExecutionPlan for IcebergFileTasksExec {
                     Arc::new(Int32Array::from(files.iter().map(|file| file.spec_id).collect::<Vec<_>>())),
                     Arc::new(StringArray::from(vec![DataContentType::Data.as_action_str(); files.len()])),
                     Arc::new(BooleanArray::from(vec![false; files.len()])),
+                    Arc::new(StringArray::from(defaults)),
                 ])?;
             }
         };

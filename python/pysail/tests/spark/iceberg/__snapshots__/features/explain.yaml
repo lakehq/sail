@@ -135,7 +135,8 @@ data:
     == Physical Plan ==
     LakeProcedureExec: lake_source=iceberg, procedure=rewrite_data_files, invocation_id=<invocation_id>
       IcebergProcedureExec: procedure=rewrite_data_files, invocation_id=<invocation_id>
-        IcebergWriterExec(table_path=file://<tmp>/iceberg_explain_procedure/)
-          IcebergScanByDataFilesExec: table_url=file://<table_url>
-            CooperativeExec
-              IcebergFileTasksExec: groups=1, files=2
+        IcebergRewriteExec: concurrent_groups=1, groups=1
+          IcebergWriterExec(table_path=file://<tmp>/iceberg_explain_procedure/)
+            IcebergScanByDataFilesExec: table_url=file://<table_url>
+              CooperativeExec
+                IcebergFileTasksExec: groups=1, files=2

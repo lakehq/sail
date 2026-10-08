@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
@@ -84,20 +83,26 @@ impl PlanResolver<'_> {
         };
         procedure.validate()?;
 
-        let mut positional_values = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            positional_values.push(self.evaluate_procedure_argument(argument, state).await?);
+        let bound = bind_procedure_arguments(
+            &procedure,
+            arguments,
+            named_arguments
+                .into_iter()
+                .map(|(name, value)| (name.as_ref().to_string(), value))
+                .collect(),
+        )?;
+        let mut values = Vec::with_capacity(bound.len());
+        for (parameter, argument) in procedure.parameters.iter().zip(bound) {
+            values.push(match argument {
+                Some(argument) => {
+                    self.evaluate_procedure_argument(argument, parameter.data_type, state)
+                        .await?
+                }
+                None => LakeProcedureValue::Null,
+            });
         }
-        let mut named_values = Vec::with_capacity(named_arguments.len());
-        for (name, argument) in named_arguments {
-            named_values.push((
-                name.as_ref().to_string(),
-                self.evaluate_procedure_argument(argument, state).await?,
-            ));
-        }
-
         let invocation = LakeProcedureInvocation {
-            arguments: bind_procedure_arguments(&procedure, positional_values, named_values)?,
+            arguments: values,
             procedure,
         };
         let (target, planning_target) = match &invocation.procedure.target {
@@ -205,17 +210,46 @@ impl PlanResolver<'_> {
     async fn evaluate_procedure_argument(
         &self,
         argument: spec::Expr,
+        data_type: LakeProcedureDataType,
         state: &mut PlanResolverState,
-    ) -> PlanResult<ScalarValue> {
+    ) -> PlanResult<LakeProcedureValue> {
         let schema = Arc::new(DFSchema::empty());
-        let expression = self.resolve_expression(argument, &schema, state).await?;
-        LiteralEvaluator::new()
+        let target = match data_type {
+            LakeProcedureDataType::Boolean => spec::DataType::Boolean,
+            LakeProcedureDataType::Int32 => spec::DataType::Int32,
+            LakeProcedureDataType::Int64 => spec::DataType::Int64,
+            LakeProcedureDataType::Utf8 => spec::DataType::Utf8,
+            LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
+                time_unit: spec::TimeUnit::Microsecond,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
+            },
+            LakeProcedureDataType::StringMap => spec::DataType::Map {
+                key_type: Box::new(spec::DataType::Utf8),
+                value_type: Box::new(spec::DataType::Utf8),
+                value_type_nullable: true,
+                keys_sorted: false,
+            },
+        };
+        let expression = self
+            .resolve_expression(
+                spec::Expr::Cast {
+                    expr: Box::new(argument),
+                    cast_to_type: target,
+                    rename: false,
+                    is_try: false,
+                },
+                &schema,
+                state,
+            )
+            .await?;
+        let value = LiteralEvaluator::new()
             .evaluate(&expression)
             .map_err(|error| {
                 PlanError::invalid(format!(
                     "Procedure arguments must be foldable constants: {error}"
                 ))
-            })
+            })?;
+        scalar_to_procedure_value(value)
     }
 }
 
@@ -270,9 +304,9 @@ fn procedure_access_purpose(access: LakeProcedureAccess) -> TableAccessPurpose {
 
 fn bind_procedure_arguments(
     procedure: &LakeProcedure,
-    positional: Vec<ScalarValue>,
-    named: Vec<(String, ScalarValue)>,
-) -> PlanResult<Vec<LakeProcedureValue>> {
+    positional: Vec<spec::Expr>,
+    named: Vec<(String, spec::Expr)>,
+) -> PlanResult<Vec<Option<spec::Expr>>> {
     if positional.len() > procedure.parameters.len() {
         return Err(PlanError::invalid(format!(
             "Too many arguments for procedure '{}': expected at most {}, got {}",
@@ -310,37 +344,22 @@ fn bind_procedure_arguments(
         .iter()
         .zip(values)
         .map(|(parameter, value)| match value {
-            Some(value) => scalar_to_procedure_value(&value, parameter.data_type),
+            Some(value) => Ok(Some(value)),
             None if parameter.required => Err(PlanError::missing(format!(
                 "Missing required argument '{}' for procedure '{}'",
                 parameter.name, procedure.name
             ))),
-            None => Ok(LakeProcedureValue::Null),
+            None => Ok(None),
         })
         .collect()
 }
 
-fn scalar_to_procedure_value(
-    value: &ScalarValue,
-    data_type: LakeProcedureDataType,
-) -> PlanResult<LakeProcedureValue> {
+fn scalar_to_procedure_value(value: ScalarValue) -> PlanResult<LakeProcedureValue> {
     if value.is_null() {
         return Ok(LakeProcedureValue::Null);
     }
-    let target = match data_type {
-        LakeProcedureDataType::Boolean => DataType::Boolean,
-        LakeProcedureDataType::Int32 => DataType::Int32,
-        LakeProcedureDataType::Int64 => DataType::Int64,
-        LakeProcedureDataType::Utf8 => DataType::Utf8,
-        LakeProcedureDataType::StringMap => return scalar_to_string_map(value),
-        LakeProcedureDataType::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
-    };
-    let value = value.cast_to(&target).map_err(|error| {
-        PlanError::invalid(format!(
-            "Cannot cast procedure argument {value:?} to {target}: {error}"
-        ))
-    })?;
     match value {
+        value @ ScalarValue::Map(_) => scalar_to_string_map(&value),
         ScalarValue::Boolean(Some(value)) => Ok(LakeProcedureValue::Boolean(value)),
         ScalarValue::Int32(Some(value)) => Ok(LakeProcedureValue::Int32(value)),
         ScalarValue::Int64(Some(value)) => Ok(LakeProcedureValue::Int64(value)),

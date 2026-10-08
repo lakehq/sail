@@ -1,4 +1,11 @@
+import json
+
+import pyarrow as pa
 import pytest
+from pyiceberg.partitioning import PartitionField, PartitionSpec
+from pyiceberg.schema import Schema
+from pyiceberg.transforms import BucketTransform
+from pyiceberg.types import LongType, NestedField, StringType
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
@@ -399,3 +406,64 @@ def test_iceberg_metadata_relations_support_joins_and_aggregations(spark, tmp_pa
         assert [(row.name, row.operation) for row in current_ref] == [("main", "append")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("source_type", [StringType(), LongType()], ids=["string", "long"])
+def test_files_retains_dropped_bucket_partition_type(spark, sql_catalog, format_version, source_type):
+    name = "metadata_dropped_bucket"
+    identifier = f"default.{name}"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(NestedField(1, "value", source_type)),
+        partition_spec=PartitionSpec(PartitionField(1, 1000, BucketTransform(8), "value_bucket")),
+        properties={"format-version": str(format_version)},
+    )
+    try:
+        value = "alpha" if isinstance(source_type, StringType) else 123
+        table.append(pa.table({"value": [value]}))
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{table.location()}'")
+        before = spark.table(f"{name}.files").select("partition")
+        expected_schema = before.schema
+        expected_partitions = before.collect()
+
+        with table.update_spec() as update:
+            update.remove_field("value_bucket")
+
+        after = spark.table(f"{name}.files").select("partition")
+        assert after.collect() == expected_partitions
+        assert after.schema == expected_schema
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize(
+    "entry", ["sql-column", "sql-wildcard", "dataframe-column", "sql-suffix", "sql-suffix-wildcard"]
+)
+def test_metadata_table_preserves_full_catalog_qualifier(spark, tmp_path, entry):
+    table = "sail.default.qualified_metadata_table"
+    location = tmp_path / "qualified_metadata_table"
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(location.as_uri())}'"
+    )
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1)")  # noqa: S608
+        metadata_file = sorted((location / "metadata").glob("*.metadata.json"))[-1]
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        relation = f"{table}.snapshots"
+
+        if entry == "sql-column":
+            result = spark.sql(f"SELECT {relation}.snapshot_id FROM {relation}")  # noqa: S608
+        elif entry == "sql-wildcard":
+            result = spark.sql(f"SELECT {relation}.* FROM {relation}")  # noqa: S608
+        elif entry == "sql-suffix":
+            result = spark.sql(f"SELECT default.qualified_metadata_table.snapshots.snapshot_id FROM {relation}")  # noqa: S608
+        elif entry == "sql-suffix-wildcard":
+            result = spark.sql(f"SELECT default.qualified_metadata_table.snapshots.* FROM {relation}")  # noqa: S608
+        else:
+            result = spark.table(relation).select(f"{relation}.snapshot_id")
+
+        assert [row.snapshot_id for row in result.collect()] == [metadata["current-snapshot-id"]]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

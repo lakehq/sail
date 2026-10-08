@@ -216,7 +216,7 @@ impl CatalogManagerState {
         default_catalog: &str,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
-        self.get_catalog(default_catalog)?;
+        let provider = self.get_catalog(default_catalog)?;
         match reference {
             [] => Err(CatalogError::InvalidArgument(
                 "empty object reference".to_string(),
@@ -224,7 +224,11 @@ impl CatalogManagerState {
             [name] => {
                 let table = name.as_ref().into();
                 let catalog = Arc::from(default_catalog);
-                let database = self.default_database.clone();
+                let database = if default_catalog == self.default_catalog.as_ref() {
+                    self.default_database.clone()
+                } else {
+                    provider.default_namespace()
+                };
                 Ok((catalog, database, table))
             }
             [x @ .., last] => {

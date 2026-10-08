@@ -144,7 +144,7 @@ impl PlanResolver<'_> {
             };
         let table_reference = match table_reference {
             Ok(table_reference) => table_reference,
-            Err(_) if lake_relation.is_some() => lake_relation_table_reference(&reference)?,
+            Err(_) if lake_relation.is_some() => state.register_relation_name(reference.clone()),
             Err(error) => return Err(error),
         };
         let plan = match status.kind {
@@ -657,24 +657,6 @@ impl PlanResolver<'_> {
         } else {
             Ok(table_scan)
         }
-    }
-}
-
-fn lake_relation_table_reference(reference: &[String]) -> PlanResult<TableReference> {
-    match reference {
-        [prefix @ .., schema, table] => match prefix.last() {
-            Some(catalog) => Ok(TableReference::Full {
-                catalog: Arc::from(catalog.as_str()),
-                schema: Arc::from(schema.as_str()),
-                table: Arc::from(table.as_str()),
-            }),
-            None => Err(PlanError::invalid(format!(
-                "lake relation reference: {reference:?}"
-            ))),
-        },
-        _ => Err(PlanError::invalid(format!(
-            "lake relation reference: {reference:?}"
-        ))),
     }
 }
 

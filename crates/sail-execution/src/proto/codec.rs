@@ -5843,7 +5843,9 @@ mod tests {
 
     #[test]
     fn round_trip_iceberg_metadata_and_file_tasks_preserves_work_assignment() -> Result<()> {
-        use sail_iceberg::physical_plan::file_tasks_exec::IcebergFileTask;
+        use sail_iceberg::physical_plan::file_tasks_exec::{
+            IcebergFileTask, IdentityPartitionDefaults,
+        };
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "file_path",
@@ -5873,6 +5875,12 @@ mod tests {
             2
         );
 
+        let default = sail_common_datafusion::schema_evolution::encode_field_default(
+            &ScalarValue::Utf8(Some("x".into())),
+        )?;
+        let partition_defaults: IdentityPartitionDefaults =
+            serde_json::from_value(serde_json::json!({"2": default}))
+                .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
         let tasks = IcebergFileTasksExec::try_new(
             (0..6)
                 .map(|group| {
@@ -5881,6 +5889,7 @@ mod tests {
                         size: 1_000,
                         records: 10,
                         spec_id: group,
+                        identity_partition_defaults: partition_defaults.clone(),
                     }]
                 })
                 .collect(),

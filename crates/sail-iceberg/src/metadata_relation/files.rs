@@ -485,12 +485,16 @@ fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
     let schema = metadata.current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing the current schema".to_string())
     })?;
-    let mut fields = BTreeMap::new();
+    let mut fields: BTreeMap<i32, (Arc<NestedField>, bool)> = BTreeMap::new();
     let mut specs = metadata.partition_specs.iter().collect::<Vec<_>>();
     specs.sort_by_key(|spec| std::cmp::Reverse(spec.spec_id()));
     for spec in specs {
         for partition_field in spec.fields() {
-            if fields.contains_key(&partition_field.field_id) {
+            let is_void = matches!(partition_field.transform, crate::spec::Transform::Void);
+            // v1 replaces a dropped transform with void: keep the latest name,
+            // but recover the result type from the last non-void transform.
+            let previous = fields.get(&partition_field.field_id);
+            if previous.is_some_and(|(_, was_void)| !was_void || is_void) {
                 continue;
             }
             let Ok(source_id) = partition_field.source_id() else {
@@ -509,15 +513,22 @@ fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
             };
             fields.insert(
                 partition_field.field_id,
-                Arc::new(NestedField::optional(
-                    partition_field.field_id,
-                    &partition_field.name,
-                    field_type,
-                )),
+                (
+                    Arc::new(NestedField::optional(
+                        partition_field.field_id,
+                        previous.map_or(partition_field.name.as_str(), |(field, _)| {
+                            field.name.as_str()
+                        }),
+                        field_type,
+                    )),
+                    is_void,
+                ),
             );
         }
     }
-    Ok(StructType::new(fields.into_values().collect()))
+    Ok(StructType::new(
+        fields.into_values().map(|(field, _)| field).collect(),
+    ))
 }
 
 fn null_scalar(data_type: &DataType) -> Result<ScalarValue> {

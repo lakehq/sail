@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -11,7 +11,8 @@ use sail_common_datafusion::lakeprocedure::LakeProcedureCall;
 use serde::{Deserialize, Serialize};
 
 use super::arguments::{optional_string, optional_string_map};
-use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::datasource::partition_defaults::IdentityPartitionDefaults;
+use crate::datasource::type_converter::{apply_name_mapping, iceberg_schema_to_arrow};
 use crate::lake_source::{
     IcebergLakeSource, IcebergReadPurpose, IcebergWriteNode, IcebergWriteNodeOptions,
     load_iceberg_read_table,
@@ -176,6 +177,11 @@ pub(super) async fn plan_rewrite_data_files(
     };
     let (table, _) = load_iceberg_read_table(session, info, IcebergReadPurpose::DataScan).await?;
     let metadata = table.metadata();
+    let current_schema = metadata.current_schema().ok_or_else(|| {
+        datafusion_common::DataFusionError::Plan(
+            "Iceberg table metadata is missing the current schema".to_string(),
+        )
+    })?;
     let current_snapshot = metadata.current_snapshot();
     let expected_snapshot_id = current_snapshot.map(Snapshot::snapshot_id);
     let rewrite_options = rewrite_options(call, &metadata.properties)?;
@@ -183,7 +189,16 @@ pub(super) async fn plan_rewrite_data_files(
         table.store_context(),
         metadata,
         session.config().target_partitions(),
-        |file| Ok(Some(RewriteFile::from(file))),
+        |file| {
+            let defaults = IdentityPartitionDefaults::from_file(
+                &file,
+                &metadata.partition_specs,
+                current_schema,
+            )?;
+            let mut file = RewriteFile::from(file);
+            file.identity_partition_defaults = defaults;
+            Ok(Some(file))
+        },
     )
     .await?;
     let active_delete_files = live_files
@@ -191,7 +206,8 @@ pub(super) async fn plan_rewrite_data_files(
         .filter(|file| !matches!(file.content, DataContentType::Data))
         .count();
 
-    let selected_files = select_files(&live_files, &rewrite_options)?;
+    let mut groups = select_file_groups(&live_files, &rewrite_options)?;
+    let selected_files = groups.iter().flatten().collect::<Vec<_>>();
 
     if !selected_files.is_empty() && active_delete_files > 0 {
         return not_impl_err!(
@@ -206,21 +222,15 @@ pub(super) async fn plan_rewrite_data_files(
 
     let selected_data_file_paths = selected_files
         .iter()
-        .map(|file| file.file_path.clone())
+        .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let rewritten_bytes = selected_files.iter().try_fold(0u64, |total, file| {
-        total.checked_add(file.file_size_in_bytes).ok_or_else(|| {
+        total.checked_add(file.size).ok_or_else(|| {
             datafusion_common::DataFusionError::Plan(
                 "rewrite_data_files byte count overflow".to_string(),
             )
         })
     })?;
-    let groups = rewrite_groups(&selected_files, rewrite_options.max_file_group_size)?;
-    let assignments = balance_by_size(
-        (0..groups.len()).collect(),
-        rewrite_options.max_concurrent_file_groups,
-        |index| groups[*index].iter().map(|file| file.size).sum(),
-    );
     let plan = RewriteDataFilesPlan {
         expected_snapshot_id,
         removed_data_file_paths: selected_data_file_paths.clone(),
@@ -236,12 +246,24 @@ pub(super) async fn plan_rewrite_data_files(
         })?,
     };
 
-    let current_schema = metadata.current_schema().ok_or_else(|| {
-        datafusion_common::DataFusionError::Plan(
-            "Iceberg table metadata is missing the current schema".to_string(),
-        )
-    })?;
-    let arrow_schema = iceberg_schema_to_arrow(current_schema)?;
+    if groups.is_empty() {
+        groups.push(vec![]);
+    }
+    let assignments = balance_by_size(
+        (0..groups.len()).collect(),
+        rewrite_options.max_concurrent_file_groups,
+        |index| groups[*index].iter().map(|file| file.size).sum(),
+    );
+    let mut arrow_schema = iceberg_schema_to_arrow(current_schema)?;
+    if let Some(mapping) = metadata
+        .properties
+        .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
+    {
+        let mapping = serde_json::from_str(mapping).map_err(|error| {
+            datafusion_common::plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
+        })?;
+        arrow_schema = apply_name_mapping(&arrow_schema, &mapping)?;
+    }
     let scan_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
     let scan = LogicalPlan::Extension(Extension {
         node: Arc::new(RewriteDataFilesScanNode::new(
@@ -319,6 +341,7 @@ struct RewriteFile {
     record_count: u64,
     file_size_in_bytes: u64,
     partition_spec_id: i32,
+    identity_partition_defaults: IdentityPartitionDefaults,
 }
 
 impl From<DataFile> for RewriteFile {
@@ -331,6 +354,7 @@ impl From<DataFile> for RewriteFile {
             record_count: file.record_count,
             file_size_in_bytes: file.file_size_in_bytes,
             partition_spec_id: file.partition_spec_id,
+            identity_partition_defaults: Default::default(),
         }
     }
 }
@@ -418,12 +442,11 @@ fn rewrite_options(
     })
 }
 
-fn select_files<'a>(
-    live_files: &'a [RewriteFile],
+fn select_file_groups(
+    live_files: &[RewriteFile],
     options: &RewriteOptions,
-) -> Result<Vec<&'a RewriteFile>> {
-    let mut candidate_groups = HashMap::new();
-    for file in live_files
+) -> Result<Vec<Vec<IcebergFileTask>>> {
+    let candidates = live_files
         .iter()
         .filter(|file| matches!(file.content, DataContentType::Data))
         .filter(|file| {
@@ -431,30 +454,37 @@ fn select_files<'a>(
                 || file.file_size_in_bytes < options.min_file_size
                 || file.file_size_in_bytes > options.max_file_size
         })
-    {
-        candidate_groups
-            .entry((file.partition_spec_id, file.partition.clone()))
-            .or_insert_with(Vec::new)
-            .push(file);
-    }
-
+        .collect::<Vec<_>>();
+    let unsupported_files = candidates
+        .iter()
+        .filter(|file| file.file_format != DataFileFormat::Parquet)
+        .map(|file| file.file_path.as_str())
+        .collect::<HashSet<_>>();
+    let groups = rewrite_groups(&candidates, options.max_file_group_size)?;
     let mut selected = Vec::new();
-    for group in candidate_groups.into_values() {
+    for group in groups {
         let input_size = group.iter().try_fold(0u64, |total, file| {
-            total.checked_add(file.file_size_in_bytes).ok_or_else(|| {
-                datafusion_common::DataFusionError::Plan(
-                    "rewrite_data_files group byte count overflow".to_string(),
+            total.checked_add(file.size).ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!(
+                    "rewrite_data_files group byte count overflow"
                 )
             })
         })?;
         let enough_input_files = group.len() > 1 && group.len() >= options.min_input_files;
         let enough_content = group.len() > 1 && input_size > options.target_file_size;
         let oversized_content = input_size > options.max_file_size;
-        if options.rewrite_all || enough_input_files || enough_content || oversized_content {
-            selected.extend(group);
+        if !group.is_empty()
+            && (options.rewrite_all || enough_input_files || enough_content || oversized_content)
+        {
+            if group
+                .iter()
+                .any(|file| unsupported_files.contains(file.path.as_str()))
+            {
+                return not_impl_err!("rewrite_data_files supports only Parquet data files");
+            }
+            selected.push(group);
         }
     }
-    selected.sort_by(|left, right| left.file_path.cmp(&right.file_path));
     Ok(selected)
 }
 
@@ -467,9 +497,6 @@ fn rewrite_groups(
     }
     let mut partitions = HashMap::new();
     for file in files {
-        if file.file_format != DataFileFormat::Parquet {
-            return not_impl_err!("rewrite_data_files supports only Parquet data files");
-        }
         partitions
             .entry((file.partition_spec_id, file.partition.clone()))
             .or_insert_with(Vec::new)
@@ -478,6 +505,7 @@ fn rewrite_groups(
                 size: file.file_size_in_bytes,
                 records: file.record_count,
                 spec_id: file.partition_spec_id,
+                identity_partition_defaults: file.identity_partition_defaults.clone(),
             });
     }
     let mut groups: Vec<Vec<IcebergFileTask>> = Vec::new();
@@ -550,12 +578,13 @@ mod tests {
             record_count: 1,
             file_size_in_bytes: size,
             partition_spec_id: 0,
+            identity_partition_defaults: Default::default(),
         }
     }
 
     #[test]
     fn binpack_selection_applies_thresholds_per_partition() -> Result<()> {
-        let files = vec![
+        let mut files = vec![
             data_file("p1-a", 10, 1),
             data_file("p1-b", 10, 1),
             data_file("p2-a", 10, 2),
@@ -571,9 +600,12 @@ mod tests {
             max_concurrent_file_groups: DEFAULT_MAX_CONCURRENT_FILE_GROUPS,
         };
 
-        let selected = select_files(&files, &options)?
+        // Unsupported formats in ineligible groups do not turn a no-op into an error.
+        files[2].file_format = DataFileFormat::Avro;
+        let selected = select_file_groups(&files, &options)?
             .into_iter()
-            .map(|file| file.file_path.as_str())
+            .flatten()
+            .map(|file| file.path)
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec!["p1-a", "p1-b", "p3-large"]);
