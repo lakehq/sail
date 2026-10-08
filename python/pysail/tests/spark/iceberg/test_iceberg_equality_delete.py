@@ -21,9 +21,9 @@ from pyiceberg.manifest import (
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
-from pyiceberg.transforms import IdentityTransform
+from pyiceberg.transforms import IdentityTransform, TruncateTransform
 from pyiceberg.typedef import Record
-from pyiceberg.types import BinaryType, LongType, NestedField, StringType
+from pyiceberg.types import BinaryType, LongType, NestedField, StringType, StructType
 
 from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
@@ -374,7 +374,7 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
         assert entries[0].data_file.content == DataFileContent.POSITION_DELETES
         assert entries[0].data_file.partition == Record("A")
         metadata = _find_latest_metadata(table_path)
-        assert len(metadata["snapshots"]) == 2
+        assert len(metadata["snapshots"]) == 2  # noqa: PLR2004
         rows = [
             tuple(row)
             for row in spark.sql("SELECT id, flag, part FROM iceberg_sql_delete_partitioned ORDER BY id").collect()
@@ -385,6 +385,101 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
         ]
     finally:
         _drop_table(spark, table_name)
+
+
+@pytest.mark.parametrize("existing_delete", [False, True])
+def test_iceberg_sql_delete_prunes_files_and_preserves_positions(spark, sql_catalog, existing_delete):
+    from pysail.tests.spark.iceberg.test_iceberg_data_skipping import unavailable_iceberg_files
+
+    identifier = "default.delete_pruning"
+    name = "iceberg_delete_pruning"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(NestedField(1, "id", LongType(), required=False)),
+        properties={"format-version": "2", "write.delete.mode": "merge-on-read"},
+    )
+    path = _local_table_path(table.location())
+    try:
+        for first in [1, 101, 201, 301]:
+            table.append(pa.table({"id": [first, first + 1]}))
+        files = [task.file for task in table.scan().plan_files()]
+        selected = [file for file in files if int.from_bytes(file.lower_bounds[1], "little", signed=True) == 1]
+        assert len(selected) == 1
+        excluded = [file.file_path for file in files if file.file_path != selected[0].file_path]
+        assert len(excluded) == 3  # noqa: PLR2004
+        if existing_delete:
+            _append_equality_delete_snapshot(table, pa.table({"id": [1]}), [1])
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{_uri_sql(path)}'")
+
+        with unavailable_iceberg_files(excluded):
+            spark.sql(f"DELETE FROM {name} WHERE id = 2").collect()  # noqa: S608
+
+        deleted = [
+            row
+            for entry in _current_delete_entries(path)
+            if entry.data_file.content == DataFileContent.POSITION_DELETES
+            for row in pq.read_table(_local_table_path(entry.data_file.file_path)).to_pylist()
+        ]
+        assert deleted == [{"file_path": selected[0].file_path, "pos": 1}]
+        expected = ([1] if not existing_delete else []) + [101, 102, 201, 202, 301, 302]
+        assert [row.id for row in spark.table(name).orderBy("id").collect()] == expected
+        if not existing_delete:
+            assert (
+                sorted(StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist())
+                == expected
+            )
+    finally:
+        _drop_table(spark, name)
+        sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("transform", [IdentityTransform(), TruncateTransform(10)], ids=["identity", "truncate"])
+def test_iceberg_sql_delete_nested_partition_source(spark, sql_catalog, transform):
+    identifier = "default.nested_partition_delete"
+    name = "iceberg_nested_partition_delete"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "s", StructType(NestedField(3, "part", LongType(), required=False)), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(3, 1000, transform, "part")),
+        properties={"format-version": "2", "write.delete.mode": "merge-on-read"},
+    )
+    path = _local_table_path(table.location())
+    try:
+        table.append(
+            pa.table(
+                {
+                    "id": [1, 2, 3, 4, 5, 6],
+                    "s": pa.array(
+                        [{"part": 11}, {"part": 11}, {"part": 21}, {"part": 21}, {"part": None}, None],
+                        type=pa.struct([pa.field("part", pa.int64())]),
+                    ),
+                }
+            )
+        )
+        source_partitions = {task.file.file_path: task.file.partition for task in table.scan().plan_files()}
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{_uri_sql(path)}'")
+        spark.sql(f"DELETE FROM {name} WHERE id IN (2, 4, 6)").collect()  # noqa: S608
+
+        entries = _current_delete_entries(path)
+        assert entries
+        deleted_ids = []
+        for entry in entries:
+            assert entry.data_file.content == DataFileContent.POSITION_DELETES
+            for deleted in pq.read_table(_local_table_path(entry.data_file.file_path)).to_pylist():
+                assert entry.data_file.partition == source_partitions[deleted["file_path"]]
+                original = pq.read_table(_local_table_path(deleted["file_path"])).to_pylist()
+                deleted_ids.append(original[deleted["pos"]]["id"])
+        assert sorted(deleted_ids) == [2, 4, 6]
+        assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 3, 5]
+        assert sorted(
+            StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist()
+        ) == [1, 3, 5]
+    finally:
+        _drop_table(spark, name)
+        sql_catalog.drop_table(identifier)
 
 
 @pytest.mark.parametrize("column_type", ["FLOAT", "DOUBLE"])
@@ -462,7 +557,7 @@ def test_iceberg_unpartitioned_equality_delete_filters_matching_rows_and_records
             assert len(position_deletes) == 1
             deleted = pq.read_table(_local_table_path(position_deletes[0].file_path)).to_pylist()
             assert len(deleted) == 1
-            assert deleted[0]["pos"] == 3
+            assert deleted[0]["pos"] == 3  # noqa: PLR2004
         finally:
             _drop_table(spark, name)
     finally:
@@ -631,7 +726,7 @@ def test_iceberg_sql_delete_duplicate_complex_rows_and_reinsert(spark, tmp_path)
             (2L, NULL, NULL),
             (1L, array(1D, NULL), map('a', 'b')),
             (4L, array(4D), map('a', 'b'))
-        """)
+        """)  # noqa: S608
         spark.sql(f"DELETE FROM {name} WHERE id = 1").collect()  # noqa: S608
         spark.sql(f"DELETE FROM {name} WHERE id = 2").collect()  # noqa: S608
         entries = _current_delete_entries(path)
@@ -640,7 +735,7 @@ def test_iceberg_sql_delete_duplicate_complex_rows_and_reinsert(spark, tmp_path)
             row for entry in entries for row in pq.read_table(_local_table_path(entry.data_file.file_path)).to_pylist()
         ]
         assert sorted(row["pos"] for row in deleted) == [1, 2, 3]
-        spark.sql(f"INSERT INTO {name} VALUES (1L, array(1D, NULL), map('a', 'b'))")
+        spark.sql(f"INSERT INTO {name} VALUES (1L, array(1D, NULL), map('a', 'b'))")  # noqa: S608
         assert sorted(row.id for row in spark.table(name).collect()) == [1, 3, 4]
         assert sorted(
             StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist()

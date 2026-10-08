@@ -27,26 +27,19 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         &info.resolved_target_field_names,
     )?;
     let merge_on_read = mode == RowLevelWriteMode::MergeOnRead;
-    let target_plan = if merge_on_read {
-        ensure_merge_metadata_columns(
-            info.target_plan.as_ref().clone(),
-            MERGE_FILE_COLUMN,
-            Some(MERGE_ROW_INDEX_COLUMN),
-        )?
-    } else {
-        let target = ensure_merge_metadata_columns(
-            info.target_plan.as_ref().clone(),
-            MERGE_FILE_COLUMN,
-            None,
-        )?;
-        super::row_level::select_copy_on_write_candidates(
-            target,
-            condition
-                .as_ref()
-                .map(|predicate| predicate.expr.clone())
-                .unwrap_or_else(|| lit(true)),
-        )?
-    };
+    let target_plan = ensure_merge_metadata_columns(
+        info.target_plan.as_ref().clone(),
+        MERGE_FILE_COLUMN,
+        merge_on_read.then_some(MERGE_ROW_INDEX_COLUMN),
+    )?;
+    // Prune whole files without filtering rows before assigning their positions.
+    let target_plan = super::row_level::select_copy_on_write_candidates(
+        target_plan,
+        condition
+            .as_ref()
+            .map(|predicate| predicate.expr.clone())
+            .unwrap_or_else(|| lit(true)),
+    )?;
     let mut projection = target_plan
         .schema()
         .fields()
