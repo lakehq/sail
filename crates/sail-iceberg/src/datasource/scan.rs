@@ -1843,12 +1843,14 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::expect_used)]
     async fn metadata_aggregate_reuses_file_plan_for_partial_and_fallback() -> Result<()> {
+        use datafusion::arrow::array::{Float64Array, Int32Array};
         use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
         use datafusion::functions_aggregate::expr_fn::{count, min, sum};
         use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
         use datafusion::prelude::{SessionContext, col, lit};
         use object_store::ObjectStoreExt;
         use object_store::path::Path;
+        use parquet::arrow::ArrowWriter;
         use sail_common_datafusion::datasource::MergeCapableSource;
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 
@@ -1858,12 +1860,27 @@ mod tests {
         use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
         use crate::spec::{FormatVersion, ManifestContentType};
 
-        let (mut read_scan, file) = statistics_fixture()?;
+        let (mut read_scan, mut file) = statistics_fixture()?;
         let context = SessionContext::new();
         let table_url = Url::parse(read_scan.table_uri()).expect("table URL");
         let store = Arc::new(object_store::memory::InMemory::new());
         context.register_object_store(&table_url, store.clone());
         let store_context = StoreContext::new(store, &table_url)?;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&read_scan.arrow_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 2])),
+                Arc::new(Float64Array::from(vec![2.5, 2.5])),
+            ],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None)?;
+        writer.write(&batch)?;
+        let bytes = writer.into_inner()?;
+        file.file_size_in_bytes = bytes.len() as u64;
+        store_context
+            .prefixed
+            .put(&Path::from(file.file_path.as_str()), bytes.into())
+            .await?;
         let mut writer = ManifestWriterBuilder::new(
             Some(1),
             None,
