@@ -191,7 +191,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: strict parse_json of a non-null literal yields a non-nullable variant
       When query
         """
@@ -214,7 +213,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
          |-- result: variant (nullable = true)
         """
 
-    @sail-bug
     Scenario: strict parse_json of a non-null column yields a non-nullable variant
       When query
         """

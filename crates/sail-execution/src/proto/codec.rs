@@ -3105,8 +3105,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::DropStructField(r#gen::DropStructFieldUdf { field_names }) => {
-                let udf = DropStructField::new(field_names);
+            UdfKind::DropStructField(r#gen::DropStructFieldUdf {
+                field_names,
+                case_sensitive,
+            }) => {
+                let udf = DropStructField::new(field_names, case_sensitive);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::Explode(r#gen::ExplodeUdf { name }) => {
@@ -3165,8 +3168,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = ArraysZip::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::UpdateStructField(r#gen::UpdateStructFieldUdf { field_names }) => {
-                let udf = UpdateStructField::new(field_names);
+            UdfKind::UpdateStructField(r#gen::UpdateStructFieldUdf {
+                field_names,
+                case_sensitive,
+            }) => {
+                let udf = UpdateStructField::new(field_names, case_sensitive);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::TimestampNow(r#gen::TimestampNowUdf {
@@ -3675,7 +3681,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().downcast_ref::<DropStructField>() {
             let field_names = func.field_names().to_vec();
-            UdfKind::DropStructField(r#gen::DropStructFieldUdf { field_names })
+            UdfKind::DropStructField(r#gen::DropStructFieldUdf {
+                field_names,
+                case_sensitive: func.case_sensitive(),
+            })
         } else if let Some(_func) = node.inner().downcast_ref::<Explode>() {
             let name = node.name().to_string();
             UdfKind::Explode(r#gen::ExplodeUdf { name })
@@ -3713,7 +3722,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ArraysZip(r#gen::ArraysZipUdf { field_names })
         } else if let Some(func) = node.inner().downcast_ref::<UpdateStructField>() {
             let field_names = func.field_names().to_vec();
-            UdfKind::UpdateStructField(r#gen::UpdateStructFieldUdf { field_names })
+            UdfKind::UpdateStructField(r#gen::UpdateStructFieldUdf {
+                field_names,
+                case_sensitive: func.case_sensitive(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<TimestampNow>() {
             let session_timezone = func.session_timezone().to_string();
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();

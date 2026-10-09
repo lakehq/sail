@@ -162,7 +162,15 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Window(Window::try_new(vec![node], Arc::new(plan))?);
                 let alias = self.state.register_field_name(&name);
-                let replacement = ident(name.clone()).alias(alias);
+                // The window function is not a named expression, so Spark reports no metadata
+                // for it, while DataFusion carries over the metadata of the column it reads.
+                let replacement =
+                    if PlanResolver::has_spark_metadata(&ident(name.clone()), self.plan.schema()) {
+                        ident(name.clone())
+                            .alias_with_metadata(alias, PlanResolver::empty_spark_metadata())
+                    } else {
+                        ident(name.clone()).alias(alias)
+                    };
                 self.seen.insert(name, replacement.clone());
                 Ok(Transformed::yes(replacement))
             }

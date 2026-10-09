@@ -200,8 +200,11 @@ impl ScalarUDFImpl for SparkParseJson {
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
+        // `parse_json` fails on invalid JSON rather than returning NULL, so it is NULL only where
+        // its input is; `try_parse_json` can always be NULL (`ParseJson`, `returnNullable`).
+        let nullable = self.safe || args.arg_fields.iter().any(|x| x.is_nullable());
         Ok(Arc::new(
-            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+            Field::new(self.name(), data_type, nullable).with_extension_type(VariantType),
         ))
     }
 

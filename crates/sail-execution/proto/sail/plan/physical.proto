@@ -303,6 +303,7 @@ message PySparkCoGroupMapUdf {
 
 message DropStructFieldUdf {
   repeated string field_names = 1;
+  bool case_sensitive = 2;
 }
 
 message ExplodeUdf {
@@ -357,6 +358,7 @@ message ArraysZipUdf {
 
 message UpdateStructFieldUdf {
   repeated string field_names = 1;
+  bool case_sensitive = 2;
 }
 
 message TimestampNowUdf {

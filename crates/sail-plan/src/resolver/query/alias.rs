@@ -80,7 +80,7 @@ impl PlanResolver<'_> {
                 .zip(names)
                 .map(|(col, name)| NamedExpr::new(vec![name], Expr::Column(col)))
                 .collect();
-            let mut expr = self.rewrite_named_expressions(expr, state)?;
+            let mut expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
             let mut fields = Vec::with_capacity(expr.len());
             for (expr, field) in expr.iter_mut().zip(input.schema().fields()) {
                 if let Expr::Alias(expr) = expr {
