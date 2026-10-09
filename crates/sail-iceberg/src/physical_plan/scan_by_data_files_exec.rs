@@ -8,7 +8,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -23,7 +22,8 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::{CachedParquetFileReaderFactory, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
@@ -217,11 +217,8 @@ impl ScanByDataFilesState {
                 .parquet
                 .clone(),
         );
-        let metadata_cache = self
-            .context
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
+        let metadata_cache =
+            FileCaches::metadata_cache(self.context.session_config(), &object_store);
         let file_groups = load_parquet_scan_metadata(
             file_groups,
             &object_store,

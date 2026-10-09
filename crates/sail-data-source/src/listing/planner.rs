@@ -10,7 +10,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
+use datafusion::execution::cache::{Cache, SchemaFingerprint, TableScopedPath};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
@@ -30,6 +30,8 @@ use datafusion_datasource::file_scan_config::{
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::session::ObjectStoreSession;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
@@ -352,6 +354,12 @@ async fn list_files_for_scan<'a>(
         });
     };
 
+    let scoped_session = FileCaches::from_config(ctx.config())
+        .listing
+        .as_ref()
+        .map(|_| ObjectStoreSession::new(ctx, &store, &[]))
+        .transpose()?;
+    let ctx: &dyn Session = scoped_session.as_ref().map_or(ctx, |session| session);
     let partition_cols: Vec<(String, DataType)> = source
         .config()
         .schema
@@ -451,7 +459,8 @@ async fn do_collect_statistics_and_ordering(
     let meta = &part_file.object_meta;
     let file_schema = source.config().schema.file_schema();
     let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(file_schema.as_ref()));
-    let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
+    let file_statistic_cache =
+        FileCaches::statistics_cache(ctx.config(), store).map(|cache| cache.for_file(meta));
     let cache_key = TableScopedPath {
         table: Some(statistics_cache_table_ref(
             part_file.table_reference.as_ref(),

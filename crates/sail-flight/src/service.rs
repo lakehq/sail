@@ -104,7 +104,7 @@ impl FlightSqlService for SailFlightSqlService {
         };
 
         let ctx = self.get_session_context().await?;
-        let (plan, _) = resolve_and_execute_plan(&ctx, self.config.clone(), plan)
+        let (plan, _, invalidation) = resolve_and_execute_plan(&ctx, self.config.clone(), plan)
             .await
             .map_err(|e| Status::internal(format!("plan error: {e}")))?;
         let schema = plan.schema();
@@ -116,6 +116,7 @@ impl FlightSqlService for SailFlightSqlService {
             .execute(&ctx, plan)
             .await
             .map_err(|e| Status::internal(format!("execution error: {e}")))?;
+        let stream = invalidation.wrap(stream);
 
         let stream: SendableRecordBatchStream = if let Some(ref m) = self.metrics {
             Box::pin(MetricsRecordingStream::new(

@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::execution::DiskManager;
-use datafusion::execution::cache::cache_manager::{
-    CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
-};
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
@@ -11,6 +8,7 @@ use datafusion::execution::memory_pool::{
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_common::Result;
 use log::debug;
+use sail_cache::file_caches::FileCaches;
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
 use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
@@ -22,9 +20,9 @@ use sail_object_store::DynamicObjectStoreRegistry;
 
 pub struct RuntimeEnvFactory {
     config: Arc<AppConfig>,
-    runtime: RuntimeHandle,
-    global_file_listing_cache: Option<Arc<ListFilesCache>>,
-    global_file_statistics_cache: Option<Arc<FileStatisticsCache>>,
+    registry: Arc<DynamicObjectStoreRegistry>,
+    global_file_listing_cache: Option<Arc<MokaFileListingCache>>,
+    global_file_statistics_cache: Option<Arc<MokaFileStatisticsCache>>,
     global_file_metadata_cache: Option<Arc<MokaFileMetadataCache>>,
 }
 
@@ -32,41 +30,30 @@ impl RuntimeEnvFactory {
     pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
         Self {
             config,
-            runtime,
+            registry: Arc::new(DynamicObjectStoreRegistry::new(runtime)),
             global_file_listing_cache: None,
             global_file_statistics_cache: None,
             global_file_metadata_cache: None,
         }
     }
 
-    pub fn create<M>(&mut self, mutator: M) -> Result<Arc<RuntimeEnv>>
+    pub fn create<M>(&mut self, mutator: M) -> Result<(Arc<RuntimeEnv>, Arc<FileCaches>)>
     where
         M: FnOnce(RuntimeEnvBuilder) -> Result<RuntimeEnvBuilder>,
     {
-        let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
-        let cache_config = CacheManagerConfig::default()
-            .with_file_statistics_cache(self.create_file_statistics_cache())
-            .with_list_files_cache(self.create_file_listing_cache())
-            .with_file_metadata_cache(Some(self.create_file_metadata_cache()));
-        let cache_config = match &self.config.parquet.file_statistics_cache.r#type {
-            CacheType::None => cache_config.with_file_statistics_cache_limit(0),
-            CacheType::Global | CacheType::Session => cache_config,
-        };
-        let cache_config = match &self.config.execution.file_listing_cache.r#type {
-            CacheType::None => cache_config.with_list_files_cache_limit(0),
-            CacheType::Global | CacheType::Session => cache_config,
-        };
-        let cache_config = match &self.config.parquet.file_metadata_cache.r#type {
-            CacheType::None => cache_config.with_metadata_cache_limit(0),
-            CacheType::Global | CacheType::Session => cache_config,
-        };
+        let registry = self.registry.for_session();
+        let caches = Arc::new(FileCaches {
+            metadata: self.create_file_metadata_cache(),
+            statistics: self.create_file_statistics_cache(),
+            listing: self.create_file_listing_cache(),
+        });
         let builder = RuntimeEnvBuilder::default()
             .with_object_store_registry(Arc::new(registry))
-            .with_cache_manager(cache_config)
+            .with_cache_manager(caches.unscoped_config())
             .with_memory_pool(self.create_memory_pool())
             .with_disk_manager_builder(self.create_disk_manager_builder());
         let builder = mutator(builder)?;
-        Ok(Arc::new(builder.build()?))
+        Ok((Arc::new(builder.build()?), caches))
     }
 
     fn create_memory_pool(&self) -> Arc<dyn MemoryPool> {
@@ -98,7 +85,7 @@ impl RuntimeEnvFactory {
         builder
     }
 
-    fn create_file_statistics_cache(&mut self) -> Option<Arc<FileStatisticsCache>> {
+    fn create_file_statistics_cache(&mut self) -> Option<Arc<MokaFileStatisticsCache>> {
         let ttl = self.config.parquet.file_statistics_cache.ttl;
         let max_entries = self.config.parquet.file_statistics_cache.max_entries;
         match &self.config.parquet.file_statistics_cache.r#type {
@@ -112,7 +99,6 @@ impl RuntimeEnvFactory {
                     self.global_file_statistics_cache
                         .get_or_insert_with(|| {
                             Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-                                as Arc<FileStatisticsCache>
                         })
                         .clone(),
                 )
@@ -124,7 +110,7 @@ impl RuntimeEnvFactory {
         }
     }
 
-    fn create_file_listing_cache(&mut self) -> Option<Arc<ListFilesCache>> {
+    fn create_file_listing_cache(&mut self) -> Option<Arc<MokaFileListingCache>> {
         let ttl = self.config.execution.file_listing_cache.ttl;
         let max_entries = self.config.execution.file_listing_cache.max_entries;
         match &self.config.execution.file_listing_cache.r#type {
@@ -138,7 +124,6 @@ impl RuntimeEnvFactory {
                     self.global_file_listing_cache
                         .get_or_insert_with(|| {
                             Arc::new(MokaFileListingCache::new(ttl, max_entries))
-                                as Arc<ListFilesCache>
                         })
                         .clone(),
                 )
@@ -150,7 +135,7 @@ impl RuntimeEnvFactory {
         }
     }
 
-    fn create_file_metadata_cache(&mut self) -> Arc<FileMetadataCache> {
+    fn create_file_metadata_cache(&mut self) -> Arc<MokaFileMetadataCache> {
         let ttl = self.config.parquet.file_metadata_cache.ttl;
         let size_limit = self.config.parquet.file_metadata_cache.size_limit;
         match self.config.parquet.file_metadata_cache.r#type {

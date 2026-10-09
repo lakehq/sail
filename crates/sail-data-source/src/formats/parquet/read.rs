@@ -3,11 +3,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::parquet::Int96Coercer;
 use datafusion::datasource::physical_plan::parquet::metadata::{
     DFParquetMetadata, ordering_from_parquet_metadata,
-};
-use datafusion::datasource::physical_plan::parquet::{
-    CachedParquetFileReaderFactory, Int96Coercer,
 };
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion_common::config::TableParquetOptions;
@@ -16,7 +14,8 @@ use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::{CachedParquetFileReaderFactory, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
@@ -91,7 +90,7 @@ impl ReadFormat for ParquetReadFormat {
             .map(parse_coerce_int96_string)
             .transpose()?;
 
-        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let caches = FileCaches::from_config(ctx.config());
         let metadata_size_hint = options.global.metadata_size_hint;
         let metadata_fetch_concurrency: usize =
             ctx.config_options().execution.meta_fetch_concurrency.into();
@@ -104,7 +103,9 @@ impl ReadFormat for ParquetReadFormat {
             .map(|(store, object)| async {
                 let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
-                    .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                    .with_file_metadata_cache(Some(Arc::new(
+                        caches.metadata.for_store(store).for_file(object),
+                    )))
                     .with_coerce_int96(coerce_int96);
                 // Fetch the Parquet footer once and derive both schemas from it.
                 // `fetch_schema()` would read (and parse) the footer a second time; when the
@@ -194,10 +195,10 @@ impl ReadFormat for ParquetReadFormat {
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
-        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = FileCaches::metadata_cache(ctx.config(), store);
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
-            .with_file_metadata_cache(Some(metadata_cache))
+            .with_file_metadata_cache(Some(Arc::new(metadata_cache.for_file(object))))
             .fetch_metadata()
             .await?;
         let statistics =
@@ -216,8 +217,8 @@ impl ReadFormat for ParquetReadFormat {
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
-        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
+        let metadata_cache = FileCaches::metadata_cache(ctx.config(), &store);
 
         input.file_groups = load_parquet_scan_metadata(
             input.file_groups,

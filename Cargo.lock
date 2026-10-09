@@ -7356,9 +7356,11 @@ dependencies = [
 name = "sail-cache"
 version = "0.7.2"
 dependencies = [
+ "async-trait",
  "chrono",
  "datafusion",
  "datafusion-common",
+ "futures",
  "log",
  "moka",
  "object_store",
@@ -7657,6 +7659,7 @@ dependencies = [
  "pyo3",
  "regex",
  "sail-build-scripts",
+ "sail-cache",
  "sail-common",
  "sail-common-datafusion",
  "sail-physical-plan",
@@ -7700,6 +7703,7 @@ dependencies = [
  "regex",
  "roaring",
  "sail-build-scripts",
+ "sail-cache",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -7742,6 +7746,7 @@ dependencies = [
  "rand 0.10.3",
  "readonly",
  "rustls",
+ "sail-cache",
  "sail-catalog",
  "sail-catalog-system",
  "sail-celeborn",
@@ -7895,6 +7900,7 @@ dependencies = [
  "roaring",
  "rust_decimal",
  "sail-build-scripts",
+ "sail-cache",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",

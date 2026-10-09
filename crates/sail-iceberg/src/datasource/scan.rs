@@ -9,7 +9,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,7 +20,6 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -38,6 +36,8 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::CachedParquetFileReaderFactory;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -1122,13 +1122,9 @@ impl IcebergScan {
         {
             return Ok(scan);
         }
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
-            session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
-        ));
+        let store = session.runtime_env().object_store(&object_store_url)?;
+        let metadata_cache = FileCaches::metadata_cache(session.config(), &store);
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
         if dirty_units.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
@@ -1362,13 +1358,9 @@ impl IcebergScan {
             }
         }
 
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
-            session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
-        ));
+        let store = session.runtime_env().object_store(&object_store_url)?;
+        let metadata_cache = FileCaches::metadata_cache(session.config(), &store);
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
 

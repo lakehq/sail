@@ -16,6 +16,9 @@ use datafusion_common::extensions::Extensions;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::CachedParquetFileReaderFactory;
+use sail_cache::session::ObjectStoreSession;
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
@@ -306,9 +309,10 @@ pub async fn build_delta_log_datasource_scans_with_options(
     let parquet_schema = if all_parquet_metas.is_empty() {
         None
     } else {
+        let session = ObjectStoreSession::new(ctx.session(), &store, &all_parquet_metas)?;
         Some(
             ParquetFormat::default()
-                .infer_schema(ctx.session(), &store, &all_parquet_metas)
+                .infer_schema(&session, &store, &all_parquet_metas)
                 .await?,
         )
     };
@@ -367,8 +371,13 @@ pub async fn build_delta_log_datasource_scans_with_options(
         .build();
 
     let parquet_checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = {
+        let metadata_cache = FileCaches::metadata_cache(ctx.session().config(), &store);
         let mut source =
-            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone());
+            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone())
+                .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    metadata_cache,
+                )));
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }

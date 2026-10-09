@@ -1,123 +1,24 @@
 use std::time::Duration;
 
-use datafusion::common::{HashMap, Result, TableReference};
+use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-use datafusion::execution::cache::{
-    Cache as DataFusionCache, CacheEntryInfo, CacheValue, TableScopedPath,
-};
-use log::debug;
 use moka::sync::Cache;
 
-pub struct MokaFileStatisticsCache {
-    statistics: Cache<TableScopedPath, CachedFileMetadata>,
-    ttl: Option<Duration>,
-    max_entries: Option<u64>,
-}
+use crate::object_store_cache::ObjectStoreCache;
+
+pub type MokaFileStatisticsCache = ObjectStoreCache<TableScopedPath, CachedFileMetadata>;
 
 impl MokaFileStatisticsCache {
-    const NAME: &'static str = "MokaFileStatisticsCache";
-
-    pub fn new(ttl: Option<u64>, max_entries: Option<u64>) -> Self {
+    pub fn new(ttl: Option<u64>, limit: Option<u64>) -> Self {
         let mut builder = Cache::builder();
-
         let ttl = ttl.map(Duration::from_secs);
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
             builder = builder.time_to_live(ttl);
         }
-        if let Some(max_entries) = max_entries {
-            debug!(
-                "Setting maximum number of entries for {} to {max_entries}",
-                Self::NAME
-            );
-            builder = builder.max_capacity(max_entries);
+        if let Some(limit) = limit {
+            builder = builder.max_capacity(limit);
         }
-
-        Self {
-            statistics: builder.build(),
-            ttl,
-            max_entries,
-        }
-    }
-}
-
-impl DataFusionCache<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCache {
-    fn get(&self, key: &TableScopedPath) -> Option<CachedFileMetadata> {
-        self.statistics.get(key)
-    }
-
-    fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
-        let previous = self.statistics.get(key);
-        self.statistics.insert(key.clone(), value);
-        previous
-    }
-
-    fn remove(&self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
-        self.statistics.remove(k)
-    }
-
-    fn contains_key(&self, k: &TableScopedPath) -> bool {
-        self.statistics.contains_key(k)
-    }
-
-    fn len(&self) -> usize {
-        self.statistics.entry_count() as usize
-    }
-
-    fn clear(&self) {
-        self.statistics.invalidate_all();
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
-
-    fn cache_limit(&self) -> usize {
-        self.max_entries
-            .map(|limit| limit as usize)
-            .unwrap_or(usize::MAX)
-    }
-
-    fn update_cache_limit(&self, _limit: usize) {
-        // TODO: support dynamic update of cache limit
-    }
-
-    fn cache_ttl(&self) -> Option<Duration> {
-        self.ttl
-    }
-
-    fn update_cache_ttl(&self, _ttl: Option<Duration>) {
-        // TODO: support dynamic update of cache ttl
-    }
-
-    fn list_entries(&self) -> HashMap<TableScopedPath, CacheEntryInfo<CachedFileMetadata>> {
-        self.statistics
-            .iter()
-            .map(|(path, cached)| {
-                (
-                    path.as_ref().clone(),
-                    CacheEntryInfo {
-                        size_bytes: cached.size(),
-                        value: cached,
-                        hits: 0,
-                        expires: None,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    fn drop_table_entries(&self, table_ref: &TableReference) -> Result<()> {
-        let keys_to_remove: Vec<_> = self
-            .statistics
-            .iter()
-            .filter(|(key, _)| key.table.as_ref() == Some(table_ref))
-            .map(|(key, _)| key.as_ref().clone())
-            .collect();
-        for key in keys_to_remove {
-            self.statistics.remove(&key);
-        }
-        Ok(())
+        Self::new_inner("MokaFileStatisticsCache", limit, ttl, builder.build(), true)
     }
 }
 
@@ -129,7 +30,7 @@ mod tests {
     use chrono::DateTime;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::Statistics;
-    use datafusion::execution::cache::SchemaFingerprint;
+    use datafusion::execution::cache::{Cache as _, SchemaFingerprint};
     use object_store::ObjectMeta;
     use object_store::path::Path;
 
@@ -150,7 +51,11 @@ mod tests {
             e_tag: None,
             version: None,
         };
-        let cache = MokaFileStatisticsCache::new(None, None);
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let cache = MokaFileStatisticsCache::new(None, None)
+            .for_store(&store)
+            .for_file(&meta);
         let key = scoped_path(meta.location.clone());
         assert!(cache.get(&key).is_none());
 

@@ -15,7 +15,9 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
-use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::load_parquet_scan_metadata;
+use sail_common_datafusion::scan::ParquetScanMetadata;
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
     encode_field_default,
@@ -114,10 +116,7 @@ pub(super) async fn create_data_scan(
         let store = session
             .runtime_env()
             .object_store(&config.object_store_url)?;
-        let metadata_cache = session
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
+        let metadata_cache = FileCaches::metadata_cache(session.config(), &store);
         config.file_groups = load_parquet_scan_metadata(
             config.file_groups,
             &store,

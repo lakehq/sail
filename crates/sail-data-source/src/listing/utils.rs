@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
+use datafusion::execution::cache::{Cache, TableScopedPath};
 use datafusion::logical_expr::{Expr, Volatility};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::TreeNode;
@@ -16,6 +16,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_cache::file_caches::FileCaches;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -165,7 +166,7 @@ pub async fn sample_listing_files<'a>(
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
+        let objects: Vec<_> = list_all_files(url, ctx, &store, path_glob_filter)
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))
@@ -269,14 +270,14 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
 pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
-    store: &'a dyn ObjectStore,
+    store: &'a Arc<dyn ObjectStore>,
     path_glob_filter: Option<&'a PathGlobFilter>,
 ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
     // If the prefix is a file, use a head request, otherwise use a list request.
     let list = match url.is_collection() {
-        true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
+        true => match FileCaches::listing_cache(ctx.config(), store) {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
                 let key = TableScopedPath {

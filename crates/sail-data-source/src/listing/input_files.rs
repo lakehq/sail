@@ -46,7 +46,7 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
             let store = ctx.runtime_env().object_store(table_path)?;
             let base = Url::parse(table_path.object_store().as_str())
                 .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;
-            let metas = list_all_files(table_path, &state, store.as_ref(), path_glob_filter)
+            let metas = list_all_files(table_path, &state, &store, path_glob_filter)
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?;

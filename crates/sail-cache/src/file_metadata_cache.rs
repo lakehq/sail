@@ -1,120 +1,27 @@
 use std::time::Duration;
 
-use datafusion::common::{HashMap, Result, TableReference};
 use datafusion::execution::cache::cache_manager::CachedFileMetadataEntry;
-use datafusion::execution::cache::{Cache as DataFusionCache, CacheEntryInfo, CacheValue};
-use log::debug;
-use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
 
-pub struct MokaFileMetadataCache {
-    size_limit: Option<u64>,
-    ttl: Option<Duration>,
-    metadata: Cache<Path, CachedFileMetadataEntry>,
-}
+use crate::object_store_cache::{ObjectStoreCache, ScopedKey};
+
+pub type MokaFileMetadataCache = ObjectStoreCache<Path, CachedFileMetadataEntry>;
 
 impl MokaFileMetadataCache {
-    const NAME: &'static str = "MokaFileMetadataCache";
-
-    pub fn new(ttl: Option<u64>, size_limit: Option<u64>) -> Self {
-        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
-
+    pub fn new(ttl: Option<u64>, limit: Option<u64>) -> Self {
+        let mut builder = Cache::builder().eviction_policy(moka::policy::EvictionPolicy::lru());
         let ttl = ttl.map(Duration::from_secs);
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
             builder = builder.time_to_live(ttl);
         }
-        if let Some(size_limit) = size_limit {
-            debug!(
-                "Setting size limit for {} to {size_limit} byte(s)",
-                Self::NAME
-            );
-            builder = builder
-                .weigher(|_key: &Path, entry: &CachedFileMetadataEntry| -> u32 {
-                    entry.file_metadata.memory_size() as u32
-                })
-                .max_capacity(size_limit);
-        } else {
-            debug!("No size limit set for {}", Self::NAME);
+        if let Some(limit) = limit {
+            builder = builder.weigher(|_key: &ScopedKey<Path>, entry: &CachedFileMetadataEntry| {
+                u32::try_from(entry.file_metadata.memory_size()).unwrap_or(u32::MAX)
+            });
+            builder = builder.max_capacity(limit);
         }
-
-        Self {
-            size_limit,
-            ttl,
-            metadata: builder.build(),
-        }
-    }
-}
-
-impl DataFusionCache<Path, CachedFileMetadataEntry> for MokaFileMetadataCache {
-    fn get(&self, key: &Path) -> Option<CachedFileMetadataEntry> {
-        self.metadata.get(key)
-    }
-
-    fn put(&self, key: &Path, value: CachedFileMetadataEntry) -> Option<CachedFileMetadataEntry> {
-        let previous = self.metadata.get(key);
-        self.metadata.insert(key.clone(), value);
-        previous
-    }
-
-    fn remove(&self, key: &Path) -> Option<CachedFileMetadataEntry> {
-        self.metadata.remove(key)
-    }
-
-    fn contains_key(&self, key: &Path) -> bool {
-        self.metadata.contains_key(key)
-    }
-
-    fn len(&self) -> usize {
-        self.metadata.entry_count() as usize
-    }
-
-    fn clear(&self) {
-        self.metadata.invalidate_all();
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
-
-    fn cache_limit(&self) -> usize {
-        self.size_limit
-            .map(|size| size as usize)
-            .unwrap_or(usize::MAX)
-    }
-
-    fn update_cache_limit(&self, _limit: usize) {
-        // TODO: support dynamic update of cache limit
-    }
-
-    fn cache_ttl(&self) -> Option<Duration> {
-        self.ttl
-    }
-
-    fn update_cache_ttl(&self, _ttl: Option<Duration>) {
-        // TODO: support dynamic update of cache ttl
-    }
-
-    fn drop_table_entries(&self, _table_ref: &TableReference) -> Result<()> {
-        Ok(())
-    }
-
-    fn list_entries(&self) -> HashMap<Path, CacheEntryInfo<CachedFileMetadataEntry>> {
-        self.metadata
-            .iter()
-            .map(|(path, entry)| {
-                (
-                    path.as_ref().clone(),
-                    CacheEntryInfo {
-                        size_bytes: entry.size(),
-                        value: entry,
-                        hits: 0,
-                        expires: None,
-                    },
-                )
-            })
-            .collect()
+        Self::new_inner("MokaFileMetadataCache", limit, ttl, builder.build(), true)
     }
 }
 
@@ -125,6 +32,8 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
+    use datafusion::common::HashMap;
+    use datafusion::execution::cache::Cache as _;
     use datafusion::execution::cache::cache_manager::FileMetadata;
     use object_store::ObjectMeta;
     use object_store::path::Path;
@@ -166,7 +75,11 @@ mod tests {
         });
         let entry = CachedFileMetadataEntry::new(object_meta.clone(), Arc::clone(&file_metadata));
 
-        let cache = MokaFileMetadataCache::new(None, None);
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let cache = MokaFileMetadataCache::new(None, None)
+            .for_store(&store)
+            .for_file(&object_meta);
         assert!(cache.get(&object_meta.location).is_none());
 
         // put
@@ -192,5 +105,53 @@ mod tests {
         cache.remove(&object_meta.location);
         assert!(cache.get(&object_meta.location).is_none());
         assert!(!cache.contains_key(&object_meta.location));
+    }
+    #[test]
+    fn metadata_requires_matching_store_and_file_version() {
+        let root = MokaFileMetadataCache::new(None, Some(100));
+        let a: Arc<dyn object_store::ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let b: Arc<dyn object_store::ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let meta = ObjectMeta {
+            location: Path::from("same.parquet"),
+            last_modified: DateTime::UNIX_EPOCH,
+            size: 1000,
+            e_tag: Some("etag-a".into()),
+            version: Some("version-a".into()),
+        };
+        let metadata: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "footer".into(),
+        });
+        root.for_store(&a).for_file(&meta).put(
+            &meta.location,
+            CachedFileMetadataEntry::new(meta.clone(), Arc::clone(&metadata)),
+        );
+        assert!(
+            root.for_store(&b)
+                .for_file(&meta)
+                .get(&meta.location)
+                .is_none()
+        );
+        assert!(root.for_store(&a).get(&meta.location).is_none());
+        let cached = root
+            .for_store(&a)
+            .for_files([(meta.location.clone(), &meta)])
+            .get(&meta.location)
+            .unwrap();
+        assert!(Arc::ptr_eq(&cached.file_metadata, &metadata));
+        for field in 0..4 {
+            let mut changed = meta.clone();
+            match field {
+                0 => changed.size += 1,
+                1 => changed.last_modified += chrono::Duration::seconds(1),
+                2 => changed.e_tag = Some("etag-b".into()),
+                _ => changed.version = Some("version-b".into()),
+            }
+            assert!(
+                root.for_store(&a)
+                    .for_file(&changed)
+                    .get(&meta.location)
+                    .is_none()
+            );
+        }
     }
 }

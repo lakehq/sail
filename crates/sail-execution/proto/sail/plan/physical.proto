@@ -712,6 +712,14 @@ message ParquetExecNode {
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
   repeated bytes virtual_columns = 7;
+  repeated ParquetFileVersion file_versions = 8;
+}
+
+message ParquetFileVersion {
+  uint64 group_index = 1;
+  uint64 file_index = 2;
+  optional string e_tag = 3;
+  optional string version = 4;
 }
 
 message ArrowExecNode {

@@ -17,7 +17,6 @@
 // limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
-
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,7 +29,6 @@ use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource, wrap_partition_type_in_dict,
     wrap_partition_value_in_dict,
@@ -39,7 +37,8 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::{CachedParquetFileReaderFactory, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -473,10 +472,7 @@ pub async fn build_file_scan_config(
     let object_store_url = create_object_store_url(&log_store.config().location)?;
     let metadata_size_hint = parquet_options.global.metadata_size_hint;
     let store = session.runtime_env().object_store(&object_store_url)?;
-    let metadata_cache = session
-        .runtime_env()
-        .cache_manager
-        .get_file_metadata_cache();
+    let metadata_cache = FileCaches::metadata_cache(session.config(), &store);
     let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
         Arc::clone(&store),
         Arc::clone(&metadata_cache),

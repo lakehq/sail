@@ -14,7 +14,6 @@ use datafusion::common::{
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
     FileSource, JsonSource, ParquetSource,
@@ -90,6 +89,8 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
+use sail_cache::file_caches::FileCaches;
+use sail_cache::parquet::CachedParquetFileReaderFactory;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{
@@ -641,6 +642,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 struct_field_matching,
                 timezone_mode,
                 virtual_columns,
+                file_versions,
             }) => {
                 let mut base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
@@ -691,7 +693,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
                 };
                 let store = ctx.runtime_env().object_store(object_store_url)?;
-                let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+                let metadata_cache = FileCaches::metadata_cache(ctx.session_config(), &store);
                 let reader_factory =
                     Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
                 let mut source = ParquetSource::new(table_schema)
@@ -700,12 +702,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }
-                let source = parse_protobuf_file_scan_config(
+                let mut source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     proto_converter,
                     Arc::new(source),
                 )?;
+                // DataFusion's base config omits the version fields needed for cache validation.
+                for version in file_versions {
+                    let group = usize::try_from(version.group_index)
+                        .ok()
+                        .and_then(|index| source.file_groups.get_mut(index))
+                        .ok_or_else(|| {
+                            plan_datafusion_err!("Invalid Parquet file version group index")
+                        })?;
+                    let index = usize::try_from(version.file_index)
+                        .ok()
+                        .filter(|index| *index < group.files().len())
+                        .ok_or_else(|| {
+                            plan_datafusion_err!("Invalid Parquet file version index")
+                        })?;
+                    group[index].object_meta.e_tag = version.e_tag;
+                    group[index].object_meta.version = version.version;
+                }
                 let struct_field_matching =
                     Self::try_decode_struct_field_matching(struct_field_matching)?;
                 let timezone_mode = Self::try_decode_schema_evolution_timezone_mode(timezone_mode)?;
@@ -2240,6 +2259,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         timezone_mode: Self::try_encode_schema_evolution_timezone_mode(
                             timezone_mode,
                         ),
+                        file_versions: file_scan
+                            .file_groups
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(group_index, group)| {
+                                group.files().iter().enumerate().filter_map(
+                                    move |(file_index, file)| {
+                                        let meta = &file.object_meta;
+                                        (meta.e_tag.is_some() || meta.version.is_some()).then(
+                                            || r#gen::ParquetFileVersion {
+                                                group_index: group_index as u64,
+                                                file_index: file_index as u64,
+                                                e_tag: meta.e_tag.clone(),
+                                                version: meta.version.clone(),
+                                            },
+                                        )
+                                    },
+                                )
+                            })
+                            .collect(),
                         virtual_columns: parquet_source
                             .table_schema()
                             .virtual_columns()
@@ -6342,7 +6381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_parquet_virtual_row_positions() -> Result<()> {
+    fn test_round_trip_parquet_file_metadata_and_virtual_row_positions() -> Result<()> {
         use datafusion::datasource::listing::PartitionedFile;
         use datafusion::datasource::physical_plan::FileGroup;
         use datafusion::execution::object_store::ObjectStoreUrl;
@@ -6361,6 +6400,8 @@ mod tests {
             .build();
         let mut file = PartitionedFile::new("unused.parquet", 0);
         file.partition_values = vec![ScalarValue::Int32(Some(3))];
+        file.object_meta.e_tag = Some("etag".into());
+        file.object_meta.version = Some("version".into());
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             Arc::new(ParquetSource::new(table_schema)),
@@ -6381,6 +6422,9 @@ mod tests {
             .data_source()
             .downcast_ref::<FileScanConfig>()
             .ok_or_else(|| plan_datafusion_err!("decoded source is not a file scan"))?;
+        let meta = &config.file_groups[0].files()[0].object_meta;
+        assert_eq!(meta.e_tag.as_deref(), Some("etag"));
+        assert_eq!(meta.version.as_deref(), Some("version"));
         let schema = config.file_source.table_schema();
         assert_eq!(schema.file_schema(), &file_schema);
         assert_eq!(schema.virtual_columns().as_ref(), &[position]);

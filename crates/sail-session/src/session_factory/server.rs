@@ -137,13 +137,13 @@ impl ServerSessionFactory {
 
     fn create_session_state(&mut self, info: &mut ServerSessionInfo) -> Result<SessionState> {
         let config = self.create_session_config(info)?;
-        let runtime = self
+        let (runtime, caches) = self
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
         // We do not add default features to the session state,
         // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()
-            .with_config(config)
+            .with_config(config.with_extension(caches))
             .with_runtime_env(runtime)
             .with_analyzer_rules(default_analyzer_rules())
             .with_optimizer_rules(default_optimizer_rules())

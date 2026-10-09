@@ -44,6 +44,7 @@ impl ObjectStoreKey {
 pub struct DynamicObjectStoreRegistry {
     stores: DashMap<ObjectStoreKey, Arc<dyn ObjectStore>>,
     runtime: RuntimeHandle,
+    fallback: Option<Arc<Self>>,
 }
 
 impl DynamicObjectStoreRegistry {
@@ -57,7 +58,20 @@ impl DynamicObjectStoreRegistry {
             },
             Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
         );
-        Self { stores, runtime }
+        Self {
+            stores,
+            runtime,
+            fallback: None,
+        }
+    }
+
+    /// Share default remote stores while keeping registrations and in-memory stores session-local.
+    pub fn for_session(self: &Arc<Self>) -> Self {
+        Self {
+            stores: DashMap::new(),
+            runtime: self.runtime.clone(),
+            fallback: Some(Arc::clone(self)),
+        }
     }
 
     pub fn register_session_store(
@@ -97,6 +111,14 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url, None);
+        if let Some(store) = self.stores.get(&key) {
+            return Ok(Arc::clone(store.value()));
+        }
+        if url.scheme() != "memory"
+            && let Some(fallback) = &self.fallback
+        {
+            return fallback.get_store(url);
+        }
 
         // Use entry API for atomic get-or-insert
         let store = self
@@ -308,6 +330,33 @@ mod tests {
         ));
         assert!(!is_aliyun_oss_url(
             &Url::parse("https://bucket.oss-cn-hangzhou.aliyuncs.com/path").unwrap()
+        ));
+    }
+    #[tokio::test]
+    async fn sessions_share_defaults_but_isolate_memory_and_registrations() {
+        let handle = Handle::current();
+        let root = Arc::new(DynamicObjectStoreRegistry::new(RuntimeHandle::new(
+            handle.clone(),
+            handle,
+        )));
+        let a = root.for_session();
+        let b = root.for_session();
+        let file = Url::parse("file:///tmp/data").unwrap();
+        let memory = Url::parse("memory:///data").unwrap();
+        assert!(Arc::ptr_eq(
+            &a.get_store(&file).unwrap(),
+            &b.get_store(&file).unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            &a.get_store(&memory).unwrap(),
+            &b.get_store(&memory).unwrap()
+        ));
+        let replacement: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        a.register_store(&file, Arc::clone(&replacement));
+        assert!(Arc::ptr_eq(&a.get_store(&file).unwrap(), &replacement));
+        assert!(!Arc::ptr_eq(
+            &a.get_store(&file).unwrap(),
+            &b.get_store(&file).unwrap()
         ));
     }
 }

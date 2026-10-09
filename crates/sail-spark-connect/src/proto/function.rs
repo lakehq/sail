@@ -103,10 +103,14 @@ mod tests {
                     let result = handle.primary().block_on(async {
                         let spark = context.extension::<SparkSession>()?;
                         let service = context.extension::<JobService>()?;
-                        let (plan, _) =
+                        let (plan, _, invalidation) =
                             resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                         let stream = service.runner().execute(&context, plan).await?;
-                        stream.err_into().try_collect::<Vec<_>>().await
+                        invalidation
+                            .wrap(stream)
+                            .err_into()
+                            .try_collect::<Vec<_>>()
+                            .await
                     });
                     // TODO: validate the result against the expected output
                     // TODO: handle non-deterministic results and error messages

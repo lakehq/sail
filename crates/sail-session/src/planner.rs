@@ -779,7 +779,7 @@ mod tests {
             },
         ));
 
-        let (physical, _) =
+        let (physical, _, _invalidation) =
             sail_plan::resolve_and_execute_plan(&context, Arc::new(PlanConfig::default()), command)
                 .await
                 .map_err(|error| internal_datafusion_err!("{error}"))?;

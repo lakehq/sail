@@ -1,133 +1,34 @@
 use std::time::Duration;
 
-use datafusion::common::{HashMap, Result, TableReference};
+use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
-use datafusion::execution::cache::{
-    Cache as DataFusionCache, CacheEntryInfo, CacheValue, TableScopedPath,
-};
-use log::debug;
 use moka::sync::Cache;
 
-pub struct MokaFileListingCache {
-    objects: Cache<TableScopedPath, CachedFileList>,
-    ttl: Option<Duration>,
-    max_entries: Option<u64>,
-}
+use crate::object_store_cache::ObjectStoreCache;
+
+pub type MokaFileListingCache = ObjectStoreCache<TableScopedPath, CachedFileList>;
 
 impl MokaFileListingCache {
-    const NAME: &'static str = "MokaFileListingCache";
-
-    pub fn new(ttl: Option<u64>, max_entries: Option<u64>) -> Self {
+    pub fn new(ttl: Option<u64>, limit: Option<u64>) -> Self {
         let mut builder = Cache::builder();
-
         let ttl = ttl.map(Duration::from_secs);
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
             builder = builder.time_to_live(ttl);
         }
-        if let Some(max_entries) = max_entries {
-            debug!(
-                "Setting maximum number of entries for {} to {max_entries}",
-                Self::NAME
-            );
-            builder = builder.max_capacity(max_entries);
+        if let Some(limit) = limit {
+            builder = builder.max_capacity(limit);
         }
-
-        Self {
-            objects: builder.build(),
-            ttl,
-            max_entries,
-        }
-    }
-}
-
-impl DataFusionCache<TableScopedPath, CachedFileList> for MokaFileListingCache {
-    fn get(&self, k: &TableScopedPath) -> Option<CachedFileList> {
-        self.objects.get(k)
-    }
-
-    fn put(&self, key: &TableScopedPath, value: CachedFileList) -> Option<CachedFileList> {
-        let previous = self.objects.get(key);
-        self.objects.insert(key.clone(), value);
-        previous
-    }
-
-    fn remove(&self, k: &TableScopedPath) -> Option<CachedFileList> {
-        self.objects.remove(k)
-    }
-
-    fn contains_key(&self, k: &TableScopedPath) -> bool {
-        self.objects.contains_key(k)
-    }
-
-    fn len(&self) -> usize {
-        self.objects.entry_count() as usize
-    }
-
-    fn clear(&self) {
-        self.objects.invalidate_all()
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
-
-    fn cache_limit(&self) -> usize {
-        self.max_entries
-            .map(|limit| limit as usize)
-            .unwrap_or(usize::MAX)
-    }
-
-    fn cache_ttl(&self) -> Option<Duration> {
-        self.ttl
-    }
-
-    fn update_cache_limit(&self, _limit: usize) {
-        // TODO: support dynamic update of cache limit
-    }
-
-    fn update_cache_ttl(&self, _ttl: Option<Duration>) {
-        // TODO: support dynamic update of cache ttl
-    }
-
-    fn list_entries(&self) -> HashMap<TableScopedPath, CacheEntryInfo<CachedFileList>> {
-        self.objects
-            .iter()
-            .map(|(table_scoped_path, cached)| {
-                (
-                    (*table_scoped_path).clone(),
-                    CacheEntryInfo {
-                        size_bytes: cached.size(),
-                        value: cached,
-                        hits: 0,
-                        expires: None,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    fn drop_table_entries(&self, table_ref: &TableReference) -> Result<()> {
-        let keys_to_drop: Vec<TableScopedPath> = self
-            .objects
-            .iter()
-            .filter_map(|(key, _)| {
-                (key.table.as_ref() == Some(table_ref)).then_some((*key).clone())
-            })
-            .collect();
-
-        for key in keys_to_drop {
-            self.objects.invalidate(&key);
-        }
-
-        Ok(())
+        Self::new_inner("MokaFileListingCache", limit, ttl, builder.build(), false)
     }
 }
 
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::DateTime;
+    use datafusion::execution::cache::Cache as _;
     use object_store::ObjectMeta;
 
     use super::*;
@@ -144,7 +45,9 @@ mod tests {
             version: None,
         };
 
-        let cache = MokaFileListingCache::new(None, None);
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let cache = MokaFileListingCache::new(None, None).for_store(&store);
         let key = TableScopedPath {
             table: None,
             path: meta.location.clone(),

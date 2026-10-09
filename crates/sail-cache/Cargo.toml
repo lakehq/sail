@@ -11,6 +11,8 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-object-store = { path = "../sail-object-store" }
 
+futures = { workspace = true }
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 object_store = { workspace = true }
 datafusion = { workspace = true }
