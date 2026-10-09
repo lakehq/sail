@@ -906,7 +906,8 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
                 *sorted,
             )
         }
-        _ => catalog_field.data_type().clone(),
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => catalog_field.data_type().clone(),
+        _ => snapshot_field.data_type().clone(),
     };
     catalog_field
         .clone()

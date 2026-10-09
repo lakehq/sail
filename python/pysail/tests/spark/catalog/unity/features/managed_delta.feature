@@ -649,7 +649,7 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then query error catalog commit replay context
 
-  Scenario: Metadata ALTER operations are rejected for catalog-managed Delta tables
+  Scenario: Metadata ALTER commits through the catalog for managed Delta tables
     Given statement
       """
       CREATE TABLE unity_table_test.managed_delta_alter_t (
@@ -664,7 +664,7 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then query result ordered
       | id | name |
-    Given statement with error catalog-managed Delta tables
+    Given statement
       """
       ALTER TABLE unity_table_test.managed_delta_alter_t
       SET TBLPROPERTIES ('my.tag' = 'blocked')
@@ -674,7 +674,7 @@ Feature: Unity Catalog managed Delta table operations
       ALTER TABLE unity_table_test.managed_delta_alter_t
       ADD CONSTRAINT positive_id CHECK (id > 0)
       """
-    Given statement with error catalog-managed Delta tables
+    Given statement
       """
       ALTER TABLE unity_table_test.managed_delta_alter_t
       ALTER COLUMN name SET DEFAULT 'unknown'
