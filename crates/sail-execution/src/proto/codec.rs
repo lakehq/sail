@@ -6852,6 +6852,105 @@ mod tests {
         assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
     }
 
+    /// Distributed round-trip for `transform_values(m, (k, v) -> v + 1)` over
+    /// `{1: NULL, 2: 20}`. Proves the `TransformValues` higher-order UDF kind
+    /// survives remote encode/decode, including the value type it derives from
+    /// the lambda rather than from the input map.
+    #[test]
+    fn test_round_trip_distributed_transform_values() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        builder.keys().append_value(1);
+        builder.values().append_null();
+        builder.keys().append_value(2);
+        builder.values().append_value(20);
+        builder.append(true)?;
+        let map = builder.finish();
+
+        let fields = vec![Field::new("m", map.data_type().clone(), true)];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new())),
+            vec![col("m"), lambda(["k", "v"], value + lit(1i32))],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+        assert_eq!(as_hof(&decoded)?.name(), "transform_values");
+        assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
+    }
+
+    /// Distributed round-trip for `transform_keys(m, (k, v) -> k + 1)` over
+    /// `{1: 10, 2: 20}`. Proves the `TransformKeys` higher-order UDF kind
+    /// survives remote encode/decode, carrying the duplicate-key policy the
+    /// planner resolved from the session config.
+    #[test]
+    fn test_round_trip_distributed_transform_keys() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+
+        for last_value_wins in [false, true] {
+            let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+            builder.keys().append_value(1);
+            builder.values().append_value(10);
+            builder.keys().append_value(2);
+            builder.values().append_value(20);
+            builder.append(true)?;
+            let map = builder.finish();
+
+            let fields = vec![Field::new("m", map.data_type().clone(), true)];
+            let schema = Arc::new(Schema::new(fields.clone()));
+            let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+            let key = Expr::LambdaVariable(LambdaVariable::new(
+                "k".to_string(),
+                Some(Arc::new(Field::new("k", DataType::Int32, false))),
+            ));
+            let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+                    last_value_wins,
+                ))),
+                vec![col("m"), lambda(["k", "v"], key + lit(1i32))],
+            ));
+            let physical = create_physical_expr(
+                &logical,
+                &dfschema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
+            let decoded = round_trip_expr(&physical, &schema)?;
+            assert_eq!(as_hof(&decoded)?.name(), "transform_keys");
+            assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])?;
+        }
+        Ok(())
+    }
+
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
     /// Proves the `Exists` higher-order UDF kind survives remote encode/decode.
     #[test]

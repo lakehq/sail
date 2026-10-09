@@ -74,14 +74,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "transform_keys",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "transform_values",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

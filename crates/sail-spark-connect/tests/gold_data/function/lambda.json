@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform_keys"
+        "success": "ok"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform_keys"
+        "success": "ok"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform_values"
+        "success": "ok"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform_values"
+        "success": "ok"
       }
     },
     {
