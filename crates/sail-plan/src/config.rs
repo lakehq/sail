@@ -73,6 +73,10 @@ pub struct PlanConfig {
     /// Whether `COUNT()` is accepted with no arguments. Spark's legacy behavior returns zero;
     /// it does not interpret the call as `COUNT(*)`.
     pub legacy_allow_parameterless_count: bool,
+    /// Whether `exists` follows three-valued logic
+    /// (`spark.sql.legacy.followThreeValuedLogicInArrayExists`, default true). False makes a
+    /// NULL predicate count as non-matching, so `exists` returns false instead of NULL.
+    pub legacy_follow_three_valued_logic_in_array_exists: bool,
 }
 
 impl PlanConfig {
@@ -107,6 +111,7 @@ impl Default for PlanConfig {
             tvf_allow_multiple_table_arguments: false,
             allow_subquery_in_higher_order_functions: false,
             legacy_allow_parameterless_count: false,
+            legacy_follow_three_valued_logic_in_array_exists: true,
         }
     }
 }

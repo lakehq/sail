@@ -16,7 +16,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
-    get_built_in_aggregate_function, get_built_in_function, is_higher_order_arity,
+    check_higher_order_arity, get_built_in_aggregate_function, get_built_in_function,
     is_higher_order_function, lambda_argument_positions,
 };
 use crate::resolver::PlanResolver;
@@ -108,6 +108,11 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
+        // Spark fails on the argument count before it looks at any argument.
+        if is_higher_order {
+            check_higher_order_arity(&canonical_function_name, arguments.len())?;
+        }
+
         // Also taken when no argument is a lambda syntactically: Spark accepts a
         // plain expression in a lambda position and wraps it.
         let has_lambda_argument_position = is_higher_order
@@ -131,10 +136,8 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        // Gated on a valid HOF arity, not just the name: at a shorter arity Spark
-        // fails on argument count first, so that error must win.
-        if is_higher_order_arity(&canonical_function_name, arguments.len()) {
-            self.reject_disallowed_higher_order_arguments(&arguments)?;
+        if is_higher_order {
+            self.reject_disallowed_higher_order_arguments(&canonical_function_name, &arguments)?;
         }
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));

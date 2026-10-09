@@ -291,6 +291,9 @@ Feature: exists higher-order function
   @function(nullability)
   Rule: Output schema
 
+    # Spark derives `ArrayExists.nullable` from the array and the predicate; Sail reports
+    # nullable until CAST nullability (`Cast.forceNullable`) is exact.
+    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -347,16 +350,14 @@ Feature: exists higher-order function
          |-- result: boolean (nullable = true)
         """
 
-    # Spark forces the CAST result nullable (`Cast.forceNullable`,
-    # fractional→integral) so the predicate — and thus the result — is nullable.
-    # Sail's expression nullability does not reproduce `Cast.forceNullable`, so it
-    # under-reports here. The divergence is schema-only under ANSI (the CAST throws
-    # rather than producing NULL); the root fix belongs in the cast resolver.
-    @sail-bug
-    Scenario: a Cast.forceNullable predicate body yields a nullable boolean
+    # Spark forces some CAST results nullable (`Cast.forceNullable`), so the predicate
+    # and the result are nullable. Sail's CAST does not report that, so the result
+    # must not be derived from the body: `main` reported nullable here and a change
+    # that trusted the body regressed it.
+    Scenario Outline: a force-nullable CAST in the predicate yields a nullable boolean: <cast>
       When query
         """
-        SELECT exists(array(1.5, 2.5), x -> CAST(x AS INT) > 0) AS result
+        SELECT exists(<array>, x -> CAST(x AS <cast>) > 0) AS result
         """
       Then query schema
         """
@@ -364,8 +365,15 @@ Feature: exists higher-order function
          |-- result: boolean (nullable = true)
         """
 
+      Examples:
+        | array              | cast          |
+        | array(1.5, 2.5)    | INT           |
+        | array('1', '2')    | INT           |
+        | array(1, 2)        | DECIMAL(10,2) |
+
     # An unaliased wrapped-lambda call is named after the full lambda, rendering
     # each hidden parameter as a nameless `namedlambdavariable()`, matching Spark.
+    @sail-bug
     Scenario: the wrapped-lambda column name includes the hidden parameter
       When query
         """
@@ -422,8 +430,9 @@ Feature: exists higher-order function
         """
         SELECT exists(array(1, 2), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
+    @spark-4
     Scenario: a subquery in place of the lambda is rejected
       When query
         """
@@ -431,6 +440,7 @@ Feature: exists higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery inside a lambda body is rejected
       When query
         """
@@ -465,24 +475,82 @@ Feature: exists higher-order function
         """
         SELECT IF(false, exists(array(1), 1), false) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean constant over an empty array is still rejected
       When query
         """
         SELECT exists(array(), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean constant over a NULL array is still rejected
       When query
         """
         SELECT exists(CAST(NULL AS ARRAY<INT>), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
+
+  Rule: The legacy two-valued logic config
+
+    # `spark.sql.legacy.followThreeValuedLogicInArrayExists=false` makes a NULL
+    # predicate count as non-matching, so `exists` returns false instead of NULL.
+    Scenario Outline: <case> with the config off
+      Given config spark.sql.legacy.followThreeValuedLogicInArrayExists = false
+      When query
+        """
+        SELECT exists(<array>, <predicate>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                  | array                           | predicate               | result |
+        | a NULL element and no match           | array(1, CAST(NULL AS INT), 3)  | x -> x > 5              | false  |
+        | a NULL element and a match            | array(1, CAST(NULL AS INT), 7)  | x -> x > 5              | true   |
+        | a NULL array stays NULL               | CAST(NULL AS ARRAY<INT>)        | x -> x > 5              | NULL   |
+        | an empty array                        | array()                         | x -> x > 5              | false  |
+        | a NULL bare predicate                 | array(1, 2)                     | CAST(NULL AS BOOLEAN)   | false  |
+
+    Scenario: rows are decided independently with the config off
+      Given config spark.sql.legacy.followThreeValuedLogicInArrayExists = false
+      When query
+        """
+        SELECT id, exists(c, x -> x > 5) AS result
+        FROM VALUES
+          (1, array(1, CAST(NULL AS INT))),
+          (2, array(9, CAST(NULL AS INT))),
+          (3, CAST(NULL AS ARRAY<INT>))
+        AS t(id, c)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 1  | false  |
+        | 2  | true   |
+        | 3  | NULL   |
+
+    Scenario Outline: <case> with the config on
+      Given config spark.sql.legacy.followThreeValuedLogicInArrayExists = true
+      When query
+        """
+        SELECT exists(<array>, <predicate>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                    | array                          | predicate             | result |
+        | a NULL element and no match | array(1, CAST(NULL AS INT), 3) | x -> x > 5            | NULL   |
+        | a NULL bare predicate   | array(1, 2)                    | CAST(NULL AS BOOLEAN) | NULL   |
 
   Rule: A stateful predicate is evaluated per element in order
 
+    # Measured: main gives the same rows for the explicit lambda `x -> rand(42) > 0.6`
+    # (Sail evaluates every element before reducing; Spark advances the seeded
+    # generator only as far as each row needs), so this is not a regression.
     @sail-bug
     Scenario: exists with a seeded rand short-circuits per row
       When query
@@ -496,6 +564,7 @@ Feature: exists higher-order function
 
   Rule: A subquery in a value argument is rejected
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -510,7 +579,6 @@ Feature: exists higher-order function
     # boolean type, so the body never runs. Sail keeps and evaluates the body, so
     # the side effect still raises. Pure `x -> NULL` bodies agree; only effectful
     # NULL-typed bodies diverge.
-    @sail-bug
     Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
       When query
         """

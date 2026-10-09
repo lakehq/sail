@@ -2,10 +2,13 @@ import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 _CONF = "spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions"
 _QUERY = "SELECT transform((SELECT array(1, 2)), x -> x + 1) AS r"
 
 
+@pytest.mark.skipif(pyspark_version() < (4,), reason="Subquery rejection in higher-order functions needs Spark 4+")
 def test_subquery_in_higher_order_function_is_gated_by_the_config(spark):
     """The subquery guard (SPARK-47509) is controlled by
     ``spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions``.

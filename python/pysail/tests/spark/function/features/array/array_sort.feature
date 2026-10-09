@@ -197,6 +197,7 @@ Feature: array_sort higher-order function
 
   Rule: A subquery in a value argument is rejected
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -207,6 +208,7 @@ Feature: array_sort higher-order function
     # The no-comparator `array_sort(a)` resolves as an ordinary function, but the
     # subquery guard runs for every higher-order name regardless of arity, so it is
     # rejected here too (a 1-arg `array_sort` is an `ArraySort` HOF in Spark).
+    @spark-4
     Scenario: a subquery in the array argument without a comparator is rejected
       When query
         """

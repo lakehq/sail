@@ -1,5 +1,6 @@
 use std::sync::{Arc, LazyLock};
 
+use datafusion::functions::expr_fn::coalesce;
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::arrow::compute::can_cast_types;
 use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
@@ -88,13 +89,7 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
 
 /// The argument positions expecting a lambda. Positions at or beyond `arity` are
 /// dropped so a shorter overload (`array_sort(a)`) resolves as an ordinary call.
-///
-/// `map_filter` is excluded: its builder wraps a bare predicate itself, after coercing a
-/// NULL-typed map, which the resolver-level wrapping would reject before that point.
-pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
-    if function_name.trim().eq_ignore_ascii_case("map_filter") {
-        return vec![];
-    }
+pub(crate) fn lambda_slot_positions(function_name: &str, arity: usize) -> Vec<usize> {
     let Some(udf) = higher_order_udf(function_name) else {
         return vec![];
     };
@@ -109,26 +104,48 @@ pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Ve
         .collect()
 }
 
-/// Whether `function_name` called with `arity` arguments forms a valid
-/// higher-order function in Spark — i.e. Spark would build a `HigherOrderFunction`
-/// node rather than fail on argument count first.
+/// The lambda positions the resolver wraps when they hold a plain expression.
+///
+/// `map_filter` is excluded: its builder wraps a bare predicate itself, after coercing a
+/// NULL-typed map, which the resolver-level wrapping would reject before that point.
+pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
+    if function_name.trim().eq_ignore_ascii_case("map_filter") {
+        return vec![];
+    }
+    lambda_slot_positions(function_name, arity)
+}
+
+/// Rejects a call to a higher-order function with a number of arguments Spark
+/// would not build a node for; Spark fails on the argument count first.
 ///
 /// The trailing lambda is optional for `array_sort` (natural-order form) and
 /// `aggregate`/`reduce` (identity finish), so those accept one fewer argument than
 /// their full signature.
-pub(crate) fn is_higher_order_arity(function_name: &str, arity: usize) -> bool {
+pub(crate) fn check_higher_order_arity(function_name: &str, arity: usize) -> PlanResult<()> {
     let Some(udf) = higher_order_udf(function_name) else {
-        return false;
+        return Ok(());
     };
     let HigherOrderTypeSignature::Exact(slots) = &udf.signature().type_signature else {
-        return false;
+        return Ok(());
     };
+    let name = function_name.trim().to_lowercase();
     let max = slots.len();
-    let min = match function_name.trim().to_lowercase().as_str() {
+    let min = match name.as_str() {
         "array_sort" | "aggregate" | "reduce" => max.saturating_sub(1),
         _ => max,
     };
-    (min..=max).contains(&arity)
+    if (min..=max).contains(&arity) {
+        return Ok(());
+    }
+    let accepted = if min == max {
+        min.to_string()
+    } else {
+        format!("[{min}, {max}]")
+    };
+    Err(PlanError::AnalysisError(format!(
+        "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `{name}` requires {accepted} parameters but the actual number is {arity}. \
+         Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix."
+    )))
 }
 
 /// Returns how many parameters to declare when wrapping a bare (non-lambda)
@@ -236,7 +253,12 @@ fn array_lambda_with_index(
     )))
 }
 
-fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+fn filter(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    erase_null_typed_body(
+        input.arguments.get_mut(1),
+        &DataType::Boolean,
+        input.function_context.schema,
+    )?;
     array_lambda_with_index(
         "filter",
         input,
@@ -274,32 +296,49 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         expr::Expr::Lambda(Lambda::new(params, predicate))
     };
     expect_lambda_arity("map_filter", &predicate, 2)?;
-    if let expr::Expr::Lambda(lambda) = &mut predicate
-        && lambda.body.get_type(input.function_context.schema)? == DataType::Null
-    {
-        // Preserve validation of lambdas outside higher-order function arguments.
-        let has_bare_lambda = matches!(lambda.body.as_ref(), expr::Expr::Lambda(_))
-            || lambda.body.exists(|expression| {
-                if matches!(expression, expr::Expr::HigherOrderFunction(_)) {
-                    return Ok(false);
-                }
-                let mut has_lambda_child = false;
-                expression.apply_children(|child| {
-                    has_lambda_child |= matches!(child, expr::Expr::Lambda(_));
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
-                Ok(has_lambda_child)
-            })?;
-        if !has_bare_lambda {
-            validate_map_filter_null_expr(&lambda.body, input.function_context.schema)?;
-            // Spark replaces NullType predicates with Boolean NULL before evaluation.
-            *lambda.body = lit(ScalarValue::Boolean(None));
-        }
-    }
+    erase_null_typed_body(
+        Some(&mut predicate),
+        &DataType::Boolean,
+        input.function_context.schema,
+    )?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_MAP_FILTER_UDF),
         vec![map, predicate],
     )))
+}
+
+/// Spark replaces a lambda body of type NULL with a NULL of the type the function
+/// expects before evaluation (`TypeCoercionHelper`), so the body, and any side
+/// effect in it, never runs.
+fn erase_null_typed_body(
+    lambda: Option<&mut expr::Expr>,
+    expected: &DataType,
+    schema: &DFSchema,
+) -> PlanResult<()> {
+    let Some(expr::Expr::Lambda(lambda)) = lambda else {
+        return Ok(());
+    };
+    if lambda.body.get_type(schema)? != DataType::Null {
+        return Ok(());
+    }
+    // Preserve validation of lambdas outside higher-order function arguments.
+    let has_bare_lambda = matches!(lambda.body.as_ref(), expr::Expr::Lambda(_))
+        || lambda.body.exists(|expression| {
+            if matches!(expression, expr::Expr::HigherOrderFunction(_)) {
+                return Ok(false);
+            }
+            let mut has_lambda_child = false;
+            expression.apply_children(|child| {
+                has_lambda_child |= matches!(child, expr::Expr::Lambda(_));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            Ok(has_lambda_child)
+        })?;
+    if !has_bare_lambda {
+        validate_map_filter_null_expr(&lambda.body, schema)?;
+        *lambda.body = lit(ScalarValue::try_new_null(expected)?);
+    }
+    Ok(())
 }
 
 fn validate_map_filter_null_expr(expression: &expr::Expr, schema: &DFSchema) -> PlanResult<()> {
@@ -345,7 +384,22 @@ fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (array, lambda) = input.arguments.two()?;
+    let (array, mut lambda) = input.arguments.two()?;
+    erase_null_typed_body(
+        Some(&mut lambda),
+        &DataType::Boolean,
+        input.function_context.schema,
+    )?;
+    // Two-valued logic: a NULL predicate counts as non-matching.
+    if !input
+        .function_context
+        .plan_config
+        .legacy_follow_three_valued_logic_in_array_exists
+        && let expr::Expr::Lambda(lambda) = &mut lambda
+    {
+        let body = std::mem::replace(lambda.body.as_mut(), lit(false));
+        *lambda.body = coalesce(vec![body, lit(false)]);
+    }
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_EXISTS_UDF),
         vec![array, lambda],
@@ -353,7 +407,12 @@ fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (array, lambda) = input.arguments.two()?;
+    let (array, mut lambda) = input.arguments.two()?;
+    erase_null_typed_body(
+        Some(&mut lambda),
+        &DataType::Boolean,
+        input.function_context.schema,
+    )?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_FORALL_UDF),
         vec![array, lambda],
@@ -418,6 +477,12 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     };
     expect_lambda_arity("merge", &merge, 2)?;
     expect_lambda_arity("finish", &finish, 1)?;
+    let mut merge = merge;
+    erase_null_typed_body(
+        Some(&mut merge),
+        &zero.get_type(input.function_context.schema)?,
+        input.function_context.schema,
+    )?;
     let (func, merge) = match merge {
         expr::Expr::Lambda(lambda)
             if lambda.params.len() == 2

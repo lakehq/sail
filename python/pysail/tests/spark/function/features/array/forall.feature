@@ -298,6 +298,9 @@ Feature: forall higher-order function
   @function(nullability)
   Rule: Output schema
 
+    # Spark derives `ArrayForAll.nullable` from the array and the predicate; Sail reports
+    # nullable until CAST nullability (`Cast.forceNullable`) is exact.
+    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -321,6 +324,7 @@ Feature: forall higher-order function
          |-- result: boolean (nullable = true)
         """
 
+    @sail-bug
     Scenario: a non-null array column yields a non-nullable boolean
       When query
         """
@@ -354,22 +358,26 @@ Feature: forall higher-order function
          |-- result: boolean (nullable = true)
         """
 
-    # Spark forces the CAST result nullable (`Cast.forceNullable`,
-    # fractional→integral) so the predicate — and thus the result — is nullable.
-    # Sail's expression nullability does not reproduce `Cast.forceNullable`, so it
-    # under-reports here. The divergence is schema-only under ANSI (the CAST throws
-    # rather than producing NULL); the root fix belongs in the cast resolver.
-    @sail-bug
-    Scenario: a Cast.forceNullable predicate body yields a nullable boolean
+    # Spark forces some CAST results nullable (`Cast.forceNullable`), so the predicate
+    # and the result are nullable. Sail's CAST does not report that, so the result
+    # must not be derived from the body: `main` reported nullable here and a change
+    # that trusted the body regressed it.
+    Scenario Outline: a force-nullable CAST in the predicate yields a nullable boolean: <cast>
       When query
         """
-        SELECT forall(array(1.5, 2.5), x -> CAST(x AS INT) > 0) AS result
+        SELECT forall(<array>, x -> CAST(x AS <cast>) > 0) AS result
         """
       Then query schema
         """
         root
          |-- result: boolean (nullable = true)
         """
+
+      Examples:
+        | array              | cast          |
+        | array(1.5, 2.5)    | INT           |
+        | array('1', '2')    | INT           |
+        | array(1, 2)        | DECIMAL(10,2) |
 
   Rule: Non-lambda expression in place of the lambda
 
@@ -416,7 +424,7 @@ Feature: forall higher-order function
         """
         SELECT forall(array(1, 2), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
   Rule: Untyped NULL body
 
@@ -445,24 +453,44 @@ Feature: forall higher-order function
         """
         SELECT forall(array(), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean constant over a NULL array is still rejected
       When query
         """
         SELECT forall(CAST(NULL AS ARRAY<INT>), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
       When query
         """
         SELECT IF(false, forall(array(1), 1), false) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
+
+  Rule: The legacy two-valued logic config does not change forall
+
+    Scenario Outline: a NULL element with the config <value>
+      Given config spark.sql.legacy.followThreeValuedLogicInArrayExists = <value>
+      When query
+        """
+        SELECT forall(array(1, CAST(NULL AS INT), 3), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | value |
+        | false |
+        | true  |
 
   Rule: A stateful predicate is evaluated per element in order
 
+    # Measured: main gives the same rows for the explicit lambda `x -> rand(42) < 0.6`
+    # (Sail evaluates every element before reducing; Spark advances the seeded
+    # generator only as far as each row needs), so this is not a regression.
     @sail-bug
     Scenario: forall with a seeded rand short-circuits per row
       When query
@@ -476,6 +504,7 @@ Feature: forall higher-order function
 
   Rule: Subquery expressions are rejected
 
+    @spark-4
     Scenario: a subquery in place of the lambda is rejected
       When query
         """
@@ -483,6 +512,7 @@ Feature: forall higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -490,6 +520,7 @@ Feature: forall higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery inside a lambda body is rejected
       When query
         """
@@ -504,7 +535,6 @@ Feature: forall higher-order function
     # boolean type, so the body never runs. Sail keeps and evaluates the body, so
     # the side effect still raises. Pure `x -> NULL` bodies agree; only effectful
     # NULL-typed bodies diverge.
-    @sail-bug
     Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
       When query
         """

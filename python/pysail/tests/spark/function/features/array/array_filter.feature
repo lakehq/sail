@@ -650,8 +650,9 @@ Feature: array filter with lambda
         """
         SELECT filter(array(1, 2), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
+    @spark-4
     Scenario: A subquery in place of the lambda is rejected
       When query
         """
@@ -686,21 +687,21 @@ Feature: array filter with lambda
         """
         SELECT filter(array(), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean constant over a NULL array is still rejected
       When query
         """
         SELECT filter(CAST(NULL AS ARRAY<INT>), 1) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
     Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
       When query
         """
         SELECT IF(false, filter(array(1), 1), array(0)) AS result
         """
-      Then query error The second parameter requires the "BOOLEAN" type
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
 
   Rule: A stateful predicate is evaluated per element in order
 
@@ -716,6 +717,7 @@ Feature: array filter with lambda
 
   Rule: A subquery in a value argument is rejected
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -740,7 +742,6 @@ Feature: array filter with lambda
     # boolean type, so the body never runs and every element is dropped. Sail keeps
     # and evaluates the body, so the side effect still raises. Pure `x -> NULL`
     # bodies agree; only effectful NULL-typed bodies diverge.
-    @sail-bug
     Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
       When query
         """

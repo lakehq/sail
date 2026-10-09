@@ -73,15 +73,22 @@ impl HigherOrderUDFImpl for SparkArrayForall {
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        let (_list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
         require_boolean_predicate(self.name(), lambda.data_type())?;
-        // `ArrayForAll.nullable`; the predicate also carries element nullability
-        // through the resolved lambda body.
-        let nullable = list.is_nullable() || lambda.is_nullable();
-        Ok(Arc::new(Field::new("", DataType::Boolean, nullable)))
+        // TODO: derive from `list.is_nullable() || lambda.is_nullable()`, as Spark does, once
+        //   the body nullability is exact. Sail's CAST does not report `Cast.forceNullable`
+        //   (the `fix/cast-parity` branch adds it); until then this must stay nullable.
+        //   Unblocks the `@sail-bug` scenarios in `exists.feature`, `forall.feature` and
+        //   `transform.feature`.
+        Ok(Arc::new(Field::new("", DataType::Boolean, true)))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        // TODO: the predicate is evaluated over every element before the rows are reduced.
+        //   Spark stops each row at the first deciding element, so a stateful predicate such as
+        //   `rand(seed)` advances its stream only as far as the row needs. This needs a
+        //   generator state shared across calls (`rand` re-seeds on every invocation today).
+        //   Tracked by the `@sail-bug` seeded-`rand` scenario in `forall.feature`.
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
         let list_array = list.to_array(args.number_rows)?;
         let num_rows = list_array.len();

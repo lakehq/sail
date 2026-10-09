@@ -4,6 +4,12 @@ from pyspark.sql import Row
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType
 
+from pysail.testing.spark.utils.common import pyspark_version
+
+pytestmark = pytest.mark.skipif(
+    pyspark_version() < (4, 2), reason="Built-in precedence over session functions needs Spark 4.2+"
+)
+
 
 def test_builtin_higher_order_function_is_not_shadowed_by_a_udf(spark):
     """A user-registered function does NOT shadow a built-in higher-order

@@ -576,6 +576,7 @@ Feature: transform higher-order function
 
   Rule: Subquery expressions are rejected anywhere in the call
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -583,6 +584,7 @@ Feature: transform higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery in the array argument with a real lambda is rejected
       When query
         """
@@ -590,6 +592,7 @@ Feature: transform higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery in the lambda body is rejected
       When query
         """

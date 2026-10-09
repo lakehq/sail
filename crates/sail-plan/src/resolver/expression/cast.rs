@@ -317,6 +317,11 @@ impl PlanResolver<'_> {
                 try_cast(expr, cast_to_type)
             }
             (_, to, true) => try_cast(expr, to),
+            // TODO: model `Cast.forceNullable`. `cast` keeps the nullability of its input, so a
+            //   cast Spark marks nullable (fractional to integral, string to numeric, ...) reports
+            //   non-null here. The `fix/cast-parity` branch adds the nullable wrapper; once it
+            //   lands, drop the `@sail-bug` tags that point at this (`transform.feature`,
+            //   `exists.feature`, `forall.feature`).
             (_, to, _) => cast(expr, to),
         };
         Ok(match spark_interval_metadata {

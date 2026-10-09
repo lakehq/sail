@@ -11,7 +11,8 @@ use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::{
-    get_lambda_parameters, lambda_argument_positions, wrapped_lambda_param_count,
+    get_lambda_parameters, lambda_argument_positions, lambda_slot_positions,
+    wrapped_lambda_param_count,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -213,10 +214,12 @@ impl PlanResolver<'_> {
     /// applies both to the whole node, so every argument is checked.
     pub(super) fn reject_disallowed_higher_order_arguments(
         &self,
+        function_name: &str,
         exprs: &[expr::Expr],
     ) -> PlanResult<()> {
         let reject_subquery = !self.config.allow_subquery_in_higher_order_functions;
-        for expr in exprs {
+        let lambda_slots = lambda_slot_positions(function_name, exprs.len());
+        for (position, expr) in exprs.iter().enumerate() {
             if reject_subquery && expr_contains_subquery(expr)? {
                 return Err(PlanError::AnalysisError(
                     "Subquery expressions are not supported within higher-order functions. \
@@ -227,8 +230,15 @@ impl PlanResolver<'_> {
             }
             // `UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`: the evaluator
             // cannot drive the Python worker per element.
-            if let expr::Expr::Lambda(lambda) = expr
-                && let Some(name) = expr_python_udf_name(&lambda.body)?
+            // A plain expression in a lambda slot that the builder wraps later
+            // (`map_filter`) is the lambda body.
+            let body = match expr {
+                expr::Expr::Lambda(lambda) => Some(lambda.body.as_ref()),
+                expr if lambda_slots.contains(&position) => Some(expr),
+                _ => None,
+            };
+            if let Some(body) = body
+                && let Some(name) = expr_python_udf_name(body)?
             {
                 // Spark quotes the call's full SQL (`"plus_one(lambda x#11)"`),
                 // which embeds an expression id we cannot reproduce.

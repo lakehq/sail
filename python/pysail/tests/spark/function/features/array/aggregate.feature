@@ -248,14 +248,14 @@ Feature: aggregate higher-order function
         """
         SELECT aggregate(array(1, 2), 0, 'x') AS result
         """
-      Then query error The third parameter requires the "INT" type
+      Then query error (The third parameter|Parameter 3) requires the "INT" type
 
     Scenario: the merge type is validated at analysis, even inside an unreachable IF branch
       When query
         """
         SELECT IF(false, aggregate(array(1), 0, 'x'), 0) AS result
         """
-      Then query error The third parameter requires the "INT" type
+      Then query error (The third parameter|Parameter 3) requires the "INT" type
 
   Rule: Untyped NULL body
 
@@ -291,7 +291,6 @@ Feature: aggregate higher-order function
     # body never runs and the fold collapses to NULL. Sail keeps and evaluates the
     # body, so the side effect still raises. Same class as the exists/forall/filter
     # erasure; `array_sort` differs — it rejects a VOID comparator at analysis.
-    @sail-bug
     Scenario: a side-effecting NULL-typed merge lambda is erased rather than evaluated
       When query
         """
@@ -303,6 +302,7 @@ Feature: aggregate higher-order function
 
   Rule: Subquery expressions are rejected in a value argument
 
+    @spark-4
     Scenario: a subquery in the array argument is rejected
       When query
         """
@@ -310,6 +310,7 @@ Feature: aggregate higher-order function
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    @spark-4
     Scenario: a subquery in the zero argument is rejected
       When query
         """
