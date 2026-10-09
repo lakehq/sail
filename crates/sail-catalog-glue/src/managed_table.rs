@@ -1,10 +1,83 @@
 use std::collections::HashMap;
 
+use aws_sdk_glue::types::TableInput;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
     metadata_location_update, metadata_location_value, previous_metadata_location_update,
 };
+use sail_common_datafusion::column_features::ColumnFeatureKey;
+
+pub(crate) fn validate_column_path(name: &[String]) -> CatalogResult<()> {
+    if name.len() != 1 {
+        return Err(CatalogError::NotSupported(
+            "Glue ALTER COLUMN requires a top-level column".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_alter_table_input(
+    database: &str,
+    table: &str,
+    input: &mut TableInput,
+    options: AlterTableOptions,
+) -> CatalogResult<()> {
+    let name = match &options {
+        AlterTableOptions::AlterColumnType { name, .. }
+        | AlterTableOptions::AlterColumnDefault { name, .. } => name,
+        _ => {
+            input.parameters = Some(apply_alter_table_options(
+                database,
+                table,
+                input.parameters.take().unwrap_or_default(),
+                options,
+            )?);
+            return Ok(());
+        }
+    };
+    validate_column_path(name)?;
+    let is_delta = input.parameters.as_ref().is_some_and(|parameters| {
+        ["spark.sql.sources.provider", "classification"]
+            .iter()
+            .any(|key| {
+                parameters
+                    .get(*key)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("delta"))
+            })
+    });
+    let column = input
+        .storage_descriptor
+        .iter_mut()
+        .flat_map(|storage| storage.columns.iter_mut().flatten())
+        .chain(input.partition_keys.iter_mut().flatten())
+        .find(|column| column.name.eq_ignore_ascii_case(&name[0]));
+    let Some(column) = column else {
+        if is_delta {
+            return Ok(());
+        }
+        return Err(CatalogError::InvalidArgument(format!(
+            "Column '{}' does not exist on '{database}.{table}'",
+            name[0]
+        )));
+    };
+    match options {
+        AlterTableOptions::AlterColumnType { data_type, .. } => {
+            column.r#type = Some(crate::data_type::arrow_to_glue_type(&data_type)?);
+        }
+        AlterTableOptions::AlterColumnDefault { default, .. } => {
+            let parameters = column.parameters.get_or_insert_with(HashMap::new);
+            let key = ColumnFeatureKey::CurrentDefault.as_str();
+            if let Some(default) = default {
+                parameters.insert(key.to_string(), default);
+            } else {
+                parameters.remove(key);
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
 
 pub(crate) fn apply_alter_table_options(
     database: &str,

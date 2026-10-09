@@ -183,6 +183,11 @@ class PrimitiveConverter(ScalarConverter):
         super().__init__(data_type)
         self._spark_data_type = from_arrow_type(data_type)
 
+    def to_pyspark(self, data: pa.Array) -> Sequence[Any]:
+        if self._spark_data_type.needConversion():
+            return super().to_pyspark(data)
+        return data.to_pylist()
+
     def _to_pyspark_value(self, data: Any) -> Any:
         # Reference: `pyspark.sql.types._create_row_inbound_converter`
         return self._spark_data_type.fromInternal(data)

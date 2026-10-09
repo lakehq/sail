@@ -1,6 +1,7 @@
 Feature: Unity Catalog table operations
 
   Background:
+    Given variable storage for temporary directory unity_external
     Given statement
       """
       CREATE SCHEMA IF NOT EXISTS unity_table_test
@@ -11,7 +12,7 @@ Feature: Unity Catalog table operations
       """
 
   Scenario: Create a table with complex column types
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.t1 (
         foo STRING,
@@ -21,7 +22,7 @@ Feature: Unity Catalog table operations
       )
       USING delta
       COMMENT 'peow'
-      LOCATION 's3://deltadata/custom/path/meow'
+      LOCATION '{{ storage.file_uri }}/custom/path/meow'
       """
     When query
       """
@@ -32,33 +33,33 @@ Feature: Unity Catalog table operations
       | sail_test_catalog.unity_table_test | t1        | false       |
 
   Scenario: Create duplicate table fails
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.dup_t (id INT)
       USING delta
-      LOCATION 's3://deltadata/dup_test'
+      LOCATION '{{ storage.file_uri }}/dup_test'
       """
-    Given statement with error .*
+    Given statement template with error .*
       """
       CREATE TABLE unity_table_test.dup_t (id INT)
       USING delta
-      LOCATION 's3://deltadata/dup_test2'
+      LOCATION '{{ storage.file_uri }}/dup_test2'
       """
 
   Scenario: Create table with IF NOT EXISTS does not raise error
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.ine_t (id INT)
       USING delta
       COMMENT 'original'
-      LOCATION 's3://deltadata/ine_test'
+      LOCATION '{{ storage.file_uri }}/ine_test'
       """
-    Given statement
+    Given statement template
       """
       CREATE TABLE IF NOT EXISTS unity_table_test.ine_t (id INT)
       USING delta
       COMMENT 'new comment'
-      LOCATION 's3://deltadata/ine_test2'
+      LOCATION '{{ storage.file_uri }}/ine_test2'
       """
     When query
       """
@@ -69,7 +70,7 @@ Feature: Unity Catalog table operations
       | sail_test_catalog.unity_table_test | ine_t     | false       |
 
   Scenario: Create a partitioned table
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.t2 (
         foo STRING,
@@ -79,7 +80,7 @@ Feature: Unity Catalog table operations
       USING delta
       COMMENT 'test table'
       PARTITIONED BY (baz)
-      LOCATION 's3://deltadata/custom/path/meow2'
+      LOCATION '{{ storage.file_uri }}/custom/path/meow2'
       TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
       """
     When query
@@ -91,7 +92,7 @@ Feature: Unity Catalog table operations
       | sail_test_catalog.unity_table_test | t2        | false       |
 
   Scenario: Describe existing table shows columns
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.get_t (
         foo STRING,
@@ -101,7 +102,7 @@ Feature: Unity Catalog table operations
       USING delta
       COMMENT 'test table'
       PARTITIONED BY (baz)
-      LOCATION 's3://deltadata/custom/path/get_test'
+      LOCATION '{{ storage.file_uri }}/custom/path/get_test'
       TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
       """
     When query
@@ -120,17 +121,17 @@ Feature: Unity Catalog table operations
     Then query error .*
 
   Scenario: List tables in a schema
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.list_t1 (id INT)
       USING delta
-      LOCATION 's3://deltadata/list_t1'
+      LOCATION '{{ storage.file_uri }}/list_t1'
       """
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.list_t2 (id INT)
       USING delta
-      LOCATION 's3://deltadata/list_t2'
+      LOCATION '{{ storage.file_uri }}/list_t2'
       """
     When query
       """
@@ -158,11 +159,11 @@ Feature: Unity Catalog table operations
       | database | tableName | isTemporary |
 
   Scenario: Drop existing table removes it
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.drop_me (id INT)
       USING delta
-      LOCATION 's3://deltadata/drop_me'
+      LOCATION '{{ storage.file_uri }}/drop_me'
       """
     Given final statement
       """
@@ -191,7 +192,7 @@ Feature: Unity Catalog table operations
       """
 
   Scenario: Describe table shows column metadata and comment
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.describe_t (
         foo STRING,
@@ -201,7 +202,7 @@ Feature: Unity Catalog table operations
       USING delta
       COMMENT 'test table'
       PARTITIONED BY (baz)
-      LOCATION 's3://deltadata/custom/path/describe_test'
+      LOCATION '{{ storage.file_uri }}/custom/path/describe_test'
       TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
       """
     When query
@@ -217,7 +218,7 @@ Feature: Unity Catalog table operations
     Then query result row where "col_name" is "bar" has "comment" equal to "meow"
 
   Scenario: Describe table shows complex column types
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.describe_complex_t (
         foo STRING,
@@ -227,7 +228,7 @@ Feature: Unity Catalog table operations
       )
       USING delta
       COMMENT 'peow'
-      LOCATION 's3://deltadata/custom/path/describe_complex'
+      LOCATION '{{ storage.file_uri }}/custom/path/describe_complex'
       """
     When query
       """
@@ -244,7 +245,7 @@ Feature: Unity Catalog table operations
     Then query result row where "col_name" is "bar" has "comment" equal to "meow"
 
   Scenario: Create table with storage OPTIONS
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.opts_t (
         foo STRING,
@@ -255,7 +256,7 @@ Feature: Unity Catalog table operations
       COMMENT 'with options'
       PARTITIONED BY (baz)
       OPTIONS (key1 = 'value1')
-      LOCATION 's3://deltadata/custom/path/opts'
+      LOCATION '{{ storage.file_uri }}/custom/path/opts'
       TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
       """
     When query
@@ -267,7 +268,7 @@ Feature: Unity Catalog table operations
       | sail_test_catalog.unity_table_test | opts_t    | false       |
 
   Scenario: Create table with primitive numeric and boolean types
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.prim_num_t (
         c_int INT,
@@ -277,7 +278,7 @@ Feature: Unity Catalog table operations
         c_bool BOOLEAN
       )
       USING delta
-      LOCATION 's3://deltadata/custom/path/prim_num'
+      LOCATION '{{ storage.file_uri }}/custom/path/prim_num'
       """
     When query
       """
@@ -290,7 +291,7 @@ Feature: Unity Catalog table operations
     Then query result row where "col_name" is "c_bool" has "data_type" equal to "boolean"
 
   Scenario: Create table with string, binary, and decimal types
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.prim_str_t (
         c_str STRING,
@@ -298,7 +299,7 @@ Feature: Unity Catalog table operations
         c_dec DECIMAL(10, 2)
       )
       USING delta
-      LOCATION 's3://deltadata/custom/path/prim_str'
+      LOCATION '{{ storage.file_uri }}/custom/path/prim_str'
       """
     When query
       """
@@ -309,14 +310,14 @@ Feature: Unity Catalog table operations
     Then query result row where "col_name" is "c_dec" has "data_type" containing "decimal"
 
   Scenario: Create table with date and timestamp types
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.prim_time_t (
         c_date DATE,
         c_ts TIMESTAMP
       )
       USING delta
-      LOCATION 's3://deltadata/custom/path/prim_time'
+      LOCATION '{{ storage.file_uri }}/custom/path/prim_time'
       """
     When query
       """
@@ -326,17 +327,17 @@ Feature: Unity Catalog table operations
     Then query result row where "col_name" is "c_ts" has "data_type" containing "timestamp"
 
   Scenario: Dropping one table does not affect sibling tables
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.sib_a (id INT)
       USING delta
-      LOCATION 's3://deltadata/sib_a'
+      LOCATION '{{ storage.file_uri }}/sib_a'
       """
-    Given statement
+    Given statement template
       """
       CREATE TABLE unity_table_test.sib_b (id INT)
       USING delta
-      LOCATION 's3://deltadata/sib_b'
+      LOCATION '{{ storage.file_uri }}/sib_b'
       """
     Given statement
       """

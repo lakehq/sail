@@ -12,6 +12,7 @@
 
 pub(crate) mod catalog_support;
 pub mod datasource;
+pub mod ddl;
 mod equality_schema;
 pub mod error;
 pub mod io;

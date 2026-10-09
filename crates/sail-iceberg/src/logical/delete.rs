@@ -26,30 +26,20 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         info.target_plan.schema(),
         &info.resolved_target_field_names,
     )?;
-    let deletion_vectors = mode == RowLevelWriteMode::MergeOnRead
-        && super::row_level::target_scan(&info.target_plan)?.has_row_lineage();
-    let target_plan = if deletion_vectors {
-        ensure_merge_metadata_columns(
-            info.target_plan.as_ref().clone(),
-            MERGE_FILE_COLUMN,
-            Some(MERGE_ROW_INDEX_COLUMN),
-        )?
-    } else if mode == RowLevelWriteMode::CopyOnWrite {
-        let target = ensure_merge_metadata_columns(
-            info.target_plan.as_ref().clone(),
-            MERGE_FILE_COLUMN,
-            None,
-        )?;
-        super::row_level::select_copy_on_write_candidates(
-            target,
-            condition
-                .as_ref()
-                .map(|predicate| predicate.expr.clone())
-                .unwrap_or_else(|| lit(true)),
-        )?
-    } else {
-        info.target_plan.as_ref().clone()
-    };
+    let merge_on_read = mode == RowLevelWriteMode::MergeOnRead;
+    let target_plan = ensure_merge_metadata_columns(
+        info.target_plan.as_ref().clone(),
+        MERGE_FILE_COLUMN,
+        merge_on_read.then_some(MERGE_ROW_INDEX_COLUMN),
+    )?;
+    // Prune whole files without filtering rows before assigning their positions.
+    let target_plan = super::row_level::select_copy_on_write_candidates(
+        target_plan,
+        condition
+            .as_ref()
+            .map(|predicate| predicate.expr.clone())
+            .unwrap_or_else(|| lit(true)),
+    )?;
     let mut projection = target_plan
         .schema()
         .fields()
@@ -60,15 +50,13 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
                 .alias(name)
         })
         .collect::<Vec<_>>();
-    if mode == RowLevelWriteMode::CopyOnWrite || deletion_vectors {
-        projection.push(col(MERGE_FILE_COLUMN));
-        projection.extend(
-            super::row_level::lineage_columns(&target_plan)?
-                .iter()
-                .map(|name| col(*name)),
-        );
-    }
-    if deletion_vectors {
+    projection.push(col(MERGE_FILE_COLUMN));
+    projection.extend(
+        super::row_level::lineage_columns(&target_plan)?
+            .iter()
+            .map(|name| col(*name)),
+    );
+    if merge_on_read {
         projection.extend(
             [
                 MERGE_ROW_INDEX_COLUMN,
@@ -124,20 +112,16 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         let rows = LogicalPlanBuilder::from(target_plan.clone())
             .filter(predicate)?
             .build()?;
-        if deletion_vectors {
-            let mut projection = rows
-                .schema()
-                .columns()
-                .into_iter()
-                .map(datafusion_expr::Expr::Column)
-                .collect::<Vec<_>>();
-            projection.push(lit(RowLevelOperationType::Delete.as_i32()).alias(OPERATION_COLUMN));
-            LogicalPlanBuilder::from(rows)
-                .project(projection)?
-                .build()?
-        } else {
-            rows
-        }
+        let mut projection = rows
+            .schema()
+            .columns()
+            .into_iter()
+            .map(datafusion_expr::Expr::Column)
+            .collect::<Vec<_>>();
+        projection.push(lit(RowLevelOperationType::Delete.as_i32()).alias(OPERATION_COLUMN));
+        LogicalPlanBuilder::from(rows)
+            .project(projection)?
+            .build()?
     };
     let node = RowLevelWriteNode::new_delete(
         Arc::new(target_plan),

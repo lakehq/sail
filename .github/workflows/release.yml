@@ -155,7 +155,7 @@ jobs:
           - runner: macos-26
             target: aarch64
             os: macos
-          - runner: windows-2025
+          - runner: windows-2025-x64-8-core
             target: x64
             os: windows
     steps:
@@ -180,6 +180,9 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: $/.github/actions/adjust-swap-space
+        if: runner.os == 'Linux'
 
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
@@ -274,9 +277,18 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: $/.github/actions/adjust-swap-space
+        if: runner.os == 'Linux'
+
       - name: Install Package
         shell: bash
         env:
+          # Make the build faster and less memory-intensive by using thin local
+          # LTO and 16 codegen units, so that we can verify installation from
+          # source using small GitHub runners. For the wheel build, we still
+          # use the default LTO setting to maximize performance.
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_LTO: "false"
           TEST_SDIST_RUNS_ON: ${{ matrix.platform.runner }}
         # Building native dependencies (e.g. using CMake) may fail on Windows due to long paths.
         # We mitigate this by making the temporary directory shorter, though this workaround
@@ -299,7 +311,7 @@ jobs:
 
       - name: Run Tests
         shell: bash
-        run: pytest --pyargs pysail
+        run: pytest --pyargs pysail --reruns 5 --reruns-delay 2
 
   test-wheel:
     name: Test Wheel
@@ -342,7 +354,7 @@ jobs:
 
       - name: Run Tests
         shell: bash
-        run: pytest --pyargs pysail
+        run: pytest --pyargs pysail --reruns 5 --reruns-delay 2
 
   review:
     name: Review

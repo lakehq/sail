@@ -20,7 +20,7 @@ The data was generated using [`tpchgen-cli`](https://pypi.org/project/tpchgen-cl
 
 ::: info
 
-- The `optimizer.enable_join_reorder` configuration option is turned on for Sail. This option is currently experimental, and we plan to enable this by default once the optimizer is more stable.
+- The `optimizer.enable_join_reorder` configuration option is turned on for Sail.
 - The Sail server is built from source as a [standalone binary](/development/recipes/standalone-binary).
 - Previously, the TPC-H data was generated using the `dbgen` tool followed by conversion to Parquet. We now use the `tpchgen-cli` tool, and we noticed that the dataset size in Parquet format is different. This is a reason why the baseline Spark query times are different from the previous benchmark results.
 
