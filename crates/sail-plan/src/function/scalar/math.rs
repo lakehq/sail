@@ -9,6 +9,8 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -627,10 +629,64 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// Mirrors Spark's `Abs` analysis: `inputTypes = NumericAndAnsiInterval`, with
+/// `ImplicitCastInputTypes` casting a string argument to DOUBLE.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L152-L158>
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let arity = input.arguments.len();
+    if arity != 1 {
+        return Err(PlanError::analysis(format!(
+            "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `abs` requires 1 parameters but the actual number is {arity}. \
+             Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix."
+        )));
+    }
+    let arg = input.arguments.one()?;
+    let data_type = arg.get_type(input.function_context.schema)?;
+    let arg = match &data_type {
+        // Spark casts a malformed string to NULL when ANSI is off and fails when it is on.
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            if ansi_mode {
+                // Spark's `Cast.nullable` is forced to true for STRING -> DOUBLE (`Cast.forceNullable`),
+                // but Sail's ANSI cast is planned non-nullable. A CASE without ELSE keeps the value
+                // and makes DataFusion plan it as nullable.
+                when(lit(true), cast(arg, DataType::Float64)).end()?
+            } else {
+                try_cast(arg, DataType::Float64)
+            }
+        }
+        t if t.is_numeric()
+            || t.is_null()
+            || matches!(
+                t,
+                DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::DayTime)
+                    | DataType::Duration(_)
+            ) =>
+        {
+            arg
+        }
+        other => {
+            let type_name = input
+                .function_context
+                .session_context
+                .extension::<PlanService>()?
+                .plan_formatter()
+                .data_type_to_simple_string(other)?
+                .to_ascii_uppercase();
+            let name = input
+                .function_context
+                .argument_display_names
+                .first()
+                .map_or("input", String::as_str);
+            return Err(PlanError::analysis(format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"abs({name})\" due to data type mismatch: \
+                 The first parameter requires the (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\") type, \
+                 however \"{name}\" has the type \"{type_name}\"."
+            )));
+        }
+    };
     let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
-    Ok(udf.call(input.arguments))
+    Ok(udf.call(vec![arg]))
 }
 
 fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
