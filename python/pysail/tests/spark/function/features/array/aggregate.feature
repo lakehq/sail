@@ -164,3 +164,155 @@ Feature: aggregate higher-order function
         SELECT reduce(array(1, 2, 3), 0, acc -> acc + 1) AS result
         """
       Then query error (?i)lambda function
+
+  Rule: Non-lambda expression in place of a lambda
+
+    Scenario Outline: Non-lambda argument: <case>
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, <rest>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                   | rest                        | result |
+        | a constant merge       | 9                           | 9      |
+        | a constant finish      | (acc, x) -> acc + x, 99     | 99     |
+        | both lambdas constant  | 9, 99                       | 99     |
+
+    # The mixed [merge non-lambda, finish lambda] form: the wrapped merge takes a
+    # two-parameter set (acc, element) while the real finish takes one (acc), so
+    # this is the shape where positional param-set alignment would regress if the
+    # wrapped and real lambdas were bound out of order.
+    Scenario: A constant merge with a real finish lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 9, acc -> acc) AS result
+        """
+      Then query result
+        | result |
+        | 9      |
+
+    Scenario: reduce (the aggregate alias) accepts a non-lambda merge
+      When query
+        """
+        SELECT reduce(array(1, 2), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | 9      |
+
+    Scenario: A merge lambda that only references an outer column
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | 7      |
+
+    Scenario: The zero wins over a constant merge lambda on an empty array
+      When query
+        """
+        SELECT aggregate(array(), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: A constant merge lambda over a NULL array
+      When query
+        """
+        SELECT aggregate(CAST(NULL AS ARRAY<INT>), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: A constant merge lambda over an array column resolves per row
+      When query
+        """
+        SELECT aggregate(c, 0, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | 9      |
+        | 0      |
+        | NULL   |
+
+    Scenario: A merge lambda whose type does not match the accumulator is still an error
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 'x') AS result
+        """
+      Then query error The third parameter requires the "INT" type
+
+    Scenario: the merge type is validated at analysis, even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, aggregate(array(1), 0, 'x'), 0) AS result
+        """
+      Then query error The third parameter requires the "INT" type
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL merge lambda body
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: An untyped NULL in place of the merge lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: The zero survives an untyped NULL merge lambda on an empty array
+      When query
+        """
+        SELECT aggregate(array(), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    # Spark's type coercion replaces a NULL-typed merge body (here `assert_true`,
+    # whose type is VOID) with a constant NULL of the accumulator's type, so the
+    # body never runs and the fold collapses to NULL. Sail keeps and evaluates the
+    # body, so the side effect still raises. Same class as the exists/forall/filter
+    # erasure; `array_sort` differs — it rejects a VOID comparator at analysis.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed merge lambda is erased rather than evaluated
+      When query
+        """
+        SELECT aggregate(array(1, 0), 0, (acc, x) -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Subquery expressions are rejected in a value argument
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT aggregate((SELECT array(1, 2)), 0, (a, x) -> a + x) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the zero argument is rejected
+      When query
+        """
+        SELECT aggregate(array(1, 2), (SELECT 0), (a, x) -> a + x) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

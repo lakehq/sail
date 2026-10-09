@@ -12,7 +12,7 @@ use datafusion::arrow::array::{
     new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::take_arrays;
+use datafusion::arrow::compute::{cast, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
 use datafusion_common::{Result, exec_err, plan_err};
@@ -20,6 +20,8 @@ use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
+
+use crate::error::spark_sql_type_name;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayAggregate {
@@ -121,12 +123,17 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
         list_element_field(self.name(), list.data_type())?;
 
-        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type()) {
+        // Spark coerces a `Null` merge body to the accumulator type rather than
+        // rejecting it, so the fold still runs.
+        if merge.data_type() != &DataType::Null
+            && !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type())
+        {
             return plan_err!(
-                "{} merge lambda result type must match zero value type, got {} and {}",
+                "cannot resolve `{}`: The third parameter requires the \"{}\" type, \
+                 however the merge lambda has the type \"{}\"",
                 self.name(),
-                merge.data_type(),
-                zero.data_type()
+                spark_sql_type_name(zero.data_type()),
+                spark_sql_type_name(merge.data_type())
             );
         }
 
@@ -312,6 +319,11 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
                 Ok(take_arrays(arrays, &row_indices, None)?)
             })?
             .into_array(rows.len())?;
+        let next_acc = if next_acc.data_type() == &DataType::Null {
+            cast(&next_acc, acc.data_type())?
+        } else {
+            next_acc
+        };
 
         acc = scatter_updates(name, &acc, &next_acc, &rows)?;
     }

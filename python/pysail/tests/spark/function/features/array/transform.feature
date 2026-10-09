@@ -398,3 +398,201 @@ Feature: transform higher-order function
       Then query result
         | result          |
         | [3.0, 5.0, 7.0] |
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario Outline: Non-lambda body: <case>
+      When query
+        """
+        SELECT transform(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                              | args                            | result       |
+        | a constant integer replaces every element         | array(1, 2), 9                  | [9, 9]       |
+        | a constant string replaces every element          | array(1, 2), 'x'                | [x, x]       |
+        | a constant NULL replaces every element            | array(1, 2), CAST(NULL AS INT)  | [NULL, NULL] |
+        | a constant boolean is accepted (body unconstrained) | array(1, 2), true             | [true, true] |
+        | a constant body over an empty array               | array(), 9                      | []           |
+        | a constant body over a NULL array                 | CAST(NULL AS ARRAY<INT>), 9     | NULL         |
+
+    Scenario: A body that only references an outer column
+      When query
+        """
+        SELECT transform(array(1, 2), v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | [7, 7] |
+
+    Scenario: A constant body over an array column resolves per row
+      When query
+        """
+        SELECT transform(c, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [9, 9] |
+        | []     |
+        | NULL   |
+
+  Rule: Non-deterministic non-lambda body is evaluated per element
+    # The wrapped non-lambda body must run once per element, not be folded to a
+    # single value and broadcast. Asserted through deterministic properties
+    # because the values themselves are random.
+
+    Scenario: A rand() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), rand()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A uuid() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), uuid()))) = 5 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A randn() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Every rand() element falls within the unit interval
+      When query
+        """
+        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+  @function(nullability)
+  Rule: Output schema
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral), so the transformed element is nullable. Sail's
+    # expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports `containsNull` here. Schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    @sail-bug
+    Scenario: a Cast.forceNullable body under-reports element containsNull
+      When query
+        """
+        SELECT transform(array(1.5, 2.5), x -> CAST(x AS INT)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = true)
+        """
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body
+      When query
+        """
+        SELECT transform(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: An untyped NULL in place of the lambda
+      When query
+        """
+        SELECT transform(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+  Rule: Non-lambda wrapping must not capture outer lambda variables
+
+    # `__wrapped_lambda_param_N` is the exact name Sail generates for a wrapped
+    # lambda's hidden parameters, so a user variable spelled that way is the
+    # adversarial case: the collision loop must skip it for the inner wrapped
+    # lambda, or the inner body would rebind to the inner element instead of the
+    # captured outer one (which would flip [[1]] to [[2]]).
+    Scenario: a user variable spelled like the generated placeholder is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    Scenario: a placeholder-shaped name that is not the generated one is used verbatim
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_1` -> transform(array(2), `__wrapped_lambda_param_1`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    Scenario: the captured value is preserved not the inner element
+      When query
+        """
+        SELECT transform(array(5), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[5]]  |
+
+    Scenario: a captured variable inside a wrapped filter predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> filter(array(2), `__wrapped_lambda_param_0` > 1)) AS result
+        """
+      Then query result
+        | result |
+        | [[]]   |
+
+    Scenario: a captured variable inside a wrapped exists predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> exists(array(2), `__wrapped_lambda_param_0` > 0)) AS result
+        """
+      Then query result
+        | result  |
+        | [true]  |
+
+  Rule: Subquery expressions are rejected anywhere in the call
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1)), 9) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the array argument with a real lambda is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1, 2)), x -> x + 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the lambda body is rejected
+      When query
+        """
+        SELECT transform(array(1, 2), x -> (SELECT 9)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

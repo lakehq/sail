@@ -30,6 +30,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
+use crate::error::spark_sql_type_name;
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
 };
@@ -114,13 +115,13 @@ impl HigherOrderUDFImpl for SparkArraySort {
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
-        // Spark requires the comparator to return exactly `IntegerType` (Int32);
-        // bigint/double/etc. raise `UNEXPECTED_RETURN_TYPE` at analysis.
+        // Spark requires exactly `IntegerType`; bigint/double raise at analysis.
         if lambda.data_type() != &DataType::Int32 {
             return plan_err!(
-                "{} comparator must return INT, got {}",
+                "cannot resolve `{}`: The `lambdafunction` requires return \"INT\" type, \
+                 but the actual is \"{}\" type",
                 self.name(),
-                lambda.data_type()
+                spark_sql_type_name(lambda.data_type())
             );
         }
 
@@ -139,6 +140,17 @@ impl HigherOrderUDFImpl for SparkArraySort {
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
         let list_array = list.to_array(args.number_rows)?;
+
+        // Spark skips sorting a `NullType` array, so the comparator never runs —
+        // not even one that would raise.
+        let element_is_null = matches!(
+            list_array.data_type(),
+            DataType::List(field) | DataType::LargeList(field)
+                if field.data_type() == &DataType::Null
+        );
+        if element_is_null {
+            return Ok(ColumnarValue::Array(list_array));
+        }
 
         let list_values = match extract_list_values(&list_array, args.return_type())? {
             ListValuesResult::EarlyReturn(v) => return Ok(v),
