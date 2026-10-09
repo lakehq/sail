@@ -103,6 +103,7 @@ impl PlanResolver<'_> {
             function_name
         };
         let expression = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+            is_sql_operator: false,
             function_name: spec::ObjectName::bare(function_name),
             arguments,
             named_arguments,

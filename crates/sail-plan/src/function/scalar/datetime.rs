@@ -39,6 +39,7 @@ use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
 use super::lambda::lambda_with_fresh_parameter;
+use crate::coercion::SAIL_DATE_DIFFERENCE_METADATA_KEY;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -266,10 +267,13 @@ fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> 
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
     match (&year, &month, &day) {
+        // `MakeDate.dataType` is `DateType` whatever its arguments are, so a NULL argument yields a
+        // NULL DATE, not an untyped NULL. The untyped one slipped past every date guard:
+        // `2 * make_date(2019, 7, NULL)` answered NULL where Spark refuses a DATE operand.
         (Expr::Literal(ScalarValue::Null, metadata), _, _)
         | (_, Expr::Literal(ScalarValue::Null, metadata), _)
         | (_, _, Expr::Literal(ScalarValue::Null, metadata)) => {
-            Expr::Literal(ScalarValue::Null, metadata.clone())
+            Expr::Literal(ScalarValue::Date32(None), metadata.clone())
         }
         _ => expr_fn::make_date(year, month, day),
     }
@@ -282,8 +286,11 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
         }
         _ => (cast(dt1, DataType::Date32), cast(dt2, DataType::Date32)),
     };
-    let dt1 = cast(dt1, DataType::Int64);
-    let dt2 = cast(dt2, DataType::Int64);
+    // `DateDiff.dataType` is `IntegerType` (`datetimeExpressions.scala:2522`). A BIGINT here is
+    // not cosmetic: it is a different arithmetic operand than Spark's, so `DATE + datediff(...)`
+    // lands in a cell Spark never uses.
+    let dt1 = cast(dt1, DataType::Int32);
+    let dt2 = cast(dt2, DataType::Int32);
     Expr::BinaryExpr(BinaryExpr {
         left: Box::new(dt1),
         op,
@@ -390,7 +397,12 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 }
             };
             match unit_str.as_str() {
-                "DAY" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
+                // The unit form is `TimestampDiff`, a BIGINT (`datetimeExpressions.scala:3867`);
+                // only the two-argument form is an INT.
+                "DAY" => Ok(cast(
+                    date_days_arithmetic(end, start, Operator::Minus),
+                    DataType::Int64,
+                )),
                 "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
                     Ok(timestampdiff_fixed_unit(&unit_str, start, end))
                 }
@@ -982,8 +994,29 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
     }
 }
 
-fn date_part(part: Expr, date: Expr) -> Expr {
-    ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
+fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (part, date) = arguments.two()?;
+    // `DATE - DATE` remains an INT day count until a consumer requires Spark's INTERVAL DAY
+    // semantics. `extract` is such a consumer: materializing only here keeps numeric casts,
+    // hashing and aggregate inputs on their established day-count representation.
+    let field = date.to_field(function_context.schema)?.1;
+    let date = if field
+        .metadata()
+        .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+        .is_some_and(|value| value == "true")
+    {
+        cast(
+            cast(date, DataType::Int64) * lit(86_400_000_000_i64),
+            DataType::Duration(TimeUnit::Microsecond),
+        )
+    } else {
+        date
+    };
+    Ok(ScalarUDF::from(SparkDatePart::new()).call(vec![part, date]))
 }
 
 fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1284,7 +1317,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
-        ("date_part", F::binary(date_part)),
+        ("date_part", F::custom(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
@@ -1292,7 +1325,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("date_trunc", F::custom(date_trunc)),
         ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
-        ("datepart", F::binary(date_part)),
+        ("datepart", F::custom(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
@@ -1301,7 +1334,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| integer_part(arg, "DOW") + lit(1)),
         ),
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
-        ("extract", F::binary(date_part)),
+        ("extract", F::custom(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::custom(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),

@@ -160,7 +160,6 @@ Feature: to_csv converts a struct value to a CSV string
         | to_csv(named_struct(price, CAST(9.99 AS DECIMAL(5,2)))) |
         | 9.99                                                    |
 
-    @sail-bug
     Scenario: Negative decimal preserves sign including fractional-only values
       # The value matches Spark; the column name diverges: Spark writes `-0.99` (verified against
       # JVM 4.2) while Sail renders the negative literal as `(- 0.99)`.

@@ -59,3 +59,26 @@ Feature: make_interval output schema
         | 0    | 0    | 0    | 0    | 0    | 0    | NaN       | NULL                                                   |
         | 0    | 0    | 0    | 0    | 0    | 0    | Infinity  | NULL                                                   |
         | 0    | 0    | 0    | 0    | 0    | 0    | -Infinity | NULL                                                   |
+
+  Rule: a fully specified calendar interval composes with an untyped NULL
+
+    # Spark's seven-argument `MakeInterval` remains available to the datetime arithmetic
+    # resolver, so these expressions resolve and their NULL result remains typed as an interval.
+    # The shorter/default-argument and high-precision-decimal forms take a later resolver path;
+    # their Spark rejection is pinned in `arithmetic_operand_resolution.feature` alongside the
+    # other arithmetic accept/reject branches.
+    Scenario Outline: a complete make_interval <case> resolves beside NULL
+      When query
+        """
+        SELECT <expression> IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | case                 | expression                                                            |
+        | adds beside NULL      | make_interval(0, 1, 0, 1, 0, 0, 0) + NULL                            |
+        | adds after negation   | -make_interval(0, 1, 0, 1, 0, 0, 0) + NULL                           |
+        | adds after scaling    | NULL + make_interval(0, 1, 0, 1, 0, 0, 0) * 2                        |
+        | subtracts after merge | NULL - coalesce(make_interval(0, 1, 0, 1, 0, 0, 0), NULL)            |

@@ -244,6 +244,9 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkConvUdf spark_conv = 40;
+    SparkMultiplyCalendarIntervalUdf spark_multiply_calendar_interval = 41;
+    SparkDivideCalendarIntervalUdf spark_divide_calendar_interval = 42;
   }
 }
 
@@ -382,6 +385,14 @@ message SparkCeilUdf {
   bool ansi_mode = 1;
 }
 
+message SparkMultiplyCalendarIntervalUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkDivideCalendarIntervalUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkFloorUdf {
   bool ansi_mode = 1;
 }
@@ -413,6 +424,10 @@ message SparkPmodUdf {
 }
 
 message SparkNegativeUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkConvUdf {
   bool ansi_mode = 1;
 }
 

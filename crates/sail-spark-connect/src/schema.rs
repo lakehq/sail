@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use sail_common::spec::{SAIL_INTERNAL_METADATA_PREFIX, SPARK_METADATA_JSON_KEY};
 use sail_common::utils::string::escape_meta_characters;
 
 use crate::error::{SparkError, SparkResult};
@@ -10,6 +13,90 @@ use crate::spark::connect::data_type::Kind;
 
 pub(crate) fn to_spark_schema(schema: SchemaRef) -> SparkResult<sc::DataType> {
     DataType::Struct(schema.fields().clone()).try_into()
+}
+
+/// Spark column metadata that Sail carries as a loose Arrow key rather than inside the
+/// [`SPARK_METADATA_JSON_KEY`] blob. Delta and the catalogs read these keys directly, so they
+/// stay as they are inside the plan and are folded into the blob only on the way out.
+const LOOSE_SPARK_METADATA_KEYS: [&str; 1] = ["comment"];
+
+/// The field metadata a client is allowed to see.
+///
+/// Spark puts the whole column metadata dictionary in one JSON blob and writes nothing when the
+/// dictionary is empty, so this folds the loose keys in, drops Sail's internal keys, and drops an
+/// empty blob. A blob that is already there is the whole dictionary: explicit metadata REPLACES the
+/// column's own (`Alias.explicitMetadata`, `namedExpressions.scala:172-178`), so a loose key left
+/// over from the source column is not folded back over it.
+pub(crate) fn to_client_metadata(metadata: &HashMap<String, String>) -> HashMap<String, String> {
+    let blob = metadata.get(SPARK_METADATA_JSON_KEY);
+    let fold_loose_keys = blob.is_none();
+    let mut spark: serde_json::Map<String, serde_json::Value> = blob
+        .and_then(|x| serde_json::from_str(x).ok())
+        .unwrap_or_default();
+    let mut output = HashMap::with_capacity(metadata.len());
+    for (key, value) in metadata {
+        if key == SPARK_METADATA_JSON_KEY || key.starts_with(SAIL_INTERNAL_METADATA_PREFIX) {
+            continue;
+        }
+        if LOOSE_SPARK_METADATA_KEYS.contains(&key.as_str()) {
+            if fold_loose_keys {
+                spark.insert(key.clone(), serde_json::Value::String(value.clone()));
+            }
+        } else {
+            output.insert(key.clone(), value.clone());
+        }
+    }
+    if !spark.is_empty()
+        && let Ok(spark) = serde_json::to_string(&serde_json::Value::Object(spark))
+    {
+        output.insert(SPARK_METADATA_JSON_KEY.to_string(), spark);
+    }
+    output
+}
+
+fn to_client_data_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => DataType::Struct(to_client_fields(fields)),
+        DataType::List(field) => DataType::List(to_client_field(field)),
+        DataType::LargeList(field) => DataType::LargeList(to_client_field(field)),
+        DataType::ListView(field) => DataType::ListView(to_client_field(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(to_client_field(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(to_client_field(field), *size)
+        }
+        DataType::Map(field, sorted) => DataType::Map(to_client_field(field), *sorted),
+        DataType::Dictionary(key, value) => {
+            DataType::Dictionary(key.clone(), Box::new(to_client_data_type(value)))
+        }
+        DataType::RunEndEncoded(run_ends, values) => {
+            DataType::RunEndEncoded(run_ends.clone(), to_client_field(values))
+        }
+        other => other.clone(),
+    }
+}
+
+fn to_client_field(field: &FieldRef) -> FieldRef {
+    Arc::new(
+        Field::new(
+            field.name(),
+            to_client_data_type(field.data_type()),
+            field.is_nullable(),
+        )
+        .with_metadata(to_client_metadata(field.metadata())),
+    )
+}
+
+fn to_client_fields(fields: &Fields) -> Fields {
+    fields.iter().map(to_client_field).collect()
+}
+
+/// The schema of an Arrow stream sent to a client, with Sail's internal field metadata removed
+/// and Spark's column metadata spelled the way Spark spells it.
+pub(crate) fn to_client_schema(schema: &SchemaRef) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        to_client_fields(schema.fields()),
+        schema.metadata().clone(),
+    ))
 }
 
 // Since we cannot construct formatter errors when the data type is invalid,

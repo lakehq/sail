@@ -55,6 +55,8 @@ pub struct ProjectedCsvDecoder {
     num_columns: usize,
     truncated_rows: bool,
     batch_size: usize,
+    // Spark's `nullValue`: a field equal to it is null, like an empty one
+    null_value: Option<Vec<u8>>,
     // `(file column, output column)` sorted by file column
     wanted: Vec<(usize, usize)>,
     builders: Vec<BinaryBuilder>,
@@ -124,6 +126,7 @@ impl ProjectedCsvDecoder {
             num_columns: schema.fields().len(),
             truncated_rows,
             batch_size,
+            null_value: None,
             builders: projection
                 .iter()
                 .map(|_| BinaryBuilder::with_capacity(batch_size, batch_size * 16))
@@ -143,6 +146,15 @@ impl ProjectedCsvDecoder {
             slow_ends: vec![0; schema.fields().len() + 1],
             slow_ends_len: 0,
         })
+    }
+
+    /// Reads a field equal to `null_value` as null too: Spark's `nullValue`, an exact match
+    /// (`UnivocityParser.scala:307`).
+    pub fn with_null_value(mut self, null_value: Option<&str>) -> Self {
+        self.null_value = null_value
+            .filter(|value| !value.is_empty())
+            .map(|value| value.as_bytes().to_vec());
+        self
     }
 
     #[inline]
@@ -266,7 +278,7 @@ impl ProjectedCsvDecoder {
             } else {
                 &[]
             };
-            if value.is_empty() {
+            if value.is_empty() || self.null_value.as_deref() == Some(value) {
                 self.builders[output].append_null();
             } else {
                 self.builders[output].append_value(value);

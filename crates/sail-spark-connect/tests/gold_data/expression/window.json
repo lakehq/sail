@@ -888,6 +888,7 @@
                   "lower": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -993,6 +994,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -1680,6 +1682,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -1785,6 +1788,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -2055,6 +2059,7 @@
                   "upper": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -2472,6 +2477,7 @@
                   "upper": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -3520,6 +3526,7 @@
                   "lower": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -3625,6 +3632,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -4312,6 +4320,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -4417,6 +4426,7 @@
                   "lower": {
                     "preceding": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -4687,6 +4697,7 @@
                   "upper": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -5104,6 +5115,7 @@
                   "upper": {
                     "following": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "+"
                         ],
@@ -5964,6 +5976,7 @@
                 "arguments": [
                   {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "+"
                       ],
@@ -6010,12 +6023,14 @@
                 "partitionBy": [
                   {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "+"
                       ],
                       "arguments": [
                         {
                           "unresolvedFunction": {
+                            "isSqlOperator": true,
                             "functionName": [
                               "/"
                             ],
@@ -6097,6 +6112,7 @@
                 "arguments": [
                   {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "+"
                       ],
@@ -6143,6 +6159,7 @@
                 "partitionBy": [
                   {
                     "unresolvedFunction": {
+                      "isSqlOperator": true,
                       "functionName": [
                         "+"
                       ],

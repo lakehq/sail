@@ -243,6 +243,10 @@ pub enum NullOrdering {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedFunction {
+    /// SQL operators participate in Catalyst's SQL analyzer rule ordering, which can differ
+    /// from expressions constructed through Spark Connect's DataFrame API.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_sql_operator: bool,
     pub function_name: ObjectName,
     /// A list of positional arguments.
     pub arguments: Vec<Expr>,

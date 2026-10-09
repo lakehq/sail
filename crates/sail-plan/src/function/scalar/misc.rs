@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -24,8 +24,11 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
+use crate::coercion::{SAIL_DATE_DIFFERENCE_METADATA_KEY, spark_interval_metadata_for_expression};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    ScalarFunction, ScalarFunctionInput, is_spark_udt_field, spark_field_type_name,
+};
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
@@ -96,6 +99,39 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let expr = arguments.one()?;
+    // `DATE - DATE` stays physically INT while interval ranges are not available to every
+    // consumer: Spark reads an interval DAY as days in numeric casts, whereas Arrow reads a
+    // Duration as seconds. The arithmetic resolver marks that temporary representation so its
+    // later operands are still checked as Spark's interval. `typeof` is observational and can
+    // report the declared Spark type without changing that physical value.
+    let field = expr.to_field(function_context.schema)?.1;
+    if field
+        .metadata()
+        .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+        .is_some_and(|value| value == "true")
+    {
+        return Ok(lit("interval day"));
+    }
+    // Arrow's interval types carry only their physical family; Spark also keeps the declared
+    // start and end fields. Literals and casts put that range in Sail metadata, and a binary
+    // expression may need to widen ranges from both children (for example DAY + HOUR is DAY TO
+    // HOUR). Read the expression rather than only its result field so `typeof` follows Spark's
+    // `DataType.typeName` for every interval range.
+    if let Some(metadata) = spark_interval_metadata_for_expression(&expr, function_context.schema)?
+    {
+        use sail_common::spec::SparkIntervalMetadata;
+        let type_of = match metadata {
+            SparkIntervalMetadata::YearMonth {
+                start_field,
+                end_field,
+            } => interval_type_name(start_field, end_field),
+            SparkIntervalMetadata::DayTime {
+                start_field,
+                end_field,
+            } => interval_type_name(start_field, end_field),
+        };
+        return Ok(lit(type_of));
+    }
     let data_type = expr.get_type(function_context.schema)?;
     let service = function_context
         .session_context
@@ -106,21 +142,85 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(lit(type_of))
 }
 
-fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+fn interval_type_name(
+    start_field: impl std::fmt::Debug,
+    end_field: impl std::fmt::Debug,
+) -> String {
+    let start_field = format!("{start_field:?}").to_lowercase();
+    let end_field = format!("{end_field:?}").to_lowercase();
+    if start_field == end_field {
+        format!("interval {start_field}")
+    } else {
+        format!("interval {start_field} to {end_field}")
+    }
+}
+
+/// The BIGINT a `bitmap_*` position function reads. Its `inputTypes` is `Seq(LongType)`
+/// (`bitmapExpressions.scala`), and implicit casting reaches a BIGINT only from a NULL, a number or
+/// a STRING, so any other argument is refused at analysis instead of being cast.
+fn bitmap_position_argument(name: &str, input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let value = arguments.one()?;
+    let (_, field) = value.to_field(function_context.schema)?;
+    let data_type = field.data_type();
+    let accepted = !is_spark_udt_field(&field)
+        && (data_type.is_null()
+            || data_type.is_numeric()
+            || matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ));
+    if !accepted {
+        return Err(PlanError::analysis(format!(
+            "cannot resolve {name} due to data type mismatch: the argument requires BIGINT, got {}",
+            spark_field_type_name(&field)
+        )));
+    }
+    // The implicit cast follows the ANSI flag like any `Cast` (`Cast.scala:886-905`): with it off a
+    // malformed string is NULL, never an error.
+    // TODO: with ANSI off Spark wraps an overflowing DECIMAL; `try_cast` reads it as NULL.
+    if function_context.plan_config.ansi_mode {
+        Ok(cast(value, DataType::Int64))
+    } else if matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        // Spark's non-ANSI Numeric.toLong uses the JVM floating-point conversion:
+        // NaN becomes zero, out-of-range values saturate (Cast.scala:903-905).
+        let value = cast(value, DataType::Float64);
+        Ok(when(expr_fn::isnan(value.clone()), lit(0_i64))
+            .when(value.clone().gt_eq(lit(i64::MAX as f64)), lit(i64::MAX))
+            .when(value.clone().lt_eq(lit(i64::MIN as f64)), lit(i64::MIN))
+            .otherwise(try_cast(value, DataType::Int64))?)
+    } else {
+        Ok(try_cast(value, DataType::Int64))
+    }
+}
+
+fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
+    // it was a different arithmetic operand than Spark's: `DATE + bitmap_bit_position(1)` resolved here
+    // and is refused there, since `DateAdd` takes no BIGINT.
+    let value = bitmap_position_argument("bitmap_bit_position", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),
         (value.clone() - lit(1)) % lit(num_bits),
     )
-    .when(lit(true), (-value) % lit(num_bits))
+    // `(-value) % NUM_BITS` on a Java long (`BitmapExpressionUtils.java:37-43`); negating after the
+    // remainder gives the same answer without overflowing on the BIGINT minimum.
+    .when(lit(true), -(value % lit(num_bits)))
     .end()?)
 }
 
 fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    let value = arguments.one()?;
+    // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
+    // it was a different arithmetic operand than Spark's: `DATE + bitmap_bucket_number(1)` resolved here
+    // and is refused there, since `DateAdd` takes no BIGINT.
+    let value = bitmap_position_argument("bitmap_bucket_number", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),
