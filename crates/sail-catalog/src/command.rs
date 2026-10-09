@@ -102,6 +102,7 @@ pub enum CatalogCommand {
     },
     FunctionExists {
         function: Vec<String>,
+        system_functions: Vec<FunctionStatus>,
     },
     GetFunction {
         function: Vec<String>,
@@ -585,8 +586,19 @@ impl CatalogCommand {
 
                 serializer.build_record_batch(&rows)?
             }
-            CatalogCommand::FunctionExists { .. } => {
-                return Err(CatalogError::NotSupported("function exists".to_string()));
+            CatalogCommand::FunctionExists {
+                function,
+                system_functions,
+            } => {
+                let value = match manager
+                    .get_function_status(&function, &system_functions)
+                    .await
+                {
+                    Ok(_) => true,
+                    Err(CatalogError::NotFound(_, _)) => false,
+                    Err(e) => return Err(e),
+                };
+                display.bools().to_record_batch(vec![value])?
             }
             CatalogCommand::GetFunction { .. } => {
                 return Err(CatalogError::NotSupported("get function".to_string()));

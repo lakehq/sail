@@ -1457,7 +1457,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     Some(x) => {
                         from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
                     }
-                    None => spec::ObjectName::bare(function_name),
+                    None => from_ast_object_name(parse_object_name(function_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::FunctionExists { function })
             }
