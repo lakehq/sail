@@ -49,7 +49,7 @@ impl RuntimeEnvFactory {
         });
         let builder = RuntimeEnvBuilder::default()
             .with_object_store_registry(Arc::new(registry))
-            .with_cache_manager(caches.unscoped_config())
+            .with_cache_manager(caches.cache_manager_config())
             .with_memory_pool(self.create_memory_pool())
             .with_disk_manager_builder(self.create_disk_manager_builder());
         let builder = mutator(builder)?;

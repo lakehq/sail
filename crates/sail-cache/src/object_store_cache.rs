@@ -30,21 +30,21 @@ impl Hash for StoreIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ScopedKey<K> {
-    store: StoreIdentity,
+    store: Option<StoreIdentity>,
     key: K,
     version: Option<FileVersion>,
 }
 
 #[derive(Hash)]
 struct ScopedKeyRef<'a, K> {
-    store: &'a StoreIdentity,
+    store: Option<&'a StoreIdentity>,
     key: &'a K,
     version: Option<&'a FileVersion>,
 }
 
 impl<K: Eq> Equivalent<ScopedKey<K>> for ScopedKeyRef<'_, K> {
     fn equivalent(&self, other: &ScopedKey<K>) -> bool {
-        self.store == &other.store
+        self.store == other.store.as_ref()
             && self.key == &other.key
             && self.version == other.version.as_ref()
     }
@@ -84,7 +84,6 @@ pub struct ObjectStoreCache<K, V> {
     ttl: Option<Duration>,
     entries: Cache<ScopedKey<K>, V>,
     store: Option<StoreIdentity>,
-    requires_file_version: bool,
     versions: Versions<K>,
     invalidation: Option<Arc<Mutex<u64>>>,
     generation: u64,
@@ -105,7 +104,7 @@ impl<K: CacheKey + 'static, V: CacheValue + 'static> ObjectStoreCache<K, V> {
         limit: Option<u64>,
         ttl: Option<Duration>,
         entries: Cache<ScopedKey<K>, V>,
-        requires_file_version: bool,
+        versioned: bool,
     ) -> Self {
         Self {
             name,
@@ -113,9 +112,8 @@ impl<K: CacheKey + 'static, V: CacheValue + 'static> ObjectStoreCache<K, V> {
             ttl,
             entries,
             store: None,
-            requires_file_version,
             versions: Versions::Unspecified,
-            invalidation: (!requires_file_version).then(|| Arc::new(Mutex::new(0))),
+            invalidation: (!versioned).then(|| Arc::new(Mutex::new(0))),
             generation: 0,
         }
     }
@@ -165,22 +163,24 @@ impl<K: CacheKey + 'static, V: CacheValue + 'static> ObjectStoreCache<K, V> {
             **value = value.wrapping_add(1);
         }
         for (key, _) in self.entries.iter().filter(|(key, _)| {
-            self.store.as_ref().is_none_or(|store| store == &key.store) && predicate(&key.key)
+            // Unidentified entries may also belong to the store being changed.
+            (self.store.is_none() || key.store.is_none() || self.store == key.store)
+                && predicate(&key.key)
         }) {
             self.entries.invalidate(key.as_ref());
         }
     }
 
     fn scoped_key<'a>(&'a self, key: &'a K) -> Option<ScopedKeyRef<'a, K>> {
-        // Unscoped DataFusion callers must miss instead of sharing another store's entries.
+        // Path-only callers use a separate namespace from identified stores.
+        // shortcut: unidentified stores can still collide until those callers provide a store.
         let version = match &self.versions {
-            Versions::Unspecified if self.requires_file_version => return None,
             Versions::Unspecified => None,
             Versions::File(version) => Some(version),
             Versions::Files(versions) => Some(versions.get(key)?),
         };
         Some(ScopedKeyRef {
-            store: self.store.as_ref()?,
+            store: self.store.as_ref(),
             key,
             version,
         })
@@ -209,16 +209,19 @@ impl<K: CacheKey + 'static, V: CacheValue + 'static> DataFusionCache<K, V>
             .map(|value| value.lock())
             .transpose()
             .ok()?;
-        if generation
-            .as_ref()
-            .is_some_and(|value| **value != self.generation)
+        // Only store-bound listing requests carry a generation captured before their fetch.
+        // shortcut: path-only calls retain the legacy race with concurrent invalidation.
+        if self.store.is_some()
+            && generation
+                .as_ref()
+                .is_some_and(|value| **value != self.generation)
         {
             return None;
         }
         let previous = self.entries.get(&scoped);
         self.entries.insert(
             ScopedKey {
-                store: scoped.store.clone(),
+                store: scoped.store.cloned(),
                 key: key.clone(),
                 version: scoped.version.cloned(),
             },
@@ -365,6 +368,29 @@ mod tests {
         fresh_a.clear();
         assert!(fresh_a.get(&unrelated).is_none());
         assert!(b.get(&path).is_some());
+    }
+
+    #[test]
+    fn path_only_cache_stays_active_and_is_invalidated_with_matching_store_entries() {
+        let root = MokaFileListingCache::new(None, None);
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let scoped = root.for_store(&store);
+        let path = key("table");
+        let unrelated = key("other");
+        root.put(&path, CachedFileList::new(vec![]));
+        root.put(&unrelated, CachedFileList::new(vec![]));
+        assert!(root.get(&path).is_some());
+        assert!(scoped.get(&path).is_none());
+        scoped.put(&path, CachedFileList::new(vec![]));
+        assert!(scoped.get(&path).is_some());
+
+        scoped.invalidate(|key| key == &path);
+        assert!(root.get(&path).is_none());
+        assert!(scoped.get(&path).is_none());
+        assert!(root.get(&unrelated).is_some());
+        root.put(&path, CachedFileList::new(vec![]));
+        assert!(root.get(&path).is_some());
+        assert!(scoped.get(&path).is_none());
     }
 
     #[test]

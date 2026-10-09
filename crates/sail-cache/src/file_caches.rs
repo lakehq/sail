@@ -56,8 +56,8 @@ impl FileCaches {
             .map(|cache| cache.for_store(store))
     }
 
-    pub fn unscoped_config(&self) -> CacheManagerConfig {
-        // Keep unscoped DataFusion lookups safe: these views never read or insert entries.
+    pub fn cache_manager_config(&self) -> CacheManagerConfig {
+        // Path-only DataFusion callers retain caching in the unidentified-store namespace.
         CacheManagerConfig::default()
             .with_file_metadata_cache(Some(Arc::clone(&self.metadata) as _))
             .with_file_statistics_cache(

@@ -53,9 +53,8 @@ mod tests {
         };
         let store: Arc<dyn object_store::ObjectStore> =
             Arc::new(object_store::memory::InMemory::new());
-        let cache = MokaFileStatisticsCache::new(None, None)
-            .for_store(&store)
-            .for_file(&meta);
+        let root = MokaFileStatisticsCache::new(None, None);
+        let cache = root.for_store(&store).for_file(&meta);
         let key = scoped_path(meta.location.clone());
         assert!(cache.get(&key).is_none());
 
@@ -72,6 +71,9 @@ mod tests {
             Arc::clone(&stats),
             None,
         );
+        root.put(&key, cached.clone());
+        assert!(root.get(&key).is_some());
+        assert!(cache.get(&key).is_none());
         cache.put(&key, cached);
         let cached = cache.get(&key);
         assert!(cached.is_some());

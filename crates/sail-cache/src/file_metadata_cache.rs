@@ -77,9 +77,10 @@ mod tests {
 
         let store: Arc<dyn object_store::ObjectStore> =
             Arc::new(object_store::memory::InMemory::new());
-        let cache = MokaFileMetadataCache::new(None, None)
-            .for_store(&store)
-            .for_file(&object_meta);
+        let root = MokaFileMetadataCache::new(None, None);
+        root.put(&object_meta.location, entry.clone());
+        assert!(root.get(&object_meta.location).is_some());
+        let cache = root.for_store(&store).for_file(&object_meta);
         assert!(cache.get(&object_meta.location).is_none());
 
         // put
