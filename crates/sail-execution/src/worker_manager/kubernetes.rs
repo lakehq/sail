@@ -412,6 +412,7 @@ impl KubernetesWorkerService {
             ..Default::default()
         };
         let mut labels = BTreeMap::new();
+        let mut annotations = None;
         if !self.options.worker_pod_template.is_empty() {
             let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)
                 .map_err(|e| {
@@ -419,10 +420,11 @@ impl KubernetesWorkerService {
                         "failed to parse worker pod template: {e}",
                     ))
                 })?;
-            if let Some(metadata) = &template.metadata
-                && let Some(template_labels) = &metadata.labels
-            {
-                labels.extend(template_labels.clone());
+            if let Some(metadata) = &template.metadata {
+                if let Some(template_labels) = &metadata.labels {
+                    labels.extend(template_labels.clone());
+                }
+                annotations = metadata.annotations.clone();
             }
             if let Some(s) = template.spec {
                 spec.merge_from(s);
@@ -433,6 +435,7 @@ impl KubernetesWorkerService {
             metadata: ObjectMeta {
                 name: Some(name),
                 labels: Some(labels),
+                annotations,
                 owner_references: Some(self.get_owner_references().await?),
                 ..Default::default()
             },
@@ -460,6 +463,112 @@ impl KubernetesWorkerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
+    async fn test_launch_worker_preserves_template_annotations() {
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        use hyper::{Method, Request, Response};
+        use kube::client::Body;
+        use serde_json::json;
+
+        for labels in [
+            None,
+            Some(json!({"custom": "value", "sail.lakesail.com/worker-manager": "other"})),
+        ] {
+            let created = Arc::new(Mutex::new(None::<Pod>));
+            let capture = created.clone();
+            let client = kube::Client::new(
+                tower::service_fn(move |request: Request<Body>| {
+                    let capture = capture.clone();
+                    async move {
+                        let response = if request.method() == Method::GET {
+                            assert_eq!(
+                                request.uri().path(),
+                                "/api/v1/namespaces/workload-a/pods/driver"
+                            );
+                            json!({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "driver", "uid": "driver-uid"}})
+                        } else {
+                            assert_eq!(request.method(), Method::POST);
+                            assert_eq!(request.uri().path(), "/api/v1/namespaces/workload-a/pods");
+                            let bytes = request.into_body().collect_bytes().await.unwrap();
+                            let pod: Pod = serde_json::from_slice(&bytes).unwrap();
+                            *capture.lock().unwrap() = Some(pod.clone());
+                            serde_json::to_value(pod).unwrap()
+                        };
+                        Ok::<_, std::convert::Infallible>(Response::new(Body::from(
+                            response.to_string().into_bytes(),
+                        )))
+                    }
+                }),
+                "workload-a",
+            );
+            let annotations = BTreeMap::from([
+                (
+                    "karpenter.sh/do-not-disrupt".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "customer.example/key".to_string(),
+                    "arbitrary value".to_string(),
+                ),
+            ]);
+            let template = json!({"metadata": {
+                "labels": labels,
+                "annotations": annotations,
+                "name": "other-name",
+                "namespace": "other-namespace",
+                "uid": "other-uid",
+                "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": "other", "uid": "other"}]
+            }});
+            let service = KubernetesWorkerService {
+                name: "manager".to_string(),
+                options: KubernetesWorkerManagerOptions {
+                    image: "sail:test".to_string(),
+                    image_pull_policy: "IfNotPresent".to_string(),
+                    namespace: "workload-a".to_string(),
+                    driver_pod_name: "driver".to_string(),
+                    worker_pod_name_prefix: "worker-".to_string(),
+                    worker_service_account_name: "worker".to_string(),
+                    worker_pod_template: template.to_string(),
+                },
+                pods: OnceCell::new_with(Some(Api::namespaced(client, "workload-a"))),
+            };
+            let options = WorkerLaunchOptions {
+                enable_tls: false,
+                batch_size: 1024,
+                session_id: "session".to_string(),
+                driver_id: 1.into(),
+                driver_external_host: "driver".to_string(),
+                driver_external_port: 1234,
+                worker_heartbeat_interval: Duration::from_secs(1),
+                task_stream_buffer: 1,
+                task_stream_creation_timeout: Duration::from_secs(1),
+                rpc_retry_strategy: RetryStrategy::Fixed {
+                    max_count: 1,
+                    delay: Duration::from_secs(1),
+                },
+                shuffle_backend: ShuffleBackendKind::Storage {
+                    path: None,
+                    max_file_size: 1024,
+                    compression: crate::shuffle::ShuffleCompression::None,
+                },
+            };
+            service.launch_worker(1.into(), options).await.unwrap();
+            let pod = created.lock().unwrap().take().unwrap();
+            assert_eq!(pod.metadata.annotations, Some(annotations));
+            assert_eq!(pod.metadata.name.as_deref(), Some("worker-manager-1"));
+            assert_eq!(pod.metadata.namespace, None);
+            assert_eq!(pod.metadata.uid, None);
+            let labels = pod.metadata.labels.unwrap();
+            assert_eq!(labels["sail.lakesail.com/worker-manager"], "manager");
+            let owners = pod.metadata.owner_references.unwrap();
+            assert_eq!(owners.len(), 1);
+            assert_eq!(owners[0].uid, "driver-uid");
+        }
+    }
 
     #[test]
     #[expect(clippy::unwrap_used)]
