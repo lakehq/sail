@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use arrow::datatypes::{Schema, SchemaRef};
 use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
@@ -13,6 +14,7 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
     alter_column_default, alter_column_type,
 };
+use sail_common_datafusion::column_features::ColumnFeatures;
 
 use crate::managed_table;
 
@@ -55,6 +57,123 @@ impl MemoryCatalogProvider {
             databases,
             default_namespace: initial_database,
         }
+    }
+
+    fn apply_table_alterations(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+        schema: Option<&Schema>,
+    ) -> CatalogResult<()> {
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        let status = db
+            .tables
+            .get_mut(table)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
+        let mut updated = status.clone();
+        if let Some(schema) = schema
+            && let TableKind::Table { columns, .. } = &mut updated.kind
+        {
+            *columns = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let previous = columns.iter().find(|column| column.name == *field.name());
+                    let features = ColumnFeatures::from_field(field);
+                    TableColumnStatus {
+                        name: field.name().clone(),
+                        data_type: field.data_type().clone(),
+                        nullable: field.is_nullable(),
+                        comment: field
+                            .metadata()
+                            .get("comment")
+                            .or_else(|| field.metadata().get("doc"))
+                            .cloned()
+                            .or_else(|| previous.and_then(|column| column.comment.clone())),
+                        // Formats may store typed defaults instead of SQL expressions.
+                        default: features
+                            .current_default()
+                            .or_else(|| previous.and_then(|column| column.default.clone())),
+                        generated_always_as: features.generation_expression().or_else(|| {
+                            previous.and_then(|column| column.generated_always_as.clone())
+                        }),
+                        identity: features
+                            .identity()
+                            .or_else(|| previous.and_then(|column| column.identity.clone())),
+                        is_partition: previous.is_some_and(|column| column.is_partition),
+                        is_bucket: previous.is_some_and(|column| column.is_bucket),
+                        is_cluster: previous.is_some_and(|column| column.is_cluster),
+                    }
+                })
+                .collect();
+        }
+        for options in options {
+            match &mut updated.kind {
+                TableKind::Table {
+                    columns,
+                    properties,
+                    ..
+                } => match options {
+                    AlterTableOptions::SetTableProperties {
+                        properties: new_props,
+                    } => {
+                        managed_table::validate_metadata_location_precondition(
+                            table, properties, &new_props,
+                        )?;
+                        for (key, value) in new_props {
+                            if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
+                                existing.1 = value;
+                            } else {
+                                properties.push((key, value));
+                            }
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                        for key in &keys {
+                            let found = properties.iter().any(|(k, _)| k == key);
+                            if !found && !if_exists {
+                                return Err(CatalogError::NotFound(
+                                    CatalogObject::Table,
+                                    format!("property '{key}' not found on table '{table}'"),
+                                ));
+                            }
+                            properties.retain(|(k, _)| k != key);
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::AlterColumnType { name, data_type } => {
+                        alter_column_type(columns, &name, data_type).map_err(|e| {
+                            CatalogError::InvalidArgument(format!(
+                                "failed to alter column type for '{}': {e}",
+                                name.join(".")
+                            ))
+                        })
+                    }
+                    AlterTableOptions::AlterColumnDefault { name, default } => {
+                        alter_column_default(columns, &name, default).map_err(|e| {
+                            CatalogError::InvalidArgument(format!(
+                                "failed to alter column default for '{}': {e}",
+                                name.join(".")
+                            ))
+                        })
+                    }
+                    AlterTableOptions::AddCheckConstraint { .. } => {
+                        Err(CatalogError::NotSupported(
+                            "CHECK constraints are handled by lake sources".to_string(),
+                        ))
+                    }
+                },
+                _ => Err(CatalogError::NotSupported(
+                    "ALTER TABLE is not supported for views".to_string(),
+                )),
+            }?;
+        }
+        *status = updated;
+        Ok(())
     }
 }
 
@@ -350,71 +469,27 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
-        })?;
-        let status = db
-            .tables
-            .get_mut(table)
-            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
-        match &mut status.kind {
-            TableKind::Table {
-                columns,
-                properties,
-                ..
-            } => match options {
-                AlterTableOptions::SetTableProperties {
-                    properties: new_props,
-                } => {
-                    managed_table::validate_metadata_location_precondition(
-                        table, properties, &new_props,
-                    )?;
-                    for (key, value) in new_props {
-                        if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
-                            existing.1 = value;
-                        } else {
-                            properties.push((key, value));
-                        }
-                    }
-                    Ok(())
-                }
-                AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                    for key in &keys {
-                        let found = properties.iter().any(|(k, _)| k == key);
-                        if !found && !if_exists {
-                            return Err(CatalogError::NotFound(
-                                CatalogObject::Table,
-                                format!("property '{key}' not found on table '{table}'"),
-                            ));
-                        }
-                        properties.retain(|(k, _)| k != key);
-                    }
-                    Ok(())
-                }
-                AlterTableOptions::AlterColumnType { name, data_type } => {
-                    alter_column_type(columns, &name, data_type).map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "failed to alter column type for '{}': {e}",
-                            name.join(".")
-                        ))
-                    })
-                }
-                AlterTableOptions::AlterColumnDefault { name, default } => {
-                    alter_column_default(columns, &name, default).map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "failed to alter column default for '{}': {e}",
-                            name.join(".")
-                        ))
-                    })
-                }
-                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
-                    "CHECK constraints are handled by lake sources".to_string(),
-                )),
-            },
-            _ => Err(CatalogError::NotSupported(
-                "ALTER TABLE is not supported for views".to_string(),
-            )),
-        }
+        self.alter_table_atomically(database, table, vec![options])
+            .await
+    }
+
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        self.apply_table_alterations(database, table, options, None)
     }
 
     async fn create_view(
