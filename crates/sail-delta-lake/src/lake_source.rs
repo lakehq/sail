@@ -162,8 +162,26 @@ impl LakeSource for DeltaLakeSource {
         info: SourceInfo,
     ) -> Result<Vec<(String, String)>> {
         let table_url = Self::parse_table_url(ctx, info.paths).await?;
+        let storage_options: Vec<_> = info
+            .options
+            .iter()
+            .filter_map(|layer| match layer {
+                OptionLayer::TablePropertyList { items } => Some(items),
+                _ => None,
+            })
+            .flatten()
+            .filter(|(key, _)| {
+                key.strip_prefix("option.")
+                    .is_some_and(|key| !key.starts_with("fs."))
+            })
+            .cloned()
+            .collect();
         let options = DeltaReadOptions::resolve(ctx, info.options)?;
-        crate::table::delta_table_properties(ctx, table_url, options, info.lakehouse_table).await
+        let mut properties =
+            crate::table::delta_table_properties(ctx, table_url, options, info.lakehouse_table)
+                .await?;
+        properties.extend(storage_options);
+        Ok(properties)
     }
 
     async fn infer_metadata(

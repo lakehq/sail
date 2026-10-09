@@ -57,7 +57,10 @@ use crate::physical_plan::write_context::{
     input_schema_with_logical_metadata, prepare_iceberg_write_context,
 };
 use crate::schema_evolution::SchemaEvolver;
-use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::spec::{
+    MetadataLog, NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder,
+    TableMetadata, Transform,
+};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
@@ -169,6 +172,38 @@ impl LakeSource for IcebergLakeSource {
                 .map(|snapshot| snapshot.snapshot_id().to_string())
                 .unwrap_or_else(|| "none".to_string()),
         );
+        // These properties describe the schema and sort order, not user properties.
+        properties.remove("sort-order");
+        properties.remove("identifier-fields");
+        let schema = metadata.current_schema().ok_or_else(|| {
+            DataFusionError::Plan("Iceberg table has no current schema".to_string())
+        })?;
+        if let Some(order) = metadata
+            .sort_orders
+            .iter()
+            .find(|order| order.order_id == i64::from(metadata.default_sort_order_id.unwrap_or(0)))
+            && !order.is_unsorted()
+        {
+            properties.insert(
+                "sort-order".to_string(),
+                describe_sort_order(order, schema)?,
+            );
+        }
+        let mut identifiers = schema
+            .identifier_field_ids()
+            .map(|id| {
+                schema.name_by_field_id(id).ok_or_else(|| {
+                    DataFusionError::Plan(format!("Iceberg identifier field {id} does not exist"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !identifiers.is_empty() {
+            identifiers.sort_unstable();
+            properties.insert(
+                "identifier-fields".to_string(),
+                format!("[{}]", identifiers.join(",")),
+            );
+        }
         Ok(properties.into_iter().collect())
     }
 
@@ -414,6 +449,41 @@ impl UserDefinedLogicalNodeCore for IcebergWriteNode {
             schema: self.schema.clone(),
         })
     }
+}
+
+fn describe_sort_order(order: &SortOrder, schema: &Schema) -> Result<String> {
+    order
+        .fields
+        .iter()
+        .map(|field| {
+            let name = schema.name_by_field_id(field.source_id).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Iceberg sort field {} does not exist",
+                    field.source_id
+                ))
+            })?;
+            let expression = match field.transform {
+                Transform::Identity => name.to_string(),
+                Transform::Bucket(n) => format!("bucket({n}, {name})"),
+                Transform::Truncate(width) => format!("truncate({name}, {width})"),
+                Transform::Year => format!("years({name})"),
+                Transform::Month => format!("months({name})"),
+                Transform::Day => format!("days({name})"),
+                Transform::Hour => format!("hours({name})"),
+                transform => format!("{transform}({name})"),
+            };
+            let direction = match field.direction {
+                SortDirection::Ascending => "ASC",
+                SortDirection::Descending => "DESC",
+            };
+            let null_order = match field.null_order {
+                NullOrder::First => "NULLS FIRST",
+                NullOrder::Last => "NULLS LAST",
+            };
+            Ok(format!("{expression} {direction} {null_order}"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|fields| fields.join(", "))
 }
 
 fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {

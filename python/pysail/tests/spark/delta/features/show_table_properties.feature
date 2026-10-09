@@ -166,3 +166,33 @@ Feature: delta SHOW TBLPROPERTIES
       """
     Then query result row where "key" is "api.token" has "value" equal to "*********(redacted)"
     Then query result row where "key" is "custom.a" has "value" equal to "*********(redacted)"
+
+  Scenario: Show Delta catalog properties includes persisted storage options
+    Given variable options_location for temporary directory show_properties_options
+    Given final statement
+      """
+      DROP TABLE IF EXISTS show_properties_options
+      """
+    Given statement template
+      """
+      CREATE TABLE show_properties_options (id INT) USING delta
+      OPTIONS ('compression' = 'gzip', 'fs.custom' = 'private', 'url' = 'https://example.invalid')
+      LOCATION {{ options_location.sql }}
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES show_properties_options ('option.compression')
+      """
+    Then query result
+      | key | value |
+      | option.compression | gzip |
+    When query
+      """
+      SHOW TBLPROPERTIES show_properties_options
+      """
+    Then query result
+      | key | value |
+      | delta.minReaderVersion | 1 |
+      | delta.minWriterVersion | 2 |
+      | option.compression | gzip |
+      | option.url | *********(redacted) |

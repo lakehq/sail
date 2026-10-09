@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_expr::LogicalPlan;
-use regex::Regex;
+use fancy_regex::Regex;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
@@ -12,6 +13,7 @@ use sail_common_datafusion::datasource::{
     DataSourceRegistry, OptionLayer, SourceInfo, is_lakehouse_format,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use url::Url;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -24,10 +26,16 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let path_table = match table.parts() {
-            [format, path] if is_lakehouse_format(format.as_ref()) => Some((
-                format.as_ref().to_ascii_lowercase(),
-                path.as_ref().to_string(),
-            )),
+            [format, path]
+                if is_lakehouse_format(format.as_ref())
+                    && (Path::new(path.as_ref()).is_absolute()
+                        || Url::parse(path.as_ref()).is_ok_and(|url| !url.cannot_be_a_base())) =>
+            {
+                Some((
+                    format.as_ref().to_ascii_lowercase(),
+                    path.as_ref().to_string(),
+                ))
+            }
             _ => None,
         };
         let (properties, temporary) = if let Some((format, path)) = path_table {
@@ -123,7 +131,12 @@ impl PlanResolver<'_> {
                 PlanError::invalid(format!("invalid property redaction pattern: {error}"))
             })?;
             for (key, value) in &mut properties {
-                if pattern.is_match(key) || pattern.is_match(value) {
+                let is_match = |text: &str| {
+                    pattern.is_match(text).map_err(|error| {
+                        PlanError::invalid(format!("property redaction failed: {error}"))
+                    })
+                };
+                if is_match(key)? || is_match(value)? {
                     *value = "*********(redacted)".to_string();
                 }
             }
