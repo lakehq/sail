@@ -1339,6 +1339,10 @@ Feature: hex function
         | function | type                   |
         | avg      | interval day to second |
 
+    # The type is covered on every version by `typeof` above. This one adds the nullability through
+    # `Then query schema`, whose tree string a PySpark 3.5 client draws as `interval` (no fields) for the
+    # day-time interval Sail sends without explicit start and end fields; 4.x clients draw it in full.
+    @spark-4
     Scenario: avg of an HOUR interval has the full day-time schema
       When query
         """
