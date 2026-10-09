@@ -28,6 +28,7 @@ const MAX_NANOS_U64: u128 = u64::MAX as u128;
 /// Configure `python.data_source_slow_read_warn_ms` (default: 30000) to log warnings
 /// when individual Python operations exceed the threshold.
 use super::executor::InputPartition;
+use super::object_store::{PythonObjectStoreContext, install_object_store_context};
 
 /// Metrics for Python execution performance tracking.
 ///
@@ -104,6 +105,7 @@ pub struct PythonDataSourceStream {
     schema: SchemaRef,
     /// Stream state
     state: StreamState,
+    _cancel_on_drop: Option<tokio_util::sync::DropGuard>,
 }
 
 impl PythonDataSourceStream {
@@ -117,13 +119,21 @@ impl PythonDataSourceStream {
     /// * `schema` - Expected output schema
     /// * `batch_size` - Batch size for row collection (from TaskContext)
     /// * `slow_read_warn_ms` - Slow read warning threshold in milliseconds (from config)
-    pub fn new(
+    /// * `object_store_context` - Runtime-scoped access to DataFusion object stores
+    pub(crate) fn new(
         pickled_reader: Vec<u8>,
         partition: InputPartition,
         schema: SchemaRef,
         batch_size: usize,
         slow_read_warn_ms: u64,
+        object_store_context: Option<PythonObjectStoreContext>,
     ) -> Result<Self> {
+        let object_store_context = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::child);
+        let cancel_on_drop = object_store_context
+            .as_ref()
+            .map(PythonObjectStoreContext::cancel_on_drop);
         let (tx, rx) = mpsc::channel(16);
 
         let schema_clone = schema.clone();
@@ -135,6 +145,7 @@ impl PythonDataSourceStream {
                 schema_clone,
                 batch_size,
                 slow_read_warn_ms,
+                object_store_context,
                 tx,
             );
         });
@@ -142,6 +153,7 @@ impl PythonDataSourceStream {
         Ok(Self {
             schema,
             state: StreamState::Running { _task: task, rx },
+            _cancel_on_drop: cancel_on_drop,
         })
     }
 
@@ -152,6 +164,7 @@ impl PythonDataSourceStream {
         schema: SchemaRef,
         batch_size: usize,
         slow_read_warn_ms: u64,
+        object_store_context: Option<PythonObjectStoreContext>,
         tx: mpsc::Sender<Result<RecordBatch>>,
     ) {
         use pyo3::prelude::*;
@@ -166,6 +179,9 @@ impl PythonDataSourceStream {
         let gil_wait_start = Instant::now();
 
         let result = Python::attach(|py| -> Result<()> {
+            let _object_store_guard =
+                install_object_store_context(py, object_store_context.as_ref())?;
+
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(

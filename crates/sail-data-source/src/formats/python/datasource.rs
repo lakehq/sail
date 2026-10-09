@@ -12,6 +12,7 @@ use pyo3::types::PyBytes;
 
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{PythonDataSourceContext, PythonDataSourceError, import_cloudpickle};
+use super::object_store::{PythonObjectStoreContext, install_object_store_context};
 
 /// Represents a Python data source.
 ///
@@ -141,6 +142,15 @@ impl PythonDataSource {
     /// - Schema string parsing fails
     /// - Schema conversion fails
     pub fn schema(&self) -> Result<SchemaRef> {
+        self.schema_with_object_store(None)
+    }
+
+    /// Get the schema while exposing the current DataFusion object-store registry
+    /// to the Python callback.
+    pub(crate) fn schema_with_object_store(
+        &self,
+        object_store_context: Option<&PythonObjectStoreContext>,
+    ) -> Result<SchemaRef> {
         {
             // Use OnceLock for thread-safe lazy initialization
             self.schema
@@ -149,6 +159,8 @@ impl PythonDataSource {
 
                     // Call Python schema() method using cached datasource
                     Python::attach(|py| {
+                        let _object_store_guard =
+                            install_object_store_context(py, object_store_context)?;
                         let ds = self.get_cached_datasource(py)?;
 
                         // Call schema() method

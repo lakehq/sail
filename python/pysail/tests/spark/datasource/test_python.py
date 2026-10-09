@@ -15,7 +15,7 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_session_factory
-from pysail.testing.spark.utils.common import pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 try:
@@ -48,6 +48,89 @@ def _update_test_state(path: str, **updates: Any) -> None:
     state = _read_test_state(path)
     state.update(updates)
     Path(path).write_text(json.dumps(state, default=str), encoding="utf-8")
+
+
+@pytest.mark.parametrize("failure", ["write", "commit"])
+def test_python_write_waits_for_abort_cleanup(spark, tmp_path, failure):
+    """A failed write must finish abort cleanup before returning to the caller."""
+    from pyspark.sql.datasource import WriterCommitMessage
+
+    path = tmp_path / "partial"
+
+    class Writer(DataSourceWriter):
+        def write(self, iterator):
+            list(iterator)
+            path.write_text("partial")
+            if failure == "write":
+                message = "intentional slow-abort test failure"
+                raise RuntimeError(message)
+            return WriterCommitMessage()
+
+        def commit(self, _messages):
+            message = "intentional slow-abort test failure"
+            raise RuntimeError(message)
+
+        def abort(self, _messages):
+            import time
+
+            # Regression: cleanup used to be abandoned after a fixed 30 seconds.
+            time.sleep(31)
+            path.unlink()
+            path.with_suffix(".aborted").write_text("done")
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return "slow_abort_cleanup"
+
+        def writer(self, _schema, _overwrite):
+            return Writer()
+
+    spark.dataSource.register(Source)
+    with pytest.raises(Exception, match="intentional slow-abort test failure"):
+        spark.range(1).coalesce(1).write.format(Source.name()).mode("append").save()
+    assert not path.exists()
+    assert path.with_suffix(".aborted").read_text() == "done"
+
+
+@pytest.mark.parametrize("missing", ["pysail", "pysail.spark.datasource._object_store", "unrelated_dependency"])
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail in-process storage binding")
+def test_python_datasource_without_storage_module(spark, monkeypatch, missing):
+    """Standalone servers only need the Python storage module when using its API."""
+    import importlib.abc
+    import sys
+
+    module = "pysail.spark.datasource._object_store"
+
+    class MissingModule(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, _path, _target=None):
+            if fullname == module:
+                message = f"No module named '{missing}'"
+                raise ModuleNotFoundError(message, name=missing)
+
+    class Reader(DataSourceReader):
+        def read(self, _partition):
+            yield (7,)
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return "plain_datasource_without_storage"
+
+        def schema(self):
+            return "id BIGINT"
+
+        def reader(self, _schema):
+            return Reader()
+
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [MissingModule(), *sys.meta_path])
+    spark.dataSource.register(Source)
+    if missing == "unrelated_dependency":
+        with pytest.raises(Exception, match="unrelated_dependency"):
+            spark.read.format(Source.name()).load().collect()
+    else:
+        assert [row.id for row in spark.read.format(Source.name()).load().collect()] == [7]
 
 
 # ============================================================================

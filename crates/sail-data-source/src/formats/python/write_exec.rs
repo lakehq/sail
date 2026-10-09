@@ -174,7 +174,10 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         let output_schema = write_result_schema();
 
         let stream = futures::stream::once(async move {
-            let executor = Arc::new(InProcessExecutor::from_app_config());
+            let executor = Arc::new(
+                InProcessExecutor::from_app_config()
+                    .with_runtime_env(context.runtime_env(), context.session_config().options())?,
+            );
 
             let input_stream = match input.execute(partition, context) {
                 Ok(stream) => stream,

@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-object-store = { path = "../sail-object-store" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
@@ -34,6 +35,7 @@ percent-encoding = { workspace = true }
 log = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
 pyo3 = { workspace = true }

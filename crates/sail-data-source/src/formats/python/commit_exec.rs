@@ -152,12 +152,17 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             );
         }
 
+        let runtime_env = context.runtime_env();
+        let config_options = context.session_config().options().clone();
         let input_stream = self.input.execute(0, context)?;
         let pickled_writer = self.pickled_writer.clone();
         let expected_partitions = self.expected_partitions;
 
         let stream = futures::stream::once(async move {
-            let executor = Arc::new(InProcessExecutor::from_app_config());
+            let executor = Arc::new(
+                InProcessExecutor::from_app_config()
+                    .with_runtime_env(runtime_env, &config_options)?,
+            );
             let mut commit_messages: Vec<Option<Vec<u8>>> = vec![None; expected_partitions];
             let mut seen_partitions = vec![false; expected_partitions];
             let mut first_error: Option<String> = None;
