@@ -5,91 +5,118 @@ rank: 2
 
 # Supported Features
 
+The tables below describe which Delta Lake features Sail supports.
+:white_check_mark: indicates support, :warning: identifies the supported cases in the notes, and :construction: means not supported.
+
+## Protocol Compatibility
+
+The Delta protocol defines separate requirements for readers and writers. Older tables specify their requirements through protocol versions and table metadata. Newer tables can name required features directly.
+
+| Feature                                  | Supported          | Notes                                                                 |
+| ---------------------------------------- | ------------------ | --------------------------------------------------------------------- |
+| Reader protocol versions 1–3             | :white_check_mark: | All required `readerFeatures` must be supported.                      |
+| Writer protocol versions 1–7             | :white_check_mark: | All required `readerFeatures` and `writerFeatures` must be supported. |
+| Unknown or unsupported required features | :construction:     | Sail rejects the operation requiring the feature.                     |
+
 ## Core Table Operations
 
-| Feature                                     | Supported          |
-| ------------------------------------------- | ------------------ |
-| Table snapshot reads                        | :white_check_mark: |
-| Append writes                               | :white_check_mark: |
-| Overwrite writes                            | :white_check_mark: |
-| Conditional overwrite (`REPLACE WHERE`)     | :white_check_mark: |
-| Partition value serialization               | :white_check_mark: |
-| Data skipping (partition pruning)           | :white_check_mark: |
-| Data skipping (pruning via file statistics) | :white_check_mark: |
-| Schema validation                           | :white_check_mark: |
-| Schema evolution                            | :white_check_mark: |
-| Type widening                               | :white_check_mark: |
-| Time travel (by version)                    | :white_check_mark: |
-| Time travel (by timestamp)                  | :white_check_mark: |
+| Feature                                       | Supported          | Notes                                                                                                                     |
+| --------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Table creation, CTAS, and replacement         | :warning:          | Through SQL and the DataFrame writer APIs; replacement is available in the Memory catalog. See [Table DDL](#table-ddl).   |
+| Snapshot reads, append, and full overwrite    | :white_check_mark: | Both partitioned and non-partitioned tables.                                                                              |
+| Conditional overwrite                         | :white_check_mark: | `replaceWhere` and SQL `REPLACE WHERE`.                                                                                   |
+| Dynamic partition overwrite                   | :construction:     | `DataFrameWriterV2.overwritePartitions()` is not supported for Delta.                                                     |
+| Partition pruning and file-statistics pruning | :white_check_mark: | Uses partition values and statistics recorded in the log.                                                                 |
+| Metadata aggregate optimization               | :white_check_mark: | Eligible aggregates can use exact file statistics. Other queries scan data.                                               |
+| Schema validation and evolution               | :white_check_mark: | `mergeSchema`, `overwriteSchema` with full overwrite, and `MERGE WITH SCHEMA EVOLUTION`.                                  |
+| Time travel                                   | :white_check_mark: | Version or timestamp through read options or SQL. Requires retained log/checkpoint state and data files for that version. |
+| Table property DDL                            | :warning:          | `SET/UNSET TBLPROPERTIES`; see [Table DDL](#table-ddl) for catalog-specific support.                                      |
+| Column type and default DDL                   | :warning:          | Supported type widening and `SET/DROP DEFAULT`. Not all `ALTER TABLE` forms are implemented.                              |
+| Optimistic commit conflict handling           | :warning:          | Creation and blind appends can retry compatible conflicts. Other writes fail on a competing commit and must be replanned. |
 
-Both non-partitioned and partitioned tables are supported for reading and writing.
+## Table DDL
+
+DDL support varies by catalog provider. See the [Delta Lake DDL support matrix](../../catalog/index.md#delta-lake) for supported operations and limitations.
 
 ## DML Operations
 
-| Feature                                | Supported          |
-| -------------------------------------- | ------------------ |
-| `DELETE` (copy-on-write)               | :white_check_mark: |
-| `DELETE` (deletion vectors)            | :white_check_mark: |
-| `MERGE INTO` (copy-on-write)           | :white_check_mark: |
-| `MERGE INTO` (deletion-vector deletes) | :white_check_mark: |
-| `MERGE INTO` (deletion-vector updates) | :construction:     |
-| `UPDATE`                               | :construction:     |
+| Operation                                       | Copy-on-write      | Deletion vectors   | Notes                                                                                                            |
+| ----------------------------------------------- | ------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `DELETE`                                        | :white_check_mark: | :white_check_mark: | —                                                                                                                |
+| `UPDATE`                                        | :white_check_mark: | :white_check_mark: | —                                                                                                                |
+| `MERGE INTO` with inserts, updates, and deletes | :white_check_mark: | :white_check_mark: | Matched, insert, and `WHEN NOT MATCHED BY SOURCE` clauses. Multiple source matches cannot update one target row. |
 
-The "merge-on-read" mode refers to updating the table with deletion vectors. This reduces the amount of data that needs to be rewritten during DML operations, but incurs additional read overhead when querying the table.
+For row changes, Sail can rewrite affected files (copy-on-write) or use deletion vectors. With deletion vectors, an update marks old rows as deleted and appends replacement rows.
 
-## Table Maintenance Operations
+## Table Features
 
-| Feature    | Supported      |
-| ---------- | -------------- |
-| `VACUUM`   | :construction: |
-| `OPTIMIZE` | :construction: |
-| `RESTORE`  | :construction: |
+### Reader-Writer Features
 
-## Protocol Internals
+| Protocol feature                                                   | Read               | Write              | Notes                                                                                                                            |
+| ------------------------------------------------------------------ | ------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Column mapping (`columnMapping`)                                   | :white_check_mark: | :white_check_mark: | `name` and `id` modes. Logical names are distinct from Parquet field names and IDs.                                              |
+| Deletion vectors (`deletionVectors`)                               | :white_check_mark: | :white_check_mark: | Applies existing vectors on reads and writes them for supported row-level operations.                                            |
+| Timestamp without timezone (`timestampNtz`)                        | :white_check_mark: | :white_check_mark: | `TIMESTAMP_NTZ`.                                                                                                                 |
+| Type widening (`typeWidening`, `typeWidening-preview`)             | :white_check_mark: | :white_check_mark: | New widening requires `delta.enableTypeWidening`. Only supported type changes are accepted.                                      |
+| Variant (`variantType`, `variantType-preview`)                     | :white_check_mark: | :white_check_mark: | Logical `VARIANT` values stored in Parquet.                                                                                      |
+| Variant shredding (`variantShredding`, `variantShredding-preview`) | :white_check_mark: | :white_check_mark: | Shredded reads and writes. Writes require shredding enablement.                                                                  |
+| V2 checkpoints (`v2Checkpoint`)                                    | :white_check_mark: | :white_check_mark: | Checkpoint policy controls the checkpoint format.                                                                                |
+| VACUUM protocol check (`vacuumProtocolCheck`)                      | :white_check_mark: | :white_check_mark: | Accepted for ordinary reads and writes. Command support is listed under [Maintenance and Streaming](#maintenance-and-streaming). |
+| Catalog-managed tables (`catalogManaged`)                          | :warning:          | :warning:          | Requires Unity Catalog commit and replay support. See [Catalog Integration](#catalog-integration).                               |
 
-| Feature                        | Supported          |
-| ------------------------------ | ------------------ |
-| Data files                     | :white_check_mark: |
-| Delta log entries              | :white_check_mark: |
-| `protocol` action              | :white_check_mark: |
-| `metaData` action              | :white_check_mark: |
-| `add` action                   | :white_check_mark: |
-| `remove` action                | :white_check_mark: |
-| `txn` action                   | :white_check_mark: |
-| `commitInfo` action            | :white_check_mark: |
-| `cdc` action                   | :construction:     |
-| Domain Metadata action         | :construction:     |
-| Classic checkpoint             | :white_check_mark: |
-| UUID-named V2 checkpoint       | :white_check_mark: |
-| Checkpoint sidecar files       | :white_check_mark: |
-| Multi-part checkpoint          | :x:                |
-| `stats_parsed`                 | :white_check_mark: |
-| `partitionValues_parsed`       | :white_check_mark: |
-| Log compaction files           | :white_check_mark: |
-| Last checkpoint file           | :white_check_mark: |
-| Version checksum file          | :white_check_mark: |
-| Append-only Tables             | :white_check_mark: |
-| Column Mapping                 | :white_check_mark: |
-| Deletion Vectors               | :white_check_mark: |
-| Timestamp without Timezone     | :white_check_mark: |
-| V2 Checkpoint table feature    | :white_check_mark: |
-| In-Commit Timestamps           | :white_check_mark: |
-| Generated Columns              | :white_check_mark: |
-| Variant Data Type              | :white_check_mark: |
-| Type Widening                  | :white_check_mark: |
-| Column Invariants              | :construction:     |
-| `CHECK` Constraints            | :white_check_mark: |
-| Default Columns                | :construction:     |
-| Identity Columns               | :construction:     |
-| Change Data Feed               | :construction:     |
-| Row Tracking                   | :construction:     |
-| Catalog-managed Tables         | :construction:     |
-| Iceberg Compatibility V1       | :construction:     |
-| Iceberg Compatibility V2       | :construction:     |
-| Clustered Table                | :construction:     |
-| VACUUM Protocol Check          | :construction:     |
-| Transaction conflict detection | :construction:     |
-| Unity Catalog integration      | :white_check_mark: |
-| AWS Glue / Hive Metastore      | :construction:     |
-| Streaming reads                | :construction:     |
-| Streaming writes               | :construction:     |
+### Writer Features and Constraints
+
+The write behavior of individual table features varies. The table below shows which constraints Sail enforces and which features it can write.
+
+| Feature                                                      | Write support      | Notes                                                                                                                                          |
+| ------------------------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Append-only tables (`appendOnly`)                            | :white_check_mark: | Data-changing removals are rejected when append-only is enabled.                                                                               |
+| `NOT NULL` constraints                                       | :white_check_mark: | Enforced during writes.                                                                                                                        |
+| Legacy column invariant expressions (`delta.invariants`)     | :construction:     | The `invariants` protocol flag is accepted. Legacy expressions are not enforced.                                                               |
+| `CHECK` constraints (`checkConstraints`)                     | :white_check_mark: | Writes must satisfy constraints. `ADD CONSTRAINT` validates existing rows. Both false and null results violate a constraint.                   |
+| Generated columns (`generatedColumns`)                       | :white_check_mark: | Computes omitted values and validates explicitly supplied values.                                                                              |
+| Default columns (`allowColumnDefaults`)                      | :white_check_mark: | Omitted columns and explicit `DEFAULT`. `ALTER COLUMN SET/DROP DEFAULT`.                                                                       |
+| Identity columns (`identityColumns`)                         | :white_check_mark: | Non-partition `BIGINT` columns with nonzero positive or negative steps. `GENERATED ALWAYS` rejects explicit values. `BY DEFAULT` accepts them. |
+| In-commit timestamps (`inCommitTimestamp`)                   | :white_check_mark: | Writes commit timestamps and uses enablement metadata for time travel.                                                                         |
+| Change Data Feed (`changeDataFeed`)                          | :construction:     | No CDF query or change-file writer.                                                                                                            |
+| Row tracking (`rowTracking`)                                 | :construction:     | No row-tracking write support.                                                                                                                 |
+| Domain metadata (`domainMetadata`)                           | :construction:     | Replaying existing actions does not enable writes requiring this feature.                                                                      |
+| Iceberg compatibility (`icebergCompatV1`, `icebergCompatV2`) | :construction:     | No UniForm/Iceberg-compatible writer.                                                                                                          |
+| Clustered tables (`clustering`)                              | :construction:     | No clustered-table writer.                                                                                                                     |
+
+## Log and Checkpoint Formats
+
+| Format or action                                                    | Read/replay        | Write              | Notes                                                                                    |
+| ------------------------------------------------------------------- | ------------------ | ------------------ | ---------------------------------------------------------------------------------------- |
+| Parquet data files                                                  | :white_check_mark: | :white_check_mark: | Partition values come from the transaction log.                                          |
+| JSON commits: `protocol`, `metaData`, `add`, `remove`, `commitInfo` | :white_check_mark: | :white_check_mark: | Snapshot reconstruction and table commits.                                               |
+| `txn` actions                                                       | :white_check_mark: | :warning:          | Preserves transaction state in checkpoints.                                              |
+| `domainMetadata` actions                                            | :white_check_mark: | :warning:          | Replays and preserves existing state in checkpoints. No public domain-update operation.  |
+| Change data files (`cdc`)                                           | :construction:     | :construction:     | Ordinary snapshot reads do not read change data files.                                   |
+| Classic Parquet checkpoints                                         | :white_check_mark: | :white_check_mark: | Includes supported parsed statistics and partition fields.                               |
+| UUID-named V2 checkpoints and Parquet sidecars                      | :white_check_mark: | :white_check_mark: | Reads JSON or Parquet top-level checkpoints. Writes use `delta.checkpointPolicy = 'v2'`. |
+| Multi-part checkpoints                                              | :white_check_mark: | :construction:     | Reads complete sets. Incomplete sets are ignored.                                        |
+| Log compaction files                                                | :white_check_mark: | :construction:     | Uses compacted ranges during replay. No compaction-file producer.                        |
+| `_last_checkpoint`                                                  | :white_check_mark: | :white_check_mark: | Checkpoint discovery hint.                                                               |
+| Version checksum files                                              | :white_check_mark: | :white_check_mark: | Checksum-based snapshot information and validation.                                      |
+
+## Catalog Integration
+
+Delta tables can be registered through [Unity Catalog](../../catalog/unity), [AWS Glue](../../catalog/glue), or [Hive Metastore](../../catalog/hms). Tables using the Delta `catalogManaged` feature require Unity Catalog for reads and writes by name.
+
+| Feature                                          | Supported          | Notes                                                                                                                        |
+| ------------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Catalog registration of filesystem-backed tables | :white_check_mark: | Supported through Unity Catalog, AWS Glue, and Hive Metastore.                                                               |
+| `catalogManaged` reads and writes by table name  | :white_check_mark: | Uses Unity Catalog to obtain ratified commits and publish writes, including commits not yet published as ordinary log files. |
+| `catalogManaged` direct path access              | :construction:     | Requires the replay context supplied by the catalog.                                                                         |
+| `catalogManaged` metadata `ALTER TABLE`          | :warning:          | Supports type widening, column defaults, and table property changes. `ADD CONSTRAINT` is not supported.                      |
+
+## Maintenance and Streaming
+
+| Operation                   | Supported      |
+| --------------------------- | -------------- |
+| `VACUUM`                    | :construction: |
+| `OPTIMIZE`                  | :construction: |
+| `RESTORE`                   | :construction: |
+| Structured Streaming reads  | :construction: |
+| Structured Streaming writes | :construction: |

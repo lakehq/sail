@@ -9,7 +9,7 @@ The Hive Metastore (HMS) catalog provider connects Sail to an external Hive Meta
 
 Sail supports plain Thrift connections, Kerberos-protected Thrift SASL connections, and high-availability endpoint lists. It supports flat database namespaces and resolves the provider and location recorded for existing HMS tables. See [Data Sources](../sources/) for the formats Sail can read and write.
 
-Sail does not support Hive ACID operations, including transaction heartbeats, locks, and write ID allocation. It also does not support delegation-token authentication.
+Sail does not support Hive ACID transactions, write ID allocation, or delegation-token authentication.
 
 ## Options
 
@@ -28,7 +28,7 @@ See [Common Options](./index.md#common-options) for options that configure cachi
 
 ## Endpoint Failover Behavior
 
-Sail tries endpoints in the order in which they are configured. It resolves the selected endpoint's DNS name for each new connection, so connections do not remain pinned to the address found at startup. When a retryable transport or Thrift error occurs, Sail moves to the next endpoint. If a connection fails after a create or drop request may have succeeded, Sail treats the resulting `AlreadyExists` or `NotFound` response as a successful retry.
+Sail tries endpoints in the order in which they are configured. It resolves the DNS name of the selected endpoint for each new connection, so connections do not remain pinned to the address found at startup. When a retryable transport or Thrift error occurs, Sail moves to the next endpoint. If a connection fails after a create or drop request may have succeeded, Sail treats the resulting `AlreadyExists` or `NotFound` response as a successful retry.
 
 ## Kerberos Authentication
 
@@ -82,7 +82,32 @@ HMS records whether a table is managed or external in its `table_type` metadata.
 
 Sail always creates tables as external by marking them as `EXTERNAL` and setting `table_type` to `EXTERNAL_TABLE`. For tables created by other engines, Sail reports the type stored in HMS.
 
-When Sail drops an HMS table, it removes only the metadata. It does not ask HMS to delete the table's data, regardless of the table type.
+When Sail drops an HMS table, it removes only the metadata. It does not ask HMS to delete the table data, regardless of the table type.
+
+## Delta Lake and Iceberg DDL
+
+HMS catalogs support `CREATE TABLE`, `CREATE TABLE AS SELECT`, `CREATE TABLE IF NOT EXISTS`, and `DROP TABLE` for Delta Lake and Iceberg. To register an existing table, use `CREATE TABLE ... USING delta|iceberg LOCATION '...'` without a column list. Sail restores its schema and partitioning from the existing format metadata.
+
+`ALTER TABLE` supports setting and unsetting table properties, changing top-level column types, and setting or dropping top-level column defaults. Delta type changes require `delta.enableTypeWidening=true` and must follow the format's type-widening rules. Iceberg allows `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and decimal precision increases without changing scale. Iceberg defaults must be typed literals and require format version 3.
+
+Iceberg partition transforms, such as `bucket(16, id)` and `days(event_time)`, are supported and are not registered as Hive partitions. Internal properties such as `metadata_location` cannot be changed through `ALTER TABLE`.
+
+See the [lakehouse DDL support matrix](./index.md#lakehouse-ddl) for the full list of supported operations.
+
+```sql
+CREATE TABLE sail.default.events (
+  id INT,
+  event_time TIMESTAMP,
+  category STRING
+)
+USING iceberg
+PARTITIONED BY (days(event_time))
+TBLPROPERTIES ('format-version' = '3');
+
+ALTER TABLE sail.default.events ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE sail.default.events ALTER COLUMN category SET DEFAULT 'unknown';
+ALTER TABLE sail.default.events SET TBLPROPERTIES ('owner' = 'analytics');
+```
 
 ## Examples
 

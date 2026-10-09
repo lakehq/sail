@@ -555,13 +555,13 @@ dependencies = [
 
 [[package]]
 name = "async-recursion"
-version = "1.1.1"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
+checksum = "4f8abc12baad266b1c8cec146854c195b5864b4221d4b2ca7296a7ae82d9e451"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1409,9 +1409,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.0"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -3199,9 +3199,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.9"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "fixed_decimal"
@@ -4956,15 +4956,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "libredox"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5206,15 +5197,6 @@ dependencies = [
  "paste",
  "rustc-hash 2.1.3",
  "tokio",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
@@ -7259,6 +7241,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfs-mimalloc-sys"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e6571957abe93757f0c6dd99182589054ace7da4102af4296ffcc8297eb3524"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7348,7 +7339,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail-build-scripts"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "lazy_static",
  "prettyplease",
@@ -7363,7 +7354,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cache"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "datafusion",
@@ -7379,7 +7370,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7401,7 +7392,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7416,7 +7407,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-hms"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7438,7 +7429,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7463,8 +7454,9 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
+ "arrow",
  "async-trait",
  "dashmap",
  "sail-catalog",
@@ -7473,7 +7465,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-trait",
  "object_store",
@@ -7487,7 +7479,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7505,7 +7497,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7527,7 +7519,7 @@ dependencies = [
 
 [[package]]
 name = "sail-celeborn"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -7549,16 +7541,16 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "log",
- "mimalloc",
  "pyo3",
  "rustls",
  "sail-common",
  "sail-execution",
  "sail-flight",
+ "sail-mimalloc",
  "sail-session",
  "sail-spark-connect",
  "sail-telemetry",
@@ -7567,7 +7559,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -7597,7 +7589,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7626,7 +7618,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-hms"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "pilota",
  "volo",
@@ -7636,7 +7628,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
@@ -7678,7 +7670,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7725,7 +7717,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-flight",
  "bytes",
@@ -7735,6 +7727,10 @@ dependencies = [
  "datafusion-spark",
  "fastrace",
  "futures",
+ "h2",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "indexmap 2.14.2",
  "k8s-openapi",
  "kube",
@@ -7745,6 +7741,7 @@ dependencies = [
  "prost-build",
  "rand 0.10.3",
  "readonly",
+ "rustls",
  "sail-catalog",
  "sail-catalog-system",
  "sail-celeborn",
@@ -7776,7 +7773,7 @@ dependencies = [
 
 [[package]]
 name = "sail-flight"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -7805,13 +7802,15 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aes",
  "aes-gcm",
  "arrow",
  "arrow-schema",
+ "async-trait",
  "base64 0.22.1",
+ "bytes",
  "cbc",
  "chrono",
  "chrono-tz",
@@ -7825,9 +7824,11 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-spark",
  "datasketches",
+ "futures",
  "half",
  "jiter",
  "lazy_static",
+ "log",
  "num",
  "ordered-float 5.5.0",
  "parquet-variant",
@@ -7838,20 +7839,23 @@ dependencies = [
  "rand_chacha 0.10.0",
  "rand_distr",
  "regex",
+ "reqwest 0.12.28",
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "url",
+ "uuid",
  "xee-xpath",
  "xot",
 ]
 
 [[package]]
 name = "sail-gold-test"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "lazy_static",
@@ -7863,7 +7867,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "apache-avro",
  "arrow-schema",
@@ -7910,7 +7914,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7921,7 +7925,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -7936,8 +7940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-mimalloc"
+version = "0.7.2"
+dependencies = [
+ "rustfs-mimalloc-sys",
+]
+
+[[package]]
 name = "sail-object-store"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -7971,17 +7982,19 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "datafusion",
+ "datafusion-datasource",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8005,7 +8018,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -8053,7 +8066,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-schema",
  "bytes",
@@ -8071,6 +8084,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-flight",
+ "sail-mimalloc",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",
@@ -8078,7 +8092,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -8098,7 +8112,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8147,7 +8161,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-schema",
  "async-stream",
@@ -8193,7 +8207,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "chumsky 0.12.0",
@@ -8207,7 +8221,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8216,7 +8230,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chumsky 0.12.0",
  "either",
@@ -8233,7 +8247,7 @@ dependencies = [
 
 [[package]]
 name = "sail-system-store"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arrow-schema",
  "chrono",
@@ -8261,7 +8275,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "datafusion",

@@ -16,7 +16,8 @@ import pytest
 import requests
 from botocore.config import Config
 from pyiceberg.io.pyarrow import PyArrowFileIO
-from pyiceberg.manifest import read_manifest_list
+from pyiceberg.manifest import DataFileContent, read_manifest_list
+from pyiceberg.table import StaticTable
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
@@ -471,9 +472,10 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
 
 
-def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
+def test_delete_advances_rest_catalog_metadata_location_with_position_delete(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
 ) -> None:
     table_name = "delete_t"
     spark.sql("DROP TABLE IF EXISTS iceberg_commit_test.delete_t")
@@ -517,19 +519,37 @@ def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
     )
     summary = snapshot["summary"]
     assert summary["added-delete-files"] == "1"
-    assert summary["added-equality-delete-files"] == "1"
-    assert summary["added-equality-deletes"] == "1"
+    assert summary["added-position-delete-files"] == "1"
+    assert summary["added-position-deletes"] == "1"
     assert "deleted-records" not in summary
-    assert "added-position-delete-files" not in summary
+    assert "added-equality-delete-files" not in summary
+    assert "added-equality-deletes" not in summary
     assert summary["total-data-files"] == "1"
     assert summary["total-delete-files"] == "1"
+    assert summary["total-position-deletes"] == "1"
+    assert summary["total-equality-deletes"] == "0"
     assert summary["total-records"] == "3"
 
+    expected_rows = [(1, "keep-a", "keep"), (3, "keep-c", "keep")]
     rows = spark.sql("SELECT id, name, flag FROM iceberg_commit_test.delete_t ORDER BY id").collect()
-    assert [(row["id"], row["name"], row["flag"]) for row in rows] == [
-        (1, "keep-a", "keep"),
-        (3, "keep-c", "keep"),
-    ]
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == expected_rows
+
+    table = StaticTable.from_metadata(
+        after_location,
+        properties={
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        },
+    )
+    (task,) = table.scan().plan_files()
+    (delete_file,) = task.delete_files
+    assert delete_file.content == DataFileContent.POSITION_DELETES
+    assert delete_file.record_count == 1
+    assert not delete_file.equality_ids
+    rows = table.scan().to_arrow().sort_by([("id", "ascending")]).to_pylist()
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == expected_rows
 
 
 def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
@@ -760,11 +780,11 @@ def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
     assert [(row.id, row.name) for row in rows] == [(1, "base"), (2, "fast")]
 
 
-def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
+def test_rest_catalog_commits_catalog_managed_iceberg_alter(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
-    table_name = "alter_reject_t"
+    table_name = "alter_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
     spark.sql(
@@ -778,16 +798,18 @@ def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
 
-    with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
-        spark.sql(
-            f"""
-            ALTER TABLE {table_fqn}
-            SET TBLPROPERTIES ('owner' = 'alice')
-            """
-        )
+    spark.sql(
+        f"""
+        ALTER TABLE {table_fqn}
+        SET TBLPROPERTIES ('owner' = 'alice')
+        """
+    )
 
     after = _load_table(iceberg_rest_endpoint, table_name)
-    assert after["metadata-location"] == before_location
+    assert after["metadata-location"] != before_location
+    assert after["metadata"]["table-uuid"] == before["metadata"]["table-uuid"]
+    assert after["metadata"]["properties"]["owner"] == "alice"
+    assert after["metadata"]["schemas"] == before["metadata"]["schemas"]
 
 
 def test_rest_catalog_rejects_non_iceberg_create_format(

@@ -111,6 +111,43 @@ Feature: delta SHOW TBLPROPERTIES
       | key | value |
       | delta.feature.inCommitTimestamp | supported |
 
+  Scenario: Show Delta change data feed properties reflects enablement and protocol
+    Given statement
+      """
+      ALTER TABLE delta_show_properties_test SET TBLPROPERTIES (
+        'delta.enableChangeDataFeed' = 'true',
+        'delta.enableInCommitTimestamps' = 'true'
+      )
+      """
+    Given statement
+      """
+      INSERT INTO delta_show_properties_test VALUES (1)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES delta_show_properties_test ('delta.enableChangeDataFeed')
+      """
+    Then query result
+      | key | value |
+      | delta.enableChangeDataFeed | true |
+    When query template
+      """
+      SHOW TBLPROPERTIES delta.`{{ location.string }}` ('delta.feature.changeDataFeed')
+      """
+    Then query result
+      | key | value |
+      | delta.feature.changeDataFeed | supported |
+    Given statement
+      """
+      ALTER TABLE delta_show_properties_test SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'false')
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES delta_show_properties_test
+      """
+    Then query result row where "key" is "delta.enableChangeDataFeed" has "value" equal to "false"
+    Then query result row where "key" is "delta.feature.changeDataFeed" has "value" equal to "supported"
+
   Scenario: Show Delta property keys are case sensitive
     When query
       """

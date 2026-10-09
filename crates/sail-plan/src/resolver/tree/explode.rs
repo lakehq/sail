@@ -90,7 +90,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             false => arg,
         };
 
-        let name = self.state.register_field_name("");
+        let name = self.state.next_field_id();
         let mut inline_projections = vec![];
         let out = match (data_type, with_position, is_inline) {
             (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
@@ -105,14 +105,15 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                     .into_iter()
                     .map(|field| {
                         let field_name = field.name().to_string();
-                        let field_column = self.state.register_field_name("");
+                        let field_column = self.state.next_field_id();
                         inline_projections.push((
                             ScalarUDF::from(ArrayStructField::new())
                                 .call(vec![arg.clone(), lit(field_name.clone())])
                                 .alias(&field_column),
                             Column::from_name(&field_column),
                         ));
-                        ident(&field_column).alias(field_name)
+                        // Keep an alias after multi-expression expansion extracts the field name.
+                        ident(&field_column).alias(&field_column).alias(field_name)
                     })
                     .collect::<Vec<_>>()),
                 wrong_type => plan_err!(

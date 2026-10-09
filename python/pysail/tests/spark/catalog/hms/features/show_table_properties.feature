@@ -14,7 +14,6 @@ Feature: HMS table property inspection
     Given statement
       """
       CREATE TABLE sail.show_properties_db.show_properties (id INT) USING <format>
-      
       TBLPROPERTIES ('custom.show' = 'initial')
       """
     When query

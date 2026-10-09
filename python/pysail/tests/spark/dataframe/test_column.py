@@ -1,12 +1,28 @@
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
+
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 def test_get_item_ignore_case(spark):
     df = spark.sql("SELECT struct(1 AS b) AS a")
     assert df.select(df.a.getItem("b")).collect() == [Row(**{"a.b": 1})]
     assert df.select(df.a.getItem("B")).collect() == [Row(**{"a.B": 1})]
+
+
+@pytest.mark.parametrize("computed", [False, True])
+def test_struct_field_selector_kind(spark, computed):
+    df = spark.createDataFrame([((1,), "selector")], "payload struct<selector:int>, selector string")
+    payload = F.coalesce(F.col("payload"), F.col("payload")) if computed else F.col("payload")
+
+    assert df.select(payload.getField("selector").alias("value")).collect() == [Row(value=1)]
+    assert df.select(payload["selector"].alias("value")).collect() == [Row(value=1)]
+    if pyspark_version() < (4,):
+        pytest.skip("the Spark Connect client does not support column selectors before PySpark 4")
+    with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
+        df.select(payload[F.col("selector")]).collect()
 
 
 def test_struct_wildcard_after_join(spark):
@@ -128,3 +144,115 @@ def test_array_struct_field(spark):
         Row(id="2", d=[None, None, None]),
         Row(id="3", d=None),
     ]
+
+
+def test_wide_qualified_nested_projection(spark):
+    width = 128
+    source = spark.createDataFrame([(1,), (2,), (None,)], "value int")
+    source = source.select(
+        F.struct(F.struct(F.lit(-1).alias("value")).alias("s0")).alias("origin"),
+        *[F.struct("value").alias(f"s{i}") for i in range(width)],
+    ).alias("origin")
+    # The matching roots span the schema. The qualifier also names a struct,
+    # whose nested value must not override the qualified column's value.
+    result = source.select(*[F.col(f"origin.s{i}.value").alias(f"v{i}") for i in range(width)])
+    assert result.schema == StructType([StructField(f"v{i}", IntegerType(), True) for i in range(width)])
+    assert sorted((tuple(row) for row in result.collect()), key=lambda row: row[0] or 0) == [
+        tuple([value] * width) for value in (None, 1, 2)
+    ]
+
+
+def test_recovered_struct_field_respects_case_sensitive_resolution(spark):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        source = spark.createDataFrame([((1,), 7)], "s struct<x:int>, a int")
+        projected = source.select(F.struct(F.lit(2).alias("X")).alias("s"), "a")
+        with pytest.raises(AnalysisException):
+            projected.where("s.x = 1").collect()
+        assert projected.select("a").where("s.x = 1").collect() == [Row(a=7)]
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        lambda: F.create_map(F.lit("a"), F.struct(F.lit(2).alias("y"))),
+        lambda: F.create_map(F.lit("a"), F.lit(2)),
+        lambda: F.array(F.lit(2)),
+    ],
+    ids=["map-struct", "map-scalar", "array-scalar"],
+)
+def test_recovered_struct_field_skips_failed_extraction_after_map_or_array(spark, replacement):
+    source = spark.createDataFrame([(((1,),), 7), (((2,),), 8)], "s struct<a:struct<x:int>>, marker int")
+    projected = source.select(replacement().alias("s"), "marker").select("marker")
+    assert projected.where("s.a.x = 1").collect() == [Row(marker=7)]
+
+
+def test_recovered_struct_field_preserves_successful_extraction_after_array(spark):
+    source = spark.createDataFrame([(((1,),), 7)], "s struct<a:struct<x:int>>, marker int")
+    replacement = F.array(F.create_map(F.lit("a"), F.struct(F.lit(2).alias("y"))))
+    projected = source.select(replacement.alias("s"), "marker").select("marker")
+    with pytest.raises(AnalysisException):
+        projected.where("s.a.x = 1").collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4, 2), reason="NullType extraction propagation was added in Spark 4.2")
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Sail follows Spark 3.5-4.1 recovery; Spark 4.2 propagates NULL through the newer map value",
+    strict=True,
+)
+def test_recovered_null_map_preserves_spark_42_null_propagation(spark):
+    source = spark.createDataFrame([(((1,),), 7)], "s struct<a:struct<x:int>>, marker int")
+    projected = source.select(F.create_map(F.lit("a"), F.lit(None)).alias("s"), "marker").select("marker")
+    assert projected.where("s.a.x = 1").collect() == []
+
+
+def _sail_bug(reason):
+    return pytest.mark.xfail(not is_jvm_spark(), reason=reason, strict=True)
+
+
+SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
+    pyspark_version() < (4, 2), reason="Spark 4.2 filters DataFrame column candidates by the output before merging"
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        pytest.param(
+            "visible-using-key",
+            [Row(a=2), Row(a=3)],
+            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("The visible USING key is not the left key attribute")],
+        ),
+        pytest.param(
+            "nested-hidden-using-key",
+            [Row(a=1, e=7)],
+            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("Hidden USING keys do not survive another join")],
+        ),
+        pytest.param(
+            "direct-join-child",
+            [Row(x=1, a=1), Row(x=1, a=2), Row(x=1, a=3)],
+            marks=_sail_bug("Join conditions do not prefer a direct child over a deeper instance"),
+        ),
+        pytest.param(
+            "drop-duplicate-attribute",
+            [Row(b=10), Row(b=20), Row(b=30)],
+            marks=_sail_bug("Column candidates for drop are not deduplicated by attribute"),
+        ),
+    ],
+)
+def test_dataframe_column_candidate_resolution(spark, case, expected):
+    df = spark.createDataFrame([(1, 10, "x"), (2, 20, "y"), (3, 30, "z")], "a int, b int, c string")
+    other = spark.createDataFrame([(1, 100), (2, 200), (4, 400)], "a int, d int")
+    third = spark.createDataFrame([(1, 7), (3, 9)], "a int, e int")
+    right = df.withColumn("x", F.lit(1))
+    results = {
+        "visible-using-key": lambda: df.join(df.filter("a > 1"), "a").select(df.a),
+        "nested-hidden-using-key": lambda: df.join(other, "a").join(third, "a").select(other.a, third.e),
+        "direct-join-child": lambda: df.join(right, df.a == right.a).select(right.x, right.a),
+        "drop-duplicate-attribute": lambda: df.select("a", "a", "b").drop(df.a),
+    }
+    assert sorted(results[case]().collect()) == expected

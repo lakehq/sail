@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
@@ -55,6 +56,17 @@ impl LakeSourceCreateTableInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LakeSourceCreateTableResult {
     pub properties: Vec<(String, String)>,
+    /// Authoritative schema and partitioning when registering an existing table.
+    pub schema: Option<SchemaRef>,
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
+}
+
+#[derive(Debug, Default)]
+pub struct LakeSourceAlterTableResult {
+    /// The lake source committed catalog metadata together with the format metadata.
+    pub catalog_updated: bool,
+    /// Committed schema for catalogs that keep a copy of the table's columns.
+    pub schema: Option<SchemaRef>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.
@@ -154,12 +166,13 @@ pub trait LakeSource: DataSource {
     /// Alters storage metadata for an existing lake source.
     async fn alter_table(
         &self,
-        runtime_env: Arc<RuntimeEnv>,
+        ctx: &TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
+    ) -> Result<LakeSourceAlterTableResult> {
         let _ = lakehouse_table;
+        let runtime_env = ctx.runtime_env();
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -185,7 +198,8 @@ pub trait LakeSource: DataSource {
                     self.name()
                 )
             }
-        }
+        }?;
+        Ok(LakeSourceAlterTableResult::default())
     }
 
     /// Alters table properties (SET/UNSET TBLPROPERTIES).

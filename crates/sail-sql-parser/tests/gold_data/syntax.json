@@ -3704,6 +3704,51 @@
               }
             },
             {
+              "name": "HintClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(HintStart)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(HintItem, Option(Operator(Comma)))"
+                  },
+                  {
+                    "nonTerminal": "Operator(HintEnd)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "HintItem",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Identifier"
+                  },
+                  {
+                    "nonTerminal": "Option(HintParameters)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "HintParameters",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(Expression, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "IdentList",
               "node": {
                 "sequence": [
@@ -7125,6 +7170,22 @@
               }
             },
             {
+              "name": "Operator(HintEnd)",
+              "node": {
+                "terminal": {
+                  "operator": "*/"
+                }
+              }
+            },
+            {
+              "name": "Operator(HintStart)",
+              "node": {
+                "terminal": {
+                  "operator": "/*+"
+                }
+              }
+            },
+            {
               "name": "Operator(LeftBracket)",
               "node": {
                 "terminal": {
@@ -7477,6 +7538,14 @@
               }
             },
             {
+              "name": "Option(HintParameters)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "HintParameters"
+                }
+              }
+            },
+            {
               "name": "Option(IdentList)",
               "node": {
                 "optional": {
@@ -7681,6 +7750,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Operator(Colon)"
+                }
+              }
+            },
+            {
+              "name": "Option(Operator(Comma))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Operator(Comma)"
                 }
               }
             },
@@ -8796,6 +8873,9 @@
                     "nonTerminal": "Keyword(Select)"
                   },
                   {
+                    "nonTerminal": "Vector(HintClause)"
+                  },
+                  {
                     "nonTerminal": "Option(DuplicateTreatment)"
                   },
                   {
@@ -8951,6 +9031,28 @@
                         },
                         {
                           "nonTerminal": "GroupingSet"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Sequence(HintItem, Option(Operator(Comma)))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "HintItem"
+                  },
+                  {
+                    "zeroOrMore": {
+                      "sequence": [
+                        {
+                          "nonTerminal": "Option(Operator(Comma))"
+                        },
+                        {
+                          "nonTerminal": "HintItem"
                         }
                       ]
                     }
@@ -12051,6 +12153,14 @@
               "node": {
                 "zeroOrMore": {
                   "nonTerminal": "CreateViewClause"
+                }
+              }
+            },
+            {
+              "name": "Vector(HintClause)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "HintClause"
                 }
               }
             },
