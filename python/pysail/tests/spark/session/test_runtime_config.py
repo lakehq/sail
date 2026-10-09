@@ -96,7 +96,63 @@ def test_sql_set_timezone_changes_planning(spark):
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail")
-def test_datafusion_set_quoted_value(config_sessions):
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("datafusion.execution.batch_size", "'1024'"),
+        ("datafusion.execution.batch_size", "1024 /*comment*/"),
+        ("datafusion.execution.batch_size", "/*comment*/+1024"),
+        ("datafusion.execution.batch_size", "'1024' /*comment*/"),
+        ("datafusion.execution.parquet.pushdown_filters", "TRUE /*comment*/"),
+        ("datafusion.execution.parquet.bloom_filter_fpp", "0.05 /*comment*/"),
+    ],
+)
+def test_datafusion_set_value(config_sessions, key, value):
     session = config_sessions.create()
-    assert session.sql("SET datafusion.execution.batch_size='1024'").collect() == []
+    assert session.sql(f"SET {key}={value}").collect() == []
     assert session.range(3).collect() == [Row(id=0), Row(id=1), Row(id=2)]
+
+
+@pytest.mark.parametrize(
+    ("sql_value", "expected"),
+    [
+        pytest.param("`json`", "json", id="backtick-value"),
+        pytest.param("`a``b`", "a`b", id="escaped-backtick"),
+        pytest.param("` a;b `;", " a;b ", id="quoted-spaces-and-semicolon"),
+        pytest.param("/*before*/`json` /*after*/;", "json", id="comments-around-quoted-value"),
+        pytest.param("`json`tail", "`json`tail", id="backtick-in-raw-value"),
+        pytest.param("a/*b*/c", "a/*b*/c", id="block-comment-text"),
+        pytest.param("a--b", "a--b", id="line-comment-text"),
+        pytest.param("/*b*/abc;", "/*b*/abc", id="leading-block-comment-text"),
+        pytest.param(" --b;;;", "--b", id="leading-line-comment-text"),
+        pytest.param("a--b\nc;", "a--b\nc", id="line-comment-with-newline"),
+    ],
+)
+def test_sql_set_configuration_value_syntax(spark, sql_value, expected):
+    key = "sail.test.config.raw_value"
+    original = spark.conf.get(key, None)
+    try:
+        result = spark.sql(f"SET {key}={sql_value}")
+        assert spark.conf.get(key) == expected
+        assert result.collect() == [Row(key=key, value=expected)]
+    finally:
+        if original is None:
+            spark.conf.unset(key)
+        else:
+            spark.conf.set(key, original)
+
+
+def test_sql_set_backtick_default_format(spark, tmp_path):
+    key = "spark.sql.sources.default"
+    original = spark.conf.get(key, None)
+    path = str(tmp_path / "quoted_default_format")
+    try:
+        spark.sql(f"SET {key}=`json`")
+        spark.range(2).write.save(path)
+        assert list((tmp_path / "quoted_default_format").glob("*.json"))
+        assert spark.read.load(path).orderBy("id").collect() == [Row(id=0), Row(id=1)]
+    finally:
+        if original is None:
+            spark.conf.unset(key)
+        else:
+            spark.conf.set(key, original)

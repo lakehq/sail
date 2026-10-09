@@ -2,7 +2,7 @@ use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
-use crate::ast::config::ConfigValue;
+use crate::ast::config::{ConfigValue, config_assignment};
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
@@ -300,6 +300,7 @@ pub enum Statement {
     },
     SetProperty {
         set: Set,
+        #[parser(function = |_, o| unit(o).then(config_assignment(o).or_not()).or_not())]
         property: Option<(PropertyKey, Option<(Equals, ConfigValue)>)>,
     },
     ResetProperty {
