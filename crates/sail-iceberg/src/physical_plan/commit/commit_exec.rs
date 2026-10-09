@@ -1319,7 +1319,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     mode: object_store::PutMode::Create,
                     ..Default::default()
                 };
-                let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes));
+                let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes.clone()));
                 prepared_snapshot.publication_started();
                 match store_ctx
                     .prefixed
@@ -1328,18 +1328,47 @@ impl ExecutionPlan for IcebergCommitExec {
                 {
                     Ok(_) => {}
                     Err(object_store::Error::AlreadyExists { .. }) => {
-                        log::warn!(
-                            "Metadata file {} already exists for version {}. Retrying attempt {}",
-                            metadata_file,
-                            next_version,
-                            attempt
-                        );
-                        prepared_snapshot.publication_did_not_happen();
-                        prepared_snapshot.cleanup().await;
-                        if attempt >= MAX_COMMIT_RETRIES {
-                            return Err(commit_conflict_error());
+                        match <dyn object_store::ObjectStore>::get(
+                            store_ctx.prefixed.as_ref(),
+                            &metadata_path,
+                        )
+                        .await
+                        {
+                            Ok(existing) => match existing.bytes().await {
+                                Ok(existing_bytes) if existing_bytes == metadata_bytes => {
+                                    log::warn!(
+                                        "Metadata file {} already exists with the content this commit wrote; treating the commit as succeeded",
+                                        metadata_file
+                                    );
+                                }
+                                Ok(_) => {
+                                    log::warn!(
+                                        "Metadata file {} already exists for version {}. Retrying attempt {}",
+                                        metadata_file,
+                                        next_version,
+                                        attempt
+                                    );
+                                    prepared_snapshot.publication_did_not_happen();
+                                    prepared_snapshot.cleanup().await;
+                                    if attempt >= MAX_COMMIT_RETRIES {
+                                        return Err(commit_conflict_error());
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    return Err(DataFusionError::Execution(format!(
+                                        "Iceberg metadata file {} already exists but its content could not be read; commit state is uncertain: {error}",
+                                        metadata_file
+                                    )));
+                                }
+                            },
+                            Err(error) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Iceberg metadata file {} already exists but could not be read; commit state is uncertain: {error}",
+                                    metadata_file
+                                )));
+                            }
                         }
-                        continue;
                     }
                     Err(error) => {
                         return Err(DataFusionError::External(Box::new(error)));
@@ -1681,12 +1710,14 @@ mod tests {
     enum MetadataWriteFault {
         Conflict(Bytes),
         LostAcknowledgement,
+        LostAcknowledgementThenConflict,
     }
 
     #[derive(Debug)]
     struct FaultInjectingMetadataStore {
         memory_store: Arc<object_store::memory::InMemory>,
         fault: MetadataWriteFault,
+        fault_path: &'static str,
         fault_injected: AtomicBool,
     }
 
@@ -1704,7 +1735,7 @@ mod tests {
             payload: PutPayload,
             opts: PutOptions,
         ) -> object_store::Result<PutResult> {
-            if location.as_ref().ends_with("metadata/v2.metadata.json")
+            if location.as_ref().ends_with(self.fault_path)
                 && !self.fault_injected.swap(true, Ordering::SeqCst)
             {
                 match &self.fault {
@@ -1720,6 +1751,11 @@ mod tests {
                             source: std::io::Error::other("lost metadata write acknowledgement")
                                 .into(),
                         });
+                    }
+                    MetadataWriteFault::LostAcknowledgementThenConflict => {
+                        self.memory_store
+                            .put_opts(location, payload.clone(), opts.clone())
+                            .await?;
                     }
                 }
             }
@@ -2030,6 +2066,7 @@ mod tests {
                     Arc::new(FaultInjectingMetadataStore {
                         memory_store: memory.clone(),
                         fault: MetadataWriteFault::LostAcknowledgement,
+                        fault_path: "metadata/v2.metadata.json",
                         fault_injected: AtomicBool::new(false),
                     })
                 } else {
@@ -2090,6 +2127,160 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn retried_conditional_metadata_write_reports_conflict_without_losing_snapshot_files() {
+        futures::executor::block_on(async {
+            let table_url = Url::parse("file:///tmp/retry-412-conflict/").expect("table URL");
+            let memory = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = memory.clone();
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let iceberg_schema = IcebergSchema::builder()
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .expect("schema");
+            let table_properties = vec![("format-version".to_string(), "2".to_string())];
+            crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                iceberg_schema,
+                PartitionSpec::unpartitioned_spec(),
+                &table_properties,
+                NewTableMetadataStyle::Hadoop,
+            )
+            .await
+            .expect("bootstrap metadata");
+            let action_schema = iceberg_action_schema().expect("action schema");
+            let mut first_data_file = partitioned_data_file("data/part-0001.parquet", 0, 0);
+            first_data_file.partition.clear();
+            let first_actions = datafusion::arrow::compute::concat_batches(
+                &action_schema,
+                &[
+                    encode_add_data_files(vec![first_data_file]).expect("add action"),
+                    encode_commit_meta(CommitMeta {
+                        table_uri: table_url.to_string(),
+                        row_count: 1,
+                        table_properties: table_properties.clone(),
+                        ..Default::default()
+                    })
+                    .expect("commit metadata"),
+                ],
+            )
+            .expect("first writer actions");
+            let first_input = MemorySourceConfig::try_new_exec(
+                &[vec![first_actions]],
+                Arc::clone(&action_schema),
+                None,
+            )
+            .expect("first writer output");
+            let first_commit = IcebergCommitExec::new(
+                first_input,
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::CopyOnWrite,
+            );
+            let first_context = SessionContext::new();
+            first_context.runtime_env().register_object_store(
+                &Url::parse("file:///").expect("file store URL"),
+                memory.clone(),
+            );
+            let first_batches = first_commit
+                .execute(0, first_context.task_ctx())
+                .expect("first commit stream")
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("first commit");
+            assert_eq!(first_batches[0].num_rows(), 1);
+
+            let mut second_data_file = partitioned_data_file("data/part-0002.parquet", 0, 0);
+            second_data_file.partition.clear();
+            let second_actions = datafusion::arrow::compute::concat_batches(
+                &action_schema,
+                &[
+                    encode_add_data_files(vec![second_data_file]).expect("add action"),
+                    encode_commit_meta(CommitMeta {
+                        table_uri: table_url.to_string(),
+                        row_count: 1,
+                        table_properties,
+                        ..Default::default()
+                    })
+                    .expect("commit metadata"),
+                ],
+            )
+            .expect("second writer actions");
+            let second_input =
+                MemorySourceConfig::try_new_exec(&[vec![second_actions]], action_schema, None)
+                    .expect("second writer output");
+            let second_commit = IcebergCommitExec::new(
+                second_input,
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::CopyOnWrite,
+            );
+            let publication_store: Arc<dyn ObjectStore> = Arc::new(FaultInjectingMetadataStore {
+                memory_store: memory.clone(),
+                fault: MetadataWriteFault::LostAcknowledgementThenConflict,
+                fault_path: "metadata/v3.metadata.json",
+                fault_injected: AtomicBool::new(false),
+            });
+            let second_context = SessionContext::new();
+            second_context.runtime_env().register_object_store(
+                &Url::parse("file:///").expect("file store URL"),
+                publication_store,
+            );
+            let second_batches = second_commit
+                .execute(0, second_context.task_ctx())
+                .expect("second commit stream")
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("a commit whose conditional metadata write landed must succeed");
+            assert_eq!(second_batches[0].num_rows(), 1);
+            let store: Arc<dyn ObjectStore> = memory;
+            let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                .await
+                .expect("committed metadata location");
+            assert!(
+                location.ends_with("metadata/v3.metadata.json"),
+                "the committed metadata must be version 3, got {location}"
+            );
+            let bytes = load_metadata_file_bytes(&store, &location)
+                .await
+                .expect("committed metadata bytes");
+            let metadata = TableMetadata::from_json(&bytes).expect("committed metadata");
+            let snapshot = metadata.snapshots.last().expect("committed snapshot");
+            let manifest_list = load_manifest_list(&store_ctx, snapshot.manifest_list())
+                .await
+                .expect(
+                    "the manifest list referenced by the committed snapshot must stay readable",
+                );
+            let mut added_files = manifest_list
+                .entries()
+                .iter()
+                .map(|entry| entry.manifest_path.clone())
+                .collect::<Vec<_>>();
+            added_files.sort();
+            added_files.dedup();
+            let mut saw_second_data_file = false;
+            for manifest_path in added_files {
+                let manifest = load_manifest(&store_ctx, &manifest_path).await.expect(
+                    "each manifest referenced by the committed manifest list must stay readable",
+                );
+                for entry in manifest.entries() {
+                    if entry.data_file.file_path == "data/part-0002.parquet" {
+                        saw_second_data_file = true;
+                    }
+                }
+            }
+            assert!(
+                saw_second_data_file,
+                "the committed snapshot must still reference the second data file"
+            );
+        });
     }
 
     #[test]
@@ -2227,6 +2418,7 @@ mod tests {
             let conflict_store = Arc::new(FaultInjectingMetadataStore {
                 memory_store: Arc::clone(&memory),
                 fault: MetadataWriteFault::Conflict(metadata_bytes),
+                fault_path: "metadata/v2.metadata.json",
                 fault_injected: AtomicBool::new(false),
             });
             let context = SessionContext::new();
