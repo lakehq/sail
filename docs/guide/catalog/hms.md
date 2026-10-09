@@ -9,7 +9,7 @@ The Hive Metastore (HMS) catalog provider connects Sail to an external Hive Meta
 
 Sail supports plain Thrift connections, Kerberos-protected Thrift SASL connections, and high-availability endpoint lists. It supports flat database namespaces and resolves the provider and location recorded for existing HMS tables. See [Data Sources](../sources/) for the formats Sail can read and write.
 
-Sail does not support Hive ACID transactions or write ID allocation. Iceberg commits use HMS table locks to check and update the metadata pointer. Delegation-token authentication is not supported.
+Sail does not support Hive ACID transactions, write ID allocation, or delegation-token authentication.
 
 ## Options
 
@@ -90,7 +90,9 @@ HMS catalogs support `CREATE TABLE`, `CREATE TABLE AS SELECT`, `CREATE TABLE IF 
 
 `ALTER TABLE` supports setting and unsetting table properties, changing top-level column types, and setting or dropping top-level column defaults. Delta type changes require `delta.enableTypeWidening=true` and must follow the format's type-widening rules. Iceberg allows `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and decimal precision increases without changing scale. Iceberg defaults must be typed literals and require format version 3.
 
-Iceberg partition transforms, such as `bucket(16, id)` and `days(event_time)`, are stored in Iceberg metadata. They are not registered as Hive partitions. Iceberg ALTER operations read the metadata file referenced by HMS and publish a new file only if that pointer has not changed concurrently. The pointer, HMS schema, and properties are updated together under the table lock. Direct changes to internal properties such as `metadata_location` are rejected.
+Iceberg partition transforms, such as `bucket(16, id)` and `days(event_time)`, are supported and are not registered as Hive partitions. Internal properties such as `metadata_location` cannot be changed through `ALTER TABLE`.
+
+See the [lakehouse DDL support matrix](./index.md#lakehouse-ddl) for the full list of supported operations.
 
 ```sql
 CREATE TABLE sail.default.events (

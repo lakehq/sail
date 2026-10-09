@@ -36,16 +36,13 @@ Sail creates **version 2** Iceberg tables by default. Set the `format-version` t
 | Dynamic partition overwrite                        | :warning:          | `overwritePartitions()` or `overwrite-mode = dynamic` on existing tables with compatible live partition specs and no active delete files. Replaces partitions present in the input. Empty input is a no-op. |
 | Time travel                                        | :white_check_mark: | Snapshot ID, timestamp, or an existing branch/tag reference. Requires the referenced metadata and data files.                                                                                               |
 | Branch/tag creation and branch writes              | :construction:     | —                                                                                                                                                                                                           |
-| Table property DDL                                 | :warning:          | `SET/UNSET TBLPROPERTIES` and format upgrades through Memory, HMS, Glue, and Iceberg REST; see [Table DDL](#table-ddl) for server limitations.                                                              |
+| Table property DDL                                 | :warning:          | `SET/UNSET TBLPROPERTIES` and format upgrades through Memory, HMS, Glue, and Iceberg REST. See [Table DDL](#table-ddl) for catalog requirements.                                                            |
 | Column type and default DDL                        | :warning:          | Top-level type promotions and `SET/DROP DEFAULT`; defaults require format version 3 and typed literals. See [Table DDL](#table-ddl).                                                                        |
 | Commit conflict handling                           | :warning:          | Validates metadata requirements and the expected snapshot, with limited metadata publication retries. Row-level conflicts require replanning, including with `snapshot` isolation.                          |
 
 ## Table DDL
 
-The [Iceberg DDL matrix](../../catalog/index.md#iceberg) lists each operation across
-all catalog providers, including unsupported DDL. It covers creation, registration,
-replacement, schema changes, defaults, properties, partition evolution, write
-ordering, identifier fields, branches, tags, and dropping tables.
+DDL support varies by catalog provider. See the [Iceberg DDL support matrix](../../catalog/index.md#iceberg) for supported operations and limitations.
 
 ## DML Operations
 

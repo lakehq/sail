@@ -36,10 +36,7 @@ The Delta protocol defines separate requirements for readers and writers. Older 
 
 ## Table DDL
 
-The [Delta Lake DDL matrix](../../catalog/index.md#delta-lake) lists each operation
-across all catalog providers, including unsupported DDL. It covers creation,
-registration, replacement, schema changes, defaults, constraints, properties,
-partitioning, clustering, cloning, conversion, and dropping tables.
+DDL support varies by catalog provider. See the [Delta Lake DDL support matrix](../../catalog/index.md#delta-lake) for supported operations and limitations.
 
 ## DML Operations
 
@@ -107,12 +104,12 @@ The write behavior of individual table features varies. The table below shows wh
 
 Delta tables can be registered through [Unity Catalog](../../catalog/unity), [AWS Glue](../../catalog/glue), or [Hive Metastore](../../catalog/hms). Tables using the Delta `catalogManaged` feature require Unity Catalog for reads and writes by name.
 
-| Feature                                          | Supported          | Notes                                                                                                                          |
-| ------------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Catalog registration of filesystem-backed tables | :white_check_mark: | Supported through Unity Catalog, AWS Glue, and Hive Metastore.                                                                 |
-| `catalogManaged` reads and writes by table name  | :white_check_mark: | Uses Unity Catalog to obtain ratified commits and publish writes, including commits not yet published as ordinary log files.   |
-| `catalogManaged` direct path access              | :construction:     | Requires the replay context supplied by the catalog.                                                                           |
-| `catalogManaged` metadata `ALTER TABLE`          | :warning:          | Type widening, column defaults, and table property changes use Unity's commit protocol. `ADD CONSTRAINT` is not yet supported. |
+| Feature                                          | Supported          | Notes                                                                                                                        |
+| ------------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Catalog registration of filesystem-backed tables | :white_check_mark: | Supported through Unity Catalog, AWS Glue, and Hive Metastore.                                                               |
+| `catalogManaged` reads and writes by table name  | :white_check_mark: | Uses Unity Catalog to obtain ratified commits and publish writes, including commits not yet published as ordinary log files. |
+| `catalogManaged` direct path access              | :construction:     | Requires the replay context supplied by the catalog.                                                                         |
+| `catalogManaged` metadata `ALTER TABLE`          | :warning:          | Supports type widening, column defaults, and table property changes. `ADD CONSTRAINT` is not supported.                      |
 
 ## Maintenance and Streaming
 

@@ -70,14 +70,14 @@ The following catalog providers are available in Sail. Table DDL capabilities ar
 
 ## Lakehouse DDL
 
-These matrices cover table DDL, including operations that Sail does not yet implement.
-The operation inventory follows [Delta Lake table DDL](https://docs.delta.io/delta-batch/)
+The following matrices show Sail's Delta Lake and Iceberg DDL support by catalog provider.
+For SQL syntax, see [Delta Lake table DDL](https://docs.delta.io/delta-batch/)
 and [Iceberg Spark DDL](https://iceberg.apache.org/docs/latest/spark-ddl/).
 
 :white_check_mark: Supported · :warning: Supported with limitations · :construction: Not supported
 
 `ALTER COLUMN` rows refer to top-level columns unless stated otherwise.
-HMS means Hive Metastore. Iceberg REST includes servers such as Nessie and Lakekeeper.
+HMS refers to [Hive Metastore](./hms).
 
 ### Delta Lake
 
@@ -127,11 +127,10 @@ promotion. Nested type changes are available through Memory and Unity; HMS and G
 support top-level type changes. Column defaults target top-level columns. Identity
 columns must be non-partition `BIGINT` columns with a nonzero step.
 
-Unity external Delta ALTER updates the Delta log. Its table API has no endpoint for
-updating the external registration's columns or properties, so catalog-only
-`DESCRIBE` and `SHOW TBLPROPERTIES` can retain their registered values. Managed Delta
-schema and property changes are published through Unity's commit protocol;
-`ADD CONSTRAINT` is not yet supported for managed tables.
+For external Delta tables in Unity, `ALTER TABLE` updates the Delta log, but
+`DESCRIBE` and `SHOW TBLPROPERTIES` can still show the schema and properties recorded
+when the table was registered. Managed Delta tables support schema and property
+changes, but do not support `ADD CONSTRAINT`.
 
 ### Iceberg
 
@@ -163,7 +162,7 @@ schema and property changes are published through Unity's commit protocol;
 | `ALTER COLUMN ... FIRST/AFTER`                                          |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER COLUMN ... DROP NOT NULL`                                        |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER TABLE ... SET TBLPROPERTIES`                                     | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
-| `ALTER TABLE ... UNSET TBLPROPERTIES [IF EXISTS]`                       | :white_check_mark: | :white_check_mark: | :white_check_mark: |     :warning:      | :construction: | :construction: |
+| `ALTER TABLE ... UNSET TBLPROPERTIES [IF EXISTS]`                       | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
 | `ALTER TABLE ... SET TBLPROPERTIES ('format-version' = ...)` (upgrade)  | :white_check_mark: | :white_check_mark: | :white_check_mark: |     :warning:      | :construction: | :construction: |
 | `ALTER TABLE ... SET LOCATION`                                          |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `COMMENT ON TABLE/COLUMN`                                               |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
@@ -180,13 +179,11 @@ schema and property changes are published through Unity's commit protocol;
 
 Iceberg type promotions permit `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and decimal
 precision increases at the same scale. Type and default changes target top-level
-columns. Column defaults require format version 3 and typed literals. Partition
-transforms remain in Iceberg metadata rather than Hive partition keys.
+columns. Column defaults require format version 3 and typed literals.
 
-Iceberg REST capabilities depend on the server's endpoints and format-version
-support. Registration requires the register-table endpoint and server access to the
-metadata file. `PURGE` forwards a deletion request to the server. Format upgrades,
-defaults, and property removal have [server-specific limitations](./iceberg-rest#table-ddl).
+Iceberg REST operations require server support for the requested endpoints and
+format version. See [Iceberg REST table DDL](./iceberg-rest#table-ddl) for registration,
+format-version, and data-deletion requirements.
 Branch/tag rows include the `IF NOT EXISTS` and `CREATE OR REPLACE` variants.
 
 ### Catalog and Storage Requirements
@@ -198,7 +195,3 @@ REST catalog connection instead of the Unity table API.
 
 Memory and HMS drop table registrations without deleting the data, including when
 `PURGE` is supplied. Glue and Unity reject `PURGE`.
-
-HMS publishes Iceberg metadata pointers and schema updates under a metastore lock;
-Glue uses version-checked updates. Iceberg REST publishes schema and property
-changes with REST commit requirements.

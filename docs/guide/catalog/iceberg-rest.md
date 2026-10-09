@@ -67,11 +67,8 @@ export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://cata
 
 ## Table DDL
 
-See the [lakehouse DDL support matrix](./index.md#lakehouse-ddl). Schema and property
-changes use REST commit requirements; the server publishes the new metadata file.
-Registering an existing table uses the register-table endpoint.
+See the [Iceberg DDL support matrix](./index.md#iceberg) for supported operations.
 
-Available features also depend on the server version. Nessie 0.107.5 in the integration
-suite serves Iceberg v2 and cannot apply v3 column defaults. Lakekeeper 0.12.1 retains
-the final removed table property in load-table responses; this is reproducible with
-both Sail and PyIceberg. Removing a property while other properties remain works.
+- Registering an existing table requires the server's register-table endpoint and access to the table's metadata file.
+- Format upgrades require server support for the target version. Column defaults require Iceberg format version 3 and typed literals.
+- `DROP TABLE ... PURGE` requests deletion of the table's data. Support and deletion behavior depend on the catalog server.
