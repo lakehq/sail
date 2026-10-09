@@ -189,7 +189,7 @@ pub(crate) fn select_copy_on_write_rows(plan: LogicalPlan) -> Result<LogicalPlan
 pub(crate) fn write_effects(
     plan: LogicalPlan,
 ) -> sail_logical_plan::row_level::RowLevelEffectPlans {
-    sail_logical_plan::row_level::RowLevelEffectPlans::new(Some(Arc::new(plan)), None, None)
+    sail_logical_plan::row_level::RowLevelEffectPlans::new(Some(Arc::new(plan)), None, None, None)
 }
 
 pub(crate) fn lineage_columns(plan: &LogicalPlan) -> Result<&'static [&'static str]> {

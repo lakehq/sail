@@ -960,14 +960,24 @@ fn validate_effective_commit_target(
     }
     validate_deletion_vector_add_stats(&actions_as_actions)?;
 
-    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
-    // write support is implemented, reject all writes to tables with CDF enabled, regardless of
-    // whether the protocol support is legacy (writer v4-6) or explicit (writer v7+ feature).
-    // Previously this guard only rejected v7+ tables, relying on `can_write_to_protocol` to reject
-    // legacy tables via implied-feature expansion. Now that legacy versions no longer expand
-    // implied features (matching delta-spark), this guard must cover legacy tables too.
     if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
-        return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
+        if !protocol_supports_legacy_change_data_feed(&protocol)
+            && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
+        {
+            return Err(
+                TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into(),
+            );
+        }
+        crate::change_data_feed::validate_schema(&metadata.parse_schema_arrow()?)
+            .map_err(|error| DeltaError::generic(error.to_string()))?;
+    }
+    if actions_as_actions
+        .iter()
+        .any(|action| matches!(action, Action::Cdc(cdc) if cdc.data_change))
+    {
+        return Err(DeltaError::generic(
+            "CDC actions must have dataChange=false",
+        ));
     }
 
     if table_property_enabled(&metadata, "delta.enableDeletionVectors")

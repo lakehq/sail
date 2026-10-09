@@ -142,7 +142,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         }
         _ => expansion.write_plan,
     };
-    let effects = RowLevelEffectPlans::new(Some(Arc::new(write_plan)), None, None);
+    let effects = RowLevelEffectPlans::new(Some(Arc::new(write_plan)), None, None, None);
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
         mode,

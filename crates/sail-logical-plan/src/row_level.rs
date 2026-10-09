@@ -30,6 +30,7 @@ use crate::check_constraints::apply_delta_check_constraint_filter;
 pub struct RowLevelEffectRequirements {
     pub touched_files: bool,
     pub row_index_deletes: bool,
+    pub change_data: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,13 +162,14 @@ pub fn evolve_row_level_field(
 /// Sparse logical plans required to materialize a row-level write.
 ///
 /// The slots are ordered for DataFusion extension planning as write rows,
-/// touched files, then row-index deletes. A missing slot means the selected
+/// touched files, row-index deletes, then change data. A missing slot means the selected
 /// write mode does not require that effect.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd)]
 pub struct RowLevelEffectPlans {
     write_rows: Option<Arc<LogicalPlan>>,
     touched_files: Option<Arc<LogicalPlan>>,
     row_index_deletes: Option<Arc<LogicalPlan>>,
+    change_data: Option<Arc<LogicalPlan>>,
 }
 
 impl RowLevelEffectPlans {
@@ -175,11 +177,13 @@ impl RowLevelEffectPlans {
         write_rows: Option<Arc<LogicalPlan>>,
         touched_files: Option<Arc<LogicalPlan>>,
         row_index_deletes: Option<Arc<LogicalPlan>>,
+        change_data: Option<Arc<LogicalPlan>>,
     ) -> Self {
         Self {
             write_rows,
             touched_files,
             row_index_deletes,
+            change_data,
         }
     }
 
@@ -195,6 +199,10 @@ impl RowLevelEffectPlans {
         self.row_index_deletes.as_ref()
     }
 
+    pub fn change_data(&self) -> Option<&Arc<LogicalPlan>> {
+        self.change_data.as_ref()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -203,6 +211,7 @@ impl RowLevelEffectPlans {
         usize::from(self.write_rows.is_some())
             + usize::from(self.touched_files.is_some())
             + usize::from(self.row_index_deletes.is_some())
+            + usize::from(self.change_data.is_some())
     }
 
     fn plans(&self) -> impl Iterator<Item = &LogicalPlan> {
@@ -210,6 +219,7 @@ impl RowLevelEffectPlans {
             self.write_rows.as_deref(),
             self.touched_files.as_deref(),
             self.row_index_deletes.as_deref(),
+            self.change_data.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -238,6 +248,7 @@ impl RowLevelEffectPlans {
             write_rows: replace(self.write_rows.is_some())?,
             touched_files: replace(self.touched_files.is_some())?,
             row_index_deletes: replace(self.row_index_deletes.is_some())?,
+            change_data: replace(self.change_data.is_some())?,
         })
     }
 }
@@ -870,6 +881,26 @@ pub fn expand_update(
         Some(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()))),
     )?;
 
+    let change_data = if requirements.change_data {
+        let mut before = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        before.push(lit("update_preimage").alias("_change_type"));
+        let before = LogicalPlanBuilder::from(normalized.plan.clone())
+            .filter(predicate.clone())?
+            .project(before)?
+            .build()?;
+        let mut after = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        after.push(lit("update_postimage").alias("_change_type"));
+        let after = LogicalPlanBuilder::from(write_rows.clone())
+            .filter(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32())))?
+            .project(after)?
+            .build()?;
+        Some(Arc::new(
+            LogicalPlanBuilder::from(before).union(after)?.build()?,
+        ))
+    } else {
+        None
+    };
+
     let touched_files = requirements
         .touched_files
         .then(|| {
@@ -896,8 +927,12 @@ pub fn expand_update(
     } else {
         None
     };
-    let effects =
-        RowLevelEffectPlans::new(Some(Arc::new(write_rows)), touched_files, row_index_deletes);
+    let effects = RowLevelEffectPlans::new(
+        Some(Arc::new(write_rows)),
+        touched_files,
+        row_index_deletes,
+        change_data,
+    );
 
     Ok(RowLevelWriteNode::new_update(
         target_plan,
@@ -1064,18 +1099,26 @@ mod tests {
     fn sparse_effect_plans_preserve_slots_when_replaced() -> Result<()> {
         let write_rows = named_plan("write_rows")?;
         let row_index_deletes = named_plan("row_index_deletes")?;
-        let effects = RowLevelEffectPlans::new(Some(write_rows), None, Some(row_index_deletes));
+        let change_data = named_plan("change_data")?;
+        let effects = RowLevelEffectPlans::new(
+            Some(write_rows),
+            None,
+            Some(row_index_deletes),
+            Some(change_data),
+        );
 
-        assert_eq!(effects.len(), 2);
+        assert_eq!(effects.len(), 3);
         assert!(effects.write_rows().is_some());
         assert!(effects.touched_files().is_none());
         assert!(effects.row_index_deletes().is_some());
 
         let replacement_write_rows = named_plan("replacement_write_rows")?;
         let replacement_row_index_deletes = named_plan("replacement_row_index_deletes")?;
+        let replacement_change_data = named_plan("replacement_change_data")?;
         let replaced = effects.replace_plans(vec![
             replacement_write_rows.as_ref().clone(),
             replacement_row_index_deletes.as_ref().clone(),
+            replacement_change_data.as_ref().clone(),
         ])?;
 
         assert_eq!(replaced.write_rows(), Some(&replacement_write_rows));
@@ -1084,6 +1127,7 @@ mod tests {
             replaced.row_index_deletes(),
             Some(&replacement_row_index_deletes)
         );
+        assert_eq!(replaced.change_data(), Some(&replacement_change_data));
         Ok(())
     }
 

@@ -5,10 +5,12 @@ import pyarrow.parquet as pq
 import pytest
 from pyiceberg.manifest import ManifestContent
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
 from pyiceberg.types import LongType, NestedField
 
 from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata, _latest_metadata_path
 from pysail.testing.spark.steps.plan import normalize_plan_text
+from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
 
 
@@ -212,7 +214,8 @@ def test_cow_applies_existing_equality_and_position_deletes(spark, tmp_path):
                                      'write.merge.mode' = 'merge-on-read')""")
         for rows in ["(1, 10), (2, 20)", "(3, 30), (4, 40)", "(5, 50), (6, 60)"]:
             spark.sql(f"INSERT INTO {name} VALUES {rows}")
-        spark.sql(f"DELETE FROM {name} WHERE id IN (2, 3)").collect()
+        table = StaticTable.from_metadata(str(_latest_metadata_path(path)))
+        _append_equality_delete_snapshot(table, pa.table({"id": [2, 3]}), [1])
         spark.sql(f"""MERGE INTO {name} AS t USING (SELECT 4L AS id) AS s ON t.id = s.id
                       WHEN MATCHED THEN DELETE""").collect()
         deletes_before = {
