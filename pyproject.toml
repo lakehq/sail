@@ -213,7 +213,8 @@ dependencies = [
 spark = ["3.5.9", "4.2.0"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
+
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3' 'pyarrow>=24.0,<25'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
