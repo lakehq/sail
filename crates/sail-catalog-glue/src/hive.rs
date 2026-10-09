@@ -184,6 +184,11 @@ fn build_glue_columns(
             .name(&col.name)
             .r#type(glue_type)
             .set_comment(col.comment.clone())
+            .set_parameters(
+                col.default
+                    .as_ref()
+                    .map(|value| HashMap::from([("CURRENT_DEFAULT".to_string(), value.clone())])),
+            )
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build column: {e}")))?;
 
