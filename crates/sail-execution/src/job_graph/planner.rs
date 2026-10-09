@@ -24,7 +24,7 @@ use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
-use sail_iceberg::physical_plan::IcebergCommitExec;
+use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
@@ -49,6 +49,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
+        let plan = ensure_worker_input_for_iceberg_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -66,6 +67,38 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+fn ensure_worker_input_for_iceberg_procedure(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
+            return has_exchange(cooperative.input());
+        }
+        plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
+    }
+
+    Ok(plan
+        .transform_up(|plan| {
+            let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some(input) = procedure.input() else {
+                return Ok(Transformed::no(plan));
+            };
+            if has_exchange(input) {
+                return Ok(Transformed::no(plan));
+            }
+            // A single writer partition still belongs on a worker. Insert the exchange after
+            // physical optimization so redundant-coalesce removal cannot erase this boundary.
+            let input = Arc::new(CoalescePartitionsExec::new(Arc::clone(input)));
+            Ok(Transformed::yes(replace_children_if_necessary(
+                plan,
+                vec![input],
+            )?))
+        })?
+        .data)
 }
 
 /// A single-partition build no longer needs a physical coalesce, but should

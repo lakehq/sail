@@ -137,6 +137,7 @@ impl DataSource for IcebergLakeSource {
                     sort_order,
                     options,
                     lakehouse_table,
+                    planned_metadata_location: None,
                     defer_commit: false,
                     target_file_size: None,
                     preserve_input_partitions: false,
@@ -379,6 +380,8 @@ pub struct IcebergWriteNodeOptions {
     pub sort_order: Vec<Sort>,
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// Base metadata already used to plan an operation's input files and schema.
+    pub planned_metadata_location: Option<String>,
     /// Leaves the writer action stream uncommitted for a coordinator-owned operation.
     pub defer_commit: bool,
     /// Operation-specific Parquet target size. Ordinary writes use the writer default.
@@ -464,6 +467,7 @@ pub(crate) async fn plan_iceberg_write(
         sort_order,
         options,
         lakehouse_table,
+        planned_metadata_location,
         defer_commit,
         target_file_size,
         preserve_input_partitions,
@@ -519,8 +523,11 @@ pub(crate) async fn plan_iceberg_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let exists_res = match metadata_location.as_deref() {
-        Some(location) if catalog_managed_table => {
+    let exists_res = match planned_metadata_location
+        .as_deref()
+        .or(metadata_location.as_deref())
+    {
+        Some(location) if planned_metadata_location.is_some() || catalog_managed_table => {
             metadata_location_to_object_path_string(location)
         }
         _ => find_latest_metadata_file(&store, &table_url).await,

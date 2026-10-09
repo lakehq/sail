@@ -284,6 +284,7 @@ pub(super) async fn plan_rewrite_data_files(
                 sort_order: vec![],
                 options,
                 lakehouse_table,
+                planned_metadata_location: Some(table.metadata_location().to_string()),
                 defer_commit: true,
                 target_file_size: Some(rewrite_options.target_file_size),
                 preserve_input_partitions: true,

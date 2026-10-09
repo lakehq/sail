@@ -758,14 +758,16 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     ]
 
 
-def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
+@pytest.mark.parametrize("operation", ["merge", "rewrite"])
+def test_stale_write_catalog_conflict_cleans_only_commit_owned_artifacts(
     spark: SparkSession,
     gated_remote: str,
     commit_gate_proxy: tuple[str, _CommitGate],
     iceberg_rest_endpoint: str,
     seaweedfs_host_endpoint: str,
+    operation: str,
 ) -> None:
-    table_name = "stale_merge_conflict_t"
+    table_name = f"stale_{operation}_conflict_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
     spark.sql(
@@ -796,23 +798,32 @@ def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
         ).createOrReplaceTempView("stale_merge_source")
         gate.arm(NAMESPACE, table_name)
 
-        def stale_merge() -> None:
+        def stale_write() -> None:
+            if operation == "rewrite":
+                slow.sql(
+                    f"""
+                    CALL system.rewrite_data_files(
+                      '{table_fqn}',
+                      options => map('rewrite-all', 'true', 'max-concurrent-file-group-rewrites', '1'))
+                    """
+                ).collect()
+                return
             slow.sql(
-                """
-                MERGE INTO iceberg_commit_test.stale_merge_conflict_t AS t
+                f"""
+                MERGE INTO {table_fqn} AS t
                 USING stale_merge_source AS s
                 ON t.id = s.id
                 WHEN NOT MATCHED THEN
                   INSERT (id, name) VALUES (s.id, s.name)
-                """
+                """  # noqa: S608
             ).collect()
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(stale_merge)
+            future = executor.submit(stale_write)
             try:
                 if not gate.arrived.wait(timeout=60):
                     outcome = future.exception(timeout=1) if future.done() else "still running"
-                    pytest.fail(f"MERGE did not reach the catalog commit gate: {outcome}")
+                    pytest.fail(f"{operation} did not reach the catalog commit gate: {outcome}")
 
                 blocked_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
                 slow_created_keys = blocked_keys - before_keys

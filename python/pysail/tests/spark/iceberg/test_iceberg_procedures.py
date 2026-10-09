@@ -7,6 +7,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -77,8 +78,9 @@ def test_rewrite_rejects_zero_group_limits(spark, tmp_path, option):
 
 
 @pytest.mark.parametrize(("files_per_group", "concurrent_groups"), [(8, 1), (2, 1), (2, 2)])
+@pytest.mark.yamlsnapshot(group="plan")
 def test_rewrite_data_files_uses_workers_and_coordinator_commit(
-    local_cluster_spark, tmp_path, files_per_group, concurrent_groups
+    local_cluster_spark, tmp_path, files_per_group, concurrent_groups, snapshot
 ):
     spark = local_cluster_spark
     table_name = "distributed_rewrite_data_files"
@@ -102,8 +104,7 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(
         group_size = files_per_group * max(row.file_size_in_bytes for row in before)
         assert group_size < (files_per_group + 1) * min(row.file_size_in_bytes for row in before)
 
-        result = spark.sql(
-            f"""
+        statement = f"""
             CALL system.rewrite_data_files(
               table => '{table_name}',
               options => map(
@@ -112,7 +113,10 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(
                 'max-file-group-size-bytes', '{group_size}',
                 'max-concurrent-file-group-rewrites', '{concurrent_groups}'))
             """
-        ).first()
+        plan = spark.sql(f"EXPLAIN CODEGEN {statement}").first().plan
+        distributed_plan = plan[plan.index("== Distributed Plan ==") :]
+        assert normalize_plan_text(distributed_plan) == snapshot
+        result = spark.sql(statement).first()
 
         assert result.rewritten_data_files_count == len(before)
         assert result.added_data_files_count == len(before) // files_per_group
