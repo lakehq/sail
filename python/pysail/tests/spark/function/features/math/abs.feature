@@ -95,14 +95,8 @@ Feature: abs comprehensive tests
         | CAST(0 AS DECIMAL(10,2))      | 0.00   |
         | CAST(-0.001 AS DECIMAL(10,3)) | 0.001  |
 
-    @sail-bug
-    # Tagged @sail-bug purely for Spark-compat tracking — Sail's behaviour here
-    # is arguably MORE correct mathematically. Divergence lives in CAST, not abs:
-    # JVM applies half-up rounding during CAST to DECIMAL(38,0) and rounds 37
-    # nines up to 10^37; Sail preserves precision and returns 37 nines. Whether
-    # to "fix" this (align with Spark) or keep Sail's precise behaviour is a
-    # policy call. Out of scope for `abs` either way — fix path is the decimal
-    # CAST kernel (arrow-rs `cast_decimal` semantics or a Sail-side override).
+    # Rounding happens in abs, not in CAST (measured on the JVM: the CAST alone is exact):
+    # see Rule: DECIMAL negation rounds to 34 significant digits.
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -112,9 +106,7 @@ Feature: abs comprehensive tests
         | result                                 |
         | 10000000000000000000000000000000000000 |
 
-    @sail-bug
-    # Same root cause as the scenario above (CAST rounding) — JVM rounds
-    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines.
+    # abs of 38 nines rounds up to 10^38 and overflows DECIMAL(38,0), as in Spark.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
@@ -222,7 +214,6 @@ Feature: abs comprehensive tests
         | case                                 | input    | result |
         | abs whitespace-padded numeric string | '  -5  ' | 5.0    |
 
-    @sail-bug
     Scenario Outline: Unparseable string coercion under ANSI=false: <case>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -249,16 +240,12 @@ Feature: abs comprehensive tests
         | Infinity |
 
   Rule: Interval values
-    # abs preserves the Arrow interval unit, but Sail widens Spark subranges
-    # (DAY, HOUR TO MINUTE, ...) to DAY TO SECOND at the type layer — this
-    # happens even without abs (e.g. SELECT INTERVAL '-5' DAY returns DAY TO
-    # SECOND). The scenarios below are tagged @sail-bug but blocked on the
-    # Sail-wide interval subrange handling, not on abs itself.
-    # Fix path: preserve Spark subrange (DAY, HOUR, DAY TO SECOND, …) as
-    # `Field` metadata when converting Spark→Arrow, restore on the return
-    # trip in `sail-spark-connect`. Also requires analyzer changes in
-    # `sail-sql-analyzer`. Affects every expression returning intervals.
-
+    # The result is right (same duration) but its TYPE loses the subrange: Spark keeps
+    # `interval day`, Sail publishes `interval day to second`. The start/end fields live in the
+    # field metadata, and a UDF's return field does not reach the projection's output schema
+    # (measured: neither `df.schema`, `show` nor `typeof`). Only a cast carrying the field does.
+    # Fixed on `fix/interval` (PR #2350), whose `preserve_interval_range` wraps `abs`; remove the
+    # tags below once it lands.
     @sail-bug
     Scenario Outline: Interval subrange: <case>
       When query
@@ -621,7 +608,6 @@ Feature: abs comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -633,7 +619,6 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
@@ -655,3 +640,444 @@ Feature: abs comprehensive tests
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Argument count error carries Spark's class and never panics
+
+    Scenario Outline: abs with <count> arguments is WRONG_NUM_ARGS
+      When query
+        """
+        SELECT abs(<args>) AS result
+        """
+      Then query error \[WRONG_NUM_ARGS.*The `abs` requires 1 parameters but the actual number is <count>
+
+      Examples:
+        | count | args |
+        | 0     |      |
+        | 2     | 1, 2 |
+        | 3     | 1, 2, 3 |
+
+  Rule: Argument types Spark rejects
+
+    Scenario Outline: abs of <type> is DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+      Examples:
+        | type              | input                      | ansi  |
+        | BOOLEAN           | true                       | false |
+        | BOOLEAN           | true                       | true  |
+        | DATE              | DATE'2024-01-02'           | false |
+        | TIMESTAMP         | TIMESTAMP'2024-01-02'      | false |
+        | BINARY            | X'0102'                    | false |
+        | ARRAY             | array(1, 2)                | false |
+        | MAP               | map('k', 1)                | false |
+        | STRUCT            | named_struct('a', 1)       | false |
+        | CALENDAR INTERVAL | make_interval(1, 2)        | false |
+        | CALENDAR INTERVAL | make_interval(1, 2)        | true  |
+
+  Rule: NULL literal is coerced to DOUBLE
+
+    Scenario: abs of an untyped NULL has type double
+      When query
+        """
+        SELECT abs(NULL) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+  Rule: DECIMAL negation rounds to 34 significant digits
+
+    # Spark's Decimal.abs on a negative value is `-decimalVal` on a scala BigDecimal,
+    # which rounds to MathContext.DECIMAL128 (34 digits, HALF_EVEN). Measured on the JVM:
+    # the CAST alone is exact; the rounding happens in abs (Decimal.scala unary_-).
+    # A non-negative input is returned as is, so it is never rounded.
+    Scenario Outline: abs of a DECIMAL that Spark leaves exact: <case>
+      When query
+        """
+        SELECT CAST(abs(CAST(<input> AS DECIMAL(<p>,<s>))) AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | digits | p  | s | input                                   | result                                   |
+        | 34 digits stay exact              | 34     | 38 | 0 | -1234567890123456789012345678901234     | 1234567890123456789012345678901234       |
+        | positive 36 digits stay exact     | 36     | 38 | 0 | 123456789012345678901234567890123456    | 123456789012345678901234567890123456     |
+
+    Scenario Outline: abs of a negative DECIMAL with <digits> digits: <case>
+      When query
+        """
+        SELECT CAST(abs(CAST(<input> AS DECIMAL(<p>,<s>))) AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | digits | p  | s | input                                   | result                                   |
+        | 35 digits, tie rounds to even     | 35     | 38 | 0 | -12345678901234567890123456789012345    | 12345678901234567890123456789012340      |
+        | 38 digits with scale, rounds up   | 38     | 38 | 2 | -123456789012345678901234567890123456.78 | 123456789012345678901234567890123500.00  |
+        | 37 nines round up to 10^37        | 37     | 38 | 0 | -9999999999999999999999999999999999999  | 10000000000000000000000000000000000000   |
+
+    Scenario Outline: abs of a negative DECIMAL(38,0) that rounds past its precision errors under ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(CAST(-99999999999999999999999999999999999999 AS DECIMAL(38,0))) AS result
+        """
+      Then query error \[NUMERIC_VALUE_OUT_OF_RANGE.*cannot be represented as Decimal\(38, 0\)
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+  Rule: Nullability follows the argument
+
+    Scenario Outline: abs of a non-null <what> is non-nullable
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <type> (nullable = false)
+        """
+
+      Examples:
+        | what             | input         | type    |
+        | positive literal | 3             | integer |
+        | decimal literal  | 3.5           | decimal(2,1) |
+
+  Rule: String argument under ANSI=true
+
+    Scenario Outline: abs of a valid numeric string under ANSI=true is a double
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | input        | result   |
+        | '-5'         | 5.0      |
+        | '  -3  '     | 3.0      |
+        | '-1e3'       | 1000.0   |
+        | 'NaN'        | NaN      |
+        | '-Infinity'  | Infinity |
+
+    # Spark: Cast.nullable is forced to true for STRING -> DOUBLE (Cast.forceNullable), also under ANSI.
+    Scenario: abs of a string literal is nullable under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs('-3') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+    Scenario: abs of a string column is nullable under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(s) AS result FROM VALUES ('-1') AS t(s)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+    # Same message-class gap as `SELECT CAST('abc' AS DOUBLE)`: Sail's cast text has no
+    # [CAST_INVALID_INPUT] class. Cast-level, outside abs: tracked in the string-to-double cast PR.
+    @sail-bug
+    Scenario Outline: abs of a malformed string under ANSI=true is CAST_INVALID_INPUT
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query error \[CAST_INVALID_INPUT\]
+
+      Examples:
+        | input  |
+        | 'abc'  |
+        | ''     |
+        | '0x10' |
+
+  Rule: String grammar follows Java's Double.parseDouble
+
+    # Spark casts the string with java.lang.Double.valueOf, which accepts a trailing type suffix
+    # (d, D, f, F) and hexadecimal floating point. Sail's string to DOUBLE cast (Arrow) does not,
+    # so these are NULL (ANSI off) or an error (ANSI on). Cast-level, outside abs: tracked in the
+    # string-to-double cast PR.
+    @sail-bug
+    Scenario Outline: abs of a string Java parses as a double: <input>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs('<input>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | input | result |
+        | 1d    | 1.0    |
+        | 1f    | 1.0    |
+        | 1D    | 1.0    |
+        | 1e3d  | 1000.0 |
+        | 0x1p3 | 8.0    |
+
+  Rule: Multi-row inputs take the vectorized kernel
+
+    # A column goes through the array kernel; a literal goes through the scalar one. Both must agree,
+    # and a NULL row, a mixed sign and an overflow row decide different branches.
+    Scenario Outline: abs of a wide DECIMAL column keeps NULLs and rounds only negative values: ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(abs(c) AS STRING) AS result
+        FROM VALUES
+          (CAST(-12345678901234567890123456789012345 AS DECIMAL(38,0))),
+          (CAST(NULL AS DECIMAL(38,0))),
+          (CAST(5 AS DECIMAL(38,0))),
+          (CAST(-7 AS DECIMAL(38,0))),
+          (CAST(123456789012345678901234567890123456 AS DECIMAL(38,0))) AS t(c)
+        """
+      Then query result
+        | result                                |
+        | 12345678901234567890123456789012340   |
+        | NULL                                  |
+        | 5                                     |
+        | 7                                     |
+        | 123456789012345678901234567890123456  |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: abs of a DECIMAL column errors when one row rounds past the precision: ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(abs(c) AS STRING) AS result
+        FROM VALUES
+          (CAST(-7 AS DECIMAL(38,0))),
+          (CAST(-99999999999999999999999999999999999999 AS DECIMAL(38,0))) AS t(c)
+        """
+      Then query error \[NUMERIC_VALUE_OUT_OF_RANGE
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: abs of a wide DECIMAL column with a scale
+      When query
+        """
+        SELECT CAST(abs(c) AS STRING) AS result
+        FROM VALUES
+          (CAST(-123456789012345678901234567890123456.78 AS DECIMAL(38,2))),
+          (CAST(1.25 AS DECIMAL(38,2))),
+          (CAST(NULL AS DECIMAL(38,2))) AS t(c)
+        """
+      Then query result
+        | result                                  |
+        | 123456789012345678901234567890123500.00 |
+        | 1.25                                    |
+        | NULL                                    |
+
+    Scenario Outline: abs of a double column keeps NaN, infinity and NULL: ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(c) AS result
+        FROM VALUES (CAST(-0.0 AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)), (CAST(NULL AS DOUBLE)) AS t(c)
+        """
+      Then query result
+        | result   |
+        | 0.0      |
+        | NaN      |
+        | Infinity |
+        | NULL     |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: abs of an INT column wraps its MIN row under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(c) AS result
+        FROM VALUES (CAST(-3 AS INT)), (CAST(NULL AS INT)), (CAST(-2147483648 AS INT)) AS t(c)
+        """
+      Then query result
+        | result      |
+        | 3           |
+        | NULL        |
+        | -2147483648 |
+
+    Scenario Outline: abs of a column holding the MIN row errors under ANSI=true: <type>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(c) AS result
+        FROM VALUES (CAST(<min> AS <type>)), (CAST(5 AS <type>)), (CAST(NULL AS <type>)) AS t(c)
+        """
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
+
+      Examples:
+        | type    | min         |
+        | TINYINT | -128        |
+        | INT     | -2147483648 |
+
+    Scenario: abs of a string column maps malformed values to NULL under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(s) AS result
+        FROM VALUES ('-1'), (CAST(NULL AS STRING)), ('x'), (' -2.5 '), ('') AS t(s)
+        """
+      Then query result
+        | result |
+        | 1.0    |
+        | NULL   |
+        | NULL   |
+        | 2.5    |
+        | NULL   |
+
+    Scenario: abs of a string column keeps NULLs under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(s) AS result
+        FROM VALUES ('-1'), (CAST(NULL AS STRING)), ('2'), ('NaN') AS t(s)
+        """
+      Then query result
+        | result |
+        | 1.0    |
+        | NULL   |
+        | 2.0    |
+        | NaN    |
+
+    Scenario: abs of a string column with a malformed row fails under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(s) AS result FROM VALUES ('-1'), ('x') AS t(s)
+        """
+      Then query error (CAST_INVALID_INPUT|Cannot cast string 'x')
+
+  Rule: Foldable expressions go through constant folding
+
+    # `abs(1 - 3)` has no column and is folded by the optimizer; the result must equal the column form.
+    Scenario Outline: abs of a foldable expression: <expr>
+      When query
+        """
+        SELECT abs(<expr>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | expr                              | result |
+        | 1 - 3                             | 2      |
+        | 1 + 1                             | 2      |
+        | -(2 * 3)                          | 6      |
+        | abs(-5) - 10                      | 5      |
+        | NULL + 1                          | NULL   |
+        | CASE WHEN true THEN -4 ELSE 0 END | 4      |
+
+    Scenario: abs of a foldable integer expression keeps a non-nullable type
+      When query
+        """
+        SELECT abs(1 - 3) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario Outline: abs of a foldable expression that reaches MIN: ANSI=false wraps, ANSI=true errors
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(<expr>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | expr                                                          | result               |
+        | -2147483647 - 1                                               | -2147483648          |
+        | CAST(-9223372036854775807 AS BIGINT) - CAST(1 AS BIGINT)      | -9223372036854775808 |
+
+    Scenario Outline: abs of a foldable expression that reaches MIN errors under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(<expr>) AS result
+        """
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
+
+      Examples:
+        | expr                                                          |
+        | -2147483647 - 1                                               |
+        | CAST(-9223372036854775807 AS BIGINT) - CAST(1 AS BIGINT)      |
+
+    Scenario Outline: abs of a foldable string expression: ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(concat('-', '5')) AS result
+        """
+      Then query result
+        | result |
+        | 5.0    |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: abs of a foldable malformed string expression is NULL under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(concat('a', 'b')) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: abs of a foldable wide DECIMAL expression rounds like the column form
+      When query
+        """
+        SELECT CAST(abs(CAST(-12345678901234567890123456789012345 AS DECIMAL(38,0)) + CAST(0 AS DECIMAL(38,0))) AS STRING) AS result
+        """
+      Then query result
+        | result                              |
+        | 12345678901234567890123456789012340 |
