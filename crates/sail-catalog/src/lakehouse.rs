@@ -357,7 +357,8 @@ fn resolved_lakehouse_authority(
 ) -> LakehouseAuthority {
     match format {
         LakehouseFormat::Delta
-            if is_unity_delta_table(properties)
+            if lifecycle == TableLifecycle::Managed
+                && is_unity_delta_table(properties)
                 && (capabilities.contains(&LakehouseCapability::CatalogCommit)
                     || capabilities.contains(&LakehouseCapability::DeltaRatifiedCommits)) =>
         {

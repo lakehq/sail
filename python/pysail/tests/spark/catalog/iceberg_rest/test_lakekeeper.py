@@ -76,3 +76,43 @@ def test_create_write_uses_configured_credentials_with_lakekeeper_session_hints(
     table = _load_lakekeeper_table(lakekeeper_endpoint, lakekeeper_warehouse_id)
     assert table["config"]["s3.remote-signing-enabled"] == "true"
     assert table["storage-credentials"]
+
+
+def test_lakekeeper_lakehouse_ddl(spark: SparkSession, lakekeeper_endpoint: str) -> None:
+    from pyiceberg.catalog.rest import RestCatalog
+
+    from pysail.testing.spark.ddl import exercise_lakehouse_alter
+
+    table = f"{NAMESPACE}.ddl"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, value STRING, part STRING) USING iceberg "
+            "PARTITIONED BY (part) TBLPROPERTIES ('format-version'='3', 'retained'='yes')"
+        )
+        exercise_lakehouse_alter(spark, table)
+        reference = RestCatalog("reference", uri=f"{lakekeeper_endpoint}/catalog", warehouse="demo").load_table(table)
+        assert str(reference.schema().find_field("id").field_type) == "long"
+        assert "custom" not in reference.properties
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("client", ["sail", "pyiceberg"])
+@pytest.mark.xfail(
+    strict=True, reason="Lakekeeper 0.12.1 retains the last removed property on load-table, including with PyIceberg"
+)
+def test_lakekeeper_remove_last_property(spark: SparkSession, lakekeeper_endpoint: str, client: str) -> None:
+    from pyiceberg.catalog.rest import RestCatalog
+
+    table = f"{NAMESPACE}.remove_last_property"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg TBLPROPERTIES ('custom'='v')")
+        reference = RestCatalog("reference", uri=f"{lakekeeper_endpoint}/catalog", warehouse="demo").load_table(table)
+        if client == "sail":
+            spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('custom')")
+        else:
+            with reference.transaction() as transaction:
+                transaction.remove_properties("custom")
+        assert "custom" not in reference.refresh().properties
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
