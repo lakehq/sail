@@ -6,12 +6,15 @@ use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{
-    Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
+    Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, TableScanBuilder, TableSource,
+    UNNAMED_TABLE,
 };
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseOperation, TableColumnStatus, TableKind, VIEW_SQL_CONFIG_PREFIX,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -157,15 +160,21 @@ impl PlanResolver<'_> {
                 definition,
                 columns,
                 comment: _,
-                properties: _,
+                properties,
             } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                self.resolve_table_view(definition, columns, table_reference.clone(), state)
-                    .await?
+                self.resolve_table_view(
+                    definition,
+                    columns,
+                    properties,
+                    table_reference.clone(),
+                    state,
+                )
+                .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {
@@ -218,17 +227,45 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    // FIXME: Capture and restore the remaining creation-time SQL configuration;
+    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
         columns: Vec<TableColumnStatus>,
+        properties: Vec<(String, String)>,
         table_reference: TableReference,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        // Like Spark, the legacy flag resolves the view with the reader's configuration.
+        let config = if self.config.legacy_use_current_configs_for_view {
+            Arc::clone(&self.config)
+        } else {
+            let mut config = self.config.as_ref().clone();
+            // Older views without a captured ANSI setting use non-ANSI coercion.
+            config.ansi_mode = properties
+                .iter()
+                .find(|(key, _)| {
+                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX) == Some("spark.sql.ansi.enabled")
+                })
+                .and_then(|(_, value)| value.parse::<bool>().ok())
+                .unwrap_or(false);
+            // Older views retain the existing nonlegacy decimal rule.
+            config.legacy_decimal_retain_fraction_digits = properties
+                .iter()
+                .find(|(key, _)| {
+                    key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
+                        == Some("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
+                })
+                .and_then(|(_, value)| value.parse::<bool>().ok())
+                .unwrap_or(false);
+            Arc::new(config)
+        };
+        let resolver = Self::new(self.ctx, config);
         let plan = match spec_plan {
-            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
                 return Err(PlanError::invalid("view definition must be a query"));
             }
@@ -236,15 +273,34 @@ impl PlanResolver<'_> {
         let plan =
             LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
         if columns.is_empty() {
-            Ok(plan)
-        } else {
-            let names = state.register_field_names(columns.iter().map(|c| &c.name));
-            let plan = rename_logical_plan(plan, &names)?;
-            // Spark renames view columns below the view's alias, so missing-reference
-            // recovery must not see the definition's column names under this output.
-            state.register_missing_input_boundary(&plan);
-            Ok(plan)
+            return Ok(plan);
         }
+        let names = state.register_field_names(columns.iter().map(|c| &c.name));
+        let plan = rename_logical_plan(plan, &names)?;
+        // Spark renames view columns below the view's alias, so missing-reference
+        // recovery must not see the definition's column names under this output.
+        state.register_missing_input_boundary(&plan);
+        if !self.config.legacy_use_current_configs_for_view {
+            return Ok(plan);
+        }
+        // Like Spark's `castColToType`, cast the view output to its stored schema,
+        // since the reader's configuration can change the resolved types.
+        let schema = Arc::clone(plan.schema());
+        let expressions = schema
+            .columns()
+            .into_iter()
+            .zip(&columns)
+            .map(|(column, status)| {
+                let (relation, name) = (column.relation.clone(), column.name.clone());
+                Ok(Expr::Column(column)
+                    .cast_to(&status.data_type, &schema)?
+                    .alias_qualified(relation, name))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expressions,
+            Arc::new(plan),
+        )?))
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan

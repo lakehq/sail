@@ -35,3 +35,23 @@ Feature: shiftright output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Shift counts
+
+    Scenario Outline: shiftright keeps the INT type for a widened IF shift count with ANSI <ansi_mode>
+      Given config spark.sql.ansi.enabled = <ansi_mode>
+      When query
+        """
+        SELECT id, result, typeof(result) AS result_type
+        FROM (SELECT id, -64 >> IF(id = 0, 2, id) AS result FROM range(2)) AS q
+        ORDER BY id
+        """
+      Then query result
+        | id | result | result_type |
+        | 0  | -16    | int         |
+        | 1  | -32    | int         |
+
+      Examples:
+        | ansi_mode |
+        | false     |
+        | true      |

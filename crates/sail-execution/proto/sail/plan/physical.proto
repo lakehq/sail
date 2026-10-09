@@ -244,6 +244,8 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkConditionalCastUdf spark_conditional_cast = 40;
+    SparkNvl2Udf spark_nvl2 = 41;
   }
 }
 
@@ -417,6 +419,14 @@ message SparkNegativeUdf {
 }
 
 message SparkFromCsvUdf {
+  string session_timezone = 1;
+}
+
+message SparkConditionalCastUdf {
+  bytes target_type = 1;
+}
+
+message SparkNvl2Udf {
   string session_timezone = 1;
 }
 

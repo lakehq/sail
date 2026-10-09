@@ -1,0 +1,18 @@
+# serializer version: 1
+---
+name: "test_explain_nvl2_with_a_nonnull_constant_tested_argument_filters_on_the_selected_column"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as id]
+      ProjectionExec: expr=[column1@0 as #6]
+        FilterExec: column2@1 > 15, projection=[column1@0]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_nvl2_with_a_nonnull_constant_tested_argument_projects_the_selected_column"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as r]
+      ProjectionExec: expr=[column2@1 as #6]
+        DataSourceExec: partitions=1, partition_sizes=[1]

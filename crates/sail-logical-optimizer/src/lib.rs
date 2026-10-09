@@ -2,15 +2,20 @@ use std::sync::Arc;
 
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+mod conditional;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
+mod union_conditional;
 
+pub use conditional::GuardInListValues;
+use conditional::SimplifyConditionals;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
+use union_conditional::PushUnionConditional;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -28,7 +33,14 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
-    let Optimizer { rules } = Optimizer::default();
+    let Optimizer { mut rules } = Optimizer::default();
+    // Like Spark's `CombineUnions` before `PushProjectionThroughUnion`, move conditional
+    // projections after DataFusion flattens UNIONs, but still before constant folding.
+    let position = rules
+        .iter()
+        .position(|rule| rule.name() == "simplify_expressions")
+        .unwrap_or(0);
+    rules.insert(position, Arc::new(PushUnionConditional));
     // Custom rules are prepended so they run before DataFusion's built-in rules.
     // `DecorrelateLateralProjection` must run before `DecorrelateLateralJoin`
     // because it handles the simple case where OuterRef only appears in
@@ -43,5 +55,6 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // folding can change the type or nullability of higher-order function
     // arguments, and the lambda variable fields must be refreshed to match.
     custom.push(Arc::new(ResolveLambdaVariables));
+    custom.push(Arc::new(SimplifyConditionals));
     custom
 }

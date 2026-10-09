@@ -71,6 +71,7 @@ use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
+use datafusion_spark::function::bitwise::bit_shift::SparkBitShift;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
@@ -157,6 +158,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::conditional::{SparkConditionalCast, SparkNvl2, SparkShiftCount};
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
@@ -3266,6 +3268,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
+            UdfKind::SparkConditionalCast(r#gen::SparkConditionalCastUdf { target_type }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(SparkConditionalCast::new(
+                    target_type,
+                ))));
+            }
+            UdfKind::SparkNvl2(r#gen::SparkNvl2Udf { session_timezone }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNvl2::new(
+                    session_timezone.into(),
+                ))));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -3392,6 +3405,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
+            "spark_shift_count" => Ok(Arc::new(ScalarUDF::from(SparkShiftCount::default()))),
+            "shiftrightunsigned" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right_unsigned()))),
             "spark_bitwise_not" | "bitwise_not" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
             }
@@ -3534,6 +3549,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
+            || node_inner.is::<SparkShiftCount>()
+            || (node_inner.is::<SparkBitShift>() && node.name() == "shiftrightunsigned")
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
@@ -3794,6 +3811,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkConditionalCast>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkConditionalCast(r#gen::SparkConditionalCastUdf { target_type })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkNvl2>() {
+            UdfKind::SparkNvl2(r#gen::SparkNvl2Udf {
+                session_timezone: func.session_timezone().to_string(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -6579,6 +6603,50 @@ mod tests {
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_shift_count_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkShiftCount::default()))?;
+        assert_eq!(decoded.name(), "spark_shift_count");
+        assert!(decoded.inner().is::<SparkShiftCount>());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_unsigned_shift_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkBitShift::right_unsigned()))?;
+        assert_eq!(decoded.name(), "shiftrightunsigned");
+        assert!(decoded.inner().is::<SparkBitShift>());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_conditional_cast_udf() -> Result<()> {
+        for target_type in [
+            DataType::Int64,
+            DataType::Float64,
+            DataType::Decimal128(22, 2),
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+        ] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkConditionalCast::new(
+                target_type.clone(),
+            )))?;
+            let decoded = downcast_udf::<SparkConditionalCast>(&decoded, "SparkConditionalCast")?;
+            assert_eq!(decoded.target_type(), &target_type);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_nvl2_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkNvl2::new(Arc::from(
+            "America/Los_Angeles",
+        ))))?;
+        let decoded = downcast_udf::<SparkNvl2>(&decoded, "SparkNvl2")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
         Ok(())
     }
 

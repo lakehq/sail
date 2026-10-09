@@ -43,6 +43,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
+use sail_logical_optimizer::GuardInListValues;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -93,6 +94,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
             Box::new(DeltaMetadataAggregateRewriter),
             Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
+            Box::new(GuardInListValues),
         ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {

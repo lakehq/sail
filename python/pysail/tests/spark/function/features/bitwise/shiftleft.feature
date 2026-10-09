@@ -35,3 +35,40 @@ Feature: shiftleft output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Shift counts
+
+    Scenario Outline: shiftleft keeps the INT type for a widened CASE shift count with ANSI <ansi_mode>
+      Given config spark.sql.ansi.enabled = <ansi_mode>
+      When query
+        """
+        SELECT id, result, typeof(result) AS result_type
+        FROM (
+          SELECT id, shiftleft(1, CASE WHEN id = 0 THEN 1 ELSE id + 1 END) AS result
+          FROM range(2)
+        ) AS q
+        ORDER BY id
+        """
+      Then query result
+        | id | result | result_type |
+        | 0  | 2      | int         |
+        | 1  | 4      | int         |
+
+      Examples:
+        | ansi_mode |
+        | false     |
+        | true      |
+
+    @sail-bug
+    Scenario Outline: <function> rejects an overflowing BIGINT shift count with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <function>(1, CAST(2147483648 AS BIGINT)) AS result
+        """
+      Then query error CAST_OVERFLOW
+
+      Examples:
+        | function   |
+        | shiftleft  |
+        | shiftright |
