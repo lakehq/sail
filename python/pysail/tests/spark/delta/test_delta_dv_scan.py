@@ -154,3 +154,20 @@ def test_fragmented_dv_excludes_deleted_values_before_predicate_evaluation(tmp_p
         )
         assert sorted(row.id for row in frame.collect()) == list(range(1, 10000, 2))
         assert frame.limit(1).first().id % 2 == 1
+
+
+@pytest.mark.parametrize("pushdown_filters", [False, True])
+def test_dynamic_join_keeps_deletion_vector_positions(tmp_path, pushdown_filters):
+    path = tmp_path / "dynamic_dv"
+    with (
+        spark_connect_server(envs={"SAIL_PARQUET__PUSHDOWN_FILTERS": str(pushdown_filters).lower()}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        spark = sessions.create()
+        spark.range(1000, numPartitions=1).write.format("delta").option("delta.enableDeletionVectors", "true").save(
+            str(path)
+        )
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE id % 3 = 0")  # noqa: S608
+        frame = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(path))
+        keys = spark.range(980, 1000, numPartitions=1)
+        assert sorted(row.id for row in frame.join(keys, "id").collect()) == [i for i in range(980, 1000) if i % 3]

@@ -59,7 +59,7 @@ use crate::row_level_metadata::{
 };
 use crate::spec::delete_index::DeleteFileRef;
 use crate::spec::transform::Transform;
-use crate::spec::types::values::{Datum, Literal};
+use crate::spec::types::values::Literal;
 use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
@@ -122,37 +122,6 @@ impl IcebergScan {
             return None;
         }
         Some(self.aggregate_statistics(planned.tasks.iter().map(|task| &task.data_file)))
-    }
-
-    fn statistic_scalar(
-        &self,
-        data_file: &DataFile,
-        field_id: i32,
-        datum: &Datum,
-    ) -> Option<ScalarValue> {
-        let field = self.schema.field_by_id(field_id)?;
-        // Iceberg bounds exclude NaNs. They cannot prove a floating column is
-        // constant unless the file explicitly records that there are no NaNs.
-        if matches!(
-            field.field_type.as_ref(),
-            crate::spec::types::Type::Primitive(
-                crate::spec::types::PrimitiveType::Float
-                    | crate::spec::types::PrimitiveType::Double
-            )
-        ) && data_file.nan_value_counts().get(&field_id) != Some(&0)
-        {
-            return None;
-        }
-        to_scalar(
-            &Literal::Primitive(datum.literal.clone()),
-            field.field_type.as_ref(),
-        )
-        .inspect_err(|error| {
-            log::debug!(
-                "Ignoring Iceberg statistic for field ID {field_id} because it cannot be converted: {error}"
-            );
-        })
-        .ok()
     }
 
     /// Create a new Iceberg table scan
@@ -617,6 +586,13 @@ impl IcebergScan {
                     &self.partition_specs,
                     &self.schema,
                 )?);
+            partitioned_file
+                .extensions
+                .insert(crate::datasource::file_pruning::FilePruning::new(
+                    &self.schema,
+                    &self.partition_specs,
+                    &data_file,
+                ));
 
             partitioned_files.push(partitioned_file);
         }
@@ -840,88 +816,13 @@ impl IcebergScan {
         sail_common_datafusion::statistics::aggregate_statistics(&self.arrow_schema, &statistics)
     }
 
-    /// Create file statistics from Iceberg data file metadata
     fn create_file_statistics(&self, data_file: &DataFile) -> Statistics {
-        let num_rows = Precision::Exact(data_file.record_count() as usize);
-        let total_byte_size = Precision::Exact(data_file.file_size_in_bytes() as usize);
-
-        // Create column statistics from Iceberg metadata
-        let column_statistics = self
-            .arrow_schema
-            .fields()
-            .iter()
-            .map(|field| {
-                let Some(field_id) = iceberg_field_id(field).unwrap_or_default() else {
-                    return ColumnStatistics::new_unknown();
-                };
-
-                if let Some(spec) = self
-                    .partition_specs
-                    .iter()
-                    .find(|spec| spec.spec_id() == data_file.partition_spec_id)
-                    && let Some(index) = spec.fields().iter().position(|partition| {
-                        partition.source_id == field_id
-                            && partition.transform == Transform::Identity
-                    })
-                    && let Some(value) = data_file.partition.get(index)
-                    && let Some(source) = self.schema.field_by_id(field_id)
-                {
-                    let scalar = match value {
-                        Some(value) => to_scalar(value, &source.field_type).ok(),
-                        None => ScalarValue::try_new_null(field.data_type()).ok(),
-                    };
-                    if let Some(scalar) = scalar {
-                        return ColumnStatistics {
-                            null_count: Precision::Exact(if scalar.is_null() {
-                                data_file.record_count() as usize
-                            } else {
-                                0
-                            }),
-                            min_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar.clone()) },
-                            max_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar) },
-                            ..ColumnStatistics::new_unknown()
-                        };
-                    }
-                }
-
-                let null_count = data_file
-                    .null_value_counts()
-                    .get(&field_id)
-                    .map(|&count| Precision::Exact(count as usize))
-                    .unwrap_or(Precision::Absent);
-
-                let distinct_count = Precision::Absent;
-
-                let min_value = data_file
-                    .lower_bounds()
-                    .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
-                    .map(Self::bound_precision)
-                    .unwrap_or(Precision::Absent);
-
-                let max_value = data_file
-                    .upper_bounds()
-                    .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
-                    .map(Self::bound_precision)
-                    .unwrap_or(Precision::Absent);
-
-                ColumnStatistics {
-                    null_count,
-                    max_value,
-                    min_value,
-                    distinct_count,
-                    sum_value: Precision::Absent,
-                    byte_size: Precision::Absent,
-                }
-            })
-            .collect();
-
-        Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics,
-        }
+        crate::datasource::file_statistics::file_statistics(
+            &self.schema,
+            &self.arrow_schema,
+            &self.partition_specs,
+            data_file,
+        )
     }
 
     fn constant_projection_scan(
@@ -1003,23 +904,6 @@ impl IcebergScan {
         };
         Ok(Some(Arc::new(IcebergMetadataScanExec::new(scan))))
     }
-
-    fn bound_precision(value: ScalarValue) -> Precision<ScalarValue> {
-        // Bounds from older files may be truncated regardless of the current metrics mode.
-        if matches!(
-            value.data_type(),
-            DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Utf8View
-                | DataType::Binary
-                | DataType::LargeBinary
-                | DataType::BinaryView
-        ) {
-            Precision::Inexact(value)
-        } else {
-            Precision::Exact(value)
-        }
-    }
 }
 
 impl IcebergScan {
@@ -1049,15 +933,7 @@ impl IcebergScan {
                 .await;
         }
 
-        // The streaming manifest path does not carry partition tuples. Use the
-        // manifest-aware scan when missing columns may need identity constants.
-        if self.metadata_as_data_read
-            && !self.partition_specs.iter().any(|spec| {
-                spec.fields()
-                    .iter()
-                    .any(|field| field.transform == Transform::Identity)
-            })
-        {
+        if self.metadata_as_data_read {
             return self
                 .scan_metadata_as_data(session, projection, filters, limit)
                 .await;
@@ -1189,6 +1065,12 @@ impl IcebergScan {
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let data_file_raw_path = df.file_path().to_string();
+            let file_statistics = crate::datasource::file_statistics::file_statistics(
+                &delete_scan.schema,
+                &data_scan.schema(),
+                &self.partition_specs,
+                &df,
+            );
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
@@ -1197,6 +1079,8 @@ impl IcebergScan {
                 eq_deletes,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
+                file_statistics,
+                None,
             ));
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
@@ -1261,13 +1145,7 @@ impl IcebergScan {
         if self.file_column_name.is_some() || self.row_index_column_name.is_some() {
             return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
         }
-        if self.metadata_as_data_read
-            && !self.partition_specs.iter().any(|spec| {
-                spec.fields()
-                    .iter()
-                    .any(|field| field.transform == Transform::Identity)
-            })
-        {
+        if self.metadata_as_data_read {
             return Ok(vec![TableProviderFilterPushDown::Inexact; filter.len()]);
         }
         Ok(filter
@@ -1422,6 +1300,12 @@ impl IcebergScan {
                     row_lineage,
                 )?);
 
+            let file_statistics = crate::datasource::file_statistics::file_statistics(
+                &delete_scan.schema,
+                &with_metadata.schema(),
+                &self.partition_specs,
+                &df,
+            );
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 with_metadata,
                 df.file_path.clone(),
@@ -1429,6 +1313,8 @@ impl IcebergScan {
                 equality_deletes,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
+                file_statistics,
+                None,
             ));
             branches.push(self.project_scan_schema(apply, &self.output_schema)?);
         }
@@ -1560,6 +1446,8 @@ impl IcebergScan {
             self.table_uri.clone(),
             snapshot.clone(),
             ManifestPruning {
+                schema: self.schema.clone(),
+                file_schema: self.arrow_schema.clone(),
                 predicate: Predicate::conjunction(&self.schema, filters),
                 limit: limit.filter(|_| filters.is_empty()),
                 floating_field_ids: self
@@ -1607,6 +1495,7 @@ impl IcebergScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::Datum;
     use crate::spec::types::{NestedField, PrimitiveLiteral, PrimitiveType, Type};
 
     fn statistics_fixture() -> Result<(IcebergScan, DataFile)> {

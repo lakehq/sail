@@ -512,3 +512,54 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, sna
         assert frame.where("p = 'a'").select().isEmpty() is False
         assert frame.select().limit(4).collect() == [(), (), ()]
     assert plans == snapshot
+
+
+@pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
+@pytest.mark.parametrize("known_stats", [False, True], ids=["missing-stats", "file-stats"])
+def test_dynamic_partition_join_skips_unreadable_files(spark, tmp_path, mapping_mode, known_stats):
+    path = tmp_path / "dynamic_partitions"
+    _write_partitioned_table(
+        path,
+        [("p", q, [q * 10, q * 10 + 1], known_stats) for q in range(4)],
+        mapping_mode,
+    )
+    frame = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(path)).select("v", "q")
+    keys = spark.createDataFrame([(2,), (2,)], "q int")
+    expected = [(20, 2), (20, 2), (21, 2), (21, 2)]
+    assert sorted(tuple(row) for row in frame.join(keys, "q").select("v", "q").collect()) == expected
+    for q in (0, 1, 3):
+        (path / f"part-{q}.parquet").unlink()
+    assert sorted(tuple(row) for row in frame.join(keys, "q").select("v", "q").collect()) == expected
+    # The missing files are still live; an ordinary scan must attempt to open them.
+    with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
+        frame.collect()
+
+
+def test_dynamic_file_statistics_join_skips_unreadable_files(spark, tmp_path):
+    path = tmp_path / "dynamic_file_statistics"
+    _write_partitioned_table(path, [("p", 0, [v, v + 1], True) for v in (10, 20, 30)])
+    frame = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(path)).select("v", "q")
+    keys = spark.createDataFrame([(20,), (21,)], "v long")
+    for index in (0, 2):
+        (path / f"part-{index}.parquet").unlink()
+    assert sorted(tuple(row) for row in frame.join(keys, "v").collect()) == [(20, 0), (21, 0)]
+
+
+def test_dynamic_partition_join_preserves_nulls_and_outer_rows(spark, tmp_path):
+    path = tmp_path / "dynamic_null_partitions"
+    _write_partitioned_table(path, [("p", q, [v, v + 1], True) for q, v in [(None, 10), (1, 20), (2, 30)]])
+    frame = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(path)).select("v", "q")
+    keys = spark.createDataFrame([(None,), (2,), (2,)], "k int")
+    assert sorted(row.v for row in frame.join(keys, frame.q == keys.k).collect()) == [30, 30, 31, 31]
+    assert sorted(row.v for row in frame.join(keys, frame.q.eqNullSafe(keys.k)).collect()) == [10, 11, 30, 30, 31, 31]
+    assert sorted(row.v for row in frame.join(keys, frame.q == keys.k, "left").collect()) == [
+        10,
+        11,
+        20,
+        21,
+        30,
+        30,
+        31,
+        31,
+    ]
+    assert frame.join(spark.createDataFrame([], "q int"), "q").collect() == []

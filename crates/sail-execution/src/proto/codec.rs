@@ -275,7 +275,9 @@ use sail_iceberg::physical_plan::{
     IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
-use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
+use sail_iceberg::{
+    IcebergParquetSource, IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind,
+};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -641,6 +643,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 struct_field_matching,
                 timezone_mode,
                 virtual_columns,
+                iceberg_file_pruning,
             }) => {
                 let mut base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
@@ -700,12 +703,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }
-                let source = parse_protobuf_file_scan_config(
+                let mut source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     proto_converter,
                     Arc::new(source),
                 )?;
+                if let Some(metadata) = iceberg_file_pruning {
+                    source.file_source = Arc::new(IcebergParquetSource::try_from_metadata(
+                        source.file_source.clone(),
+                        &metadata,
+                    )?);
+                }
                 let struct_field_matching =
                     Self::try_decode_struct_field_matching(struct_field_matching)?;
                 let timezone_mode = Self::try_decode_schema_evolution_timezone_mode(timezone_mode)?;
@@ -1708,6 +1717,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url,
                 iceberg_schema_json,
+                file_statistics,
+                predicate,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1723,6 +1734,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg schema: {e}")
                     })?;
+                let file_statistics = self.try_decode_statistics(&file_statistics)?;
+                let predicate = predicate
+                    .map(|predicate| {
+                        try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &input.schema(),
+                        )
+                    })
+                    .transpose()?;
                 Ok(Arc::new(IcebergDeleteApplyExec::new(
                     input,
                     data_file_path,
@@ -1730,6 +1753,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     equality_deletes,
                     table_url,
                     iceberg_schema,
+                    file_statistics,
+                    predicate,
                 )))
             }
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
@@ -2207,7 +2232,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         options,
                     })
-                } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                } else if let Some(parquet_source) =
+                    file_source.downcast_ref::<ParquetSource>().or_else(|| {
+                        file_source
+                            .downcast_ref::<IcebergParquetSource>()
+                            .and_then(IcebergParquetSource::parquet)
+                    })
+                {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -2230,6 +2261,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let (struct_field_matching, timezone_mode) =
                         Self::parquet_schema_evolution_modes(file_scan)?;
                     NodeKind::Parquet(r#gen::ParquetExecNode {
+                        iceberg_file_pruning: file_source
+                            .downcast_ref::<IcebergParquetSource>()
+                            .map(IcebergParquetSource::metadata_json)
+                            .transpose()?,
                         base_config,
                         options,
                         predicate,
@@ -2855,6 +2890,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url: delete_apply.table_url().to_string(),
                 iceberg_schema_json,
+                file_statistics: self.try_encode_statistics(delete_apply.file_statistics())?,
+                predicate: delete_apply
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(self, proto_converter, predicate)
+                    })
+                    .transpose()?,
             })
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5602,6 +5644,123 @@ mod tests {
         fn encode(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
             plan_err!("nested expression encoding is not used by this test")
         }
+    }
+
+    #[tokio::test]
+    async fn iceberg_manifest_pruning_survives_parquet_source_decode() -> Result<()> {
+        use datafusion::datasource::listing::PartitionedFile;
+        use datafusion::datasource::physical_plan::FileGroup;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{Column, binary, lit};
+        use sail_iceberg::spec::{DataFile, NestedField, PartitionSpec, PrimitiveType, Type};
+
+        let iceberg_schema = sail_iceberg::spec::Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                7,
+                "key",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let schema = Arc::new(sail_iceberg::iceberg_schema_to_arrow(&iceberg_schema)?);
+        let file: DataFile = serde_json::from_value(serde_json::json!({
+            "content": "DATA",
+            "file_path": "missing-iceberg-codec/data.parquet",
+            "file_format": "PARQUET",
+            "partition": [],
+            "record_count": 2,
+            "file_size_in_bytes": 100,
+            "partition_spec_id": 0
+        }))
+        .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let spec = PartitionSpec::builder()
+            .add_field_with_id(7, 1000, "key", IcebergTransform::Identity)
+            .build();
+        let metadata = serde_json::json!({file.file_path.clone(): {
+            "schema": iceberg_schema,
+            "spec": spec,
+            "file": {
+                "data_file": file,
+                "partition": [{"Int": 1}],
+                "lower_bounds": {},
+                "upper_bounds": {}
+            }
+        }})
+        .to_string();
+        let parquet = ParquetSource::new(schema.clone()).with_predicate(binary(
+            Arc::new(Column::new("key", 0)),
+            Operator::Eq,
+            lit(2i32),
+            &schema,
+        )?);
+        let source = IcebergParquetSource::try_from_metadata(Arc::new(parquet), &metadata)?;
+        let scan = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(source))
+            .with_file_groups(vec![FileGroup::from(vec![PartitionedFile::new(
+                "missing-iceberg-codec/data.parquet",
+                100,
+            )])])
+            .build();
+        let plan = DataSourceExec::from_data_source(scan);
+        let codec = RemoteExecutionCodec;
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let context = Arc::new(TaskContext::default());
+        let decoded = crate::proto::decode_remote_physical_plan(&context, &codec, &bytes)?;
+        assert!(
+            datafusion::physical_plan::collect(decoded, context)
+                .await?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn iceberg_delete_pruning_survives_plan_decode_and_executes_before_io() -> Result<()> {
+        use datafusion::arrow::datatypes::Field;
+        use datafusion::common::stats::Precision;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{Column, binary, lit};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let mut statistics = Statistics::new_unknown(&schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[0].min_value = Precision::Exact(ScalarValue::Int64(Some(1)));
+        statistics.column_statistics[0].max_value = Precision::Exact(ScalarValue::Int64(Some(1)));
+        statistics.column_statistics[0].null_count = Precision::Exact(0);
+        let predicate = binary(
+            Arc::new(Column::new("key", 0)),
+            Operator::Eq,
+            lit(2i64),
+            &schema,
+        )?;
+        let plan = Arc::new(IcebergDeleteApplyExec::new(
+            Arc::new(EmptyExec::new(schema)),
+            "unregistered://table/data.parquet".into(),
+            vec![],
+            vec![],
+            "unregistered://table/".into(),
+            sail_iceberg::spec::Schema::builder()
+                .build()
+                .map_err(|error| plan_datafusion_err!("{error}"))?,
+            statistics.clone(),
+            Some(predicate.clone()),
+        ));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let context = Arc::new(TaskContext::default());
+        let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
+        let scan = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergDeleteApplyExec"))?;
+        assert_eq!(scan.file_statistics(), &statistics);
+        assert!(
+            scan.predicate()
+                .is_some_and(|decoded| decoded.eq(&predicate))
+        );
+        let batches = datafusion::physical_plan::collect(decoded, context).await?;
+        assert!(batches.is_empty());
+        Ok(())
     }
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {

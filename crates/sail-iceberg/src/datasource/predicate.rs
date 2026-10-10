@@ -104,6 +104,57 @@ pub(crate) enum Operation {
 }
 
 impl Predicate {
+    pub(crate) fn physical(
+        schema: &Schema,
+        arrow_schema: &datafusion::arrow::datatypes::Schema,
+        expr: &std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+    ) -> Self {
+        use datafusion::physical_expr::expressions::{
+            BinaryExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, NotExpr,
+        };
+
+        if let Some(dynamic) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+            return dynamic
+                .current()
+                .map(|expr| Self::physical(schema, arrow_schema, &expr))
+                .unwrap_or(Self::Unknown);
+        }
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            match binary.op() {
+                Operator::And => {
+                    return Self::And(vec![
+                        Self::physical(schema, arrow_schema, binary.left()),
+                        Self::physical(schema, arrow_schema, binary.right()),
+                    ]);
+                }
+                Operator::Or => {
+                    return Self::Or(vec![
+                        Self::physical(schema, arrow_schema, binary.left()),
+                        Self::physical(schema, arrow_schema, binary.right()),
+                    ]);
+                }
+                _ => {}
+            }
+        }
+        if let Some(not) = expr.downcast_ref::<NotExpr>() {
+            return Self::physical(schema, arrow_schema, not.arg()).negate();
+        }
+        if let Some(null) = expr.downcast_ref::<IsNullExpr>()
+            && physical_value(schema, arrow_schema, null.arg()).is_none()
+        {
+            return Self::IsNull(Box::new(Self::physical(schema, arrow_schema, null.arg())));
+        }
+        if let Some(null) = expr.downcast_ref::<IsNotNullExpr>()
+            && physical_value(schema, arrow_schema, null.arg()).is_none()
+        {
+            return Self::IsNull(Box::new(Self::physical(schema, arrow_schema, null.arg())))
+                .negate();
+        }
+        physical_value(schema, arrow_schema, expr)
+            .map(|expr| Self::new(schema, &expr))
+            .unwrap_or(Self::Unknown)
+    }
+
     pub(crate) fn conjunction(schema: &Schema, filters: &[Expr]) -> Self {
         Self::And(filters.iter().map(|expr| Self::new(schema, expr)).collect())
     }
@@ -410,6 +461,78 @@ impl Predicate {
             })
         })
     }
+}
+
+fn physical_value(
+    schema: &Schema,
+    arrow_schema: &datafusion::arrow::datatypes::Schema,
+    expr: &std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+) -> Option<Expr> {
+    use datafusion::physical_expr::ScalarFunctionExpr;
+    use datafusion::physical_expr::expressions::{
+        BinaryExpr as PhysicalBinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
+        IsNotNullExpr, IsNullExpr, Literal as PhysicalLiteral, NotExpr,
+    };
+
+    let convert = |expr| physical_value(schema, arrow_schema, expr);
+    if let Some(dynamic) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+        return convert(&dynamic.current().ok()?);
+    }
+    if let Some(column) = expr.downcast_ref::<Column>() {
+        let field = arrow_schema.fields().get(column.index())?;
+        let id = crate::datasource::type_converter::iceberg_field_id(field).ok()??;
+        let field = schema.fields().iter().find(|field| field.id == id)?;
+        return Some(datafusion_expr::col(field.name.clone()));
+    }
+    if let Some(literal) = expr.downcast_ref::<PhysicalLiteral>() {
+        return Some(datafusion_expr::lit(literal.value().clone()));
+    }
+    if let Some(binary) = expr.downcast_ref::<PhysicalBinaryExpr>() {
+        return Some(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(convert(binary.left())?),
+            *binary.op(),
+            Box::new(convert(binary.right())?),
+        )));
+    }
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        return Some(Expr::Cast(datafusion_expr::Cast::new(
+            Box::new(convert(cast.expr())?),
+            cast.cast_type().clone(),
+        )));
+    }
+    if let Some(list) = expr.downcast_ref::<InListExpr>() {
+        return Some(
+            convert(list.expr())?.in_list(
+                list.list()
+                    .iter()
+                    .map(convert)
+                    .collect::<Option<Vec<_>>>()?,
+                list.negated(),
+            ),
+        );
+    }
+    if let Some(null) = expr.downcast_ref::<IsNullExpr>() {
+        return Some(convert(null.arg())?.is_null());
+    }
+    if let Some(null) = expr.downcast_ref::<IsNotNullExpr>() {
+        return Some(convert(null.arg())?.is_not_null());
+    }
+    if let Some(not) = expr.downcast_ref::<NotExpr>() {
+        return Some(Expr::Not(Box::new(convert(not.arg())?)));
+    }
+    if let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        return Some(Expr::ScalarFunction(
+            datafusion_expr::expr::ScalarFunction::new_udf(
+                function.fun().clone().into(),
+                function
+                    .args()
+                    .iter()
+                    .map(convert)
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+        ));
+    }
+    None
 }
 
 fn source_field<'a>(

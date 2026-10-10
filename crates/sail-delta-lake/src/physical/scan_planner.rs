@@ -347,9 +347,10 @@ pub(crate) async fn plan_delta_scan(
             )
         }
         DeltaFileSource::Replay => {
-            let include_stats = pruning_expr
-                .as_ref()
-                .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols));
+            let include_stats = config.enable_parquet_pushdown
+                || pruning_expr
+                    .as_ref()
+                    .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols));
             (
                 build_replayed_adds_input(
                     session,
