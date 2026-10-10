@@ -177,7 +177,7 @@ impl ServerSessionFactory {
         }
         execution.collect_statistics = self.config.execution.collect_statistics;
         execution.spill_compression =
-            super::spill_compression(self.config.runtime.temporary_files.spill_compression);
+            super::temporary_file_compression(self.config.runtime.temporary_files.compression);
         execution.use_row_number_estimates_to_optimize_partitioning = self
             .config
             .execution

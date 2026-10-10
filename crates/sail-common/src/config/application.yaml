@@ -65,7 +65,7 @@
     will be raised if a query attempts to spill to disk.
   experimental: true
 
-- key: runtime.temporary_files.spill_compression
+- key: runtime.temporary_files.compression
   type: string
   default: "uncompressed"
   description: |

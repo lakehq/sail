@@ -21,14 +21,14 @@ def remote(request, execution_mode):
             "SAIL_EXECUTION__DEFAULT_PARALLELISM": "1",
             "SAIL_RUNTIME__MEMORY_POOL__TYPE": "greedy",
             "SAIL_RUNTIME__MEMORY_POOL__GREEDY__MAX_SIZE": "33554432",
-            "SAIL_RUNTIME__TEMPORARY_FILES__SPILL_COMPRESSION": request.param,
+            "SAIL_RUNTIME__TEMPORARY_FILES__COMPRESSION": request.param,
             "SAIL_CLUSTER__WORKER_MAX_COUNT": "1",
         }
     ) as server:
         yield server.remote
 
 
-def test_sort_spill_compression(spark):
+def test_sort_temporary_file_compression(spark):
     rows = 120_000
     # Retain the padded keys in buffered rows; row ranks verify merge order after spilling.
     query = f"""

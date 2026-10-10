@@ -11,7 +11,7 @@ use datafusion::prelude::SessionContext;
 pub use job_runner::{
     ServerSessionJobRunnerFactory, SessionJobRunner, SessionJobRunnerFactory, SessionJobRunnerInfo,
 };
-use sail_common::config::ParquetConfig;
+use sail_common::config::{ParquetConfig, TemporaryFileCompression};
 pub use server::{ServerSessionFactory, ServerSessionInfo, ServerSessionMutator};
 pub use worker::WorkerSessionFactory;
 
@@ -22,16 +22,15 @@ pub trait SessionFactory<I>: Send {
     fn create(&mut self, info: I) -> Result<SessionContext>;
 }
 
-fn spill_compression(
-    compression: sail_common::config::SpillCompression,
+fn temporary_file_compression(
+    compression: TemporaryFileCompression,
 ) -> datafusion::common::config::SpillCompression {
     use datafusion::common::config::SpillCompression;
-    use sail_common::config::SpillCompression as SailSpillCompression;
 
     match compression {
-        SailSpillCompression::Uncompressed => SpillCompression::Uncompressed,
-        SailSpillCompression::Lz4Frame => SpillCompression::Lz4Frame,
-        SailSpillCompression::Zstd => SpillCompression::Zstd,
+        TemporaryFileCompression::Uncompressed => SpillCompression::Uncompressed,
+        TemporaryFileCompression::Lz4Frame => SpillCompression::Lz4Frame,
+        TemporaryFileCompression::Zstd => SpillCompression::Zstd,
     }
 }
 

@@ -41,7 +41,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
         let execution = &mut config.options_mut().execution;
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =
-            super::spill_compression(self.config.runtime.temporary_files.spill_compression);
+            super::temporary_file_compression(self.config.runtime.temporary_files.compression);
         super::apply_parquet_config(&mut execution.parquet, &self.config.parquet);
         let state = SessionStateBuilder::new()
             .with_config(config)
