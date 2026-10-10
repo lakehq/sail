@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::utils::object::partial_cmp_by_equality;
 use sail_common::utils::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -211,10 +212,8 @@ impl ShowStringFormat {
 #[educe(PartialOrd)]
 pub struct ShowStringNode {
     input: Arc<LogicalPlan>,
-    // names is part of schema so we skip it in PartialOrd
-    #[educe(PartialOrd(ignore))]
     names: Vec<String>,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
     limit: usize,
     format: ShowStringFormat,

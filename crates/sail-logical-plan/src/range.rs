@@ -7,6 +7,7 @@ use datafusion::common::{DFSchema, DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_common::plan_err;
 use educe::Educe;
+use sail_common::utils::object::partial_cmp_by_equality;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -81,7 +82,7 @@ impl Iterator for RangeIterator {
 pub struct RangeNode {
     range: Range,
     num_partitions: usize,
-    #[educe(PartialOrd(ignore))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality)))]
     schema: DFSchemaRef,
 }
 

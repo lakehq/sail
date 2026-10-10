@@ -527,6 +527,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 prefix,
                 storage_schema,
+                input_ordering,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -535,12 +536,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let prefix = object_store::path::Path::parse(prefix)
                     .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
                 let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
-                Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
-                    input,
-                    object_store_url,
-                    prefix,
-                    storage_schema,
-                )?))
+                let input_ordering = input_ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(
+                            &ordering,
+                            &input.schema(),
+                            ctx,
+                            proto_converter,
+                        )
+                    })
+                    .transpose()?;
+                Ok(Arc::new(
+                    RemoteCheckpointWriteExec::try_new(
+                        input,
+                        object_store_url,
+                        prefix,
+                        storage_schema,
+                    )?
+                    .with_input_ordering(input_ordering),
+                ))
             }
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
                 input,
@@ -2005,6 +2019,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                input_ordering: checkpoint
+                    .input_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+                    .transpose()?,
             })
         } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -7124,7 +7142,9 @@ mod tests {
 
     #[test]
     fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
+        use datafusion::physical_expr::expressions::Column;
         use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::sorts::sort::SortExec;
 
         let input_schema = Arc::new(Schema::new(vec![Field::new(
             "logical_name",
@@ -7132,15 +7152,30 @@ mod tests {
             true,
         )]));
         let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "logical_name",
+            0,
+        )))])
+        .ok_or_else(|| plan_datafusion_err!("expected checkpoint ordering"))?;
         let checkpoint = RemoteCheckpointWriteExec::try_new(
-            Arc::new(EmptyExec::new(input_schema)),
+            Arc::new(SortExec::new(
+                ordering.clone(),
+                Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+            )),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
             object_store::path::Path::from("checkpoints/session/relation"),
             Arc::clone(&storage_schema),
         )?;
         let codec = RemoteExecutionCodec;
 
-        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        // The requirement is independent of the current child properties during rewrites.
+        let checkpoint = Arc::new(checkpoint).replace_children(
+            vec![Arc::new(EmptyExec::new(input_schema))],
+            datafusion::physical_plan::ReplaceChildrenOptions::new(
+                datafusion::physical_plan::ChildrenPropertiesMode::Recompute,
+            ),
+        )?;
+        let bytes = try_encode_physical_plan(&codec, checkpoint)?;
         let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
         let decoded = decoded
             .downcast_ref::<RemoteCheckpointWriteExec>()
@@ -7156,6 +7191,10 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        assert_eq!(
+            decoded.required_input_ordering(),
+            vec![Some(ordering.into())]
+        );
         Ok(())
     }
 

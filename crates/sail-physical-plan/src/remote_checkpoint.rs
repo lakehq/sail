@@ -7,7 +7,7 @@ use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::{ConfigOptions, TableParquetOptions};
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
@@ -15,9 +15,11 @@ use datafusion::datasource::source::{DataSource, OpenArgs};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
+    PhysicalExpr, PhysicalSortExpr, RangePartitioning,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use datafusion::physical_plan::filter_pushdown::FilterPushdownPropagation;
@@ -25,7 +27,7 @@ use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SortOrderPushdownResult,
+    SortOrderPushdownResult, apply_expression_roots,
 };
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use datafusion_datasource_parquet::ParquetSink;
@@ -187,6 +189,70 @@ pub fn checkpoint_storage_schema(logical_schema: &SchemaRef) -> SchemaRef {
     ))
 }
 
+// Column ordinals survive logical/storage renames; names may be duplicated or synthetic.
+pub fn checkpoint_schema_partitioning(
+    partitioning: &Partitioning,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Partitioning> {
+    match partitioning {
+        Partitioning::RoundRobinBatch(partitions) => Ok(Partitioning::RoundRobinBatch(*partitions)),
+        Partitioning::Hash(expressions, partitions) => Ok(Partitioning::Hash(
+            expressions
+                .iter()
+                .map(|expression| checkpoint_schema_expression(Arc::clone(expression), schema))
+                .collect::<datafusion_common::Result<Vec<_>>>()?,
+            *partitions,
+        )),
+        Partitioning::Range(range) => Ok(Partitioning::Range(RangePartitioning::try_new(
+            checkpoint_schema_ordering(range.ordering(), schema)?,
+            range.split_points().to_vec(),
+        )?)),
+        Partitioning::UnknownPartitioning(partitions) => {
+            Ok(Partitioning::UnknownPartitioning(*partitions))
+        }
+    }
+}
+
+pub fn checkpoint_schema_ordering(
+    ordering: &LexOrdering,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<LexOrdering> {
+    let expressions = ordering
+        .iter()
+        .map(|sort| {
+            Ok(PhysicalSortExpr::new(
+                checkpoint_schema_expression(Arc::clone(&sort.expr), schema)?,
+                sort.options,
+            ))
+        })
+        .collect::<datafusion_common::Result<Vec<_>>>()?;
+    LexOrdering::new(expressions)
+        .ok_or_else(|| internal_datafusion_err!("checkpoint output ordering cannot be empty"))
+}
+
+fn checkpoint_schema_expression(
+    expression: Arc<dyn PhysicalExpr>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_down(|expression| {
+            let Some(column) = expression.downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expression));
+            };
+            let field = schema.fields().get(column.index()).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "checkpoint property references column {} at invalid index {}",
+                    column.name(),
+                    column.index()
+                )
+            })?;
+            Ok(Transformed::yes(
+                Arc::new(Column::new(field.name(), column.index())) as Arc<dyn PhysicalExpr>,
+            ))
+        })
+        .data()
+}
+
 fn checkpoint_metadata_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new(
         METADATA_COLUMN,
@@ -340,6 +406,28 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
                 "RemoteCheckpointCommitExec must have exactly one child"
             ));
         };
+        // Optimizers may change the writer's input distribution or ordering. Capture the
+        // current properties before distributed planning replaces the writer with a stage input.
+        let mut output_partitioning = self.output_partitioning.clone();
+        let mut output_ordering = self.output_ordering.clone();
+        input.apply(|plan| {
+            if let Some(writer) = plan.downcast_ref::<RemoteCheckpointWriteExec>()
+                && writer.prefix() == &self.prefix
+                && writer.object_store_url() == &self.object_store_url
+            {
+                output_partitioning = checkpoint_schema_partitioning(
+                    writer.input().output_partitioning(),
+                    &self.storage_schema,
+                )?;
+                output_ordering = writer
+                    .input()
+                    .output_ordering()
+                    .map(|ordering| checkpoint_schema_ordering(ordering, &self.storage_schema))
+                    .transpose()?;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
         Ok(Arc::new(Self::new(
             Arc::clone(input),
             self.relation_id.clone(),
@@ -347,8 +435,8 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
             self.prefix.clone(),
             Arc::clone(&self.logical_schema),
             Arc::clone(&self.storage_schema),
-            self.output_partitioning.clone(),
-            self.output_ordering.clone(),
+            output_partitioning,
+            output_ordering,
         )))
     }
 
@@ -403,6 +491,7 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
 #[derive(Debug)]
 pub struct RemoteCheckpointWriteExec {
     input: Arc<dyn ExecutionPlan>,
+    input_ordering: Option<LexOrdering>,
     object_store_url: ObjectStoreUrl,
     prefix: Path,
     storage_schema: SchemaRef,
@@ -410,6 +499,15 @@ pub struct RemoteCheckpointWriteExec {
 }
 
 impl RemoteCheckpointWriteExec {
+    pub fn input_ordering(&self) -> Option<&LexOrdering> {
+        self.input_ordering.as_ref()
+    }
+
+    pub fn with_input_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
+        self.input_ordering = ordering;
+        self
+    }
+
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         object_store_url: ObjectStoreUrl,
@@ -440,6 +538,7 @@ impl RemoteCheckpointWriteExec {
             Boundedness::Bounded,
         ));
         Ok(Self {
+            input_ordering: input.output_ordering().cloned(),
             input,
             object_store_url,
             prefix,
@@ -484,6 +583,10 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
         &self.properties
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![self.input_ordering.clone().map(Into::into)]
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
@@ -494,9 +597,14 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        apply_expression_roots(
+            self.input_ordering
+                .iter()
+                .flat_map(|order| order.iter().map(|sort| &sort.expr)),
+            f,
+        )
     }
 
     #[expect(deprecated)]
@@ -517,12 +625,14 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
                 "RemoteCheckpointWriteExec must have exactly one child"
             ));
         };
-        Ok(Arc::new(Self::try_new(
+        let mut writer = Self::try_new(
             Arc::clone(input),
             self.object_store_url.clone(),
             self.prefix.clone(),
             Arc::clone(&self.storage_schema),
-        )?))
+        )?;
+        writer.input_ordering = self.input_ordering.clone();
+        Ok(Arc::new(writer))
     }
 
     fn execute(

@@ -8,14 +8,14 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use futures::StreamExt;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::DecodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
 
-/// A physical plan node that collects a stream of retractable data batches
-/// into final data batches.
+/// A physical plan node that collects append-only data from a bounded event stream.
+/// Retractions are rejected until retractable collection is supported.
 /// The input schema must be a flow event schema, while the output schema
 /// is the corresponding data schema.
 #[derive(Debug)]
@@ -33,8 +33,7 @@ impl StreamCollectorExec {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            // We emit data at the end since we need to handle retractions.
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Ok(Self { input, properties })
@@ -119,14 +118,14 @@ impl ExecutionPlan for StreamCollectorExec {
             return internal_err!("{} requires a single input partition", self.name());
         }
         let stream = self.input.execute(partition, context)?;
-        // TODO: collect data batches and handle retractions
         let stream = DecodedFlowEventStream::try_new(stream)?.filter_map(|event| async move {
             match event {
                 Ok(FlowEvent::Marker(_)) => None,
-                Ok(FlowEvent::Data {
-                    batch,
-                    retracted: _,
-                }) => Some(Ok(batch)),
+                Ok(FlowEvent::Data { batch, retracted }) => Some(if retracted.true_count() > 0 {
+                    not_impl_err!("stream collector does not support retractions")
+                } else {
+                    Ok(batch)
+                }),
                 Err(e) => Some(Err(e)),
             }
         });
@@ -134,9 +133,5 @@ impl ExecutionPlan for StreamCollectorExec {
             self.schema(),
             stream,
         )))
-    }
-
-    fn supports_limit_pushdown(&self) -> bool {
-        true
     }
 }

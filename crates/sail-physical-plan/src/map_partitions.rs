@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -27,7 +27,8 @@ impl MapPartitionsExec {
         // due to field renaming.
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
-            input.output_partitioning().clone(),
+            // A stream UDF may replace partition keys or change the output schema.
+            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             input.pipeline_behavior(),
             input.boundedness(),
         ));
