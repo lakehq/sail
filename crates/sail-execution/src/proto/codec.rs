@@ -7141,6 +7141,7 @@ mod tests {
     #[test]
     fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
         let input_schema = Arc::new(Schema::new(vec![Field::new(
             "logical_name",
@@ -7164,8 +7165,10 @@ mod tests {
             Some(ordering),
         )?;
         assert_eq!(checkpoint.required_input_ordering(), required_ordering);
-        let checkpoint =
-            Arc::new(checkpoint).with_new_children(vec![Arc::new(EmptyExec::new(input_schema))])?;
+        let checkpoint = Arc::new(checkpoint).replace_children(
+            vec![Arc::new(EmptyExec::new(input_schema))],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(checkpoint.required_input_ordering(), required_ordering);
         let codec = RemoteExecutionCodec;
 
