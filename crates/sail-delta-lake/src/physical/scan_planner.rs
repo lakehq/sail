@@ -36,8 +36,8 @@ use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{
     DeltaDiscoveryExec, DeltaScanByAddsExec, delta_action_schema, encode_actions,
 };
-use crate::schema::{attach_column_mapping_metadata, get_physical_schema};
-use crate::spec::{Action, Add, ColumnMappingMode, StructType};
+use crate::schema::get_physical_schema;
+use crate::spec::{Action, Add, StructType};
 use crate::table::DeltaSnapshot;
 
 #[derive(Debug, Clone)]
@@ -58,24 +58,16 @@ pub(crate) async fn plan_delta_scan(
     filters: &[Expr],
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut config = config.clone();
+    let config = config.clone();
     snapshot
         .ensure_data_read_supported()
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let kmode = snapshot.effective_column_mapping_mode();
-    let schema = match config.schema.clone() {
-        Some(requested) if kmode != ColumnMappingMode::None => {
-            let schema = Arc::new(attach_column_mapping_metadata(
-                requested.as_ref(),
-                snapshot.schema(),
-            ));
-            config.schema = Some(Arc::clone(&schema));
-            schema
-        }
-        Some(requested) => requested,
-        None => Arc::new(snapshot.schema().clone()),
-    };
+    let schema = config
+        .schema
+        .clone()
+        .unwrap_or_else(|| Arc::new(snapshot.schema().clone()));
 
     let full_logical_schema = df_logical_schema(
         snapshot,
