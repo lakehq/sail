@@ -7596,11 +7596,13 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-expr",
  "either",
  "futures",
  "lexical-core",
  "num-bigint 0.4.8",
+ "object_store",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
@@ -7614,6 +7616,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "url",
 ]
 
 [[package]]

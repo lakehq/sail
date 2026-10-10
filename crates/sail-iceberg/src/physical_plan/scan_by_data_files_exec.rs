@@ -8,20 +8,27 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
+};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::input_file::{
+    InputFileMetadataSource, projection_references_input_file_metadata,
+};
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
@@ -46,6 +53,7 @@ struct ScanByDataFilesState {
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
+    input_file_projection: Option<ProjectionExprs>,
     /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
     pending_files: Vec<(String, u64, u64, bool)>,
     /// Currently active scan stream (draining Parquet data).
@@ -70,6 +78,7 @@ impl ScanByDataFilesState {
             projection: plan.projection.clone(),
             predicate: plan.predicate.clone(),
             limit: plan.limit,
+            input_file_projection: plan.input_file_projection.clone(),
             pending_files: Vec::new(),
             current_scan: None,
             emitted_batch: false,
@@ -224,8 +233,7 @@ impl ScanByDataFilesState {
         }
         let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
             Arc::new(parquet_source);
-
-        let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+        let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
             .with_projection_indices(self.projection.clone())?
             .with_limit(self.limit)
@@ -235,6 +243,18 @@ impl ScanByDataFilesState {
                 ),
             ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
+        if let Some(projection) = &self.input_file_projection {
+            // Metadata expressions reference the projected scan columns, not the file schema.
+            let source = InputFileMetadataSource::try_new_with_projection(
+                Arc::clone(&file_scan_config.file_source),
+                projection.clone(),
+            )?;
+            let statistics = Statistics::new_unknown(source.table_schema().table_schema());
+            file_scan_config = FileScanConfigBuilder::from(file_scan_config)
+                .with_source(Arc::new(source))
+                .with_statistics(statistics)
+                .build();
+        }
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
         let output_schema = Arc::clone(&self.output_schema);
@@ -270,11 +290,13 @@ pub struct IcebergScanByDataFilesExec {
     /// Table URL for object store access.
     table_url: String,
     /// The Arrow schema of the actual user data.
+    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
     file_schema: SchemaRef,
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
+    input_file_projection: Option<ProjectionExprs>,
     /// Cached plan properties.
     cache: Arc<PlanProperties>,
 }
@@ -302,11 +324,13 @@ impl IcebergScanByDataFilesExec {
         Ok(Self {
             input,
             table_url,
+            scan_output_schema: Arc::clone(&output_schema),
             output_schema,
             file_schema,
             projection,
             predicate,
             limit,
+            input_file_projection: None,
             cache,
         })
     }
@@ -329,6 +353,34 @@ impl IcebergScanByDataFilesExec {
 
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
+    }
+
+    pub fn scan_output_schema(&self) -> &SchemaRef {
+        &self.scan_output_schema
+    }
+
+    pub fn input_file_projection(&self) -> Option<&ProjectionExprs> {
+        self.input_file_projection.as_ref()
+    }
+
+    pub fn with_input_file_projection(
+        mut self,
+        projection: Option<ProjectionExprs>,
+    ) -> Result<Self> {
+        self.output_schema = match &projection {
+            Some(projection) => Arc::new(projection.project_schema(&self.scan_output_schema)?),
+            None => Arc::clone(&self.scan_output_schema),
+        };
+        self.input_file_projection = projection;
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&self.output_schema)),
+            Partitioning::UnknownPartitioning(
+                self.input.output_partitioning().partition_count().max(1),
+            ),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Ok(self)
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -370,10 +422,14 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        if let Some(predicate) = &self.predicate {
-            return f(predicate);
-        }
-        Ok(TreeNodeRecursion::Continue)
+        datafusion::physical_plan::apply_expression_roots(
+            self.predicate.iter().chain(
+                self.input_file_projection
+                    .iter()
+                    .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            ),
+            f,
+        )
     }
 
     #[expect(deprecated)]
@@ -403,6 +459,24 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
             Boundedness::Bounded,
         ));
         Ok(Arc::new(cloned))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.input_file_projection.is_none()
+            && !projection_references_input_file_metadata(projection.projection_expr())
+        {
+            return Ok(None);
+        }
+        let projection = match &self.input_file_projection {
+            Some(current) => current.try_merge(projection.projection_expr())?,
+            None => projection.projection_expr().clone(),
+        };
+        Ok(Some(Arc::new(
+            self.clone().with_input_file_projection(Some(projection))?,
+        )))
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
