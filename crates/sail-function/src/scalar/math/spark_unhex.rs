@@ -1,43 +1,55 @@
-use std::fmt::Write;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    BinaryBuilder, OffsetSizeTrait, StringArray, as_dictionary_array, as_largestring_array,
-    as_string_array,
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit};
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::cast::{
-    as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
-    as_string_view_array,
-};
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
-use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
-use datafusion_expr_common::signature::TypeSignature;
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err, plan_err};
+use datafusion_expr::ScalarFunctionArgs;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
+use crate::scalar::math::spark_hex::{printed_text, prints_as_text};
+
+/// Spark's `Unhex(expr, failOnError)`.
+///
+/// `Unhex` is `ImplicitCastInputTypes` over STRING and decodes the UTF-8 BYTES of its input in
+/// pairs, each digit through `java.util.HexFormat.fromHexDigit` (`mathExpressions.scala`), which
+/// accepts only ASCII `[0-9A-Fa-f]` and throws for any other byte. With `failOnError = false`
+/// (the SQL `unhex`) a throw is a NULL; with `failOnError = true` (what `to_binary(.., 'hex')` is)
+/// it is `CONVERSION_INVALID_INPUT`. An odd number of digits is padded on the left, an empty input
+/// is an empty binary, and the result is always nullable BINARY.
+///
+/// `ansi_mode` only decides whether a calendar interval is implicitly cast to STRING (see
+/// `coerce_input`).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnHex {
     signature: Signature,
+    fail_on_error: bool,
+    ansi_mode: bool,
 }
 
 impl Default for SparkUnHex {
     fn default() -> Self {
-        Self::new()
+        Self::with_options(false, false)
     }
 }
 
 impl SparkUnHex {
-    pub fn new() -> Self {
+    pub fn with_options(fail_on_error: bool, ansi_mode: bool) -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Utf8]),
-                    TypeSignature::Exact(vec![DataType::Utf8View]),
-                    TypeSignature::Exact(vec![DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
+            fail_on_error,
+            ansi_mode,
         }
+    }
+
+    pub fn fail_on_error(&self) -> bool {
+        self.fail_on_error
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -62,274 +74,216 @@ impl ScalarUDFImpl for SparkUnHex {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [arg_type] = arg_types else {
+            return plan_err!(
+                "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `unhex` requires 1 parameters but the actual number is {}. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+                arg_types.len()
+            );
+        };
+        Ok(vec![coerce_input(arg_type, "unhex", self.ansi_mode)?])
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        spark_unhex(&args)
-    }
-}
-
-// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs>
-
-fn hex_int64(num: i64) -> String {
-    format!("{num:X}")
-}
-
-#[inline(always)]
-fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> Result<String> {
-    let mut s = String::with_capacity(data.as_ref().len() * 2);
-    if lower_case {
-        for b in data.as_ref() {
-            write!(&mut s, "{b:02x}")?;
+        // The arity is validated once, in `coerce_types`.
+        let [arg] = args.args.as_slice() else {
+            return internal_err!("`unhex` expects 1 argument, got {}", args.args.len());
+        };
+        let (array, is_scalar) = match arg {
+            ColumnarValue::Array(array) => (Arc::clone(array), false),
+            ColumnarValue::Scalar(value) => (value.to_array()?, true),
+        };
+        let array = if prints_as_text(array.data_type()) {
+            printed_text(&args, array)?
+        } else {
+            array
+        };
+        let decoded = unhex_array(&array, self.fail_on_error)?;
+        if is_scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &decoded, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(decoded))
         }
-    } else {
-        for b in data.as_ref() {
-            write!(&mut s, "{b:02X}")?;
+    }
+}
+
+/// The type an input is handed to the kernel as: Spark casts it to STRING first, so what is
+/// decoded is its printed text.
+///
+/// - STRING and BINARY are decoded as they are (a BINARY cast to STRING keeps its bytes);
+/// - an integer prints as its digits, so it goes through a cast to STRING;
+/// - everything else Spark can print (a fractional number, a decimal with a scale, BOOLEAN, a
+///   datetime, an interval, VARIANT) is left as it is and printed when it is evaluated, so that
+///   the text is what is decoded (or what an error names);
+/// - a calendar interval is only cast to STRING when ANSI is on: the implicit cast covers
+///   `AtomicType` only (`TypeCoercion.scala:234`) and a calendar interval is not one;
+/// - ARRAY, MAP and STRUCT are rejected, as Spark's implicit cast has no rule for them.
+pub(crate) fn coerce_input(
+    data_type: &DataType,
+    function: &str,
+    ansi_mode: bool,
+) -> Result<DataType> {
+    Ok(match data_type {
+        DataType::Interval(IntervalUnit::MonthDayNano) if !ansi_mode => {
+            return plan_err!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{function}\" due to data type mismatch: The first parameter requires the \"STRING\" type, however the input has the type \"INTERVAL\"."
+            );
+        }
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::FixedSizeBinary(_) => data_type.clone(),
+        DataType::BinaryView => DataType::Binary,
+        DataType::Dictionary(_, value_type) => coerce_input(value_type, function, ansi_mode)?,
+        DataType::Null => DataType::Utf8,
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => DataType::Utf8,
+        DataType::Decimal32(_, 0)
+        | DataType::Decimal64(_, 0)
+        | DataType::Decimal128(_, 0)
+        | DataType::Decimal256(_, 0) => DataType::Utf8,
+        DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _)
+        | DataType::Boolean
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_)
+        | DataType::Interval(_) => data_type.clone(),
+        data_type if is_marked_variant_storage_type(data_type) => data_type.clone(),
+        other => {
+            return plan_err!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{function}\" due to data type mismatch: The first parameter requires the \"STRING\" type, however the input has the type \"{other}\"."
+            );
+        }
+    })
+}
+
+fn unhex_array(array: &ArrayRef, fail_on_error: bool) -> Result<ArrayRef> {
+    let len = array.len();
+    match array.data_type() {
+        DataType::Utf8 => unhex_values(
+            array
+                .as_string::<i32>()
+                .iter()
+                .map(|v| v.map(str::as_bytes)),
+            len,
+            fail_on_error,
+        ),
+        DataType::LargeUtf8 => unhex_values(
+            array
+                .as_string::<i64>()
+                .iter()
+                .map(|v| v.map(str::as_bytes)),
+            len,
+            fail_on_error,
+        ),
+        DataType::Utf8View => unhex_values(
+            array.as_string_view().iter().map(|v| v.map(str::as_bytes)),
+            len,
+            fail_on_error,
+        ),
+        DataType::Binary => unhex_values(array.as_binary::<i32>().iter(), len, fail_on_error),
+        DataType::LargeBinary => unhex_values(array.as_binary::<i64>().iter(), len, fail_on_error),
+        DataType::FixedSizeBinary(_) => {
+            unhex_values(array.as_fixed_size_binary().iter(), len, fail_on_error)
+        }
+        other => internal_err!("`unhex` cannot decode {other}; `coerce_types` should have cast it"),
+    }
+}
+
+fn unhex_values<'a>(
+    values: impl Iterator<Item = Option<&'a [u8]>>,
+    len: usize,
+    fail_on_error: bool,
+) -> Result<ArrayRef> {
+    let mut builder = BinaryBuilder::with_capacity(len, 0);
+    let mut decoded = Vec::new();
+    for value in values {
+        let Some(bytes) = value else {
+            builder.append_null();
+            continue;
+        };
+        decoded.clear();
+        if unhex_bytes(bytes, &mut decoded) {
+            builder.append_value(&decoded);
+        } else if fail_on_error {
+            return Err(invalid_input_err(&String::from_utf8_lossy(bytes)));
+        } else {
+            builder.append_null();
         }
     }
-    Ok(s)
+    Ok(Arc::new(builder.finish()))
 }
 
-#[inline(always)]
-fn hex_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<String> {
-    let hex_string = hex_encode(bytes, false)?;
-    Ok(hex_string)
+/// `DataTypeErrorsBase.toSQLValue(String)`: quoted, with `\\` and `'` escaped.
+pub(crate) fn sql_string_value(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// Spark-compatible `hex` function
-pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return Err(DataFusionError::Internal(
-            "hex expects exactly one argument".to_string(),
-        ));
-    }
+fn invalid_input_err(value: &str) -> datafusion_common::DataFusionError {
+    conversion_invalid_input_err(value, "HEX")
+}
 
-    match &args[0] {
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Int64 => {
-                let array = as_int64_array(array)?;
-
-                let hexed_array: StringArray = array.iter().map(|v| v.map(hex_int64)).collect();
-
-                Ok(ColumnarValue::Array(Arc::new(hexed_array)))
-            }
-            DataType::Utf8 => {
-                let array = as_string_array(array);
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(hex_bytes).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
-            }
-            DataType::Utf8View => {
-                let array = as_string_view_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(hex_bytes).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
-            }
-            DataType::LargeUtf8 => {
-                let array = as_largestring_array(array);
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(hex_bytes).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
-            }
-            DataType::Binary => {
-                let array = as_binary_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(hex_bytes).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
-            }
-            DataType::FixedSizeBinary(_) => {
-                let array = as_fixed_size_binary_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(hex_bytes).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
-            }
-            DataType::Dictionary(_, value_type) => {
-                let dict = as_dictionary_array::<Int32Type>(&array);
-
-                let values = match **value_type {
-                    DataType::Int64 => as_int64_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(hex_int64))
-                        .collect::<Vec<_>>(),
-                    DataType::Utf8 => as_string_array(dict.values())
-                        .iter()
-                        .map(|v| v.map(hex_bytes).transpose())
-                        .collect::<Result<_, _>>()?,
-                    DataType::Utf8View => as_string_view_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(hex_bytes).transpose())
-                        .collect::<Result<_, _>>()?,
-                    DataType::LargeUtf8 => as_largestring_array(dict.values())
-                        .iter()
-                        .map(|v| v.map(hex_bytes).transpose())
-                        .collect::<Result<_, _>>()?,
-                    DataType::Binary => as_binary_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(hex_bytes).transpose())
-                        .collect::<Result<_, _>>()?,
-                    _ => exec_err!(
-                        "hex got an unexpected argument type: {:?}",
-                        array.data_type()
-                    )?,
-                };
-
-                let new_values: Vec<Option<String>> = dict
-                    .keys()
-                    .iter()
-                    .map(|key| key.map(|k| values[k as usize].clone()).unwrap_or(None))
-                    .collect();
-
-                let string_array_values = StringArray::from(new_values);
-
-                Ok(ColumnarValue::Array(Arc::new(string_array_values)))
-            }
-            _ => exec_err!(
-                "hex got an unexpected argument type: {:?}",
-                array.data_type()
-            ),
-        },
-        _ => exec_err!("native hex does not support scalar values at this time"),
-    }
+/// `QueryExecutionErrors.invalidInputInConversionError` as `ToBinary` raises it: `format` is the
+/// format the value did not follow.
+pub(crate) fn conversion_invalid_input_err(
+    value: &str,
+    format: &str,
+) -> datafusion_common::DataFusionError {
+    let value = sql_string_value(value);
+    exec_datafusion_err!(
+        "[CONVERSION_INVALID_INPUT] The value {value} ('{format}') cannot be converted to \"BINARY\" because it is malformed. Correct the value as per the syntax, or change its format. Use `try_to_binary` to tolerate malformed input and return NULL instead."
+    )
 }
 
 // [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs>
 
-/// Helper function to convert a hex digit to a binary value.
-fn unhex_digit(c: u8) -> Result<u8, DataFusionError> {
-    match c {
-        b'0'..=b'9' => Ok(c - b'0'),
-        b'A'..=b'F' => Ok(10 + c - b'A'),
-        b'a'..=b'f' => Ok(10 + c - b'a'),
-        _ => Err(DataFusionError::Execution(
-            "Input to unhex_digit is not a valid hex digit".to_string(),
-        )),
+/// `java.util.HexFormat.fromHexDigit`: ASCII `[0-9A-Fa-f]`, nothing else.
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
-/// Convert a hex string to binary and store the result in `result`. Returns an error if the input
-/// is not a valid hex string.
-fn unhex(hex_str: &str, result: &mut Vec<u8>) -> Result<(), DataFusionError> {
-    let bytes = hex_str.as_bytes();
-
-    let mut i = 0;
-
-    if (bytes.len() & 0x01) != 0 {
-        let v = unhex_digit(bytes[0])?;
-
-        result.push(v);
-        i += 1;
+/// `Hex.unhex(bytes)`: decodes `bytes` into `out` and returns whether every byte was a hex digit.
+/// An odd count leaves the first digit on its own, so the result is padded on the left.
+fn unhex_bytes(bytes: &[u8], out: &mut Vec<u8>) -> bool {
+    out.reserve(bytes.len().div_ceil(2));
+    let mut rest = bytes;
+    if bytes.len() % 2 == 1 {
+        let Some(first) = hex_digit(bytes[0]) else {
+            return false;
+        };
+        out.push(first);
+        rest = &bytes[1..];
     }
-
-    while i < bytes.len() {
-        let first = unhex_digit(bytes[i])?;
-        let second = unhex_digit(bytes[i + 1])?;
-        result.push((first << 4) | second);
-
-        i += 2;
+    let (pairs, _) = rest.as_chunks::<2>();
+    for [high, low] in pairs {
+        let (Some(high), Some(low)) = (hex_digit(*high), hex_digit(*low)) else {
+            return false;
+        };
+        out.push((high << 4) | low);
     }
-
-    Ok(())
-}
-
-fn spark_unhex_inner<T: OffsetSizeTrait>(
-    array: &ColumnarValue,
-    fail_on_error: bool,
-) -> Result<ColumnarValue, DataFusionError> {
-    match array {
-        ColumnarValue::Array(array) => {
-            let string_array = as_generic_string_array::<T>(array)?;
-
-            let mut encoded = Vec::new();
-            let mut builder = BinaryBuilder::new();
-
-            for item in string_array.iter() {
-                if let Some(s) = item {
-                    if unhex(s, &mut encoded).is_ok() {
-                        builder.append_value(encoded.as_slice());
-                    } else if fail_on_error {
-                        return exec_err!("Input to unhex is not a valid hex string: {s}");
-                    } else {
-                        builder.append_null();
-                    }
-                    encoded.clear();
-                } else {
-                    builder.append_null();
-                }
-            }
-            Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(string)))
-        | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(string)))
-        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(string))) => {
-            let mut encoded = Vec::new();
-
-            if unhex(string, &mut encoded).is_ok() {
-                Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(encoded))))
-            } else if fail_on_error {
-                exec_err!("Input to unhex is not a valid hex string: {string}")
-            } else {
-                Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
-            }
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(None))
-        | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
-            Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
-        }
-        _ => {
-            exec_err!(
-                "The first argument must be a string scalar or array, but got: {:?}",
-                array
-            )
-        }
-    }
-}
-
-/// Spark-compatible `unhex` expression
-pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() > 2 {
-        return exec_err!("unhex takes at most 2 arguments, but got: {}", args.len());
-    }
-
-    let val_to_unhex = &args[0];
-    let fail_on_error = if args.len() == 2 {
-        match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error))) => *fail_on_error,
-            _ => {
-                return exec_err!(
-                    "The second argument must be boolean scalar, but got: {:?}",
-                    args[1]
-                );
-            }
-        }
-    } else {
-        false
-    };
-
-    match val_to_unhex.data_type() {
-        DataType::Utf8 | DataType::Utf8View => {
-            spark_unhex_inner::<i32>(val_to_unhex, fail_on_error)
-        }
-        DataType::LargeUtf8 => spark_unhex_inner::<i64>(val_to_unhex, fail_on_error),
-        other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
-    }
+    true
 }

@@ -80,7 +80,6 @@ use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
-use datafusion_spark::function::math::hex::SparkHex;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
@@ -202,6 +201,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_hex::SparkHexCast;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -244,7 +244,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::{
 };
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
-use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_binary::SparkToBinary;
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::struct_function::StructFunction;
@@ -3240,6 +3240,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkBin::new(ansi_mode))));
             }
+            UdfKind::SparkToBinary(r#gen::SparkToBinaryUdf { is_try, ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkToBinary::new(
+                    is_try, ansi_mode,
+                ))));
+            }
+            UdfKind::SparkUnhex(r#gen::SparkUnhexUdf {
+                fail_on_error,
+                ansi_mode,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkUnHex::with_options(
+                    fail_on_error,
+                    ansi_mode,
+                ))));
+            }
+            UdfKind::SparkHexCast(r#gen::SparkHexCastUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkHexCast::new(ansi_mode))));
+            }
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
             }
@@ -3338,8 +3355,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "regexp_extract" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtract::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
-            "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
-            "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
@@ -3383,10 +3398,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
-            }
-            "spark_to_binary" | "to_binary" => Ok(Arc::new(ScalarUDF::from(SparkToBinary::new()))),
-            "spark_try_to_binary" | "try_to_binary" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
             "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
             "spark_bit_get" | "bit_get" | "getbit" => {
@@ -3548,7 +3559,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
-            || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
@@ -3578,7 +3588,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSqrt>()
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
-            || node_inner.is::<SparkToBinary>()
             || node_inner.is::<WithMetadataFunc>()
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
@@ -3591,7 +3600,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryMult>()
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
-            || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
             || node_inner.is::<ThetaDifferenceFunction>()
@@ -3600,7 +3608,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ThetaUnionFunction>()
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUniform>()
-            || node_inner.is::<SparkUnHex>()
             || node_inner.is::<SparkVariantToJsonUdf>()
             || node_inner.is::<SparkVersion>()
             || node_inner.is::<SparkWidthBucket>()
@@ -3773,6 +3780,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkBin>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToBinary>() {
+            UdfKind::SparkToBinary(r#gen::SparkToBinaryUdf {
+                is_try: func.is_try(),
+                ansi_mode: func.ansi_mode(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkUnHex>() {
+            UdfKind::SparkUnhex(r#gen::SparkUnhexUdf {
+                fail_on_error: func.fail_on_error(),
+                ansi_mode: func.ansi_mode(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkHexCast>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkHexCast(r#gen::SparkHexCastUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode })
@@ -6589,6 +6609,46 @@ mod tests {
         downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
         assert_eq!(decoded.name(), "spark_cast_string_to_int32");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_hex_cast_udf_keeps_ansi_mode() -> Result<()> {
+        for ansi_mode in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkHexCast::new(ansi_mode)))?;
+            let hex = downcast_udf::<SparkHexCast>(&decoded, "SparkHexCast")?;
+            assert_eq!(hex.ansi_mode(), ansi_mode);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_unhex_udf_keeps_its_flags() -> Result<()> {
+        for fail_on_error in [false, true] {
+            for ansi_mode in [false, true] {
+                let decoded = round_trip_udf(ScalarUDF::from(SparkUnHex::with_options(
+                    fail_on_error,
+                    ansi_mode,
+                )))?;
+                let unhex = downcast_udf::<SparkUnHex>(&decoded, "SparkUnHex")?;
+                assert_eq!(unhex.fail_on_error(), fail_on_error);
+                assert_eq!(unhex.ansi_mode(), ansi_mode);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_to_binary_udf_keeps_its_flags() -> Result<()> {
+        for is_try in [false, true] {
+            for ansi_mode in [false, true] {
+                let decoded =
+                    round_trip_udf(ScalarUDF::from(SparkToBinary::new(is_try, ansi_mode)))?;
+                let to_binary = downcast_udf::<SparkToBinary>(&decoded, "SparkToBinary")?;
+                assert_eq!(to_binary.is_try(), is_try);
+                assert_eq!(to_binary.ansi_mode(), ansi_mode);
+            }
+        }
         Ok(())
     }
 

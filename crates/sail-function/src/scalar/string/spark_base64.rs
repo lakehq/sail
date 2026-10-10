@@ -319,6 +319,50 @@ fn decode_spark_base64(value: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// `UnBase64.isValidBase64` (`stringExpressions.scala`): RFC 4648 groups of 4 symbols plus a last
+/// group of 2-4 symbols, with `=` padding (at most 2, only at the end, completing the group of 4)
+/// and any whitespace ignored.
+pub(crate) fn is_valid_base64(value: &str) -> bool {
+    let mut position = 0_usize;
+    let mut pad_size = 0_usize;
+    for c in value.chars() {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' => {
+                if pad_size != 0 {
+                    return false;
+                }
+                position += 1;
+            }
+            '=' => {
+                pad_size += 1;
+                if pad_size > 2 || position % 4 < 2 {
+                    return false;
+                }
+            }
+            c if is_java_whitespace(c) => {
+                if pad_size != 0 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    if pad_size > 0 {
+        (position + pad_size).is_multiple_of(4)
+    } else {
+        position % 4 != 1
+    }
+}
+
+/// `Character.isWhitespace`: the Unicode spaces except the non-breaking ones, plus the ASCII
+/// control separators.
+fn is_java_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}'
+    ) || (c.is_whitespace() && !matches!(c, '\u{85}' | '\u{a0}' | '\u{2007}' | '\u{202f}'))
+}
+
 fn is_spark_base64_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
 }

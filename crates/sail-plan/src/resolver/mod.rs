@@ -17,6 +17,8 @@ mod schema;
 mod state;
 mod tree;
 
+pub(crate) use expression::spark_interval_metadata_for_expression;
+
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,
     config: Arc<PlanConfig>,
