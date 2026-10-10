@@ -168,6 +168,9 @@ pub fn parse_regex(format: &str) -> Result<Regex> {
 }
 
 pub fn split_to_array(value: &str, format: &Regex, limit: i32) -> Result<Vec<Option<String>>> {
+    if format.as_str().is_empty() {
+        return Ok(split_empty_pattern(value, limit));
+    }
     let values: Vec<&str> = if limit > 0 {
         format.splitn(value, limit as usize).collect::<Vec<&str>>()
     } else {
@@ -177,6 +180,37 @@ pub fn split_to_array(value: &str, format: &Regex, limit: i32) -> Result<Vec<Opt
         .iter()
         .map(|value| Some(value.to_string()))
         .collect::<Vec<Option<String>>>())
+}
+
+/// Spark 4.2 `UTF8String.split` on an empty pattern.
+///
+/// A non-empty input is split on UTF-8 code points. A positive `limit` smaller
+/// than that count keeps that many slots and puts the unmatched tail in the last
+/// one. An empty input stays `[""]`: Java `split` skips the zero-width match at
+/// the start and returns the input itself.
+fn split_empty_pattern(value: &str, limit: i32) -> Vec<Option<String>> {
+    if value.is_empty() {
+        return vec![Some(String::new())];
+    }
+
+    let char_count = value.chars().count();
+    let new_limit = match usize::try_from(limit) {
+        Ok(limit) if limit > 0 && limit <= char_count => limit,
+        _ => char_count,
+    };
+
+    let mut parts = Vec::with_capacity(new_limit);
+    let mut byte_index = 0;
+    for (char_index, ch) in value.chars().enumerate() {
+        if char_index + 1 == new_limit {
+            parts.push(Some(value[byte_index..].to_string()));
+            break;
+        }
+        let next = byte_index + ch.len_utf8();
+        parts.push(Some(value[byte_index..next].to_string()));
+        byte_index = next;
+    }
+    parts
 }
 
 #[cfg(test)]
@@ -239,6 +273,51 @@ mod tests {
             (fourth.len(), fourth.value(0), fourth.value(1)),
             (2, "x", "y")
         );
+        Ok(())
+    }
+
+    /// Empty pattern splits on UTF-8 code points, matching Spark 4.2 `UTF8String.split`.
+    /// The two-argument SQL form reaches this path with limit -1.
+    #[test]
+    fn split_empty_pattern_matches_spark() -> Result<()> {
+        // (value, pattern, limit, expected parts)
+        // The first row is also the slice check: Spark slice is 1-based, so
+        // slice(split('abcdef', ''), 2, 4) reads parts[1..5] == ["b", "c", "d", "e"].
+        let cases: &[(&str, &str, i32, &[&str])] = &[
+            ("abcdef", "", -1, &["a", "b", "c", "d", "e", "f"]),
+            ("", "", -1, &[""]),
+            ("", "", 2, &[""]),
+            ("abcdef", "", 0, &["a", "b", "c", "d", "e", "f"]),
+            ("abcdef", "", 1, &["abcdef"]),
+            ("abcdef", "", 2, &["a", "bcdef"]),
+            ("abcdef", "", 10, &["a", "b", "c", "d", "e", "f"]),
+            // Spark counts code points, not bytes. Confirmed from UTF8String.split.
+            ("éf", "", -1, &["é", "f"]),
+            ("éf", "", 1, &["éf"]),
+            // Non-empty patterns stay on the regex path.
+            ("a-b", "-", -1, &["a", "b"]),
+        ];
+        for (value, pattern, limit, expected) in cases {
+            let output = spark_split_inner(&[
+                Arc::new(StringArray::from(vec![Some(*value)])),
+                Arc::new(StringArray::from(vec![Some(*pattern)])),
+                Arc::new(Int32Array::from(vec![*limit])),
+            ])?;
+            let output = output
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("list output");
+            let parts = output.value(0);
+            let parts = parts
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("string parts");
+            let actual: Vec<&str> = (0..parts.len()).map(|i| parts.value(i)).collect();
+            assert_eq!(&actual, expected, "split({value:?}, {pattern:?}, {limit})");
+            if *value == "abcdef" && pattern.is_empty() && *limit == -1 {
+                assert_eq!(&actual[1..5], &["b", "c", "d", "e"]);
+            }
+        }
         Ok(())
     }
 }
