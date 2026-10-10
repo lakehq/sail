@@ -191,7 +191,9 @@ mod tests {
         let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default())?;
         let mut row_group = writer.next_row_group()?;
         let mut column = row_group.next_column()?.expect("id column");
-        column.typed::<Int64Type>().write_batch(&[1, 2, 3], None, None)?;
+        column
+            .typed::<Int64Type>()
+            .write_batch(&[1, 2, 3], None, None)?;
         column.close()?;
         row_group.close()?;
         let data = writer.into_inner()?;
@@ -199,8 +201,14 @@ mod tests {
         let payload = PutPayload::from(data);
 
         let inner = InMemory::new();
-        let paths = ["a.parquet", "b.parquet", "c.parquet", "d.parquet", "e.parquet"]
-            .map(Path::from);
+        let paths = [
+            "a.parquet",
+            "b.parquet",
+            "c.parquet",
+            "d.parquet",
+            "e.parquet",
+        ]
+        .map(Path::from);
         let mut files = Vec::new();
         for (index, path) in paths.iter().enumerate() {
             inner.put(path, payload.clone()).await?;
@@ -224,14 +232,17 @@ mod tests {
         ];
         let controlled = Arc::new(ControlledStore {
             inner,
-            gates: paths.iter().map(|path| (path.clone(), Notify::new())).collect(),
+            gates: paths
+                .iter()
+                .map(|path| (path.clone(), Notify::new()))
+                .collect(),
             requests: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
         });
         let store = Arc::clone(&controlled) as Arc<dyn ObjectStore>;
-        let cache = CacheManager::try_new(&CacheManagerConfig::default())?
-            .get_file_metadata_cache();
+        let cache =
+            CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
         assert!(paths.iter().all(|path| cache.get(path).is_none()));
 
         let load = load_parquet_scan_metadata(groups, &store, &cache, Some(8), 2);
@@ -258,7 +269,10 @@ mod tests {
         assert_eq!(controlled.active.load(Ordering::SeqCst), 0);
         assert_eq!(controlled.peak.load(Ordering::SeqCst), 2);
         assert_eq!(controlled.requests.load(Ordering::SeqCst), paths.len());
-        assert_eq!(groups.iter().map(FileGroup::len).collect::<Vec<_>>(), [3, 0, 2]);
+        assert_eq!(
+            groups.iter().map(FileGroup::len).collect::<Vec<_>>(),
+            [3, 0, 2]
+        );
         for (group, statistics) in groups.iter().zip(&statistics) {
             assert_eq!(group.file_statistics(None), Some(statistics.as_ref()));
         }
@@ -266,7 +280,10 @@ mod tests {
             assert_eq!(file.path(), &paths[index]);
             assert_eq!(file.metadata_size_hint, Some(metadata_size_hint));
             assert_eq!(file.extensions.get::<usize>(), Some(&index));
-            let metadata = file.extensions.get::<ParquetScanMetadata>().expect("row groups");
+            let metadata = file
+                .extensions
+                .get::<ParquetScanMetadata>()
+                .expect("row groups");
             assert_eq!(metadata.row_groups.len(), 1);
             assert_eq!(metadata.row_groups[0].num_rows, 3);
             assert!(cache.get(file.path()).is_some());
