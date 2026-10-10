@@ -316,7 +316,8 @@ pub(crate) async fn plan_delta_scan(
             },
             session,
             file_schema,
-        )?;
+        )
+        .await?;
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
         return align_delta_scan_output(scan_exec, output_schema);

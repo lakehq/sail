@@ -1,13 +1,22 @@
+import json
+import re
 from collections import Counter
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyiceberg.manifest import DataFile, DataFileContent, FileFormat
+from pyiceberg.partitioning import PartitionField, PartitionSpec
+from pyiceberg.schema import Schema
+from pyiceberg.transforms import IdentityTransform
+from pyiceberg.typedef import Record
+from pyiceberg.types import LongType, NestedField, StringType
 
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail scan and distributed planning")
 
@@ -31,8 +40,8 @@ def remote(scan_settings):
         yield server.remote
 
 
-def write_row_groups(path, sizes):
-    schema = pa.schema([("id", pa.int64()), ("payload", pa.string())])
+def write_row_groups(path, sizes, schema=None):
+    schema = schema or pa.schema([("id", pa.int64()), ("payload", pa.string())])
     with pq.ParquetWriter(path, schema, compression="NONE", use_dictionary=False) as writer:
         start = 0
         for size in sizes:
@@ -109,3 +118,103 @@ def test_scan_rewrite_preserves_sort_and_limit(spark, tmp_path):
     write_row_groups(path, [12_000, 9_000, 20_000])
     query = spark.read.parquet(str(path)).filter("id % 3 = 0").orderBy(F.col("id").desc()).limit(17)
     assert [row.id for row in query.collect()] == list(range(40_998, 40_948, -3))
+
+
+@pytest.mark.parametrize("sizes", [[20_000], [12_000, 9_000, 20_000]])
+@pytest.mark.parametrize("table_format", ["delta", "iceberg", "iceberg_identity"])
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_lake_scan_row_groups(spark, tmp_path, sizes, table_format, metadata_as_data, scan_settings):
+    path = tmp_path / "groups.parquet"
+    write_row_groups(
+        path,
+        sizes,
+        pa.schema(
+            [
+                pa.field("id", pa.int64(), metadata={"PARQUET:field_id": "1"}),
+                pa.field("payload", pa.string(), metadata={"PARQUET:field_id": "2"}),
+            ]
+        ),
+    )
+    catalog = None
+    if table_format == "delta":
+        log = tmp_path / "_delta_log"
+        log.mkdir()
+        actions = [
+            {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+            {
+                "metaData": {
+                    "id": "row-group-scan",
+                    "format": {"provider": "parquet", "options": {}},
+                    "schemaString": json.dumps(
+                        {
+                            "type": "struct",
+                            "fields": [
+                                {"name": "id", "type": "long", "nullable": True, "metadata": {}},
+                                {"name": "payload", "type": "string", "nullable": True, "metadata": {}},
+                            ],
+                        }
+                    ),
+                    "partitionColumns": [],
+                    "configuration": {},
+                    "createdTime": 0,
+                }
+            },
+            {
+                "add": {
+                    "path": path.name,
+                    "partitionValues": {},
+                    "size": path.stat().st_size,
+                    "modificationTime": 0,
+                    "dataChange": True,
+                    "stats": json.dumps({"numRecords": sum(sizes)}),
+                }
+            },
+        ]
+        (log / "00000000000000000000.json").write_text("".join(json.dumps(action) + "\n" for action in actions))
+        location = str(tmp_path)
+    else:
+        catalog = create_sql_catalog(tmp_path)
+        partitioned = table_format == "iceberg_identity"
+        spec = (
+            PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "payload")) if partitioned else PartitionSpec()
+        )
+        table = catalog.create_table(
+            "default.row_groups",
+            schema=Schema(NestedField(1, "id", LongType()), NestedField(2, "payload", StringType())),
+            partition_spec=spec,
+        )
+        with table.transaction() as transaction, transaction.update_snapshot().fast_append() as append:
+            append.append_data_file(
+                DataFile.from_args(
+                    content=DataFileContent.DATA,
+                    file_path=path.as_uri(),
+                    file_format=FileFormat.PARQUET,
+                    partition=Record("x" * 128) if partitioned else Record(),
+                    record_count=sum(sizes),
+                    file_size_in_bytes=path.stat().st_size,
+                    spec_id=spec.spec_id,
+                )
+            )
+        location = table.location()
+    try:
+        query = (
+            spark.read.format("delta" if table_format == "delta" else "iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(location)
+            .filter("id % 7 = 0")
+            .select("id", "payload", F.spark_partition_id().alias("pid"))
+        )
+        if not metadata_as_data or table_format == "iceberg_identity":
+            plan = query._explain_string()  # noqa: SLF001
+            groups = re.search(r"DataSourceExec: file_groups=\{(\d+) group", plan)
+            assert groups is not None, plan
+            assert int(groups[1]) == len(sizes), plan
+        for _ in range(2):
+            rows = query.collect()
+            assert sorted(row.id for row in rows) == list(range(0, sum(sizes), 7))
+            assert all(row.payload == "x" * 128 for row in rows)
+            if (not metadata_as_data or table_format == "iceberg_identity") and scan_settings[0] == "local-cluster":
+                assert len(Counter(row.pid for row in rows)) == len(sizes)
+    finally:
+        if catalog is not None:
+            catalog.drop_table("default.row_groups")

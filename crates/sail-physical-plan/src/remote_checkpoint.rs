@@ -17,7 +17,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use datafusion::physical_plan::filter_pushdown::FilterPushdownPropagation;
@@ -406,6 +407,7 @@ pub struct RemoteCheckpointWriteExec {
     object_store_url: ObjectStoreUrl,
     prefix: Path,
     storage_schema: SchemaRef,
+    input_ordering: Option<LexOrdering>,
     properties: Arc<PlanProperties>,
 }
 
@@ -415,6 +417,7 @@ impl RemoteCheckpointWriteExec {
         object_store_url: ObjectStoreUrl,
         prefix: Path,
         storage_schema: SchemaRef,
+        input_ordering: Option<LexOrdering>,
     ) -> Result<Self> {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
             return Err(DataFusionError::NotImplemented(
@@ -444,6 +447,7 @@ impl RemoteCheckpointWriteExec {
             object_store_url,
             prefix,
             storage_schema,
+            input_ordering,
             properties,
         })
     }
@@ -462,6 +466,10 @@ impl RemoteCheckpointWriteExec {
 
     pub fn storage_schema(&self) -> &SchemaRef {
         &self.storage_schema
+    }
+
+    pub fn input_ordering(&self) -> Option<&LexOrdering> {
+        self.input_ordering.as_ref()
     }
 }
 
@@ -482,6 +490,11 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
 
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        // The checkpoint descriptor promises this ordering for the saved rows.
+        vec![self.input_ordering.clone().map(Into::into)]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -522,6 +535,7 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
             self.object_store_url.clone(),
             self.prefix.clone(),
             Arc::clone(&self.storage_schema),
+            self.input_ordering.clone(),
         )?))
     }
 
@@ -898,6 +912,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             storage_schema,
+            None,
         )?;
         let context = SessionContext::new();
         context
@@ -945,6 +960,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             schema,
+            None,
         )?;
         let context = SessionContext::new();
         context
@@ -994,6 +1010,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&schema),
+            None,
         )?);
         let checkpoint = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),
@@ -1052,6 +1069,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&storage_schema),
+            None,
         )?);
         let commit = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),

@@ -160,6 +160,15 @@ def test_checkpoint_preserves_partitioning_and_ordering(spark, local, snapshot):
     assert ordered_plan == snapshot
 
 
+@pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])
+def test_checkpoint_preserves_saved_row_order(spark, local):
+    source = spark.range(10, numPartitions=1).sortWithinPartitions(sf.col("id").desc())
+
+    checkpointed = source.localCheckpoint() if local else source.checkpoint()
+
+    assert checkpointed.collect() == [(i,) for i in range(9, -1, -1)]
+
+
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):
     source = spark.range(3)
 

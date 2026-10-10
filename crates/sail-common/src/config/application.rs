@@ -184,6 +184,16 @@ mod memory_pool {
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
+    pub compression: TemporaryFileCompression,
+}
+
+/// Compression for temporary Arrow IPC spill files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporaryFileCompression {
+    Uncompressed,
+    Lz4Frame,
+    Zstd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

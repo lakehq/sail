@@ -22,8 +22,7 @@ data:
       ProjectionExec: expr=[id@0 as #2]
         CoalescePartitionsExec: fetch=1
           FilterExec: p@1 = 1, projection=[id@0], fetch=1
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet, <tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet, <tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
+            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet, <tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet, <tmp>/warehouse/default/filtered_limit/data/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
   offset: |-
     == Physical Plan ==
     ProjectionExec: expr=[#0@0 as id, #1@1 as p]
@@ -109,8 +108,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=4/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=4/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[bucket-manifest]"
 data:
@@ -119,8 +117,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=4/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=4/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1 AND 1 <= p_max@1, required_guarantees=[p in (1)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[day-data]"
 data:
@@ -129,8 +126,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[day-manifest]"
 data:
@@ -139,8 +135,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[hour-data]"
 data:
@@ -149,8 +144,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01-12/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01-12/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[hour-manifest]"
 data:
@@ -159,8 +153,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01-12/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01-01-12/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[identity-data]"
 data:
@@ -183,8 +176,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[month-manifest]"
 data:
@@ -193,8 +185,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022-01/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[truncate-int-data]"
 data:
@@ -203,8 +194,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 11, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=10/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 11, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 11 AND 11 <= p_max@1, required_guarantees=[p in (11)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=10/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 11, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 11 AND 11 <= p_max@1, required_guarantees=[p in (11)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[truncate-int-manifest]"
 data:
@@ -213,8 +203,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 11, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=10/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 11, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 11 AND 11 <= p_max@1, required_guarantees=[p in (11)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=10/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 11, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 11 AND 11 <= p_max@1, required_guarantees=[p in (11)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[truncate-string-data]"
 data:
@@ -223,8 +212,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = bbbb, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=bb/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = bbbb, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= bbbb AND bbbb <= p_max@1, required_guarantees=[p in (bbbb)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=bb/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = bbbb, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= bbbb AND bbbb <= p_max@1, required_guarantees=[p in (bbbb)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[truncate-string-manifest]"
 data:
@@ -233,8 +221,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = bbbb, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=bb/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = bbbb, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= bbbb AND bbbb <= p_max@1, required_guarantees=[p in (bbbb)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=bb/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = bbbb, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= bbbb AND bbbb <= p_max@1, required_guarantees=[p in (bbbb)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[year-data]"
 data:
@@ -243,8 +230,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_partition_pruning_avoids_unrelated_io[year-manifest]"
 data:
@@ -253,8 +239,7 @@ data:
     ProjectionExec: expr=[#2@0 as id]
       ProjectionExec: expr=[id@0 as #2]
         FilterExec: p@1 = 1641038400000000, projection=[id@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/partition_skipping/data/partition_value=2022/00000-0-<uuid>.parquet]]}, projection=[id, p], file_type=parquet, predicate=p@1 = 1641038400000000, pruning_predicate=p_null_count@2 != row_count@3 AND p_min@0 <= 1641038400000000 AND 1641038400000000 <= p_max@1, required_guarantees=[p in (1641038400000000)]
 ---
 name: "test_unpartitioned_numeric_metrics_avoid_data_file_io[False-1]"
 data:
@@ -274,8 +259,7 @@ data:
     ProjectionExec: expr=[#1@0 as id]
       ProjectionExec: expr=[id@0 as #1]
         FilterExec: id@0 = 10
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/numeric_skipping/data/00000-0-<uuid>.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 10, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 10 AND 10 <= id_max@1, required_guarantees=[id in (10)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/warehouse/default/numeric_skipping/data/00000-0-<uuid>.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 10, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 10 AND 10 <= id_max@1, required_guarantees=[id in (10)]
 ---
 name: "test_unpartitioned_numeric_metrics_avoid_data_file_io[True-1]"
 data:
