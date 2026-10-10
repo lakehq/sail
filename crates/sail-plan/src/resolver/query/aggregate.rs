@@ -18,6 +18,8 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
+use sail_function::scalar::misc::distributed_sequence_id::SparkDistributedSequenceId;
+use sail_logical_plan::distributed_sequence_id::DistributedSequenceIdNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -28,6 +30,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
+use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
@@ -51,6 +54,7 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         if let Expr::ScalarFunction(f) = e
             && f.func.signature().volatility == Volatility::Volatile
             && f.func.as_async().is_none()
+            && !f.func.inner().is::<SparkDistributedSequenceId>()
         {
             found_name = Some(f.func.name().to_string());
             return Ok(TreeNodeRecursion::Stop);
@@ -191,6 +195,25 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        // Sequence IDs belong to the aggregate input. Share one generated column
+        // between grouping keys, aggregate arguments, and HAVING expressions.
+        let projection_count = projections.len();
+        let has_having = having.is_some();
+        let expressions = projections
+            .into_iter()
+            .chain(grouping)
+            .chain(having.map(|expr| NamedExpr::new(vec![], expr)))
+            .collect();
+        let (input, mut expressions) =
+            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expressions, state)?;
+        let having = if has_having {
+            expressions.pop().map(|expr| expr.expr)
+        } else {
+            None
+        };
+        let grouping = expressions.split_off(projection_count);
+        let projections = expressions;
+
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -394,6 +417,8 @@ impl PlanResolver<'_> {
                     Some(sort.sort_expr().to_vec())
                 } else if let Some(sort) = node.downcast_ref::<SortWithinPartitionsNode>() {
                     Some(sort.sort_expr().to_vec())
+                } else if let Some(node) = node.downcast_ref::<DistributedSequenceIdNode>() {
+                    Self::find_input_sort_ordering(node.input().as_ref())
                 } else if let Some(node) = node.downcast_ref::<MonotonicIdNode>() {
                     Self::find_input_sort_ordering(node.input().as_ref())
                 } else if let Some(node) = node.downcast_ref::<SparkPartitionIdNode>() {
@@ -588,6 +613,7 @@ impl PlanResolver<'_> {
                 }
                 if !extension.node.as_any().is::<MonotonicIdNode>()
                     && !extension.node.as_any().is::<SparkPartitionIdNode>()
+                    && !extension.node.as_any().is::<DistributedSequenceIdNode>()
                 {
                     return Ok((LogicalPlan::Extension(extension), false, false));
                 }

@@ -282,6 +282,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
+use sail_physical_plan::distributed_sequence_id::{DistributedSequenceIdExec, PartitionCountsExec};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1423,6 +1424,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::DistributedSequenceId(r#gen::DistributedSequenceIdExecNode {
+                input,
+                column_name,
+                counts,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let counts = counts
+                    .map(|counts| {
+                        try_decode_physical_plan_with_converter(ctx, self, proto_converter, &counts)
+                    })
+                    .transpose()?;
+                Ok(Arc::new(DistributedSequenceIdExec::try_new(
+                    input,
+                    column_name,
+                    counts,
+                )?))
+            }
+            NodeKind::PartitionCounts(r#gen::PartitionCountsExecNode { input }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(PartitionCountsExec::new(input)))
+            }
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
                 column_name,
@@ -2655,6 +2679,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
+        } else if let Some(sequence) = node.downcast_ref::<DistributedSequenceIdExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                sequence.input().clone(),
+            )?;
+            let counts = sequence
+                .counts()
+                .map(|counts| {
+                    try_encode_physical_plan_with_converter(self, proto_converter, counts.clone())
+                })
+                .transpose()?;
+            NodeKind::DistributedSequenceId(r#gen::DistributedSequenceIdExecNode {
+                input,
+                column_name: sequence.column_name().to_string(),
+                counts,
+            })
+        } else if let Some(counts) = node.downcast_ref::<PartitionCountsExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                counts.input().clone(),
+            )?;
+            NodeKind::PartitionCounts(r#gen::PartitionCountsExecNode { input })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
