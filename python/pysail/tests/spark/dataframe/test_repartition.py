@@ -41,6 +41,40 @@ def test_explicit_repartition(spark):
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
 
 
+# Ported from Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
+# Uses Connect partition IDs/counts instead of the RDD API.
+@pytest.mark.parametrize("descending", [False, True])
+def test_range_repartition_preserves_rows_and_partition_count(spark, descending):
+    source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    key = F.col("key").desc() if descending else F.col("key").asc()
+    result = source.repartitionByRange(3, key)
+    assert partition_count(result) == 3  # noqa: PLR2004
+    assert result.schema == source.schema
+    assert result.orderBy("id").collect() == source.orderBy("id").collect()
+
+
+# Regression extending Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
+# Uses Connect partition IDs/counts instead of the RDD API.
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="repartitionByRange currently uses hash partitioning instead of ordered range boundaries",
+    raises=AssertionError,
+    strict=True,
+)
+@pytest.mark.parametrize("descending", [False, True])
+def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descending):
+    source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    key = F.col("key").desc() if descending else F.col("key").asc()
+    rows = source.repartitionByRange(3, key).select("key", F.spark_partition_id().alias("pid")).collect()
+    groups = {pid: [row.key for row in rows if row.pid == pid] for pid in range(3)}
+    assert all(groups.values())
+    for lower, upper in zip(range(2), range(1, 3), strict=True):
+        if descending:
+            assert min(groups[lower]) > max(groups[upper])
+        else:
+            assert max(groups[lower]) < min(groups[upper])
+
+
 def test_explicit_repartition_spreads_identical_rows(spark):
     partition_ids = {
         row["pid"]
