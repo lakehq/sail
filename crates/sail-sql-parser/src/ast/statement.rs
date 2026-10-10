@@ -2,6 +2,7 @@ use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
+use crate::ast::config::{ConfigValue, config_assignment};
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
@@ -15,10 +16,10 @@ use crate::ast::keywords::{
     Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
     Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
     Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
-    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
-    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
-    When, With, Zone,
+    Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source,
+    Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary,
+    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose,
+    View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -299,7 +300,12 @@ pub enum Statement {
     },
     SetProperty {
         set: Set,
-        property: Option<PropertyKeyValue>,
+        #[parser(function = |_, o| unit(o).then(config_assignment(o).or_not()).or_not())]
+        property: Option<(PropertyKey, Option<(Equals, ConfigValue)>)>,
+    },
+    ResetProperty {
+        reset: Reset,
+        property: Option<PropertyKey>,
     },
     SetTimeZone {
         set: (Set, Time, Zone),

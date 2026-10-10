@@ -1,5 +1,6 @@
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{LogicalPlan, SetVariable, Statement};
+use sail_sql_analyzer::parser::parse_native_config_value;
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
@@ -10,6 +11,7 @@ impl PlanResolver<'_> {
         variable: String,
         value: String,
     ) -> PlanResult<LogicalPlan> {
+        let value = parse_native_config_value(&value).unwrap_or(value);
         let variable = if variable.eq_ignore_ascii_case("timezone")
             || variable.eq_ignore_ascii_case("time.zone")
         {
