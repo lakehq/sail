@@ -84,6 +84,7 @@ pub async fn load_parquet_scan_metadata(
 }
 
 #[cfg(test)]
+#[expect(clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -263,7 +264,7 @@ mod tests {
         }
         controlled.gates[&paths[0]].notify_one();
         let Poll::Ready(result) = futures::poll!(&mut load) else {
-            panic!("all released footer loads must complete");
+            return datafusion_common::internal_err!("all released footer loads must complete");
         };
         let groups = result?;
         assert_eq!(controlled.active.load(Ordering::SeqCst), 0);
