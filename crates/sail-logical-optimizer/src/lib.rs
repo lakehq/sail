@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+mod join_null_equality;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
 
+use join_null_equality::{EliminateCrossJoin, ExtractEquijoinPredicate};
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
@@ -37,7 +39,15 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
-    custom.extend(rules);
+    custom.extend(rules.into_iter().map(|rule| match rule.name() {
+        "eliminate_cross_join" => {
+            Arc::new(EliminateCrossJoin) as Arc<dyn OptimizerRule + Send + Sync>
+        }
+        "extract_equijoin_predicate" => {
+            Arc::new(ExtractEquijoinPredicate) as Arc<dyn OptimizerRule + Send + Sync>
+        }
+        _ => rule,
+    }));
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function
