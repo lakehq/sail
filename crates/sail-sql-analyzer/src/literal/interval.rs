@@ -428,6 +428,28 @@ fn from_ast_standard_interval(
     }
 }
 
+/// Returns the net number of days of a multi-unit interval, where a week counts as seven days.
+/// Spark keeps the days apart from the microseconds, so `1 DAYS -24 HOURS` has one day
+/// while the folded value of the same interval is zero.
+pub fn multi_unit_interval_days<'a>(
+    values: impl IntoIterator<Item = &'a IntervalValueWithUnit>,
+) -> SqlResult<i64> {
+    let error = || SqlError::invalid("multi-unit interval");
+    let mut days = 0i64;
+    for IntervalValueWithUnit { value, unit } in values {
+        let count = match unit {
+            IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
+                let weeks: i64 = parse_signed_value(value.clone())?;
+                weeks.checked_mul(7).ok_or_else(error)?
+            }
+            IntervalUnit::Day(_) | IntervalUnit::Days(_) => parse_signed_value(value.clone())?,
+            _ => continue,
+        };
+        days = days.checked_add(count).ok_or_else(error)?;
+    }
+    Ok(days)
+}
+
 fn from_ast_multi_unit_interval(
     values: Vec<IntervalValueWithUnit>,
     negated: bool,
