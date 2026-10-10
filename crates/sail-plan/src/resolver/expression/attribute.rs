@@ -319,13 +319,18 @@ impl PlanResolver<'_> {
     fn matching_root_fields<'a>(
         &'a self,
         schema: &'a DFSchema,
-        qualifier: Option<&'a TableReference>,
+        qualifier: Option<&'a Vec<String>>,
         root: &'a str,
         plan_id: Option<i64>,
         state: &'a PlanResolverState,
     ) -> impl Iterator<Item = (Option<&'a TableReference>, &'a FieldRef, &'a FieldInfo)> {
         schema.iter().filter_map(move |(field_qualifier, field)| {
-            if !qualifier_matches(qualifier, field_qualifier, self.config.case_sensitive) {
+            if !qualifier_matches(
+                qualifier,
+                field_qualifier,
+                self.config.case_sensitive,
+                state,
+            ) {
                 return None;
             }
             let info = state.get_field_info(field.name()).ok()?;
@@ -475,7 +480,7 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive)
+                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive, state)
                             && info.matches(name.as_ref(), None)
                             && (!self.config.case_sensitive || info.name() == name.as_ref())
                     })
@@ -551,79 +556,62 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &T)> {
-        match name {
-            [n1] => vec![(None, n1)],
-            [n1, n2] => vec![(Some(TableReference::bare(n1.as_ref())), n2)],
-            [n1, n2, n3] => vec![(Some(TableReference::partial(n1.as_ref(), n2.as_ref())), n3)],
-            [n1, n2, n3, n4] => vec![(
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                n4,
+    ) -> Vec<(Option<Vec<String>>, &T)> {
+        match name.split_last() {
+            Some((field, qualifier)) => vec![(
+                (!qualifier.is_empty()).then(|| {
+                    qualifier
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect()
+                }),
+                field,
             )],
-            _ => vec![],
+            None => vec![],
         }
     }
 
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> impl DoubleEndedIterator<Item = (Option<TableReference>, &T, &[T])> {
-        (0..name.len().min(4)).map(|index| {
-            let qualifier = match index {
-                0 => None,
-                1 => Some(TableReference::bare(name[0].as_ref())),
-                2 => Some(TableReference::partial(name[0].as_ref(), name[1].as_ref())),
-                _ => Some(TableReference::full(
-                    name[0].as_ref(),
-                    name[1].as_ref(),
-                    name[2].as_ref(),
-                )),
-            };
+    ) -> impl DoubleEndedIterator<Item = (Option<Vec<String>>, &T, &[T])> {
+        (0..name.len()).map(|index| {
+            let qualifier = (index > 0).then(|| {
+                name[..index]
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect()
+            });
             (qualifier, &name[index], &name[index + 1..])
         })
     }
 }
 
-/// Returns whether the qualifier matches the target qualifier.
-/// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
+/// A qualifier matches a suffix of the relation name, including multipart namespaces.
 pub(super) fn qualifier_matches(
-    qualifier: Option<&TableReference>,
+    qualifier: Option<&Vec<String>>,
     target: Option<&TableReference>,
     case_sensitive: bool,
+    state: &PlanResolverState,
 ) -> bool {
-    let names_equal = |left: &str, right: &str| {
-        if case_sensitive {
-            left == right
-        } else {
-            left.eq_ignore_ascii_case(right)
-        }
+    let Some(qualifier) = qualifier else {
+        return true;
     };
-    let table_matches = |table: &str| {
-        target
-            .map(|x| x.table())
-            .is_some_and(|x| names_equal(x, table))
+    let Some(target) = target else {
+        return false;
     };
-    let schema_matches = |schema: &str| {
-        target
-            .and_then(|x| x.schema())
-            .is_some_and(|x| names_equal(x, schema))
-    };
-    let catalog_matches = |catalog: &str| {
-        target
-            .and_then(|x| x.catalog())
-            .is_some_and(|x| names_equal(x, catalog))
-    };
-    match qualifier {
-        Some(TableReference::Bare { table }) => table_matches(table),
-        Some(TableReference::Partial { schema, table }) => {
-            schema_matches(schema) && table_matches(table)
-        }
-        Some(TableReference::Full {
-            catalog,
-            schema,
-            table,
-        }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
-        None => true,
-    }
+    let target = state.relation_name(target);
+    qualifier.len() <= target.len()
+        && qualifier
+            .iter()
+            .rev()
+            .zip(target.iter().rev())
+            .all(|(left, right)| {
+                if case_sensitive {
+                    left == right
+                } else {
+                    left.eq_ignore_ascii_case(right)
+                }
+            })
 }
 
 /// Returns the struct field selected by Spark's configured name resolver.

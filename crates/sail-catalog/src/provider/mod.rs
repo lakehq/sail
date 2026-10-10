@@ -30,6 +30,14 @@ pub trait CatalogProvider: Send + Sync {
     /// in different sessions.
     fn get_name(&self) -> &str;
 
+    /// The namespace used for unqualified objects when this is not the current catalog.
+    fn default_namespace(&self) -> Namespace {
+        Namespace {
+            head: "default".into(),
+            tail: vec![],
+        }
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

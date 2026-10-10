@@ -55,9 +55,12 @@ async fn plan_iceberg_merge_on_read(
         metadata_location,
         catalog_managed_table,
     )?;
-    let table =
-        Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
-            .await?;
+    let table = Table::load_with_metadata_location(
+        session.runtime_env().as_ref(),
+        table_url.clone(),
+        metadata_location_for_load,
+    )
+    .await?;
     ensure_current_row_level_mode(&table, node)?;
     if node.command() == RowLevelCommand::Delete
         && let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await?
@@ -110,8 +113,12 @@ async fn plan_iceberg_copy_on_write(
         metadata_location_from_options(node.target_options()),
         catalog_managed_iceberg_from_options(node.target_options()),
     )?;
-    let table =
-        Table::load_with_metadata_location(session, table_url.clone(), metadata_location).await?;
+    let table = Table::load_with_metadata_location(
+        session.runtime_env().as_ref(),
+        table_url.clone(),
+        metadata_location,
+    )
+    .await?;
     ensure_current_row_level_mode(&table, node)?;
     let [input] = physical_inputs else {
         return plan_err!("Iceberg copy-on-write requires exactly one write-plan input");

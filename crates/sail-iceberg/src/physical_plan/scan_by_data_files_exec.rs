@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -27,10 +26,20 @@ use sail_common_datafusion::schema_evolution::{
 };
 use url::Url;
 
+use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::io::StoreContext;
+use crate::physical_plan::file_tasks_exec::COL_IDENTITY_PARTITION_DEFAULTS;
 use crate::physical_plan::manifest_scan_exec::{
     COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_RECORD_COUNT,
 };
+
+struct ScanFile {
+    path: String,
+    size: u64,
+    records: u64,
+    nan_free: bool,
+    defaults: IdentityPartitionDefaults,
+}
 
 /// State machine for the streaming scan-by-data-files loop.
 struct ScanByDataFilesState {
@@ -46,8 +55,8 @@ struct ScanByDataFilesState {
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
-    /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
-    pending_files: Vec<(String, u64, u64, bool)>,
+    /// Pending file entries accumulated from the metadata stream.
+    pending_files: Vec<ScanFile>,
     /// Currently active scan stream (draining Parquet data).
     current_scan: Option<SendableRecordBatchStream>,
     /// Whether we've emitted at least one (possibly empty) batch.
@@ -77,7 +86,7 @@ impl ScanByDataFilesState {
     }
 
     /// Extract file paths and sizes from a metadata RecordBatch.
-    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64, u64, bool)>> {
+    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<ScanFile>> {
         let path_col = batch
             .column_by_name(COL_FILE_PATH)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -106,15 +115,33 @@ impl ScanByDataFilesState {
             .column_by_name(COL_NAN_FREE)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
             .ok_or_else(|| DataFusionError::Internal("Missing Iceberg NaN evidence".into()))?;
+        let defaults = batch
+            .column_by_name(COL_IDENTITY_PARTITION_DEFAULTS)
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Invalid Iceberg identity partition defaults".into(),
+                        )
+                    })
+            })
+            .transpose()?;
         let mut files = Vec::with_capacity(path_col.len());
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
-                files.push((
-                    path_col.value(i).to_string(),
-                    size_col.value(i),
-                    rows.value(i),
-                    nan_free.value(i),
-                ));
+                files.push(ScanFile {
+                    path: path_col.value(i).to_string(),
+                    size: size_col.value(i),
+                    records: rows.value(i),
+                    nan_free: nan_free.value(i),
+                    defaults: defaults
+                        .map(|column| serde_json::from_str(column.value(i)))
+                        .transpose()
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?
+                        .unwrap_or_default(),
+                });
             }
         }
         Ok(files)
@@ -130,8 +157,8 @@ impl ScanByDataFilesState {
         if self.output_schema.fields().is_empty() {
             let rows = files
                 .iter()
-                .try_fold(0usize, |rows, (_, _, count, _)| {
-                    usize::try_from(*count)
+                .try_fold(0usize, |rows, file| {
+                    usize::try_from(file.records)
                         .ok()
                         .and_then(|count| rows.checked_add(count))
                 })
@@ -180,13 +207,15 @@ impl ScanByDataFilesState {
         // exercised in this streaming path. The actual file size from the manifest
         // is accurate and is the only metadata field that matters for scan planning.
         let mut partitioned_files = Vec::with_capacity(files.len());
-        for (raw_path, file_size, _, _) in &files {
-            let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
+        for file in &files {
+            let file_path = store_ctx.resolve_to_absolute_path(&file.path)?;
+            let mut extensions = datafusion::common::extensions::Extensions::default();
+            extensions.insert(file.defaults.clone());
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
                     location: file_path,
                     last_modified: chrono::Utc::now(),
-                    size: *file_size,
+                    size: file.size,
                     e_tag: None,
                     version: None,
                 },
@@ -194,7 +223,7 @@ impl ScanByDataFilesState {
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: Default::default(),
+                extensions,
                 metadata_size_hint: None,
                 arrow_schema: None,
                 table_reference: None,
@@ -209,7 +238,7 @@ impl ScanByDataFilesState {
         // Use session Parquet options for parity with the driver-based scan path.
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.file_schema,
-            files.iter().all(|(_, _, _, nan_free)| *nan_free),
+            files.iter().all(|file| file.nan_free),
             self.context
                 .session_config()
                 .options()
@@ -236,7 +265,7 @@ impl ScanByDataFilesState {
             ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
 
-        let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+        let scan_exec = create_data_scan(file_scan_config)?;
         let output_schema = Arc::clone(&self.output_schema);
 
         // Execute all partitions of the scan and flatten into a single stream.
@@ -275,6 +304,8 @@ pub struct IcebergScanByDataFilesExec {
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
+    /// Whether each upstream partition owns a complete rewrite group.
+    preserve_file_groups: bool,
     /// Cached plan properties.
     cache: Arc<PlanProperties>,
 }
@@ -307,6 +338,7 @@ impl IcebergScanByDataFilesExec {
             projection,
             predicate,
             limit,
+            preserve_file_groups: false,
             cache,
         })
     }
@@ -333,6 +365,15 @@ impl IcebergScanByDataFilesExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn preserve_file_groups(mut self) -> Self {
+        self.preserve_file_groups = true;
+        self
+    }
+
+    pub fn preserves_file_groups(&self) -> bool {
+        self.preserve_file_groups
     }
 }
 
@@ -411,6 +452,10 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![!self.preserve_file_groups]
     }
 
     fn execute(

@@ -79,6 +79,8 @@ pub(super) enum AggregateState {
 pub(super) struct PlanResolverState {
     next_id: usize,
     next_origin: usize,
+    /// Multipart relation names represented by opaque DataFusion qualifiers.
+    relation_names: HashMap<TableReference, Vec<String>>,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
     /// An output schema of each DataFrame plan ID, for checking references against it.
@@ -126,6 +128,7 @@ impl PlanResolverState {
         Self {
             next_id: 0,
             next_origin: 0,
+            relation_names: HashMap::new(),
             fields: HashMap::new(),
             plan_schemas: HashMap::new(),
             outer_query_schema: None,
@@ -142,6 +145,31 @@ impl PlanResolverState {
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn register_relation_name(&mut self, name: Vec<String>) -> TableReference {
+        let reference = TableReference::bare(format!("#relation:{}", uuid::Uuid::new_v4()));
+        self.relation_names.insert(reference.clone(), name);
+        reference
+    }
+
+    pub fn relation_name<'a>(&'a self, reference: &'a TableReference) -> Vec<&'a str> {
+        if let Some(name) = self.relation_names.get(reference) {
+            return name.iter().map(String::as_str).collect();
+        }
+        match reference {
+            TableReference::Bare { table } => vec![table],
+            TableReference::Partial { schema, table } => vec![schema, table],
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => vec![catalog, schema, table],
+        }
+    }
+
+    pub fn is_multipart_relation(&self, reference: &TableReference) -> bool {
+        self.relation_names.contains_key(reference)
     }
 
     pub fn next_field_id(&mut self) -> String {

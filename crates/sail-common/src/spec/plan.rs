@@ -297,6 +297,11 @@ pub enum CommandNode {
         root: Box<CommandPlan>,
         references: Vec<QueryPlan>,
     },
+    CallProcedure {
+        procedure: ObjectName,
+        arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {

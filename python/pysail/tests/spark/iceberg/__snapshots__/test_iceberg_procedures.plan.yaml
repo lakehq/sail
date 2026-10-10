@@ -1,0 +1,102 @@
+# serializer version: 1
+---
+name: "test_rewrite_data_files_uses_workers_and_coordinator_commit[2-1]"
+data:
+  |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    IcebergRewriteExec: concurrent_groups=1, groups=4
+      IcebergWriterExec(table_path=file://<tmp>/distributed_rewrite_data_files/)
+        IcebergScanByDataFilesExec: table_url=file://<table_url>
+          CooperativeExec
+            IcebergFileTasksExec: groups=4, files=8
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=iceberg, procedure=rewrite_data_files, invocation_id=<invocation_id>
+      IcebergProcedureExec: procedure=rewrite_data_files, invocation_id=<invocation_id>
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_rewrite_data_files_uses_workers_and_coordinator_commit[2-2]"
+data:
+  |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    IcebergRewriteExec: concurrent_groups=2, groups=4
+      IcebergWriterExec(table_path=file://<tmp>/distributed_rewrite_data_files/)
+        IcebergScanByDataFilesExec: table_url=file://<table_url>
+          IcebergFileTasksExec: groups=4, files=8
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=iceberg, procedure=rewrite_data_files, invocation_id=<invocation_id>
+      IcebergProcedureExec: procedure=rewrite_data_files, invocation_id=<invocation_id>
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_rewrite_data_files_uses_workers_and_coordinator_commit[8-1]"
+data:
+  |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    IcebergRewriteExec: concurrent_groups=1, groups=1
+      IcebergWriterExec(table_path=file://<tmp>/distributed_rewrite_data_files/)
+        IcebergScanByDataFilesExec: table_url=file://<table_url>
+          CooperativeExec
+            IcebergFileTasksExec: groups=1, files=8
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=iceberg, procedure=rewrite_data_files, invocation_id=<invocation_id>
+      IcebergProcedureExec: procedure=rewrite_data_files, invocation_id=<invocation_id>
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)

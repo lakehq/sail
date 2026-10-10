@@ -20,13 +20,15 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
-use sail_iceberg::physical_plan::IcebergCommitExec;
+use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -47,6 +49,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
+        let plan = ensure_worker_input_for_iceberg_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -64,6 +67,38 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+fn ensure_worker_input_for_iceberg_procedure(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
+            return has_exchange(cooperative.input());
+        }
+        plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
+    }
+
+    Ok(plan
+        .transform_up(|plan| {
+            let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some(input) = procedure.input() else {
+                return Ok(Transformed::no(plan));
+            };
+            if has_exchange(input) {
+                return Ok(Transformed::no(plan));
+            }
+            // A single writer partition still belongs on a worker. Insert the exchange after
+            // physical optimization so redundant-coalesce removal cannot erase this boundary.
+            let input = Arc::new(CoalescePartitionsExec::new(Arc::clone(input)));
+            Ok(Transformed::yes(replace_children_if_necessary(
+                plan,
+                vec![input],
+            )?))
+        })?
+        .data)
 }
 
 /// A single-partition build no longer needs a physical coalesce, but should
@@ -537,6 +572,7 @@ fn plan_job_graph_stages(
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
+        || is_coordinator_lake_procedure(&subtree.plan)
         || subtree.plan.is::<FileDeleteExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
@@ -688,10 +724,21 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
     plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
+        || is_coordinator_lake_procedure(plan)
         || plan.is::<FileDeleteExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
+}
+
+fn is_coordinator_lake_procedure(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.downcast_ref::<LakeProcedureExec>()
+        .is_some_and(|procedure| {
+            matches!(
+                procedure.root_placement(),
+                LakeProcedureRootPlacement::Coordinator
+            )
+        })
 }
 
 fn wrap_pending_scalar_subqueries(
@@ -1056,6 +1103,62 @@ mod tests {
     }
 
     #[test]
+    fn lake_procedure_root_placement_is_preserved() {
+        use datafusion::common::tree_node::TreeNode;
+        use sail_common_datafusion::lakeprocedure::{
+            LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+            LakeProcedureInvocationId, LakeProcedureRootPlacement, LakeProcedureTarget,
+        };
+        use sail_physical_plan::lake_procedure::LakeProcedureExec;
+
+        for (placement, expected) in [
+            (
+                LakeProcedureRootPlacement::Coordinator,
+                TaskPlacement::Driver,
+            ),
+            (
+                LakeProcedureRootPlacement::Distributed,
+                TaskPlacement::Worker,
+            ),
+        ] {
+            let procedure = LakeProcedure {
+                name: "test".to_string(),
+                parameters: vec![],
+                output: vec![],
+                access: LakeProcedureAccess::MetadataCommit,
+                target: LakeProcedureTarget::Catalog,
+            };
+            let implementation = Arc::new(EmptyExec::new(procedure.schema()));
+            let call = LakeProcedureCall {
+                invocation_id: LakeProcedureInvocationId("test".to_string()),
+                catalog: "test".to_string(),
+                namespace: vec!["system".to_string()],
+                lake_source: "iceberg".to_string(),
+                target: None,
+                invocation: LakeProcedureInvocation {
+                    procedure,
+                    arguments: vec![],
+                },
+            };
+            let plan =
+                Arc::new(LakeProcedureExec::try_new(call, implementation, placement).unwrap());
+            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+            let stages = graph
+                .stages
+                .iter()
+                .filter(|stage| {
+                    stage
+                        .plan
+                        .exists(|plan| Ok(plan.is::<LakeProcedureExec>()))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stages.len(), 1);
+            assert_eq!(stages[0].placement, expected);
+        }
+    }
+
+    #[test]
     fn nested_loop_build_output_has_one_probe_partition() {
         use datafusion::common::JoinType;
         use datafusion::physical_plan::joins::NestedLoopJoinExec;
@@ -1287,6 +1390,108 @@ mod tests {
                 mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
+    }
+
+    #[test]
+    fn iceberg_rewrite_concurrency_bounds_the_reader_writer_stage() {
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+        use sail_iceberg::SnapshotUpdateKind;
+        use sail_iceberg::physical_plan::{
+            IcebergCommitExec, IcebergFileTasksExec, IcebergRewriteExec,
+            IcebergScanByDataFilesExec, IcebergWriterExec, IcebergWriterExecOptions,
+            prepare_iceberg_write_context,
+        };
+        use url::Url;
+
+        let table_url = Url::parse("memory://bucket/rewrite").unwrap();
+        let tasks = Arc::new(IcebergFileTasksExec::try_new(vec![vec![]; 6]).unwrap());
+        let scan = Arc::new(
+            IcebergScanByDataFilesExec::new(
+                tasks,
+                table_url.to_string(),
+                schema(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+            .preserve_file_groups(),
+        );
+        let options = IcebergWriterExecOptions::default();
+        let context = prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            &schema(),
+        )
+        .unwrap();
+        let writer = Arc::new(
+            IcebergWriterExec::new(
+                scan,
+                table_url.clone(),
+                vec![],
+                PhysicalSinkMode::Append,
+                false,
+                options,
+                context,
+            )
+            .unwrap(),
+        );
+        let runner = Arc::new(
+            IcebergRewriteExec::try_new(writer, vec![vec![0, 2, 4], vec![1, 3, 5]]).unwrap(),
+        );
+        let commit = Arc::new(IcebergCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(runner)),
+            table_url,
+            None,
+            SnapshotUpdateKind::RewriteDataFiles,
+        ));
+        let graph = JobGraph::try_new(commit, flight_shuffle_options()).unwrap();
+        let stages = graph
+            .stages()
+            .iter()
+            .filter(|stage| {
+                stage
+                    .plan
+                    .exists(|plan| Ok(plan.is::<IcebergRewriteExec>()))
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stages.len(), 1);
+        let stage = stages[0];
+        assert_eq!(stage.placement, TaskPlacement::Worker);
+        assert_eq!(stage.plan.output_partitioning().partition_count(), 2);
+        assert!(stage.inputs.is_empty());
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergWriterExec>()))
+                .unwrap()
+        );
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergScanByDataFilesExec>()))
+                .unwrap()
+        );
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergFileTasksExec>()
+                    && plan.output_partitioning().partition_count() == 6))
+                .unwrap()
+        );
+        let commits = graph
+            .stages()
+            .iter()
+            .filter(|stage| stage.plan.is::<IcebergCommitExec>())
+            .collect::<Vec<_>>();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].placement, TaskPlacement::Driver);
     }
 
     #[test]

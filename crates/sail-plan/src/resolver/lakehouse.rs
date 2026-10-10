@@ -19,6 +19,24 @@ impl PlanResolver<'_> {
         requested_format: Option<&str>,
         options: Vec<(String, String)>,
     ) -> PlanResult<LakehouseExecutionContext> {
+        self.resolve_lakehouse_table_context_for_access(
+            table,
+            operation,
+            requested_format,
+            options,
+            table_access_purpose(operation),
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_lakehouse_table_context_for_access(
+        &self,
+        table: &[String],
+        operation: LakehouseOperation,
+        requested_format: Option<&str>,
+        options: Vec<(String, String)>,
+        access_purpose: TableAccessPurpose,
+    ) -> PlanResult<LakehouseExecutionContext> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let resolved = manager
             .resolve_lakehouse_table(
@@ -37,7 +55,7 @@ impl PlanResolver<'_> {
                 table,
                 BeginTableAccessRequest {
                     context: execution.clone(),
-                    purpose: table_access_purpose(operation),
+                    purpose: access_purpose,
                 },
             )
             .await

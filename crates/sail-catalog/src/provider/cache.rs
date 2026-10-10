@@ -208,6 +208,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
+    fn default_namespace(&self) -> Namespace {
+        self.inner.default_namespace()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
