@@ -137,6 +137,7 @@ impl PlanResolver<'_> {
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
                     function: function.into(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {

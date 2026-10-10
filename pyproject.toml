@@ -213,7 +213,7 @@ dependencies = [
 spark = ["3.5.9", "4.2.0"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3' 'pyarrow>=24.0,<25'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
@@ -229,6 +229,7 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.9",
     "ibis-framework[pyspark]>=12,<13",
+    "pyarrow>=24.0,<25",
     # Ibis 12 uses Drop(this=...), but SQLGlot 30.18 requires Drop(tables=[...]).
     "sqlglot>=23.4,<30.18,!=26.32.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
