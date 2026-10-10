@@ -1,5 +1,10 @@
 /// Options for the SQL parser.
-#[derive(Debug, Clone, Default)]
+///
+/// `Eq` and `Hash` let a parser be looked up by the dialect it was built for.
+/// Keep the set of possible values small and enumerable: a parser is built and
+/// retained for each distinct value, and a field with an open range of values
+/// would make that unbounded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ParserOptions {
     /// Whether to allow dual quote escape in strings with single-character quotes.
     /// If true, the quote character can be escaped by repeating it twice.
