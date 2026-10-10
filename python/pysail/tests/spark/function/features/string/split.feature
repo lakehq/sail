@@ -71,6 +71,13 @@ Feature: split output schema
         | split doctest #14 (result) | 'aa2bb3cc4', '[1-9]+', NULL   | NULL                |
         | split doctest #15 (result) | 'aa2bb3cc4', NULL, -1         | NULL                |
         | split doctest #16 (result) | NULL, '[1-9]+', -1            | NULL                |
+        | empty pattern characters   | 'abcdef', ''                  | [a, b, c, d, e, f]  |
+        | empty pattern empty input  | '', ''                        | []                  |
+        | empty pattern limit -1     | 'abcdef', '', -1              | [a, b, c, d, e, f]  |
+        | empty pattern limit 0      | 'abcdef', '', 0               | [a, b, c, d, e, f]  |
+        | empty pattern limit 1      | 'abcdef', '', 1               | [abcdef]            |
+        | empty pattern limit 2      | 'abcdef', '', 2               | [a, bcdef]          |
+        | empty pattern limit 10     | 'abcdef', '', 10              | [a, b, c, d, e, f]  |
 
     Scenario: split doctest #17 (result)
       When query
@@ -91,3 +98,12 @@ Feature: split output schema
         | NULL                | array<string> |
         | NULL                | array<string> |
         | NULL                | array<string> |
+
+    Scenario: slice of an empty-pattern split uses Spark indexes
+      When query
+        """
+        SELECT slice(split('abcdef', ''), 2, 4) AS result, typeof(slice(split('abcdef', ''), 2, 4)) AS type
+        """
+      Then query result
+        | result       | type          |
+        | [b, c, d, e] | array<string> |
