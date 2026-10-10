@@ -7,9 +7,11 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, FieldRef,
 };
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    lit,
 };
 use rand::{RngExt, rng};
 
@@ -170,14 +172,34 @@ impl ScalarUDFImpl for SparkUniform {
         let t_max = args.arg_fields[1].data_type();
         let return_type = Self::calculate_output_type(t_min, t_max);
 
-        // The result is NULL whenever a bound is NULL, so the field must be
-        // nullable if either bound is a NULL literal or a nullable expression.
-        let nullable = matches!(t_min, DataType::Null)
-            || matches!(t_max, DataType::Null)
-            || args.arg_fields[0].is_nullable()
-            || args.arg_fields[1].is_nullable();
+        // Uniform inherits RDG.nullable = false (randomExpressions.scala:58).
+        // This is Spark's analyzed schema even when a foldable bound evaluates
+        // to NULL; runtime evaluation must still preserve that NULL value.
+        Ok(Arc::new(Field::new(self.name(), return_type, false)))
+    }
 
-        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        // Spark replaces Uniform with arithmetic before optimizing expressions.
+        // Its analyzed field is non-nullable (RDG), but NULL bounds fold to a
+        // nullable literal in the executable plan. Preserve that distinction so
+        // IS NULL/coalesce and Arrow's field validation see the actual value.
+        // Require all arguments to be literals: do not bypass the validation of
+        // non-foldable bounds or seeds. Type coercion has already checked types.
+        if matches!(args.len(), 2 | 3)
+            && args.iter().all(|arg| matches!(arg, Expr::Literal(_, _)))
+            && args[..2]
+                .iter()
+                .any(|arg| matches!(arg, Expr::Literal(value, _) if value.is_null()))
+        {
+            let return_type = Self::calculate_output_type(
+                &info.get_data_type(&args[0])?,
+                &info.get_data_type(&args[1])?,
+            );
+            return Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::try_from(
+                &return_type,
+            )?)));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

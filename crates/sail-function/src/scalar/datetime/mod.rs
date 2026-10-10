@@ -1,5 +1,6 @@
 pub mod convert_tz;
 pub mod format;
+pub mod int64_floor_div;
 pub mod negate_duration;
 pub mod spark_date;
 pub mod spark_date_format;
@@ -11,6 +12,7 @@ pub mod spark_make_time;
 pub mod spark_make_timestamp_ntz;
 pub mod spark_make_ym_interval;
 pub mod spark_next_day;
+pub mod spark_string_to_time;
 pub mod spark_time;
 pub mod spark_time_diff;
 pub mod spark_time_trunc;

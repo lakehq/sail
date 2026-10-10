@@ -161,20 +161,23 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::int64_floor_div::Int64FloorDiv;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
-    SparkYearMonthInterval, YearMonthIntervalMonths,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalFromInt64,
+    SparkDayTimeIntervalToCalendarInterval, SparkYearMonthInterval,
+    SparkYearMonthIntervalFromInt64, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_string_to_time::SparkStringToTime;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -213,6 +216,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::misc::force_nullable::SparkForceNullable;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
@@ -3165,6 +3169,34 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkMapFromArrays::new(last_value_wins);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkYearMonthIntervalFromInt64(
+                r#gen::SparkYearMonthIntervalFromInt64Udf { multiplier, is_try },
+            ) => {
+                let udf = SparkYearMonthIntervalFromInt64::new(multiplier, is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDayTimeIntervalFromInt64(r#gen::SparkDayTimeIntervalFromInt64Udf {
+                multiplier,
+                is_try,
+            }) => {
+                let udf = SparkDayTimeIntervalFromInt64::new(multiplier, is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkStringToTime(r#gen::SparkStringToTimeUdf { is_try }) => {
+                let udf = SparkStringToTime::new(is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf { divisor }) => {
+                let udf = Int64FloorDiv::new(divisor);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf { qualifier, is_try }) => {
+                let metadata = sail_common::spec::SparkIntervalMetadata::from_json(&qualifier)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let udf =
+                    SparkDayTimeInterval::new(metadata.start_field(), metadata.end_field(), is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
                 let udf = SparkMapFromEntries::new(last_value_wins);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3333,6 +3365,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
+            "spark_variant_to_string" => {
+                Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new_cast())))
+            }
             "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
@@ -3446,7 +3481,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
-            "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
             "year_month_interval_months" => {
                 Ok(Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())))
             }
@@ -3536,10 +3570,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<Int64FloorDiv>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
+            || node_inner.is::<SparkForceNullable>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -3558,7 +3594,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
-            || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -3634,6 +3669,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkYearMonthIntervalFromInt64>() {
+            UdfKind::SparkYearMonthIntervalFromInt64(r#gen::SparkYearMonthIntervalFromInt64Udf {
+                multiplier: func.multiplier(),
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeIntervalFromInt64>() {
+            UdfKind::SparkDayTimeIntervalFromInt64(r#gen::SparkDayTimeIntervalFromInt64Udf {
+                multiplier: func.multiplier(),
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkStringToTime>() {
+            UdfKind::SparkStringToTime(r#gen::SparkStringToTimeUdf {
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<Int64FloorDiv>() {
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf {
+                divisor: func.divisor(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeInterval>() {
+            let metadata =
+                sail_common::spec::SparkIntervalMetadata::DayTime {
+                    start_field: func.start_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                    end_field: func.end_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                };
+            let qualifier = metadata
+                .to_json()
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf {
+                qualifier,
+                is_try: func.is_try(),
+            })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),

@@ -185,7 +185,9 @@ def data(spark, tmp_path_factory):
         pq.write_table(file_table, tmp_dir / f"hits-{file_index:02}.parquet")
 
     df = spark.read.parquet(str(tmp_dir))
-    df = df.withColumn("EventDate", F.col("EventDate").cast("int").cast("date"))
+    # Spark has no NumericType -> DateType cast rule at all (Cast.scala suggests
+    # `DATE_FROM_UNIX_DATE` instead); reinterpret the raw day offset that way.
+    df = df.withColumn("EventDate", F.expr("date_from_unix_date(CAST(EventDate AS INT))"))
     df.createOrReplaceTempView("hits")
     yield
     spark.catalog.dropTempView("hits")

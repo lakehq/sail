@@ -9,6 +9,7 @@ mod constraint;
 mod data_type;
 mod expression;
 mod function;
+pub(crate) use expression::spark_interval_metadata_for_expression;
 mod lakehouse;
 mod literal;
 pub mod plan;

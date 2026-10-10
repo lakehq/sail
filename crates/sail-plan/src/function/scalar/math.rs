@@ -9,6 +9,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -39,6 +40,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::resolver::spark_interval_metadata_for_expression;
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -126,6 +128,14 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) + right, DataType::Date32)
             }
+            (
+                Ok(time_type @ (DataType::Time32(_) | DataType::Time64(_))),
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+            ) => spark_time_add_interval(left, right, &time_type, false, function_context.schema)?,
+            (
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+                Ok(time_type @ (DataType::Time32(_) | DataType::Time64(_))),
+            ) => spark_time_add_interval(right, left, &time_type, false, function_context.schema)?,
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
             (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left + right,
@@ -177,11 +187,181 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
             }
+            (
+                Ok(time_type @ (DataType::Time32(_) | DataType::Time64(_))),
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+            ) => spark_time_add_interval(left, right, &time_type, true, function_context.schema)?,
+            (
+                Ok(left_type @ (DataType::Time32(_) | DataType::Time64(_))),
+                Ok(right_type @ (DataType::Time32(_) | DataType::Time64(_))),
+            ) => spark_subtract_times(
+                left,
+                right,
+                &left_type,
+                &right_type,
+                function_context.schema,
+            )?,
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
             (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left - right,
         })
     }
+}
+
+fn time_unit_of(data_type: &DataType) -> Option<TimeUnit> {
+    match data_type {
+        DataType::Time32(unit) | DataType::Time64(unit) => Some(*unit),
+        _ => None,
+    }
+}
+
+fn time_unit_precision(unit: TimeUnit) -> i32 {
+    match unit {
+        TimeUnit::Second => 0,
+        TimeUnit::Millisecond => 3,
+        TimeUnit::Microsecond => 6,
+        TimeUnit::Nanosecond => 9,
+    }
+}
+
+fn precision_to_time_type(precision: i32) -> DataType {
+    match precision {
+        0 => DataType::Time32(TimeUnit::Second),
+        3 => DataType::Time32(TimeUnit::Millisecond),
+        6 => DataType::Time64(TimeUnit::Microsecond),
+        _ => DataType::Time64(TimeUnit::Nanosecond),
+    }
+}
+
+fn nanos_per_unit(precision: i32) -> i64 {
+    match precision {
+        0 => 1_000_000_000,
+        3 => 1_000_000,
+        6 => 1_000,
+        _ => 1,
+    }
+}
+
+/// Spark's `TimeAddInterval` (timeExpressions.scala): adds a day-time interval
+/// (stored as microseconds) to a TIME value, working in nanoseconds. Result
+/// type precision is `max(source TIME precision, 6 if the interval's end
+/// field is SECOND else 0)`. Unlike TIMESTAMP arithmetic there is no
+/// wraparound: a result outside `[0, 24h)` always raises `DATETIME_OVERFLOW`,
+/// in ANSI mode or not (`DateTimeUtils.timeAddInterval` has no ANSI branch).
+/// `subtract` negates the interval in the nanosecond domain (used for
+/// `TIME - INTERVAL`, which Spark rewrites to the same function), so no
+/// separate interval-negation UDF call is needed.
+fn spark_time_add_interval(
+    time: Expr,
+    interval: Expr,
+    time_type: &DataType,
+    subtract: bool,
+    schema: &DFSchemaRef,
+) -> PlanResult<Expr> {
+    let Some(time_unit) = time_unit_of(time_type) else {
+        return Err(PlanError::internal(
+            "expected TIME type for interval arithmetic",
+        ));
+    };
+    let source_precision = time_unit_precision(time_unit);
+    let interval_precision = match spark_interval_metadata_for_expression(&interval, schema)? {
+        Some(spec::SparkIntervalMetadata::DayTime {
+            end_field: spec::DayTimeIntervalField::Second,
+            ..
+        }) => 6,
+        _ => 0,
+    };
+    let target_precision = source_precision.max(interval_precision);
+    let target_type = precision_to_time_type(target_precision);
+
+    let sign = if subtract { -1_i64 } else { 1_i64 };
+    let time_nanos = cast(time, DataType::Int64) * lit(nanos_per_unit(source_precision));
+    let interval_nanos = cast(interval, DataType::Int64) * lit(sign * 1_000_i64);
+    let result_nanos = time_nanos + interval_nanos;
+    let overflow = result_nanos
+        .clone()
+        .lt(lit(0_i64))
+        .or(result_nanos.clone().gt_eq(lit(86_400_000_000_000_i64)));
+    let truncated = result_nanos / lit(nanos_per_unit(target_precision));
+    // The guarded branch may still be visited by constant folding; keep it
+    // non-panicking with `try_cast` since `truncated` is only known to be in
+    // range once `overflow` is checked (see the CAST_OVERFLOW pattern above).
+    let value = if matches!(target_type, DataType::Time32(_)) {
+        try_cast(try_cast(truncated, DataType::Int32), target_type)
+    } else {
+        try_cast(truncated, target_type)
+    };
+    let message = lit(
+        "[DATETIME_OVERFLOW] Datetime operation overflow: time value out of range [00:00:00, 24:00:00).".to_string(),
+    );
+    Ok(when(
+        overflow,
+        ScalarUDF::from(RaiseError::new()).call(vec![message]),
+    )
+    .otherwise(value)?)
+}
+
+/// Spark's `SubtractTimes` (timeExpressions.scala): exact microsecond
+/// difference between two TIME values, with the fixed result type
+/// `DayTimeIntervalType(HOUR, SECOND)` regardless of either operand's TIME
+/// precision (`DateTimeUtils.subtractTimes`: `(endNanos - startNanos) /
+/// NANOS_PER_MICROS`).
+fn spark_subtract_times(
+    left: Expr,
+    right: Expr,
+    left_type: &DataType,
+    right_type: &DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<Expr> {
+    let (Some(left_unit), Some(right_unit)) = (time_unit_of(left_type), time_unit_of(right_type))
+    else {
+        return Err(PlanError::internal(
+            "expected TIME type for interval arithmetic",
+        ));
+    };
+    let left_nanos =
+        cast(left, DataType::Int64) * lit(nanos_per_unit(time_unit_precision(left_unit)));
+    let right_nanos =
+        cast(right, DataType::Int64) * lit(nanos_per_unit(time_unit_precision(right_unit)));
+    let diff_micros = (left_nanos - right_nanos) / lit(1_000_i64);
+    let value = cast(diff_micros, DataType::Duration(TimeUnit::Microsecond));
+    attach_day_time_interval_metadata(
+        value,
+        schema,
+        spec::DayTimeIntervalField::Hour,
+        spec::DayTimeIntervalField::Second,
+    )
+}
+
+/// Attaches Spark day-time interval field metadata to an expression already
+/// typed as `Duration(Microsecond)`, mirroring the pattern used for `CAST ...
+/// AS INTERVAL` in `cast.rs`: relabel via a (possibly no-op) `Cast` around
+/// the value rather than the underlying data, since the physical type is
+/// unchanged.
+fn attach_day_time_interval_metadata(
+    expr: Expr,
+    schema: &DFSchemaRef,
+    start_field: spec::DayTimeIntervalField,
+    end_field: spec::DayTimeIntervalField,
+) -> PlanResult<Expr> {
+    let metadata_value = spec::SparkIntervalMetadata::DayTime {
+        start_field,
+        end_field,
+    }
+    .to_json()
+    .map_err(|error| PlanError::internal(error.to_string()))?;
+    let field = expr.to_field(schema)?.1;
+    let mut field_metadata = field.metadata().clone();
+    field_metadata.insert(
+        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+        metadata_value,
+    );
+    let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+    Ok(match expr {
+        Expr::Cast(cast) => Expr::Cast(expr::Cast::new_from_field(cast.expr, field)),
+        Expr::TryCast(cast) => Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field)),
+        expr => Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+    })
 }
 
 /// Arguments:
