@@ -10,7 +10,7 @@ use datafusion_expr::{
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -629,6 +629,62 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// `QuotingUtils.quoteIfNeeded`: back-ticks unless the name is a plain identifier.
+fn quote_identifier_if_needed(name: &str) -> String {
+    let mut chars = name.chars();
+    let is_plain = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_plain {
+        name.to_string()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
+    }
+}
+
+/// Spark's `DataType.sql`, which `toSQLType` quotes in analysis errors: upper-case type names,
+/// `MAP<K, V>` with a space and struct fields as `name: TYPE`, plus ` NOT NULL` when non-nullable.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/StructType.scala#L447>
+fn spark_sql_type(formatter: &dyn PlanFormatter, data_type: &DataType) -> PlanResult<String> {
+    Ok(match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
+            format!("ARRAY<{}>", spark_sql_type(formatter, field.data_type())?)
+        }
+        DataType::Map(entries, _) => match entries.data_type() {
+            DataType::Struct(fields) if fields.len() == 2 => format!(
+                "MAP<{}, {}>",
+                spark_sql_type(formatter, fields[0].data_type())?,
+                spark_sql_type(formatter, fields[1].data_type())?
+            ),
+            _ => formatter
+                .data_type_to_simple_string(data_type)?
+                .to_ascii_uppercase(),
+        },
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    Ok(format!(
+                        "{}: {}{}",
+                        quote_identifier_if_needed(field.name()),
+                        spark_sql_type(formatter, field.data_type())?,
+                        if field.is_nullable() { "" } else { " NOT NULL" }
+                    ))
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            format!("STRUCT<{}>", fields.join(", "))
+        }
+        other => formatter
+            .data_type_to_simple_string(other)?
+            .to_ascii_uppercase(),
+    })
+}
+
 /// Mirrors Spark's `Abs` analysis: `inputTypes = NumericAndAnsiInterval`, with
 /// `ImplicitCastInputTypes` casting a string argument to DOUBLE.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L152-L158>
@@ -666,13 +722,14 @@ fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
             arg
         }
         other => {
-            let type_name = input
-                .function_context
-                .session_context
-                .extension::<PlanService>()?
-                .plan_formatter()
-                .data_type_to_simple_string(other)?
-                .to_ascii_uppercase();
+            let type_name = spark_sql_type(
+                input
+                    .function_context
+                    .session_context
+                    .extension::<PlanService>()?
+                    .plan_formatter(),
+                other,
+            )?;
             let name = input
                 .function_context
                 .argument_display_names

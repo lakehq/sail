@@ -23,9 +23,10 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
-/// `scala.math.BigDecimal` negation rounds to `MathContext.DECIMAL128`: 34 significant digits,
-/// HALF_EVEN. Spark's `Decimal.abs` of a negative value is `-decimalVal`, so a negative decimal
-/// wider than 34 digits is rounded to 34 digits; a non-negative one is returned as is.
+/// `scala.math.BigDecimal.unary_-` rounds to `MathContext.DECIMAL128`: 34 significant digits,
+/// HALF_EVEN. Spark's `Decimal.abs` of a negative value is `-decimalVal` (`decimalVal` is a Scala
+/// `BigDecimal`: `java.math.BigDecimal` is imported there as `JavaBigDecimal`), so a negative
+/// decimal wider than 34 digits is rounded to 34 digits; a non-negative one is returned as is.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/Decimal.scala#L543-L551>
 const SPARK_NEGATE_DIGITS: u8 = 34;
 
@@ -45,6 +46,34 @@ fn format_decimal(unscaled: u128, scale: i8) -> String {
     }
 }
 
+/// `java.math.BigDecimal.toString` of `unscaled * 10^-scale`: plain notation when the scale is not
+/// negative and the adjusted exponent is at least -6, scientific notation otherwise.
+fn java_decimal_string(unscaled: u128, scale: i64) -> String {
+    let digits = unscaled.to_string();
+    if scale == 0 {
+        return digits;
+    }
+    let len = i64::try_from(digits.len()).unwrap_or(i64::MAX);
+    let adjusted = len - 1 - scale;
+    if scale > 0 && adjusted >= -6 {
+        let scale = usize::try_from(scale).unwrap_or(0);
+        let padded = format!("{digits:0>width$}", width = scale + 1);
+        let (int_part, frac_part) = padded.split_at(padded.len() - scale);
+        return format!("{int_part}.{frac_part}");
+    }
+    let (head, tail) = digits.split_at(1);
+    let mantissa = if tail.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head}.{tail}")
+    };
+    match adjusted {
+        0 => mantissa,
+        a if a > 0 => format!("{mantissa}E+{a}"),
+        a => format!("{mantissa}E{a}"),
+    }
+}
+
 /// Spark's `abs` of one unscaled `Decimal128` value, or the overflow error Spark raises when
 /// the rounded value no longer fits the precision.
 fn spark_abs_wide_decimal(value: i128, precision: u8, scale: i8) -> Result<i128> {
@@ -54,8 +83,10 @@ fn spark_abs_wide_decimal(value: i128, precision: u8, scale: i8) -> Result<i128>
     let magnitude = value.unsigned_abs();
     let digits = decimal_digits(magnitude);
     let excess = digits.saturating_sub(u32::from(SPARK_NEGATE_DIGITS));
-    let rounded = if excess == 0 {
-        magnitude
+    // `coefficient * 10^excess` is the rounded value; `coefficient` is the 34-digit unscaled value
+    // of the `BigDecimal` Spark builds, and the one its error message prints.
+    let (coefficient, excess) = if excess == 0 {
+        (magnitude, 0)
     } else {
         let unit = 10_u128.pow(excess);
         let (quotient, remainder) = (magnitude / unit, magnitude % unit);
@@ -65,20 +96,20 @@ fn spark_abs_wide_decimal(value: i128, precision: u8, scale: i8) -> Result<i128>
         } else {
             quotient
         };
-        quotient * unit
+        (quotient, excess)
     };
+    let rounded = coefficient * 10_u128.pow(excess);
     if decimal_digits(rounded) > u32::from(precision) {
-        let exponent = decimal_digits(rounded) as i64 - 1 - i64::from(scale);
-        let leading = rounded.to_string();
-        let significant = leading.trim_end_matches('0');
-        let mantissa = if significant.len() > 1 {
-            format!("{}.{}", &significant[..1], &significant[1..])
+        // A carry (999...9 -> 1000...0) leaves 35 digits; `BigDecimal` keeps 34 of them.
+        let (coefficient, excess) = if decimal_digits(coefficient) > u32::from(SPARK_NEGATE_DIGITS)
+        {
+            (coefficient / 10, excess + 1)
         } else {
-            format!("{significant}.0")
+            (coefficient, excess)
         };
+        let original = java_decimal_string(coefficient, i64::from(scale) - i64::from(excess));
         return exec_err!(
-            "[NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION] The {} rounded half up from {mantissa}E+{exponent} cannot be represented as Decimal({precision}, {scale}). \
-             If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error.",
+            "[NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION] The {} rounded half up from {original} cannot be represented as Decimal({precision}, {scale}).",
             format_decimal(rounded, scale)
         );
     }
@@ -178,8 +209,9 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     /// Spark's `Abs` is `NullIntolerant` and keeps the child's `dataType`, so the result is
-    /// nullable exactly when the argument is.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L152-L158>
+    /// nullable exactly when the argument is (`nullable` is inherited from `UnaryExpression`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L152-L160>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L599>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field] = args.arg_fields else {
             return Err(invalid_arg_count_exec_err(

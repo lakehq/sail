@@ -7,7 +7,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(<args>) AS result
         """
-      Then query error .*
+      Then query error \[WRONG_NUM_ARGS
 
       Examples:
         | case                 | args |
@@ -107,12 +107,14 @@ Feature: abs comprehensive tests
         | 10000000000000000000000000000000000000 |
 
     # abs of 38 nines rounds up to 10^38 and overflows DECIMAL(38,0), as in Spark.
+    # Spark 3.5 raises DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION here instead.
+    @spark-4
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
         SELECT abs(CAST(-99999999999999999999999999999999999999 AS DECIMAL(38,0))) AS result
         """
-      Then query error .*
+      Then query error \[NUMERIC_VALUE_OUT_OF_RANGE\.WITHOUT_SUGGESTION\]\s+The 100000000000000000000000000000000000000 rounded half up from 1\.000000000000000000000000000000000E\+38 cannot be represented as Decimal\(38, 0\)\.
 
   Rule: Integer overflow under ANSI=false wraps to MIN
     # Two's-complement quirk: signed integer range is asymmetric (e.g. TINYINT
@@ -425,7 +427,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(<input>) AS result
         """
-      Then query error .*
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\]
 
       Examples:
         | input                           |
@@ -679,6 +681,32 @@ Feature: abs comprehensive tests
         | CALENDAR INTERVAL | make_interval(1, 2)        | false |
         | CALENDAR INTERVAL | make_interval(1, 2)        | true  |
 
+    # The offending type is rendered with `DataType.sql` (DataTypeErrorsBase.toSQLType): upper case,
+    # `MAP<K, V>` with a space, struct fields keep their name and carry NOT NULL, quoted if needed.
+    Scenario Outline: abs of <input> names its type as <type>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\].*has the type "<type>"
+
+      Examples:
+        | input                                      | type                  | ansi  |
+        | map('k', 1)                                | MAP<STRING, INT>      | false |
+        | map('k', 1)                                | MAP<STRING, INT>      | true  |
+        | array(map('k', 1))                         | ARRAY<MAP<STRING, INT>> | false |
+        | named_struct('a', CAST(NULL AS INT))       | STRUCT<a: INT>        | false |
+        | named_struct('A', CAST(NULL AS INT))       | STRUCT<A: INT>        | false |
+        | named_struct('a b', CAST(NULL AS INT))     | STRUCT<`a b`: INT>    | false |
+        | array(CAST(1 AS DECIMAL(10,2)))            | ARRAY<DECIMAL[(]10,2[)]> | false |
+        | array(TIMESTAMP_NTZ'2024-01-02 00:00:00')  | ARRAY<TIMESTAMP_NTZ>  | false |
+        | TIMESTAMP_NTZ'2024-01-02 00:00:00'         | TIMESTAMP_NTZ         | false |
+        | TIMESTAMP'2024-01-02'                      | TIMESTAMP             | false |
+        | DATE'2024-01-02'                           | DATE                  | false |
+        | X'0102'                                    | BINARY                | false |
+        | true                                       | BOOLEAN               | true  |
+
   Rule: NULL literal is coerced to DOUBLE
 
     Scenario: abs of an untyped NULL has type double
@@ -727,6 +755,8 @@ Feature: abs comprehensive tests
         | 38 digits with scale, rounds up   | 38     | 38 | 2 | -123456789012345678901234567890123456.78 | 123456789012345678901234567890123500.00  |
         | 37 nines round up to 10^37        | 37     | 38 | 0 | -9999999999999999999999999999999999999  | 10000000000000000000000000000000000000   |
 
+    # Spark 3.5 raises DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION here instead.
+    @spark-4
     Scenario Outline: abs of a negative DECIMAL(38,0) that rounds past its precision errors under ANSI=<ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -739,6 +769,24 @@ Feature: abs comprehensive tests
         | ansi  |
         | false |
         | true  |
+
+    # The message is Spark's NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION template and nothing else
+    # (the "If necessary set spark.sql.ansi.enabled" sentence belongs to WITH_SUGGESTION, and this
+    # error is raised with ANSI off too). `<original>` is the DECIMAL128-rounded BigDecimal printed by
+    # java.math.BigDecimal.toString: all 34 digits, plain notation when the scale stays >= 0.
+    @spark-4
+    Scenario Outline: abs overflow message of DECIMAL(<p>,<s>): <case>
+      When query
+        """
+        SELECT abs(CAST(<input> AS DECIMAL(<p>,<s>))) AS result
+        """
+      Then query error \[NUMERIC_VALUE_OUT_OF_RANGE\.WITHOUT_SUGGESTION\]\s+The <rounded> rounded half up from <original> cannot be represented as Decimal\(<p>, <s>\)\.(?! If necessary)
+
+      Examples:
+        | case                       | p  | s  | input                                   | rounded                                  | original                                    |
+        | scale 0, 38 nines          | 38 | 0  | -99999999999999999999999999999999999999 | 100000000000000000000000000000000000000  | 1[.]000000000000000000000000000000000E[+]38   |
+        | scale 0, 35 nines          | 35 | 0  | -99999999999999999999999999999999999    | 100000000000000000000000000000000000     | 1[.]000000000000000000000000000000000E[+]35   |
+        | scale 10 keeps plain form  | 38 | 10 | -9999999999999999999999999999.9999999999 | 10000000000000000000000000000[.]0000000000 | 10000000000000000000000000000[.]00000        |
 
   Rule: Nullability follows the argument
 
@@ -874,6 +922,8 @@ Feature: abs comprehensive tests
         | false |
         | true  |
 
+    # Spark 3.5 raises DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION here instead.
+    @spark-4
     Scenario Outline: abs of a DECIMAL column errors when one row rounds past the precision: ANSI=<ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -980,13 +1030,16 @@ Feature: abs comprehensive tests
         | 2.0    |
         | NaN    |
 
+    # Same cast-level message-class gap as the Outline above (no [CAST_INVALID_INPUT]); this one
+    # is the column form, where only one row is malformed.
+    @sail-bug
     Scenario: abs of a string column with a malformed row fails under ANSI=true
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT abs(s) AS result FROM VALUES ('-1'), ('x') AS t(s)
         """
-      Then query error (CAST_INVALID_INPUT|Cannot cast string 'x')
+      Then query error \[CAST_INVALID_INPUT\]
 
   Rule: Foldable expressions go through constant folding
 
