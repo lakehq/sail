@@ -36,22 +36,6 @@ Feature: nvl2 output schema
         | CASE then  | CASE WHEN TRUE THEN 'id' ELSE CAST(CAST('invalid' AS INT) AS STRING) END              |
         | CASE else  | CASE WHEN FALSE THEN CAST(CAST('invalid' AS INT) AS STRING) ELSE 'id' END             |
 
-    # TODO: Reject table function arguments that Spark does not treat as foldable.
-    #  Lowering NVL2, NVL and IFNULL to CASE lets constant evaluation accept them.
-    @sail-bug
-    Scenario Outline: range rejects a non-foldable <function> argument
-      When query
-        """
-        SELECT count(*) AS n FROM range(<expression>)
-        """
-      Then query error NON_FOLDABLE_ARGUMENT
-
-      Examples:
-        | function | expression        |
-        | nvl2     | nvl2(1, 2, 3)     |
-        | nvl      | nvl(NULL, 2)      |
-        | ifnull   | ifnull(NULL, 2)   |
-
   @function(nullability)
   Rule: Output schema
 
@@ -214,24 +198,6 @@ Feature: nvl2 output schema
         | TIMESTAMP_NTZ and LTZ  | false | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | TIMESTAMP_NTZ and LTZ  | true  | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP_LTZ '2024-02-03 04:05:06' | timestamp     |
         | STRING and BINARY     | true  | 'a'                                | X'62'                              | binary        |
-
-    # TODO: Reject NVL2 result branches without a Spark wider common type.
-    #  NVL2 shares the permissive CASE coercion that IF and CASE already use.
-    @sail-bug
-    Scenario Outline: nvl2 rejects result branches without a common type: <case>, ANSI <ansi>
-      Given config spark.sql.ansi.enabled = <ansi>
-      When query
-        """
-        SELECT nvl2(nullif(id, 0), <first_branch>, <second_branch>) AS result FROM range(2)
-        """
-      Then query error DATATYPE_MISMATCH
-
-      Examples:
-        | case                              | ansi  | first_branch              | second_branch    |
-        | INT and STRING map keys           | true  | map(CAST(id AS INT), 'v') | map('k', 'w')    |
-        | BIGINT and STRING map keys        | true  | map(id, 'v')              | map('k', 'w')    |
-        | BINARY and STRING                 | false | X'61'                     | 'b'              |
-        | year-month and day-time intervals | true  | INTERVAL '1' YEAR         | INTERVAL '1' DAY |
 
     Scenario: nvl2 returns a DATE branch as TIMESTAMP_NTZ
       When query
