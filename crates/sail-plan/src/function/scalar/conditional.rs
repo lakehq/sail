@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::{ExprSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -118,13 +119,28 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         when_then_expr,
         else_expr,
     });
-    if spark_nullable {
+    // The wrapper changes the plan text (it survives inside aggregate arguments, window and
+    // ORDER BY expressions, and into their generated names), so it is added only where it
+    // changes the schema: Spark says nullable and DataFusion does not.
+    if spark_nullable && !datafusion_declares_nullable(&case_expr, schema) {
         // The same `CASE WHEN true THEN <expr> END` wrapper `cast.rs` uses: its missing ELSE
-        // makes the analyzed schema nullable, and the optimizer removes it before execution.
+        // makes the analyzed schema nullable.
         Ok(datafusion_expr::when(lit(true), case_expr).end()?)
     } else {
         Ok(case_expr)
     }
+}
+
+/// DataFusion's own nullability for `case_expr`, asked only where that is safe. The question
+/// validates the whole tree, so it is never put to an expression holding a higher-order
+/// function: a nested lambda body would be checked here, before Sail's own deferred check
+/// ("Null-typed predicates discard unchecked higher-order returns" in map_filter.feature).
+/// Whenever it cannot be answered the schema is taken as nullable, which adds no wrapper.
+fn datafusion_declares_nullable(case_expr: &expr::Expr, schema: &dyn ExprSchema) -> bool {
+    let has_higher_order = case_expr
+        .exists(|node| Ok(matches!(node, expr::Expr::HigherOrderFunction(_))))
+        .unwrap_or(true);
+    has_higher_order || case_expr.nullable(schema).unwrap_or(true)
 }
 
 /// A branch type whose Arrow type is the whole Spark type: no interval field range, TIME
