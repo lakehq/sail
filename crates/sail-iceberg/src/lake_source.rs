@@ -574,7 +574,10 @@ pub(crate) async fn plan_iceberg_write(
         physical_sort,
         ctx,
     );
-    if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
+    if matches!(mode, PhysicalSinkMode::Overwrite) {
+        // Keep the planned snapshot fixed so commit retries cannot overwrite concurrent writes.
+        builder = builder.with_expected_snapshot_id(expected_snapshot_id);
+    } else if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
         builder = builder
             .with_expected_snapshot_id(expected_snapshot_id)
             .with_removed_data_file_paths(removed_data_file_paths);

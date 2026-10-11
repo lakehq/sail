@@ -472,6 +472,92 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
 
 
+@pytest.mark.parametrize("write_mode", ["overwrite", "append"])
+@pytest.mark.parametrize("initial_rows", [0, 3], ids=["empty", "populated"])
+def test_concurrent_append_during_catalog_commit(
+    spark: SparkSession,
+    gated_remote: str,
+    commit_gate_proxy: tuple[str, _CommitGate],
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+    write_mode: str,
+    initial_rows: int,
+) -> None:
+    table_name = f"concurrent_{write_mode}_{initial_rows}_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT, value INT) USING iceberg")
+    if initial_rows:
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 10), (2, 20), (3, 30)")  # noqa: S608
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    base_snapshot_id = before["metadata"].get("current-snapshot-id")
+    if base_snapshot_id is not None and base_snapshot_id < 0:
+        base_snapshot_id = None
+
+    _, gate = commit_gate_proxy
+    with spark_session_factory(gated_remote) as sessions:
+        slow = sessions.create()
+        gate.arm(NAMESPACE, table_name)
+
+        def write() -> None:
+            if write_mode == "overwrite":
+                slow.sql(f"INSERT OVERWRITE {table_fqn} SELECT id, value * 2 FROM {table_fqn}").collect()  # noqa: S608
+            else:
+                slow.sql(f"INSERT INTO {table_fqn} VALUES (5, 50)").collect()  # noqa: S608
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(write)
+            try:
+                if not gate.arrived.wait(timeout=60):
+                    outcome = future.exception(timeout=1) if future.done() else "still running"
+                    pytest.fail(f"Write did not reach the catalog commit gate: {outcome}")
+                spark.sql(f"INSERT INTO {table_fqn} VALUES (4, 40)")  # noqa: S608
+                fast_commit = _load_table(iceberg_rest_endpoint, table_name)
+            finally:
+                gate.release.set()
+
+            if write_mode == "overwrite":
+                with pytest.raises(Exception, match="expected snapshot"):
+                    future.result(timeout=60)
+            else:
+                future.result(timeout=60)
+
+    assert gate.completed.wait(timeout=10)
+    assert gate.response_status == HTTP_CONFLICT
+    assert gate.request is not None
+    snapshot_requirements = [
+        requirement for requirement in gate.request["requirements"] if requirement["type"] == "assert-ref-snapshot-id"
+    ]
+    assert snapshot_requirements
+    assert {requirement.get("snapshot-id") for requirement in snapshot_requirements} == {base_snapshot_id}
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    if write_mode == "overwrite":
+        assert after["metadata-location"] == fast_commit["metadata-location"]
+        assert after["metadata"] == fast_commit["metadata"]
+    else:
+        assert after["metadata-location"] != fast_commit["metadata-location"]
+        snapshot = _current_snapshot(after["metadata"])
+        assert snapshot["parent-snapshot-id"] == fast_commit["metadata"]["current-snapshot-id"]
+        assert snapshot["summary"]["operation"] == "append"
+
+    expected = [(i, i * 10) for i in range(1, initial_rows + 1)] + [(4, 40)]
+    if write_mode == "append":
+        expected.append((5, 50))
+    rows = spark.sql(f"SELECT id, value FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [(row.id, row.value) for row in rows] == expected
+    external_table = StaticTable.from_metadata(
+        after["metadata-location"],
+        properties={
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        },
+    )
+    external_rows = external_table.scan().to_arrow().to_pylist()
+    assert sorted((row["id"], row["value"]) for row in external_rows) == expected
+
+
 def test_delete_advances_rest_catalog_metadata_location_with_position_delete(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
