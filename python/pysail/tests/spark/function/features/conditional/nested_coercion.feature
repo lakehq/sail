@@ -124,7 +124,6 @@ Feature: Conditional coercion of nested types
       | an array of structs | array(struct(INTERVAL '1' DAY AS v, 1 AS n))       | array(struct(INTERVAL '2' HOUR AS v, 2L AS n))        | [0]      |
       | a map of structs    | map('item', struct(INTERVAL '1' DAY AS v, 1 AS n)) | map('item', struct(INTERVAL '2' HOUR AS v, 2L AS n)) | ['item'] |
 
-  # These coercion gaps also occur at the PR merge-base. They are not regressions.
   @sail-bug
   Scenario Outline: ANSI numeric widening retains integral precision inside <container>
     Given config spark.sql.ansi.enabled = true
