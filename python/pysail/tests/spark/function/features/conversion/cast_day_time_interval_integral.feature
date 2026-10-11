@@ -427,8 +427,9 @@ Feature: Day-time interval integral casts use the end field without float roundi
   # fails and falls back to dividing by SECOND (the bug this fix targets) would
   # give 172800 / 7200 / 5400000000 instead, so a single DAY case alone
   # wouldn't have caught a regression back to that fallback.
-  @sail-bug
-  Scenario Outline: Interval integral shape array element: <qualifier>
+  # The VALUE is not part of the known gap, so it is asserted without the marker: on `main`
+  # these return 172800 / 7200 / 5400, and the branch matches Spark.
+  Scenario Outline: Interval integral shape array element value: <qualifier>
     When query
       """
       SELECT CAST(array(INTERVAL '<value>' <qualifier>)[0] AS BIGINT) AS result
@@ -436,6 +437,19 @@ Feature: Day-time interval integral casts use the end field without float roundi
     Then query result ordered
       |result   |
       |<result> |
+
+    Examples:
+      | qualifier | value | result |
+      | DAY       | 2     | 2      |
+      | HOUR      | 2     | 2      |
+      | MINUTE    | 90    | 90     |
+
+  @sail-bug
+  Scenario Outline: Interval integral shape array element schema: <qualifier>
+    When query
+      """
+      SELECT CAST(array(INTERVAL '<value>' <qualifier>)[0] AS BIGINT) AS result
+      """
     Then query schema
       """
       root
@@ -443,10 +457,10 @@ Feature: Day-time interval integral casts use the end field without float roundi
       """
 
     Examples:
-      | qualifier | value | result |
-      | DAY       | 2     | 2      |
-      | HOUR      | 2     | 2      |
-      | MINUTE    | 90    | 90     |
+      | qualifier | value |
+      | DAY       | 2     |
+      | HOUR      | 2     |
+      | MINUTE    | 90    |
 
   Scenario: Interval integral shape CASE with wider right interval
     When query

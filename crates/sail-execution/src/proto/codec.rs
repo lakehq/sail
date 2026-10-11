@@ -216,7 +216,6 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
-use sail_function::scalar::misc::force_nullable::SparkForceNullable;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
@@ -231,6 +230,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_decimal_to_float::SparkCastDecimalToFloat;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -267,6 +267,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::vector::l2_distance::VectorL2Distance;
+use sail_function::scalar::vector::norm::VectorNorm;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -531,6 +532,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 prefix,
                 storage_schema,
+                input_ordering,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -539,11 +541,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let prefix = object_store::path::Path::parse(prefix)
                     .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
                 let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let input_ordering = input_ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(
+                            &ordering,
+                            &input.schema(),
+                            ctx,
+                            proto_converter,
+                        )
+                    })
+                    .transpose()?;
                 Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
                     input,
                     object_store_url,
                     prefix,
                     storage_schema,
+                    input_ordering,
                 )?))
             }
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -2009,6 +2022,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                input_ordering: checkpoint
+                    .input_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+                    .transpose()?,
             })
         } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -3330,11 +3347,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_decimal_to_float" => Ok(Arc::new(ScalarUDF::from(
                 SparkCastDecimalToFloat::new_float32(),
             ))),
+            "spark_integral_to_binary" => {
+                Ok(Arc::new(ScalarUDF::from(SparkIntegralToBinary::new())))
+            }
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "vector_l2_distance" => Ok(Arc::new(ScalarUDF::from(VectorL2Distance::new()))),
+            "vector_norm" => Ok(Arc::new(ScalarUDF::from(VectorNorm::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
@@ -3535,9 +3556,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
             || node_inner.is::<SparkCastDecimalToFloat>()
+            || node_inner.is::<SparkIntegralToBinary>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
+            || node_inner.is::<VectorNorm>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -3559,12 +3582,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
-            || node_inner.is::<Int64FloorDiv>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
-            || node_inner.is::<SparkForceNullable>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -6689,6 +6710,28 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_int64_floor_div_udf_keeps_the_divisor() -> Result<()> {
+        for divisor in [1_000_i64, 1_000_000, 1_000_000_000] {
+            let decoded = round_trip_udf(ScalarUDF::from(Int64FloorDiv::new(divisor)))?;
+
+            let decoded = downcast_udf::<Int64FloorDiv>(&decoded, "Int64FloorDiv")?;
+            assert_eq!(decoded.divisor(), divisor);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_integral_to_binary_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkIntegralToBinary::new()))?;
+
+        downcast_udf::<SparkIntegralToBinary>(&decoded, "SparkIntegralToBinary")?;
+        assert_eq!(decoded.name(), "spark_integral_to_binary");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_vector_inner_product_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(VectorInnerProduct::new()))?;
 
@@ -6724,6 +6767,16 @@ mod tests {
 
         assert!(decoded.inner().downcast_ref::<VectorL2Distance>().is_some());
         assert_eq!(decoded.name(), "vector_l2_distance");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_norm_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorNorm::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorNorm>().is_some());
+        assert_eq!(decoded.name(), "vector_norm");
 
         Ok(())
     }
@@ -7211,6 +7264,7 @@ mod tests {
     #[test]
     fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
         let input_schema = Arc::new(Schema::new(vec![Field::new(
             "logical_name",
@@ -7218,15 +7272,30 @@ mod tests {
             true,
         )]));
         let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let ordering = LexOrdering::from([PhysicalSortExpr::new(
+            Arc::new(Column::new("logical_name", 0)),
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )]);
+        let required_ordering = vec![Some(ordering.clone().into())];
         let checkpoint = RemoteCheckpointWriteExec::try_new(
-            Arc::new(EmptyExec::new(input_schema)),
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
             object_store::path::Path::from("checkpoints/session/relation"),
             Arc::clone(&storage_schema),
+            Some(ordering),
         )?;
+        assert_eq!(checkpoint.required_input_ordering(), required_ordering);
+        let checkpoint = Arc::new(checkpoint).replace_children(
+            vec![Arc::new(EmptyExec::new(input_schema))],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        assert_eq!(checkpoint.required_input_ordering(), required_ordering);
         let codec = RemoteExecutionCodec;
 
-        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let bytes = try_encode_physical_plan(&codec, checkpoint)?;
         let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
         let decoded = decoded
             .downcast_ref::<RemoteCheckpointWriteExec>()
@@ -7242,6 +7311,8 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        assert_eq!(decoded.required_input_ordering(), required_ordering);
+        assert!(decoded.properties().output_ordering().is_none());
         Ok(())
     }
 

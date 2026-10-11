@@ -585,3 +585,23 @@ Feature: CAST expressions
          |-- s: struct (nullable = false)
          |    |-- x: double (nullable = false)
         """
+
+  # `UpCastRule` calls DATE -> TIMESTAMP an up-cast, but a DATE far outside the range a TIMESTAMP
+  # holds still overflows: the TRY_CAST must return NULL, never raise.
+  Rule: TRY_CAST of a DATE too large for a TIMESTAMP is NULL
+
+    Scenario Outline: TRY_CAST of a far DATE to <type>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT TRY_CAST(date_from_unix_date(<days>) AS <type>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | type          | days       | result              |
+        | TIMESTAMP     | 2000000000 | NULL                |
+        | TIMESTAMP_NTZ | 2000000000 | NULL                |
+        | TIMESTAMP     | 100000     | 2243-10-17 00:00:00 |

@@ -279,13 +279,14 @@ impl TryFrom<DataType> for spec::DataType {
                 type_variation_reference: _,
             }) => {
                 let precision = precision.unwrap_or(6); // Default to microsecond if not specified
-                if !(0..=6).contains(&precision) {
-                    return Err(SparkError::invalid(format!(
-                        "unsupported TIME precision: {precision}. Only [0, 6] is supported"
-                    )));
-                }
-                #[expect(clippy::unwrap_used, reason = "precision is checked to be in [0, 6]")]
-                let precision = u8::try_from(precision).unwrap();
+                let precision = u8::try_from(precision)
+                    .ok()
+                    .filter(|p| *p <= 6)
+                    .ok_or_else(|| {
+                        SparkError::invalid(format!(
+                            "unsupported TIME precision: {precision}. Only [0, 6] is supported"
+                        ))
+                    })?;
                 // Spark stores every TIME value as a microsecond-resolution `Long`
                 // internally regardless of the declared precision -- precision is
                 // schema/display-only, matching `from_ast_time_precision` in

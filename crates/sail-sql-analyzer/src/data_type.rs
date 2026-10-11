@@ -68,18 +68,15 @@ fn from_ast_timestamp_precision(
 fn from_ast_time_precision(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<u8> {
-    let precision = precision.as_ref().map(|(_, p, _)| p.value);
-    let precision = match precision {
-        None => 6,
-        Some(p) if (0..=6).contains(&p) => p,
-        Some(p) => {
-            return Err(SqlError::invalid(format!(
-                "[UNSUPPORTED_TIME_PRECISION] The seconds precision {p} of the TIME data type is out of the supported range [0, 6]."
-            )));
-        }
-    };
-    #[expect(clippy::unwrap_used, reason = "precision is checked to be in [0, 6]")]
-    Ok(u8::try_from(precision).unwrap())
+    let precision = precision.as_ref().map_or(6, |(_, p, _)| p.value);
+    u8::try_from(precision)
+        .ok()
+        .filter(|p| *p <= 6)
+        .ok_or_else(|| {
+            SqlError::invalid(format!(
+                "[UNSUPPORTED_TIME_PRECISION] The seconds precision {precision} of the TIME data type is out of the supported range [0, 6]."
+            ))
+        })
 }
 
 pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {

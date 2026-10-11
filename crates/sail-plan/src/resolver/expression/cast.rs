@@ -49,6 +49,39 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if let spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            ..
+        } = &cast_to_type
+        {
+            let resolved = self
+                .resolve_named_expression(expr.clone(), schema, state)
+                .await?;
+            let field = resolved.expr.to_field(schema)?.1;
+            if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_UDT_METADATA_KEY) {
+                let source: spec::SparkUdtMetadata = serde_json::from_str(metadata)
+                    .map_err(|e| PlanError::internal(format!("invalid UDT metadata: {e}")))?;
+                let same_type = match (&source.jvm_class, jvm_class) {
+                    (Some(source), Some(target)) => source == target,
+                    (None, None) => {
+                        source.python_class.is_some() && source.python_class == *python_class
+                    }
+                    _ => false,
+                };
+                if same_type {
+                    return Ok(resolved);
+                }
+                // Different JVM UDTs can accept each other's user classes through
+                // inheritance. Without that hierarchy, leave them unsupported.
+                if source.jvm_class.is_none() || jvm_class.is_none() {
+                    return Err(PlanError::analysis(
+                        "cannot cast between incompatible user-defined types",
+                    ));
+                }
+            }
+        }
+
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
@@ -164,8 +197,11 @@ impl PlanResolver<'_> {
                 target_name.to_ascii_uppercase()
             )));
         }
-        let force_nullable =
-            !is_try && spark_cast_force_nullable(&expr_type, &cast_to_type, expr_is_variant);
+        let force_nullable = if is_try {
+            spark_try_cast_force_nullable(&expr_type, &cast_to_type)
+        } else {
+            spark_cast_force_nullable(&expr_type, &cast_to_type, expr_is_variant)
+        };
 
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -728,7 +764,15 @@ impl PlanResolver<'_> {
                     (Some(field), DataType::Duration(_)) => day_time_field_to_microseconds(field),
                     _ => time_unit_to_multiplier(&time_unit),
                 };
-                cast(expr.mul(lit(multiplier)), cast_to_type)
+                if from.is_decimal() {
+                    // `decimalToDayTimeInterval` rounds HALF_UP at the interval's unit
+                    // (IntervalUtils.scala:939-953); Arrow's decimal rescale rounds half away
+                    // from zero, which is the same rule.
+                    let rounded = cast(expr.mul(lit(multiplier)), DataType::Decimal128(38, 0));
+                    cast(cast(rounded, DataType::Int64), cast_to_type)
+                } else {
+                    cast(expr.mul(lit(multiplier)), cast_to_type)
+                }
             }
             (from, DataType::Interval(IntervalUnit::YearMonth), is_try)
                 if from.is_integer() || from.is_decimal() =>
@@ -741,8 +785,17 @@ impl PlanResolver<'_> {
                     Some(spec::IntervalFieldType::Year) => 12_i64,
                     _ => 1_i64,
                 };
+                // `decimalToYearMonthInterval` rounds HALF_UP at the interval's unit
+                // (IntervalUtils.scala:841-851), so a DECIMAL is scaled to months before it is
+                // narrowed to an integer.
+                let (units, multiplier) = if from.is_decimal() {
+                    let rounded = cast(expr.mul(lit(multiplier)), DataType::Decimal128(38, 0));
+                    (cast(rounded, DataType::Int64), 1_i64)
+                } else {
+                    (cast(expr, DataType::Int64), multiplier)
+                };
                 ScalarUDF::from(SparkYearMonthIntervalFromInt64::new(multiplier, is_try))
-                    .call(vec![cast(expr, DataType::Int64)])
+                    .call(vec![units])
             }
             (
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -797,11 +850,42 @@ impl PlanResolver<'_> {
                     },
                     _ => 1_000_000_i64,
                 };
-                let value = cast(expr, DataType::Int64) / lit(divisor);
-                if is_try {
-                    try_cast(value, to)
+                let micros = cast(expr, DataType::Int64);
+                let value = if to.is_decimal() && divisor == 1_000_000_i64 {
+                    // A SECOND-ending interval is `Decimal(micros, 20, 6)` and keeps its six
+                    // fractional digits (IntervalUtils.scala:930-937); only DAY, HOUR and
+                    // MINUTE divide down to a whole unit. DataFusion's decimal division keeps
+                    // `max(s1, s2) + 4` fractional digits, so the dividend carries scale 6: the
+                    // quotient then has ten, and the six that are needed are exact.
+                    cast(micros.clone(), DataType::Decimal128(38, 6))
+                        .div(lit(ScalarValue::Decimal128(Some(1_000_000), 7, 0)))
                 } else {
-                    cast(value, to)
+                    micros.clone() / lit(divisor)
+                };
+                match decimal_precision_scale(&to) {
+                    _ if is_try => try_cast(value, to),
+                    Some((precision, scale)) => {
+                        // The interval -> DECIMAL cast builds its Decimal with
+                        // `nullOnOverflow = false` (Cast.scala:1141-1146): an overflow raises
+                        // `NUMERIC_VALUE_OUT_OF_RANGE` under ANSI on AND off.
+                        let casted = try_cast(value.clone(), to.clone());
+                        let overflow = micros.is_not_null().and(casted.clone().is_null());
+                        let message = concat(vec![
+                            lit("[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  "),
+                            cast(cast(value, DataType::Decimal128(38, 6)), DataType::Utf8),
+                            lit(format!(
+                                " cannot be represented as Decimal({precision}, {scale}). If \
+                                 necessary set \"spark.sql.ansi.enabled\" to \"false\" to \
+                                 bypass this error, and return NULL instead."
+                            )),
+                        ]);
+                        datafusion_expr::when(
+                            overflow,
+                            ScalarUDF::from(RaiseError::new()).call(vec![message]),
+                        )
+                        .otherwise(casted)?
+                    }
+                    None => cast(value, to),
                 }
             }
             // `Some(_)` (not the bare `_` this used to be) excludes TIMESTAMP_NTZ: Spark has
@@ -967,7 +1051,7 @@ impl PlanResolver<'_> {
                 // would otherwise shadow it and hard-error via a plain `cast` instead.
                 if is_try
                     || (!self.config.ansi_mode
-                        && decimal_cast_can_overflow(&DataType::Int8, precision, scale))
+                        && decimal_cast_can_overflow(&DataType::Boolean, precision, scale))
                 {
                     try_cast(as_int8, cast_to_type)
                 } else {
@@ -1119,9 +1203,24 @@ impl PlanResolver<'_> {
                 _,
             ) if from.is_numeric()
                 && !self.config.ansi_mode
-                && (is_try || decimal_cast_can_overflow(&from, precision, scale)) =>
+                && ((is_try && !spark_can_up_cast(&from, &cast_to_type))
+                    || decimal_cast_can_overflow(&from, precision, scale)) =>
             {
                 try_cast(expr, cast_to_type)
+            }
+            // A TRY_CAST that is an up-cast (UpCastRule.scala) cannot fail, so it keeps its
+            // input's nullability; DataFusion's TryCast would always declare it nullable.
+            // ... unless the cast can still fail at runtime although `UpCastRule` calls it safe: a
+            // DATE or TIMESTAMP far outside the target's range overflows. Those keep the
+            // `try_cast` below, whose NULL is what Spark returns for a TRY_CAST.
+            (from, to, true)
+                if spark_can_up_cast(&from, &to)
+                    && !matches!(
+                        from,
+                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                    ) =>
+            {
+                cast(expr, to)
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
@@ -1311,6 +1410,85 @@ fn is_legacy_only_pair(is_try: bool, ansi_mode: bool) -> bool {
     is_try || ansi_mode
 }
 
+fn decimal_precision_scale(data_type: &DataType) -> Option<(u8, i8)> {
+    match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => Some((*precision, *scale)),
+        _ => None,
+    }
+}
+
+/// Spark 4.2 `UpCastRule.canUpCast` (UpCastRule.scala:28-66) for the atomic types Sail can tell
+/// apart. A container is an up-cast only when it is the same type: answering `false` for the
+/// rest makes the cast nullable, which is what DataFusion's TryCast already declared.
+fn spark_can_up_cast(from: &DataType, to: &DataType) -> bool {
+    if from == to || from == &DataType::Null {
+        return true;
+    }
+    if (from.is_string() && to.is_string()) || (from.is_binary() && to.is_binary()) {
+        return true;
+    }
+    let numeric_precedence = |data_type: &DataType| match data_type {
+        DataType::Int8 => Some(0),
+        DataType::Int16 => Some(1),
+        DataType::Int32 => Some(2),
+        DataType::Int64 => Some(3),
+        DataType::Float32 => Some(4),
+        DataType::Float64 => Some(5),
+        _ => None,
+    };
+    if let (Some(from_rank), Some(to_rank)) = (numeric_precedence(from), numeric_precedence(to)) {
+        return from_rank < to_rank;
+    }
+    if let Some((precision, scale)) = decimal_precision_scale(to) {
+        // `to.isWiderThan(from)`: BOOLEAN is not a NumericType, so it is not an up-cast.
+        return match (decimal_precision_scale(from), from) {
+            (Some((from_precision, from_scale)), _) => {
+                i16::from(precision) - i16::from(scale)
+                    >= i16::from(from_precision) - i16::from(from_scale)
+                    && scale >= from_scale
+            }
+            (None, DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64) => {
+                spark_cast_decimal_is_safe(from, precision, scale)
+            }
+            _ => false,
+        };
+    }
+    match (from, to) {
+        (
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+            DataType::Timestamp(_, _),
+        ) => true,
+        (DataType::Int64, DataType::Timestamp(_, Some(_)))
+        | (DataType::Timestamp(_, Some(_)), DataType::Int64) => true,
+        (from, to) if to.is_string() => !matches!(
+            from,
+            DataType::Struct(_)
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::Map(_, _)
+                | DataType::Union(_, _)
+                | DataType::Dictionary(_, _)
+        ),
+        _ => false,
+    }
+}
+
+/// Spark 4.2 `Cast.nullable` for a TRY_CAST (Cast.scala:630-639) without the `child.nullable`
+/// term: the cast is nullable unless it is an up-cast.
+fn spark_try_cast_force_nullable(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (from, to) if from.is_string() && to.is_binary() => false,
+        (from, to) if decimal_precision_scale(from).is_some() && to.is_integer() => true,
+        _ => !spark_can_up_cast(from, to),
+    }
+}
+
 fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {
     let integer_digits = i16::from(precision) - i16::from(scale);
     match from {
@@ -1320,6 +1498,8 @@ fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool 
             integer_digits < source_integer_digits
                 || (integer_digits == source_integer_digits && scale < *from_scale)
         }
+        // BOOLEAN is `DecimalType(1, 0)` for `isWiderThan` (Cast.scala:410).
+        DataType::Boolean => scale < 0 || integer_digits < 1,
         DataType::Int8 | DataType::UInt8 => scale < 0 || integer_digits < 3,
         DataType::Int16 | DataType::UInt16 => scale < 0 || integer_digits < 5,
         DataType::Int32 | DataType::UInt32 => scale < 0 || integer_digits < 10,

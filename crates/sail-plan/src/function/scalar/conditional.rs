@@ -7,7 +7,6 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::misc::force_nullable::SparkForceNullable;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
@@ -40,71 +39,124 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .zip(branch_values)
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
-    // CaseWhen.nullable ignores the missing ELSE when a branch is always
-    // true (conditionalExpressions.scala:191-200). A final true branch is an
-    // explicit ELSE; moving it preserves every branch's type checking.
-    let final_is_true = when_then_expr.last().is_some_and(|(condition, _)| {
+    // CaseWhen.nullable ignores the missing ELSE when a branch is always true, and takes the
+    // FIRST literal-true condition as the last branch that counts: every branch after it is
+    // unreachable (conditionalExpressions.scala:191-200). That branch is an explicit ELSE;
+    // moving it preserves every branch's type checking. The branches after it are dropped
+    // only when their type is the retained one's (or an untyped NULL) and carries no field
+    // metadata and their conditions are BOOLEAN, so that dropping them can neither change the
+    // result type -- an interval's field range, for one, lives in metadata, not in the Arrow
+    // type -- nor hide a type error Spark would report. Otherwise only a trailing `WHEN true` becomes the ELSE.
+    let schema = function_context.schema;
+    let is_true = |condition: &expr::Expr| {
         matches!(
-            condition.as_ref(),
+            condition,
             expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
         )
-    });
-    let else_expr = if final_is_true {
-        when_then_expr.pop().map(|(_, value)| value)
-    } else {
-        None
     };
+    let last_index = when_then_expr.len().saturating_sub(1);
+    let first_true = when_then_expr
+        .iter()
+        .position(|(condition, _)| is_true(condition));
+    let cut = match first_true {
+        Some(index) if index < last_index => {
+            let kept_type = when_then_expr[index].1.get_type(schema).ok();
+            let droppable = kept_type.as_ref().is_some_and(is_plain_branch_type)
+                && when_then_expr[index + 1..]
+                    .iter()
+                    .all(|(condition, value)| {
+                        // `CaseWhen.checkInputDataTypes` requires every condition to be BOOLEAN,
+                        // the ones after a `WHEN true` included (conditionalExpressions.scala:207).
+                        condition
+                            .get_type(schema)
+                            .is_ok_and(|data_type| data_type == DataType::Boolean)
+                            && value.get_type(schema).is_ok_and(|data_type| {
+                                Some(&data_type) == kept_type.as_ref()
+                                    || data_type == DataType::Null
+                            })
+                    });
+            if droppable {
+                Some(index)
+            } else if is_true(&when_then_expr[last_index].0) {
+                Some(last_index)
+            } else {
+                None
+            }
+        }
+        Some(index) => Some(index),
+        None => None,
+    };
+    let else_expr = cut.and_then(|index| {
+        when_then_expr.truncate(index + 1);
+        when_then_expr.pop().map(|(_, value)| value)
+    });
     if when_then_expr.is_empty() {
         if let Some(value) = else_expr {
             return Ok(*value);
         }
         return Ok(lit(ScalarValue::Null));
     }
-    // Spark's CaseWhen.nullable ORs every branch's nullability unconditionally
-    // (conditionalExpressions.scala:191-200) -- including a WHEN branch guarded
-    // by a literal-false condition, which can never actually be selected.
-    // DataFusion's own `nullable()` excludes such unreachable branches, which
-    // disagrees with Spark's declared schema even though both engines compute
-    // the same runtime value.
+    // Spark's CaseWhen.nullable ORs the nullability of every branch VALUE and the ELSE
+    // (conditionalExpressions.scala:191-200); a missing ELSE is nullable. It never asks
+    // whether a branch can be reached. DataFusion's own `nullable()` drops a branch whose
+    // condition cannot hold when its value is NULL (`c IS NOT NULL`, `c > 0`, a literal
+    // false), so it can declare a narrower schema than Spark for the same values.
     //
-    // Only a literal-boolean WHEN condition can make DataFusion's computation
-    // diverge from Spark's (a data-dependent condition is never excluded by
-    // either engine, so the two already agree there). Detect that narrow shape
-    // directly instead of calling `case_expr.nullable(schema)` to compare: that
-    // call also (re-)validates the whole expression tree, including any nested
-    // higher-order lambda bodies inside the WHEN conditions -- which defeats
-    // Sail's separate mechanism for discarding an unchecked, never-evaluated
-    // higher-order return type inside a provably null-typed branch (see
-    // "Null-typed predicates discard unchecked higher-order returns" in
-    // map_filter.feature) by forcing that validation to run here, too early.
-    let has_unreachable_literal_condition = when_then_expr.iter().any(|(condition, _)| {
-        matches!(
-            condition.as_ref(),
-            expr::Expr::Literal(ScalarValue::Boolean(Some(false)), _)
-        )
-    });
-    let schema = function_context.schema;
-    let spark_nullable = has_unreachable_literal_condition
-        && (when_then_expr
-            .iter()
-            .any(|(_, value)| value.nullable(schema).unwrap_or(true))
-            || else_expr
-                .as_ref()
-                .is_none_or(|value| value.nullable(schema).unwrap_or(true)));
+    // Only the branch VALUES are inspected, never `case_expr.nullable(schema)`: that call
+    // also (re-)validates the whole tree, including higher-order lambda bodies inside the
+    // WHEN conditions, which defeats Sail's separate mechanism for discarding an unchecked,
+    // never-evaluated higher-order return type inside a provably null-typed branch (see
+    // "Null-typed predicates discard unchecked higher-order returns" in map_filter.feature).
+    let spark_nullable = when_then_expr
+        .iter()
+        .any(|(_, value)| value.nullable(schema).unwrap_or(true))
+        || else_expr
+            .as_ref()
+            .is_none_or(|value| value.nullable(schema).unwrap_or(true));
     let case_expr = expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr,
         else_expr,
     });
     if spark_nullable {
-        // Known to disagree with DataFusion's own `nullable()` precisely
-        // because of the literal-false branch just detected -- no need to
-        // call it (and risk the same premature-validation side effect) to
-        // confirm the disagreement.
-        Ok(ScalarUDF::from(SparkForceNullable::new()).call(vec![case_expr]))
+        // The same `CASE WHEN true THEN <expr> END` wrapper `cast.rs` uses: its missing ELSE
+        // makes the analyzed schema nullable, and the optimizer removes it before execution.
+        Ok(datafusion_expr::when(lit(true), case_expr).end()?)
     } else {
         Ok(case_expr)
     }
+}
+
+/// A branch type whose Arrow type is the whole Spark type: no interval field range, TIME
+/// precision or other field metadata decides the result type.
+fn is_plain_branch_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::Date32
+            | DataType::Date64
+    )
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

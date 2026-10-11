@@ -81,3 +81,111 @@ Feature: when output schema
         root
          |-- result: decimal(11,1) (nullable = false)
         """
+
+  # CaseWhen.nullable (conditionalExpressions.scala:191-200) ORs the nullability of every branch
+  # VALUE; it never reasons about whether a branch can be reached. DataFusion does: a THEN guarded
+  # by `c IS NOT NULL` or `c > 0` is dropped from its nullability, so the two engines disagree
+  # unless the schema is forced.
+  @function(nullability)
+  Rule: CASE nullability follows the branch values, not the reachability of the branches
+
+    Scenario Outline: a nullable column stays nullable behind a guard: <case>
+      When query
+        """
+        SELECT <expr> AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: <type> (nullable = true)
+        """
+
+      Examples:
+        | case                      | expr                                                          | type    |
+        | IS NOT NULL guard, ELSE   | CASE WHEN c IS NOT NULL THEN c ELSE 0 END                     | integer |
+        | comparison guard, ELSE    | CASE WHEN c > 0 THEN c ELSE 0 END                             | integer |
+        | IS NOT NULL guard, no ELSE | CASE WHEN c IS NOT NULL THEN c END                           | integer |
+        | IS NULL first, ELSE value | CASE WHEN c IS NULL THEN 0 ELSE c END                         | integer |
+        | two guards cover all rows | CASE WHEN c IS NOT NULL THEN c WHEN c IS NULL THEN 0 END      | integer |
+        | simple CASE               | CASE c WHEN 1 THEN c ELSE 0 END                               | integer |
+        | widened branch            | CASE WHEN c > 0 THEN CAST(c AS BIGINT) ELSE 0 END             | long    |
+        | literal false condition   | CASE WHEN false THEN c ELSE 1 END                             | integer |
+        | literal true condition    | CASE WHEN true THEN c ELSE 1 END                              | integer |
+
+    Scenario Outline: a non-null column stays non-nullable behind the same guard: <case>
+      When query
+        """
+        SELECT <expr> AS result FROM VALUES (1), (2) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+      Examples:
+        | case                    | expr                                  |
+        | IS NOT NULL guard, ELSE | CASE WHEN c IS NOT NULL THEN c ELSE 0 END |
+        | comparison guard, ELSE  | CASE WHEN c > 0 THEN c ELSE 0 END     |
+
+    Scenario: a non-null range id stays non-nullable behind an IS NOT NULL guard
+      When query
+        """
+        SELECT CASE WHEN id IS NOT NULL THEN id ELSE 0 END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    # Spark takes the FIRST literal-true condition and ignores every later branch
+    # (conditionalExpressions.scala:191-200).
+    Scenario Outline: a literal true condition that is not last makes the CASE non-nullable: <case>
+      When query
+        """
+        SELECT <expr> AS result <source>
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+      Examples:
+        | case                         | expr                                                                          | source          |
+        | true then a nullable branch  | CASE WHEN true THEN 1 WHEN id > 0 THEN CAST(NULL AS INT) END                  |  FROM range(1)  |
+        | two true conditions          | CASE WHEN true THEN 1 WHEN true THEN CAST(NULL AS INT) END                    |                 |
+        | true between two conditions  | CASE WHEN id = 0 THEN 1 WHEN true THEN 2 WHEN id = 2 THEN CAST(NULL AS INT) END |  FROM range(3)  |
+
+  # CaseWhen.checkInputDataTypes (conditionalExpressions.scala:204-213) requires EVERY condition to
+  # be BOOLEAN, including the ones after a literal `WHEN true`, which never run. Dropping the
+  # unreachable branches must not drop that check.
+  Rule: a condition after a literal true is still type checked
+
+    Scenario Outline: a non-boolean condition after WHEN true is rejected: <case>
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 WHEN <condition> THEN 2 END AS result
+        """
+      Then query error (?i)boolean
+
+      Examples:
+        | case              | condition |
+        | string            | 'abc'     |
+        | array             | array(1)  |
+        | decimal           | 1.5       |
+
+    # Pre-existing: `main` accepts an INT condition where Spark raises UNEXPECTED_INPUT_TYPE.
+    @sail-bug
+    Scenario Outline: an integer or untyped-null condition after WHEN true is rejected: <case>
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 WHEN <condition> THEN 2 END AS result
+        """
+      Then query error (?i)boolean
+
+      Examples:
+        | case        | condition        |
+        | int         | 5                |
+        | typed null  | CAST(NULL AS INT) |

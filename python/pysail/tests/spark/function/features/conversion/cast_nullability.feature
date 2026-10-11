@@ -556,3 +556,184 @@ Feature: nullability of an explicit CAST
       Examples:
         | case                  |
         | folded WHEN true CASE |
+
+  # Cast.canNullSafeCastToDecimal (Cast.scala:405-413): BOOLEAN is `DecimalType(1, 0)`, so a
+  # target with at least one integer digit never forces NULL, with ANSI on or off.
+  @function(nullability)
+  Rule: BOOLEAN to DECIMAL nullability does not depend on spark.sql.ansi.enabled
+
+    Scenario Outline: BOOLEAN to <type> stays non-nullable with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(true AS <type>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <schema> (nullable = false)
+        """
+
+      Examples:
+        | ansi  | type          | schema        |
+        | true  | DECIMAL(1,0)  | decimal(1,0)  |
+        | true  | DECIMAL(2,0)  | decimal(2,0)  |
+        | true  | DECIMAL(3,1)  | decimal(3,1)  |
+        | true  | DECIMAL(4,2)  | decimal(4,2)  |
+        | true  | DECIMAL(10,2) | decimal(10,2) |
+        | true  | DECIMAL(38,37) | decimal(38,37) |
+        | false | DECIMAL(1,0)  | decimal(1,0)  |
+        | false | DECIMAL(2,0)  | decimal(2,0)  |
+        | false | DECIMAL(3,1)  | decimal(3,1)  |
+        | false | DECIMAL(4,2)  | decimal(4,2)  |
+        | false | DECIMAL(10,2) | decimal(10,2) |
+        | false | DECIMAL(38,37) | decimal(38,37) |
+
+    Scenario Outline: BOOLEAN column to DECIMAL(2,0) keeps values and schema with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(b AS DECIMAL(2,0)) AS result FROM VALUES (true), (false) AS t(b)
+        """
+      Then query result
+        | result |
+        | 1      |
+        | 0      |
+      And query schema
+        """
+        root
+         |-- result: decimal(2,0) (nullable = false)
+        """
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario: a BOOLEAN to DECIMAL(2,2) with no integer digit is the one nullable target when ANSI is off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(true AS DECIMAL(2,2)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+      And query schema
+        """
+        root
+         |-- result: decimal(2,2) (nullable = true)
+        """
+
+    # Controls for the integral arm that shares the predicate: TINYINT needs three digits.
+    Scenario Outline: Integral <source> to <type> nullability control with ANSI off: <nullable>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(CAST(1 AS <source>) AS <type>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <schema> (nullable = <nullable>)
+        """
+
+      Examples:
+        | source   | type         | schema       | nullable |
+        | TINYINT  | DECIMAL(2,0) | decimal(2,0) | true     |
+        | TINYINT  | DECIMAL(3,0) | decimal(3,0) | false    |
+        | SMALLINT | DECIMAL(4,0) | decimal(4,0) | true     |
+        | SMALLINT | DECIMAL(5,0) | decimal(5,0) | false    |
+
+  # Cast.nullable for a TRY_CAST (Cast.scala:630-639) is `child.nullable || !canUpCast(from, to)`;
+  # DataFusion's TryCast is always nullable, so an up-cast must not go through it.
+  @function(nullability)
+  Rule: TRY_CAST nullability follows canUpCast
+
+    Scenario Outline: a TRY_CAST that is an upcast keeps a non-null input non-nullable: <case>
+      When query
+        """
+        SELECT TRY_CAST(<input> AS <type>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <schema> (nullable = false)
+        """
+
+      Examples:
+        | case              | input             | type   | schema  |
+        | int -> bigint     | CAST(1 AS INT)    | BIGINT | long    |
+        | int -> double     | 1                 | DOUBLE | double  |
+        | string -> string  | 'a'               | STRING | string  |
+        | binary -> binary  | X'01'             | BINARY | binary  |
+
+    Scenario Outline: a TRY_CAST that is not an upcast is nullable: <case>
+      When query
+        """
+        SELECT TRY_CAST(<input> AS <type>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <schema> (nullable = true)
+        """
+
+      Examples:
+        | case           | input | type | schema  |
+        | string -> int  | '1'   | INT  | integer |
+        | double -> int  | 1.5   | INT  | integer |
+
+    Scenario: a TRY_CAST of an int to a timestamp is nullable
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT TRY_CAST(CAST(1 AS INT) AS TIMESTAMP) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+  # A struct CAST keeps the nullability of its child (Cast.nullable).
+  @function(nullability)
+  Rule: a struct CAST that renames fields stays non-nullable
+
+    Scenario: a non-null struct cast to renamed fields
+      When query
+        """
+        SELECT CAST(named_struct('a', 1) AS STRUCT<b:INT>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- b: integer (nullable = true)
+        """
+
+    Scenario: a non-null struct with two renamed fields
+      When query
+        """
+        SELECT CAST(named_struct('a', 1, 'c', 'x') AS STRUCT<b:INT, d:STRING>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- b: integer (nullable = true)
+         |    |-- d: string (nullable = true)
+        """
+
+    Scenario: a non-null array of structs cast to renamed fields
+      When query
+        """
+        SELECT CAST(array(named_struct('a', 1)) AS ARRAY<STRUCT<b:INT>>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: struct (containsNull = true)
+         |    |    |-- b: integer (nullable = true)
+        """

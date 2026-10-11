@@ -180,7 +180,10 @@ impl GlueCatalogProvider {
                     data_type,
                     nullable: true, // Glue doesn't track nullability
                     comment: col.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: col
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: false,
@@ -207,7 +210,10 @@ impl GlueCatalogProvider {
                     data_type,
                     nullable: true,
                     comment: pk.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: pk
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: true,
@@ -271,7 +277,10 @@ impl GlueCatalogProvider {
                     data_type,
                     nullable: true,
                     comment: col.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: col
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: false,
@@ -603,10 +612,7 @@ impl CatalogProvider for GlueCatalogProvider {
         } else {
             hive::validate_hive_create_table_options(options)?;
         }
-        if self.has_custom_endpoint()
-            && options.format.eq_ignore_ascii_case("iceberg")
-            && !options.is_write_precondition
-        {
+        if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
             Ok(CreateTableMetadataRequirement::LakeSource {
                 mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             })
@@ -744,6 +750,29 @@ impl CatalogProvider for GlueCatalogProvider {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
+        self.alter_table_atomically(database, table, vec![options])
+            .await
+    }
+
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        match options {
+            AlterTableOptions::AlterColumnType { name, data_type } => {
+                managed_table::validate_column_path(name)?;
+                arrow_to_glue_type(data_type).map(|_| ())
+            }
+            AlterTableOptions::AlterColumnDefault { name, .. } => {
+                managed_table::validate_column_path(name)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
         let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
         let result = client
@@ -773,9 +802,15 @@ impl CatalogProvider for GlueCatalogProvider {
         };
 
         let parameters = table_value.parameters().cloned().unwrap_or_default();
-        let parameters =
-            managed_table::apply_alter_table_options(&database_name, table, parameters, options)?;
-        let table_input = Self::table_input_with_parameters(&table_value, parameters)?;
+        let mut table_input = Self::table_input_with_parameters(&table_value, parameters)?;
+        for options in options {
+            managed_table::apply_alter_table_input(
+                &database_name,
+                table,
+                &mut table_input,
+                options,
+            )?;
+        }
         let mut update_table = client
             .update_table()
             .set_catalog_id(self.catalog_id())

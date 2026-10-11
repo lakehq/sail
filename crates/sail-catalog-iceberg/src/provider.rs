@@ -835,6 +835,31 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<sail_catalog::provider::CreateTableMetadataRequirement> {
+        use sail_catalog::provider::{
+            CreateTableMetadataRequirement, LakeSourceCreateMetadataMode,
+        };
+        if !options.format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot create '{}' tables",
+                options.format
+            )));
+        }
+        if options.columns.is_empty()
+            && options.location.is_some()
+            && !options.is_write_precondition
+        {
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+            })
+        } else {
+            Ok(CreateTableMetadataRequirement::None)
+        }
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -1157,6 +1182,34 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
+        if let Some(metadata_location) =
+            sail_common_datafusion::catalog::managed::metadata_location_value(
+                properties
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            )
+        {
+            let request = crate::r#gen::RegisterTableRequest {
+                name: table.to_string(),
+                metadata_location: metadata_location.to_string(),
+                overwrite: Some(false),
+            };
+            let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+            let namespace = catalog_config.namespace_string(database)?;
+            let result = self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let namespace = namespace.clone();
+                    let request = request.clone();
+                    async move { client.register_table(prefix, namespace, request).await }
+                })
+                .await?
+                .map_err(|error| {
+                    CatalogError::External(format!("Failed to register Iceberg table: {error}"))
+                })?;
+            return Self::load_table_result_to_status(&self.name, database, table, result.inner);
+        }
+
         let format_version = requested_iceberg_format_version(&properties)?;
         let fields = columns_to_nested_fields(&columns, format_version)?;
 
@@ -1308,13 +1361,54 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn alter_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: AlterTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "alter table in Iceberg catalog".to_string(),
-        ))
+        let result = self.load_table_result(database, table, None).await?;
+        let metadata = serde_json::to_vec(result.metadata.as_ref())
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let metadata = sail_iceberg::spec::TableMetadata::from_json(&metadata)
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let (requirements, updates) =
+            sail_iceberg::ddl::catalog_alter_updates(&metadata, &(&options).into())
+                .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?;
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let mut catalog_table = vec![self.name.clone()];
+        catalog_table.extend(Vec::<String>::from(database.clone()));
+        catalog_table.push(table.to_string());
+        let context = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            self.name.clone(),
+            catalog_table,
+            &status,
+            sail_common_datafusion::catalog::LakehouseOperation::Alter,
+            &self.lakehouse_capabilities(),
+        )
+        .execution;
+        self.commit_lakehouse_table(
+            database,
+            table,
+            LakehouseCommitRequest {
+                context,
+                format: "iceberg".to_string(),
+                requirements: requirements
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|error| CatalogError::External(error.to_string()))?,
+                updates: updates
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|error| CatalogError::External(error.to_string()))?,
+                payload: None,
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn commit_lakehouse_table(

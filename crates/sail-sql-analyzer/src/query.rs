@@ -243,6 +243,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         select:
             SelectClause {
                 select: _,
+                hints,
                 quantifier,
                 projection,
             },
@@ -334,7 +335,28 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         }
     };
 
-    Ok(plan)
+    let hints = hints
+        .into_iter()
+        .flat_map(|hint| hint.items.into_items())
+        .collect::<Vec<_>>();
+    hints.into_iter().rev().try_fold(plan, |input, hint| {
+        let parameters = hint
+            .parameters
+            .map(|parameters| parameters.items)
+            .map(|items| {
+                items
+                    .into_items()
+                    .map(from_ast_expression)
+                    .collect::<SqlResult<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(spec::QueryPlan::new(spec::QueryNode::Hint {
+            input: Box::new(input),
+            name: hint.name.value,
+            parameters,
+        }))
+    })
 }
 
 fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
