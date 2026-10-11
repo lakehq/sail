@@ -315,7 +315,22 @@ impl ScanByAddsStreamState {
         let scan = if adds.is_empty() {
             None
         } else {
-            Some(self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?)
+            Some(
+                Self::build_bulk_scan(
+                    snapshot,
+                    log_store,
+                    session_state,
+                    &adds,
+                    file_schema,
+                    &self.scan_config,
+                    &self.scan_schema,
+                    self.pushdown_filter.as_ref().map(Arc::clone),
+                    self.scan_parallelism,
+                    &self.scan_metrics,
+                    &self.context,
+                )
+                .await?,
+            )
         };
 
         let scan_schema = Arc::clone(&self.scan_schema);
@@ -344,16 +359,20 @@ impl ScanByAddsStreamState {
         Ok(())
     }
 
-    fn build_bulk_scan(
-        &self,
+    #[expect(clippy::too_many_arguments)]
+    async fn build_bulk_scan(
         snapshot: &DeltaSnapshot,
         log_store: &LogStoreRef,
         session_state: &dyn datafusion::catalog::Session,
         adds: &[crate::spec::Add],
         file_schema: SchemaRef,
+        scan_config: &DeltaScanConfig,
+        file_output_schema: &SchemaRef,
+        pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+        scan_parallelism: usize,
+        scan_metrics: &ScanMetrics,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let scan_config = &self.scan_config;
-        let file_output_schema = &self.scan_schema;
         let file_projection = file_scan_projection_for_schema(
             snapshot,
             scan_config,
@@ -376,17 +395,18 @@ impl ScanByAddsStreamState {
                 // Limit must be applied after DV filtering, otherwise deleted rows consume the
                 // physical-file limit and valid rows can be missed.
                 limit: None,
-                pushdown_filter: self.pushdown_filter.clone(),
+                pushdown_filter,
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
             session_state,
             file_schema,
         )
+        .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         if let Some(config) = file_scan_config.file_source.repartitioned(
-            self.scan_parallelism,
+            scan_parallelism,
             session_state
                 .config()
                 .options()
@@ -405,14 +425,14 @@ impl ScanByAddsStreamState {
                 .collect();
             file_scan_config.file_groups =
                 datafusion::datasource::physical_plan::FileGroup::new(files)
-                    .split_files(self.scan_parallelism);
+                    .split_files(scan_parallelism);
             if file_scan_config.file_groups.is_empty() {
                 file_scan_config.file_groups.push(
                     datafusion::datasource::physical_plan::FileGroup::new(vec![]),
                 );
             }
         }
-        self.scan_metrics
+        scan_metrics
             .lock()
             .map_err(|error| DataFusionError::Execution(error.to_string()))?
             .push(file_scan_config.file_source.metrics().clone());
@@ -420,7 +440,7 @@ impl ScanByAddsStreamState {
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
         let scan_exec = rename_physical_plan(scan_exec, &file_logical_names)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        execute_stream(scan_exec, Arc::clone(&self.context))
+        execute_stream(scan_exec, Arc::clone(context))
     }
 
     async fn decode_adds_from_meta_batch(
@@ -720,7 +740,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let catalog_managed_commits = self.catalog_managed_commits.clone();
         let limit = self.limit;
-        let pushdown_filter = self.pushdown_filter.clone();
+        let pushdown_filter = self.pushdown_filter.as_ref().map(Arc::clone);
         let scan_parallelism = context
             .session_config()
             .target_partitions()
