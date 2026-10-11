@@ -4,14 +4,17 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Decimal128Array, Int64Array, PrimitiveArray, StringArray,
     StringBuilder, as_largestring_array, as_string_array, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, Float32Type, Float64Type, Int64Type};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int64Type,
+};
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::math::spark_hex::decimal_array_to_i64;
+use crate::scalar::math::spark_cast_bigint::{decimal_array_to_i64, double_to_i64, float_to_i64};
 
 const BIN_SUPPORTED_TYPES: &str = "numeric or string";
 
@@ -51,6 +54,16 @@ impl ScalarUDFImpl for SparkBin {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    // TODO: Spark's `Bin` is not nullable for a non-nullable integer input, and is nullable for a
+    //   string or a fractional or decimal one (`Cast.forceNullable`, Spark 4.2.0 `Cast.scala:433,446`),
+    //   but DataFusion 55.1.0 gives a scalar subquery the nullability of its field and ignores that it
+    //   can return no rows, so a non-nullable `bin` inside one would declare a field that carries a
+    //   NULL, and writing it fails. Keep it nullable until a DataFusion upgrade brings the `min_rows`
+    //   rule.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -197,6 +210,10 @@ impl ScalarUDFImpl for SparkBin {
             // NaN/Infinity, so `bin` applies Spark's saturating cast itself.
             DataType::Float16 | DataType::Float64 => Ok(vec![DataType::Float64]),
             DataType::Float32 => Ok(vec![DataType::Float32]),
+            // An Arrow dictionary is one more storage shape of its value type, not a Spark type.
+            DataType::Dictionary(_, value_type) => {
+                self.coerce_types(&[value_type.as_ref().clone()])
+            }
             other => Err(unsupported_data_type_exec_err(
                 "bin",
                 BIN_SUPPORTED_TYPES,
@@ -294,52 +311,6 @@ fn cast_invalid_input_err(value: &str) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
         "[CAST_INVALID_INPUT] The value '{value}' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed."
     )
-}
-
-/// `QueryExecutionErrors.castingCauseOverflowError`: `shown` is the value as Spark prints it for its
-/// source type (`1.0E30D`, `1.0E30`, `9223372036854775808.9BD`) and `source_type` the SQL type name.
-pub(crate) fn cast_overflow_err(
-    shown: &str,
-    source_type: &str,
-) -> datafusion_common::DataFusionError {
-    exec_datafusion_err!(
-        "[CAST_OVERFLOW] The value {shown} of the type \"{source_type}\" cannot be cast to \"BIGINT\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead."
-    )
-}
-
-/// Spark's DOUBLE -> BIGINT cast: Rust's `as` matches the JVM's `(long) double`
-/// (NaN -> 0, +/-Infinity -> i64::MAX/MIN, truncate toward zero, finite
-/// out-of-range saturates). ANSI mode instead raises CAST_OVERFLOW for any value
-/// outside the BIGINT range — NaN, +/-Infinity, and finite overflow alike.
-pub(crate) fn double_to_i64(value: f64, ansi: bool) -> Result<i64> {
-    if ansi && overflows_i64(value) {
-        // `toSQLValue(Double)` prints NaN and the infinities bare; only a finite value gets `D`.
-        let shown = match value.is_finite() {
-            true => format!("{}D", spark_f64_to_string(value)),
-            false => spark_f64_to_string(value),
-        };
-        return Err(cast_overflow_err(&shown, "DOUBLE"));
-    }
-    Ok(value as i64)
-}
-
-/// Spark's FLOAT -> BIGINT cast. A float widens to a double exactly, so the range check is the
-/// same as for a DOUBLE; only the error names the FLOAT and prints it as `Float.toString` does.
-pub(crate) fn float_to_i64(value: f32, ansi: bool) -> Result<i64> {
-    if ansi && overflows_i64(f64::from(value)) {
-        return Err(cast_overflow_err(&spark_f32_to_string(value), "FLOAT"));
-    }
-    Ok(value as i64)
-}
-
-fn overflows_i64(value: f64) -> bool {
-    // Spark checks `Math.floor(x) <= Long.MaxValue && Math.ceil(x) >= Long.MinValue` with both
-    // bounds promoted to double (`Cast.scala:2031`). `Long.MaxValue` rounds up to `2^63`, so
-    // `2^63` itself is accepted and saturates to `i64::MAX`; the next f64 above it overflows.
-    // The comparisons also cover +/-Infinity; NaN needs an explicit check since all NaN
-    // comparisons are false.
-    const I64_UPPER_BOUND: f64 = 9223372036854775808.0;
-    value.is_nan() || value.floor() > I64_UPPER_BOUND || value.ceil() < i64::MIN as f64
 }
 
 fn bin_float_array(array: &PrimitiveArray<Float64Type>, ansi: bool) -> Result<StringArray> {

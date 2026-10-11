@@ -1248,6 +1248,35 @@ Feature: hex function
         | a date    | CAST(DATE'2024-01-02' AS VARIANT)           | 323032342D30312D3032                   |
         | timestamp | CAST(TIMESTAMP'2024-01-02 03:04:05' AS VARIANT) | 323032342D30312D30322030333A30343A3035 |
 
+  Rule: a VARIANT timestamp is hexed in the session time zone, also when it is an offset
+
+    @spark-4
+    Scenario Outline: hex of a timestamp VARIANT in the session time zone <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT hex(CAST(TIMESTAMP'2020-01-01 00:00:00+00:00' AS VARIANT)) AS result
+        """
+      Then query result collected
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone          | result                                 |
+        | UTC           | 323032302D30312D30312030303A30303A3030 |
+        | Asia/Shanghai | 323032302D30312D30312030383A30303A3030 |
+
+    @spark-4
+    Scenario: hex of a timestamp VARIANT in an offset session time zone
+      Given config spark.sql.session.timeZone = +08:00
+      When query
+        """
+        SELECT hex(CAST(TIMESTAMP'2020-01-01 00:00:00+00:00' AS VARIANT)) AS result
+        """
+      Then query result collected
+        | result                                 |
+        | 323032302D30312D30312030383A30303A3030 |
+
   @function(nullability)
   Rule: hex of a VARIANT is nullable
 
@@ -1403,20 +1432,54 @@ Feature: hex function
   # Arrow type: `however "array(1, 2)" has the type "ARRAY<INT>"`.
   Rule: the rejection of a type prints Spark's expression and type
 
-    @sail-bug
     Scenario: hex of an ARRAY
       When query
         """
         SELECT hex(array(1, 2)) AS result
         """
-      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex\(array\(1, 2\)\)".* however "array\(1, 2\)" has the type "ARRAY<INT>"
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex\(array\(1, 2\)\)".* requires the \("BIGINT" or "BINARY" or "STRING"\) type, however "array\(1, 2\)" has the type "ARRAY<INT>"
+
+    Scenario: hex of a MAP
+      When query
+        """
+        SELECT hex(map('a', 1)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex\(map\(a, 1\)\)".* requires the \("BIGINT" or "BINARY" or "STRING"\) type, however "map\(a, 1\)" has the type "MAP<STRING, INT>"
+
+    Scenario: hex of an ARRAY of ARRAY
+      When query
+        """
+        SELECT hex(array(array(1))) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex\(array\(array\(1\)\)\)".* requires the \("BIGINT" or "BINARY" or "STRING"\) type, however "array\(array\(1\)\)" has the type "ARRAY<ARRAY<INT>>"
+
+    # A type with a DECIMAL or a STRUCT in it is rejected with the same class, but the call and the
+    # type are not shown the way Spark shows them (`has the type "ARRAY<DECIMAL(3,1)>"`).
+    Scenario Outline: hex of an ARRAY of <case> is rejected
+      When query template
+        """
+        SELECT hex(array(<element>)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex.* requires the \("BIGINT" or "BINARY" or "STRING"\) type
+
+      Examples:
+        | case     | element                       |
+        | decimals | CAST(1.5 AS DECIMAL(3,1))     |
+        | structs  | named_struct('a', 1)          |
+
+    Scenario: hex of a column of ARRAY
+      When query
+        """
+        SELECT hex(c) AS result FROM VALUES (array(1)) AS t(c)
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "hex\(c\)".* requires the \("BIGINT" or "BINARY" or "STRING"\) type, however "c" has the type "ARRAY<INT>"
 
   # `VariantGet.cast` to STRING: a BINARY variant keeps its bytes and a timestamp nested in an
-  # object or array prints in the session time zone.
+  # object or array prints in the session time zone. The nested timestamp is the same gap as
+  # `CAST(<variant> AS STRING)`, which prints the JSON of the variant in UTC.
   Rule: a VARIANT of another kind is hexed as Spark prints it
 
     @spark-4
-    @sail-bug
     Scenario: a BINARY variant keeps its bytes
       When query
         """
@@ -1425,6 +1488,17 @@ Feature: hex function
       Then query result collected
         | result |
         | 414243 |
+
+    # A STRING of Spark holds any bytes, so the bytes that are not UTF-8 are hexed as they are.
+    @spark-4
+    Scenario: a BINARY variant with bytes that are not UTF-8 keeps them
+      When query
+        """
+        SELECT hex(CAST(X'FF00' AS VARIANT)) AS result
+        """
+      Then query result collected
+        | result |
+        | FF00   |
 
     @spark-4
     @sail-bug
@@ -1486,6 +1560,10 @@ Feature: hex function
   @function(nullability)
   Rule: Output schema
 
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
+    @sail-bug
     Scenario: a non-null literal input to hex yields the schema Spark declares
       When query
         """
@@ -1497,6 +1575,10 @@ Feature: hex function
          |-- result: string (nullable = false)
         """
 
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
+    @sail-bug
     Scenario: a non-null column input to hex yields the schema Spark declares
       When query
         """
@@ -1521,22 +1603,20 @@ Feature: hex function
 
   @function(nullability)
   Rule: Nullability through Spark's implicit casts
-  # Float/Double -> Integral is force-nullable (Cast.scala:446)
 
-    Scenario Outline: hex without an implicit cast keeps its non-nullable schema
+    # A scalar subquery with no rows is NULL (`ScalarSubquery.nullable` is true), so the result must be
+    # declared nullable or the batch that carries the NULL fails against the schema when it is written.
+    Scenario: a scalar subquery with no rows over hex is nullable
       When query
         """
-        SELECT hex(<input>) AS result
+        SELECT (SELECT hex(c) FROM VALUES (1) AS t(c) WHERE c > 5) AS result
         """
       Then query schema
         """
         root
-         |-- result: string (nullable = false)
+         |-- result: string (nullable = true)
         """
-
-      Examples:
-        | case    | input |
-        | no cast | 17    |
+  # Float/Double -> Integral is force-nullable (Cast.scala:446)
 
     Scenario Outline: hex through a force-nullable implicit cast: <case>
       When query

@@ -90,6 +90,21 @@ Feature: to_binary
         | an INT | 12      | 12     |
         | BINARY | X'4142' | AB     |
 
+  Rule: an ARRAY value is rejected naming the call and its type
+
+    Scenario Outline: <function> of an ARRAY
+      When query template
+        """
+        SELECT <function>(array(1)<format>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "to_binary\(array\(1\)<shown>\)".* requires the "STRING" type, however "array\(1\)" has the type "ARRAY<INT>"
+
+      Examples:
+        | function      | format        | shown      |
+        | to_binary     |               |            |
+        | to_binary     | , 'utf-8'     | , utf-8    |
+        | try_to_binary |               |            |
+
   # `ToBinary.checkInputDataTypes`: the format must be a foldable STRING (or NULL) naming one of
   # 'hex', 'utf-8', 'utf8', 'base64' compared with `toLowerCase(Locale.ROOT)` and NO trimming.
   # An unknown name is `INVALID_ARG_VALUE` for to_binary and NULL for try_to_binary; a NULL
@@ -397,10 +412,32 @@ Feature: to_binary
       Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got <shown>
 
       Examples:
-        | case   | fmt                 | shown        |
-        | ARRAY  | array('hex')        | ARRAY        |
-        | MAP    | map('a', 'b')       | MAP          |
-        | STRUCT | named_struct('a',1) | NAMED_STRUCT |
+        | case   | fmt                 | shown                  |
+        | ARRAY  | array('hex')        | ARRAY.'hex'.           |
+        | MAP    | map('a', 'b')       | MAP.'a', 'b'.          |
+        | STRUCT | named_struct('a',1) | NAMED_STRUCT.'a', 1.   |
+
+    # `Literal.sql` of the value: every element is written as Spark writes its literal.
+    Scenario Outline: to_binary shows the format as a literal: <fmt>
+      When query template
+        """
+        SELECT to_binary('41', <fmt>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got <shown>
+
+      Examples:
+        | fmt                                 | shown                           |
+        | array(1, 2, 3)                      | ARRAY.1, 2, 3.                  |
+        | array(true, false)                  | ARRAY.true, false.              |
+        | array(CAST(1 AS TINYINT))           | ARRAY.1Y.                       |
+        | array(CAST(2 AS SMALLINT))          | ARRAY.2S.                       |
+        | array(3L)                           | ARRAY.3L.                       |
+        | array(array('x'))                   | ARRAY.ARRAY.'x'..               |
+        | map('a', 1, 'b', 2)                 | MAP.'a', 1, 'b', 2.             |
+        | map('a', array(1))                  | MAP.'a', ARRAY.1..              |
+        | named_struct('a', 1, 'b', 'x')      | NAMED_STRUCT.'a', 1, 'b', 'x'.  |
+        | named_struct('a', array(1))         | NAMED_STRUCT.'a', ARRAY.1..     |
+        | CAST(NULL AS ARRAY<STRING>)         | NULL                            |
 
     Scenario Outline: to_binary shows the lower-cased name: <fmt>
       When query template
@@ -413,6 +450,7 @@ Feature: to_binary
         | fmt     | shown |
         | 'BOGUS' | bogus |
         | 'HEX!'  | hex!  |
+        | 'ÀB'    | àb    |
 
     Scenario: to_binary shows the lower-cased name: a trailing space is kept
       When query
@@ -420,6 +458,15 @@ Feature: to_binary
         SELECT to_binary('41', 'HeX ') AS result
         """
       Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got 'hex '
+
+  Rule: a computed interval is printed with its fields in the error
+
+    Scenario: to_binary of an interval computed by arithmetic
+      When query
+        """
+        SELECT to_binary(INTERVAL '1' DAY + INTERVAL '2' DAY) AS result
+        """
+      Then query error \[CONVERSION_INVALID_INPUT\] The value 'INTERVAL .+3.+ DAY' \('HEX'\)
 
   # `TypeCoercion.scala:234`: a calendar interval is not an AtomicType, so it is cast to STRING
   # only when ANSI is on; the year-month and day-time intervals are always cast.
@@ -514,6 +561,10 @@ Feature: to_binary
   @function(nullability)
   Rule: the base64 format keeps the nullability of its input
 
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
+    @sail-bug
     Scenario: a non-null literal to_binary base64 is not nullable
       When query
         """
@@ -525,6 +576,10 @@ Feature: to_binary
          |-- result: binary (nullable = false)
         """
 
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
+    @sail-bug
     Scenario: a non-null column to_binary base64 is not nullable
       When query
         """
@@ -607,6 +662,26 @@ Feature: to_binary
         | a lone last symbol    | 'abcde'                         |
         | three pad symbols     | 'YQ==='                         |
         | a non-breaking space  | concat('YWJj', chr(160))        |
+        | a figure space        | concat('YWJj', CAST(X'E28087' AS STRING)) |
+        | a narrow no-break sp  | concat('YWJj', CAST(X'E280AF' AS STRING)) |
+        | a next line (U+0085)  | concat('YWJj', chr(133))                  |
+
+    # `Character.isWhitespace` is true for the Unicode spaces that do not break a line and for the
+    # ASCII control separators U+001C..U+001F, so they are skipped like a space.
+    Scenario Outline: to_binary base64 skips the whitespace of Java: <case>
+      When query template
+        """
+        SELECT hex(to_binary(<input>, 'base64')) AS result
+        """
+      Then query result collected
+        | result |
+        | 616263 |
+
+      Examples:
+        | case                  | input                                     |
+        | an em space           | concat('YWJj', CAST(X'E28083' AS STRING)) |
+        | a unit separator      | concat('YW', chr(31), 'Jj')               |
+        | a tab and a newline   | concat('YW', chr(9), 'J', chr(10), 'j')   |
 
   # A format that is not foldable is rejected when the call is analyzed, in the shapes where the call
   # never runs too. A foldable one (`concat('he', 'y')`, a CAST) is folded by the planner and checked
@@ -705,7 +780,10 @@ Feature: to_binary
   Rule: a foldable format is resolved like the literal it evaluates to
 
     # `UnBase64` follows its child's nullability, so a foldable `fmt` that evaluates to 'base64'
-    # leaves the result non-nullable for a non-null input. The planner only sees a literal here.
+    # leaves the result non-nullable for a non-null input.
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
     @sail-bug
     Scenario: a foldable base64 format that is not a literal
       When query
@@ -717,6 +795,35 @@ Feature: to_binary
         root
          |-- result: binary (nullable = false)
         """
+
+    # `Encode` and `Unhex` are always nullable, whatever the input and whether the format is written as
+    # a literal or folded from an expression. `@spark-4`: in 3.5 `Encode` follows its input.
+    @spark-4
+    Scenario Outline: a foldable <format> format gives a nullable result
+      When query template
+        """
+        SELECT to_binary('61', <fmt>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+      Examples:
+        | format | fmt                  |
+        | utf-8  | concat('ut', 'f-8')  |
+        | hex    | concat('he', 'x')    |
+
+    # Without ANSI a calendar interval is not cast to STRING, so it is a type error that shows the
+    # value as a literal (`ToBinary.checkInputDataTypes`, `toSQLValue(f.eval(), CalendarIntervalType)`).
+    Scenario: a calendar interval format is shown as an INTERVAL when ANSI is off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_binary('41', make_interval(0, 1, 0, 2, 0, 0, 0)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got INTERVAL '1 months 2 days'
 
     # The format is shown as the text Spark's cast to STRING prints, not as the raw value.
     Scenario: a calendar interval format is shown as Spark's cast to STRING
@@ -820,6 +927,9 @@ Feature: to_binary
   @function(nullability)
   Rule: Output schema
 
+    # `Encode` is `RuntimeReplaceable` over a `StaticInvoke` since Spark 4, so it is nullable; in 3.5 it
+    # is a `NullIntolerant` `BinaryExpression` and follows its input.
+    @spark-4
     Scenario: a non-null literal input to to_binary yields the schema Spark declares
       When query
         """
@@ -831,6 +941,9 @@ Feature: to_binary
          |-- result: binary (nullable = true)
         """
 
+    # `Encode` is `RuntimeReplaceable` over a `StaticInvoke` since Spark 4, so it is nullable; in 3.5 it
+    # is a `NullIntolerant` `BinaryExpression` and follows its input.
+    @spark-4
     Scenario: a non-null column input to to_binary yields the schema Spark declares
       When query
         """

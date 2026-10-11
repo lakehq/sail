@@ -114,6 +114,15 @@ Feature: unhex function
         | a map    | map('a',1)          |
         | a struct | named_struct('a',1) |
 
+  Rule: an ARRAY is rejected naming the call and its type
+
+    Scenario: unhex of an ARRAY
+      When query
+        """
+        SELECT unhex(array(1)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "unhex\(array\(1\)\)".* requires the "STRING" type, however "array\(1\)" has the type "ARRAY<INT>"
+
   # `TypeCoercion.scala:234`: a calendar interval is cast to STRING only when ANSI is on (the
   # year-month and day-time intervals always are). Its text is never hex, so unhex is NULL.
   Rule: a calendar interval needs ANSI to be cast to STRING

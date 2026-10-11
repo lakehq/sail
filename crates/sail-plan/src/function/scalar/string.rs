@@ -43,7 +43,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
 use crate::function::scalar::lambda::lambda_with_fresh_parameter;
-use crate::function::scalar::math::intervals_as_text;
+use crate::function::scalar::math::{intervals_as_text, reject_collection_argument};
 
 fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
     let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
@@ -223,7 +223,8 @@ fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 fn validate_to_binary_format(input: &ScalarFunctionInput, is_try: bool) -> PlanResult<()> {
     if let Some(format) = input.arguments.get(1) {
         let folded = fold_format(format, input.function_context.schema);
-        validate_format(folded.as_ref().unwrap_or(format), is_try)?;
+        let ansi_mode = input.function_context.plan_config.ansi_mode;
+        validate_format(folded.as_ref().unwrap_or(format), is_try, ansi_mode)?;
     }
     Ok(())
 }
@@ -248,13 +249,20 @@ fn fold_format(format: &expr::Expr, schema: &DFSchemaRef) -> Option<expr::Expr> 
 
 fn to_binary(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     validate_to_binary_format(&input, false)?;
+    reject_collection_argument("to_binary", "\"STRING\"", &input)?;
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkToBinary::new(false, ansi_mode));
     Ok(udf.call(intervals_as_text(input)))
 }
 
+// TODO: `TryToBinary` is `TryEval(ToBinary(..))`, so Spark also turns an error raised while the
+//   argument is evaluated into NULL (`try_to_binary(CAST(1/0 AS STRING))`). DataFusion evaluates the
+//   arguments before the function runs and has no expression-level planner hook, so this needs a
+//   generic `TryEval` (a logical marker plus a physical expression that catches its child's error).
+//   The `@sail-bug` scenarios in `try_to_binary.feature` cover it.
 fn try_to_binary(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     validate_to_binary_format(&input, true)?;
+    reject_collection_argument("to_binary", "\"STRING\"", &input)?;
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkToBinary::new(true, ansi_mode));
     Ok(udf.call(intervals_as_text(input)))

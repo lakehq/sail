@@ -19,6 +19,8 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode 
 BAD_ROW = 17777
 ROW_COUNT = 20000
 ROWS = f"range(0, {ROW_COUNT}, 1, 8)"
+# The strict error is the one of the bad value, or the one a task retry reports once it has lost it.
+STRICT_ERROR = re.compile(r"CONVERSION_INVALID_INPUT|different attempt has already produced job output")
 
 
 def collect_one(spark, sql):
@@ -41,7 +43,7 @@ def test_to_binary_is_strict_on_workers(spark, call):
     valid = f"SELECT count({call}) FROM (SELECT hex(id) AS v FROM {ROWS})"
     assert collect_one(spark, valid) == ROW_COUNT
     sql = f"SELECT count({call}) FROM (SELECT IF(id = {BAD_ROW}, 'ZZ', hex(id)) AS v FROM {ROWS})"
-    with pytest.raises(Exception):  # noqa: B017, PT011
+    with pytest.raises(Exception, match=STRICT_ERROR):
         spark.sql(sql).collect()
 
 
@@ -56,15 +58,16 @@ def test_to_binary_base64_is_strict_on_workers(spark):
     valid = f"SELECT sum(length(to_binary(IF(id = {BAD_ROW}, 'YQ==', 'YQ=='), 'base64'))) FROM {ROWS}"
     assert collect_one(spark, valid) == ROW_COUNT
     sql = f"SELECT sum(length(to_binary(IF(id = {BAD_ROW}, 'a!', 'YQ=='), 'base64'))) FROM {ROWS}"
-    with pytest.raises(Exception):  # noqa: B017, PT011
+    with pytest.raises(Exception, match=STRICT_ERROR):
         spark.sql(sql).collect()
 
 
 def test_to_binary_is_strict_on_workers_for_a_value_that_prints_as_text(spark):
-    valid = f"SELECT count(to_binary(CAST(id AS STRING))) FROM {ROWS} WHERE id = 1"
+    # The lenient form of the same expression is NULL for that row, so it decodes on the workers.
+    valid = f"SELECT count(*) FROM {ROWS} WHERE id = {BAD_ROW} AND try_to_binary(CAST(id AS DOUBLE) / 4) IS NULL"
     assert collect_one(spark, valid) == 1
     sql = f"SELECT count(to_binary(CAST(id AS DOUBLE) / 4)) FROM {ROWS} WHERE id = {BAD_ROW}"
-    with pytest.raises(Exception):  # noqa: B017, PT011
+    with pytest.raises(Exception, match=STRICT_ERROR):
         spark.sql(sql).collect()
 
 

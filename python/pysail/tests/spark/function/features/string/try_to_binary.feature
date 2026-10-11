@@ -113,10 +113,22 @@ Feature: try_to_binary with an argument coming from a column
       Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got <shown>
 
       Examples:
-        | case   | fmt                 | shown        |
-        | ARRAY  | array('hex')        | ARRAY        |
-        | MAP    | map('a', 'b')       | MAP          |
-        | STRUCT | named_struct('a',1) | NAMED_STRUCT |
+        | case   | fmt                 | shown                  |
+        | ARRAY  | array('hex')        | ARRAY.'hex'.           |
+        | MAP    | map('a', 'b')       | MAP.'a', 'b'.          |
+        | STRUCT | named_struct('a',1) | NAMED_STRUCT.'a', 1.   |
+
+  # A calendar interval is not an atomic type, so without ANSI it cannot be cast to STRING and the
+  # format is a type error: `ToBinary.checkInputDataTypes` raises it even for `try_to_binary`.
+  Rule: try_to_binary — a calendar interval format is a type error when ANSI is off
+
+    Scenario: try_to_binary with a calendar interval format
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT try_to_binary('41', make_interval(0, 1, 0, 2, 0, 0, 0)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.INVALID_ARG_VALUE\] Cannot resolve "to_binary.*but got INTERVAL '1 months 2 days'
 
   # `TryEval` nulls only the row that is malformed, and `UnBase64.isValidBase64` decides it.
   Rule: try_to_binary base64 is decided per row

@@ -289,9 +289,63 @@ Feature: bin converts integral values to binary strings
         | a FLOAT  | CAST(1.0E30 AS FLOAT)       | 1.0E30   | FLOAT  |
         | Infinity | CAST('Infinity' AS DOUBLE)  | Infinity | DOUBLE |
 
+  Rule: a FLOAT and a DECIMAL column are cast to BIGINT row by row
+
+    Scenario: bin of a FLOAT column saturates and keeps NULL when ANSI is off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(c) AS result
+        FROM VALUES (1, CAST(1.0E30 AS FLOAT)), (2, CAST('NaN' AS FLOAT)), (3, CAST(-1.5 AS FLOAT)), (4, CAST(NULL AS FLOAT)) AS t(i, c)
+        ORDER BY i
+        """
+      Then query result ordered
+        | result                                                           |
+        | 111111111111111111111111111111111111111111111111111111111111111  |
+        | 0                                                                |
+        | 1111111111111111111111111111111111111111111111111111111111111111 |
+        | NULL                                                             |
+
+    Scenario: bin of a FLOAT column raises on the row that overflows when ANSI is on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bin(c) AS result
+        FROM VALUES (1, CAST(1 AS FLOAT)), (2, CAST(1.0E30 AS FLOAT)) AS t(i, c)
+        """
+      Then query error \[CAST_OVERFLOW\] The value 1\.0E30 of the type "FLOAT"
+
+    Scenario: bin of a DECIMAL column truncates the fraction towards zero
+      When query
+        """
+        SELECT bin(c) AS result
+        FROM VALUES (1, CAST(-1.99 AS DECIMAL(5,2))), (2, CAST(3.5 AS DECIMAL(5,2))) AS t(i, c)
+        ORDER BY i
+        """
+      Then query result ordered
+        | result                                                           |
+        | 1111111111111111111111111111111111111111111111111111111111111111 |
+        | 11                                                               |
+
   @function(nullability)
   Rule: Output schema
 
+    # A scalar subquery with no rows is NULL (`ScalarSubquery.nullable` is true), so the result must be
+    # declared nullable or the batch that carries the NULL fails against the schema when it is written.
+    Scenario: a scalar subquery with no rows over bin is nullable
+      When query
+        """
+        SELECT (SELECT bin(c) FROM VALUES (1) AS t(c) WHERE c > 5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
     @sail-bug
     Scenario: a non-null integer literal yields a non-nullable string
       When query
@@ -304,6 +358,9 @@ Feature: bin converts integral values to binary strings
          |-- result: string (nullable = false)
         """
 
+    # Spark declares this non-nullable, but a scalar subquery that returns no rows is NULL and DataFusion
+    # 55.1.0 gives it the nullability of its field, so a non-nullable result would break the write of
+    # `SELECT (SELECT <call> ... WHERE false)`: the result stays nullable (TODO in the UDF).
     @sail-bug
     Scenario: a non-null integer column yields a non-nullable string
       When query
@@ -315,6 +372,25 @@ Feature: bin converts integral values to binary strings
         root
          |-- result: string (nullable = false)
         """
+
+    # `Cast.forceNullable`: a string that may not parse and a fractional or decimal value.
+    Scenario Outline: a <case> input is nullable because its cast to BIGINT can give NULL
+      When query template
+        """
+        SELECT bin(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case    | input                |
+        | string  | '5'                  |
+        | double  | 5.5D                 |
+        | float   | CAST(5.5 AS FLOAT)   |
+        | decimal | CAST(5.5 AS DECIMAL(5,1)) |
 
     Scenario: a nullable integer column stays nullable
       When query

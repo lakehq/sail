@@ -93,10 +93,13 @@ def test_to_arrow(spark, ansi, _, data_type, values, expected, forced):  # noqa:
 
 @pytest.mark.parametrize(("_", "data_type", "values", "expected", "forced"), FAMILIES, ids=IDS)
 def test_non_null_input_to_pandas_and_schema(spark, ansi, _, data_type, values, expected, forced):  # noqa: ARG001
-    """A column declared non-nullable has no NULL row. Its result follows Spark: non-nullable, except
-    where the cast to BIGINT can add a NULL of its own (a fractional or decimal input)."""
+    """A column declared non-nullable has no NULL row, and the result reads back as the values. The
+    result is declared nullable whatever the input: Spark makes it non-nullable except where the cast to
+    BIGINT can add a NULL of its own (`forced`), but DataFusion 55.1.0 gives a scalar subquery the
+    nullability of its field and ignores that it can return no rows, so a non-nullable `hex` would
+    break the write of `SELECT (SELECT hex(c) ... WHERE false)`. See `test_scalar_subquery_that_returns_no_rows`."""
     df = _frame(spark, data_type, values, nullable=False)
-    assert df.schema["h"].nullable is forced
+    assert df.schema["h"].nullable is True
     assert df.toPandas()["h"].tolist() == _expected(values, expected, nullable=False)
 
 
@@ -114,3 +117,23 @@ def test_local_iterator_and_head(spark, ansi):  # noqa: ARG001
     assert [r["h"] for r in df.toLocalIterator()] == ["FF", None, "FFFFFFFFFFFFFFFF"]
     assert df.head()["h"] == "FF"
     assert df.tail(1)[0]["h"] == "FFFFFFFFFFFFFFFF"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "hex(c)",
+        "bin(c)",
+        "to_binary(CAST(c AS STRING), 'base64')",
+        "to_char(CAST(c AS BINARY), 'hex')",
+        "sha2(CAST(c AS STRING), 256)",
+    ],
+)
+def test_scalar_subquery_that_returns_no_rows(spark, tmp_path, ansi, call):  # noqa: ARG001
+    """A scalar subquery with no rows is NULL. Its result must be declared nullable, or the batch that
+    carries the NULL fails against the schema when it is written (Spark: `ScalarSubquery.nullable` is true)."""
+    df = spark.sql(f"SELECT (SELECT {call} FROM VALUES (1) AS t(c) WHERE c > 5) AS r")  # noqa: S608
+    assert df.schema["r"].nullable is True
+    path = str(tmp_path / "out")
+    df.write.parquet(path)
+    assert spark.read.parquet(path).collect()[0]["r"] is None

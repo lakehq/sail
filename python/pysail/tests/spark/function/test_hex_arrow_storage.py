@@ -44,6 +44,22 @@ def test_dictionary_encoded_column(spark, tmp_path, ansi, values, expected):  # 
     assert [r["h"] for r in rows] == expected
 
 
+# `bin` casts its argument to BIGINT the way `hex` does, so it must also accept every Arrow shape of a
+# STRING, a BIGINT or a DOUBLE. The expected texts are the binary of the integer part.
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        pytest.param(["5", "12", "5", None], ["101", "1100", "101", None], id="string"),
+        pytest.param([1, 255, 1, None], ["1", "11111111", "1", None], id="bigint"),
+        pytest.param([1.5, 255.9, 1.5, None], ["1", "11111111", "1", None], id="double"),
+    ],
+)
+def test_dictionary_encoded_column_in_bin(spark, tmp_path, ansi, values, expected):  # noqa: ARG001
+    df = pd.DataFrame({"n": [1, 2, 3, 4], "c": pd.Categorical(values)})
+    rows = _read(spark, tmp_path, pa.Table.from_pandas(df)).selectExpr("n", "bin(c) AS b").orderBy("n").collect()
+    assert [r["b"] for r in rows] == expected
+
+
 def test_dictionary_encoded_binary_column(spark, tmp_path, ansi):  # noqa: ARG001
     table = pa.table({"n": pa.array([1, 2, 3]), "b": pa.array([b"\x00\xff", b"ab", b"\x00\xff"]).dictionary_encode()})
     rows = _read(spark, tmp_path, table).selectExpr("n", "hex(b) AS h").orderBy("n").collect()

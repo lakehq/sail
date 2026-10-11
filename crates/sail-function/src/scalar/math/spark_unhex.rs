@@ -9,7 +9,7 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err, 
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
-use crate::scalar::math::spark_hex::{printed_text, prints_as_text};
+use crate::scalar::math::spark_hex::{is_printed_atomic, printed_text, prints_as_text};
 
 /// Spark's `Unhex(expr, failOnError)`.
 ///
@@ -158,15 +158,8 @@ pub(crate) fn coerce_input(
         | DataType::Decimal32(_, _)
         | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _)
-        | DataType::Boolean
-        | DataType::Date32
-        | DataType::Date64
-        | DataType::Timestamp(_, _)
-        | DataType::Time32(_)
-        | DataType::Time64(_)
-        | DataType::Duration(_)
-        | DataType::Interval(_) => data_type.clone(),
+        | DataType::Decimal256(_, _) => data_type.clone(),
+        data_type if is_printed_atomic(data_type) => data_type.clone(),
         data_type if is_marked_variant_storage_type(data_type) => data_type.clone(),
         other => {
             return plan_err!(
@@ -271,12 +264,14 @@ fn hex_digit(byte: u8) -> Option<u8> {
 fn unhex_bytes(bytes: &[u8], out: &mut Vec<u8>) -> bool {
     out.reserve(bytes.len().div_ceil(2));
     let mut rest = bytes;
-    if bytes.len() % 2 == 1 {
-        let Some(first) = hex_digit(bytes[0]) else {
+    if bytes.len() % 2 == 1
+        && let Some((first, tail)) = bytes.split_first()
+    {
+        let Some(first) = hex_digit(*first) else {
             return false;
         };
         out.push(first);
-        rest = &bytes[1..];
+        rest = tail;
     }
     let (pairs, _) = rest.as_chunks::<2>();
     for [high, low] in pairs {

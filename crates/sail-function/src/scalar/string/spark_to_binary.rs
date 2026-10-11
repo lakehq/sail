@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray, StringArray};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringArray};
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -15,7 +15,6 @@ use sail_common_datafusion::display::{
     ArrayFormatter, FormatOptions, spark_f32_to_string, spark_f64_to_string,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::scalar::math::spark_hex::{printed_text, prints_as_text};
 use crate::scalar::math::spark_unhex::{
@@ -82,7 +81,7 @@ fn scalar_text(value: &ScalarValue) -> Option<String> {
 /// Spark checks the format argument when it analyzes the call, even in a branch that never runs
 /// and in a plan that is never executed: the planner calls this for the second argument. A literal
 /// must name a format (`to_binary`) and anything that is not foldable is rejected by both.
-pub fn validate_format(format: &Expr, is_try: bool) -> Result<()> {
+pub fn validate_format(format: &Expr, is_try: bool, ansi_mode: bool) -> Result<()> {
     match format {
         // An ARRAY, MAP or STRUCT is a type error that `nullOnInvalidFormat` does not cover.
         Expr::Literal(value, _) if !matches!(value.data_type(), DataType::Null) => {
@@ -91,10 +90,22 @@ pub fn validate_format(format: &Expr, is_try: bool) -> Result<()> {
                 | DataType::LargeList(_)
                 | DataType::FixedSizeList(_, _)
                 | DataType::ListView(_)
-                | DataType::LargeListView(_) => Err(invalid_format_value_err("ARRAY")),
-                DataType::Map(_, _) => Err(invalid_format_value_err("MAP")),
-                DataType::Struct(_) | DataType::Union(_, _) => {
-                    Err(invalid_format_value_err("NAMED_STRUCT"))
+                | DataType::LargeListView(_) => Err(invalid_format_value_err(
+                    &literal_sql(value).unwrap_or_else(|| "ARRAY".to_string()),
+                )),
+                DataType::Map(_, _) => Err(invalid_format_value_err(
+                    &literal_sql(value).unwrap_or_else(|| "MAP".to_string()),
+                )),
+                DataType::Struct(_) | DataType::Union(_, _) => Err(invalid_format_value_err(
+                    &literal_sql(value).unwrap_or_else(|| "NAMED_STRUCT".to_string()),
+                )),
+                // Without ANSI a calendar interval is not cast to STRING: it is a type error that
+                // `nullOnInvalidFormat` does not cover, and Spark shows it as an INTERVAL literal.
+                DataType::Interval(IntervalUnit::MonthDayNano) if !ansi_mode => {
+                    Err(invalid_format_value_err(&format!(
+                        "INTERVAL {}",
+                        sql_string_value(scalar_text(value).as_deref().unwrap_or_default())
+                    )))
                 }
                 _ => match parse_format(scalar_text(value).as_deref()) {
                     Err(shown) if !is_try => Err(invalid_format_err(&shown)),
@@ -106,6 +117,58 @@ pub fn validate_format(format: &Expr, is_try: bool) -> Result<()> {
         other if !is_foldable(other) => Err(non_foldable_err(other)),
         _ => Ok(()),
     }
+}
+
+/// `Literal.sql` of a value Spark can write as a literal: what `toSQLValue` prints for the format
+/// of `to_binary` that is not a STRING (`ARRAY('hex')`, `MAP('a', 'b')`, `NAMED_STRUCT('a', 1)`).
+/// `None` for a leaf type this does not render, so the caller names the type instead.
+fn literal_sql(value: &ScalarValue) -> Option<String> {
+    if value.is_null() {
+        return Some("NULL".to_string());
+    }
+    let join = |values: Vec<String>| values.join(", ");
+    Some(match value {
+        ScalarValue::Utf8(Some(text))
+        | ScalarValue::LargeUtf8(Some(text))
+        | ScalarValue::Utf8View(Some(text)) => sql_string_value(text),
+        ScalarValue::Boolean(Some(value)) => value.to_string(),
+        ScalarValue::Int8(Some(value)) => format!("{value}Y"),
+        ScalarValue::Int16(Some(value)) => format!("{value}S"),
+        ScalarValue::Int32(Some(value)) => value.to_string(),
+        ScalarValue::Int64(Some(value)) => format!("{value}L"),
+        ScalarValue::List(array) => {
+            let values = array.value(0);
+            let elements = (0..values.len())
+                .map(|index| literal_sql(&ScalarValue::try_from_array(&values, index).ok()?))
+                .collect::<Option<Vec<_>>>()?;
+            format!("ARRAY({})", join(elements))
+        }
+        ScalarValue::Struct(array) => {
+            let fields = array
+                .fields()
+                .iter()
+                .zip(array.columns())
+                .map(|(field, column)| {
+                    let element = literal_sql(&ScalarValue::try_from_array(column, 0).ok()?)?;
+                    Some(format!("{}, {element}", sql_string_value(field.name())))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            format!("NAMED_STRUCT({})", join(fields))
+        }
+        ScalarValue::Map(array) => {
+            let entries = array.value(0);
+            let (keys, values) = (entries.column(0), entries.column(1));
+            let pairs = (0..entries.len())
+                .map(|index| {
+                    let key = literal_sql(&ScalarValue::try_from_array(keys, index).ok()?)?;
+                    let value = literal_sql(&ScalarValue::try_from_array(values, index).ok()?)?;
+                    Some(format!("{key}, {value}"))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            format!("MAP({})", join(pairs))
+        }
+        _ => return None,
+    })
 }
 
 fn invalid_format_err(shown: &str) -> datafusion_common::DataFusionError {
@@ -224,7 +287,7 @@ fn coerce_to_binary_types(
         [value] => Ok(vec![coerce_input(value, "to_binary", ansi_mode)?]),
         [value, format] => Ok(vec![
             coerce_input(value, "to_binary", ansi_mode)?,
-            coerce_format(format)?,
+            coerce_format(format, ansi_mode)?,
         ]),
         other => wrong_num_args(name, other.len()),
     }
@@ -233,10 +296,14 @@ fn coerce_to_binary_types(
 /// `ToBinary.fmt` is `ImplicitCastInputTypes` over STRING, so a format of any atomic type (a
 /// BINARY included) is cast to its text. Only ARRAY, MAP and STRUCT are rejected, and they are
 /// rejected by `try_to_binary` too: `nullOnInvalidFormat` only covers an unknown NAME.
-fn coerce_format(data_type: &DataType) -> Result<DataType> {
+fn coerce_format(data_type: &DataType, ansi_mode: bool) -> Result<DataType> {
     match data_type {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(data_type.clone()),
-        DataType::Dictionary(_, value_type) => coerce_format(value_type),
+        DataType::Dictionary(_, value_type) => coerce_format(value_type, ansi_mode),
+        // Without ANSI a calendar interval cannot be cast to STRING, so it is a type error.
+        DataType::Interval(IntervalUnit::MonthDayNano) if !ansi_mode => {
+            Err(invalid_format_value_err("INTERVAL"))
+        }
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::FixedSizeList(_, _)
@@ -250,21 +317,10 @@ fn coerce_format(data_type: &DataType) -> Result<DataType> {
     }
 }
 
-fn first_argument(args: ScalarFunctionArgs) -> ScalarFunctionArgs {
-    let ScalarFunctionArgs {
-        args,
-        arg_fields,
-        number_rows,
-        return_field,
-        config_options,
-    } = args;
-    ScalarFunctionArgs {
-        args: args[0..1].to_vec(),
-        arg_fields: arg_fields[0..1].to_vec(),
-        number_rows,
-        return_field,
-        config_options,
-    }
+fn first_argument(mut args: ScalarFunctionArgs) -> ScalarFunctionArgs {
+    args.args.truncate(1);
+    args.arg_fields.truncate(1);
+    args
 }
 
 /// The first argument alone, cast to STRING when it is not already text (`ImplicitCastInputTypes`):
@@ -488,23 +544,13 @@ impl ScalarUDFImpl for SparkToBinary {
     /// `nullable` is `true` unconditionally.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // `UnBase64` is a `UnaryExpression`, so with the `base64` format the result is nullable only
-        // when its (cast) input is; every other form is always nullable.
-        let follows_input = !self.is_try
-            && matches!(
-                args.scalar_arguments.get(1),
-                Some(Some(format))
-                    if matches!(parse_format(scalar_text(format).as_deref()), Ok(Format::Base64))
-            );
-        let nullable = !follows_input
-            || args.arg_fields.first().is_some_and(|field| {
-                field.is_nullable() || is_marked_variant_storage_type(field.data_type())
-            });
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Binary,
-            nullable,
-        )))
+        // TODO: with the `base64` format `UnBase64` is a `UnaryExpression`, so Spark's result is nullable
+        //   only when its (cast) input is, but DataFusion 55.1.0 gives a scalar subquery the nullability
+        //   of its field and ignores that it can return no rows, so a non-nullable result inside one
+        //   would declare a field that carries a NULL, and writing it fails. Keep it nullable until a
+        //   DataFusion upgrade brings the `min_rows` rule.
+        let _ = args;
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

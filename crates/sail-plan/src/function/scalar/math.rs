@@ -11,6 +11,8 @@ use datafusion_expr::{
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -644,24 +646,75 @@ fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn spark_hex_cast(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    reject_collection_argument("hex", "(\"BIGINT\" or \"BINARY\" or \"STRING\")", &input)?;
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkHexCast::new(ansi_mode));
     Ok(udf.call(intervals_as_text(input)))
 }
 
 fn spark_unhex(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    reject_collection_argument("unhex", "\"STRING\"", &input)?;
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkUnHex::with_options(false, ansi_mode));
     Ok(udf.call(intervals_as_text(input)))
 }
 
-/// The arguments of `hex`, `unhex` and `to_binary`, with an interval printed as text.
+/// Spark rejects an ARRAY or MAP value for `hex`, `unhex` and `to_binary` while it analyzes the
+/// call, and names the call, the argument and its SQL type (`ExpectsInputTypes`):
+/// `Cannot resolve "hex(array(1, 2))" ... however "array(1, 2)" has the type "ARRAY<INT>"`.
+/// A type that has a decimal or a STRUCT in it is left to the check of the function, which does not
+/// know the expression: Spark prints those with details this does not render (`NOT NULL`).
+pub(crate) fn reject_collection_argument(
+    function: &str,
+    required: &str,
+    input: &ScalarFunctionInput,
+) -> PlanResult<()> {
+    let context = &input.function_context;
+    let (Some(argument), Some(shown)) = (
+        input.arguments.first(),
+        context.argument_display_names.first(),
+    ) else {
+        return Ok(());
+    };
+    let Ok(data_type) = argument.get_type(context.schema) else {
+        return Ok(());
+    };
+    if !matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
+    ) {
+        return Ok(());
+    }
+    let simple = context
+        .session_context
+        .extension::<PlanService>()?
+        .plan_formatter()
+        .data_type_to_simple_string(&data_type)?;
+    if simple.contains(['(', ':']) || simple.contains("struct") {
+        return Ok(());
+    }
+    let sql_type = simple.to_uppercase().replace(',', ", ");
+    let call = context.argument_display_names.join(", ");
+    Err(PlanError::invalid(format!(
+        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{function}({call})\" due to data type mismatch: The first parameter requires the {required} type, however \"{shown}\" has the type \"{sql_type}\"."
+    )))
+}
+
+/// The arguments of `hex`, `unhex` and `to_binary`, with an interval value printed as text. Only the
+/// first argument is a value: the format of `to_binary` must stay as written.
 pub(crate) fn intervals_as_text(input: ScalarFunctionInput) -> Vec<Expr> {
     let schema = input.function_context.schema;
     input
         .arguments
         .into_iter()
-        .map(|argument| interval_as_text(argument, schema))
+        .enumerate()
+        .map(|(position, argument)| match position {
+            0 => interval_as_text(argument, schema),
+            _ => argument,
+        })
         .collect()
 }
 

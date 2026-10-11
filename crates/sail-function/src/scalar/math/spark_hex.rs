@@ -1,24 +1,22 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, Decimal128Array, Float32Array, Float64Array, Int64Array,
-};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, Float32Array, Float64Array, Int64Array};
 use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, DecimalType, Field, FieldRef, Float32Type, Float64Type, IntervalUnit,
+    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, IntervalUnit,
 };
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::ScalarFunctionArgs;
-// [Credit]: <https://github.com/apache/datafusion/blob/55.1.0/datafusion/spark/src/function/math/hex.rs>
+// [Credit]: <https://github.com/apache/datafusion/blob/f2b2ffd400cc8ac8744b5ec401f7cfb556f944d5/datafusion/spark/src/function/math/hex.rs>
 // The encoding kernel (writes the hex digits straight into the output buffer) is the one from
 // `datafusion-spark`'s `SparkHex`; this UDF adds what Spark's `Hex` does around it: the implicit
 // casts, ANSI, and the nullability.
 use datafusion_spark::function::math::hex::spark_hex as encode_hex;
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
-use crate::scalar::math::spark_bin::{cast_overflow_err, double_to_i64, float_to_i64};
+use crate::scalar::math::spark_cast_bigint::{decimal_array_to_i64, double_to_i64, float_to_i64};
 use crate::scalar::spark_to_string::SparkToUtf8;
 use crate::scalar::variant::spark_variant_to_json::variant_to_text;
 
@@ -78,11 +76,16 @@ impl ScalarUDFImpl for SparkHexCast {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [arg] = args.arg_fields else {
+        if args.arg_fields.len() != 1 {
             return wrong_num_args(args.arg_fields.len());
-        };
-        let nullable = arg.is_nullable() || casts_to_bigint_with_null(arg.data_type());
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+        }
+        // TODO: Spark's `Hex` is not nullable for a non-nullable input (`mathExpressions.scala:1189-1215`),
+        //   but DataFusion 55.1.0 gives a scalar subquery the nullability of its field and ignores that
+        //   it can return no rows, so a non-nullable `hex` inside one would declare a field that
+        //   carries a NULL, and writing it fails. Keep it nullable until a DataFusion upgrade brings
+        //   the `min_rows` rule. `Cast.scala:430,446` also force it nullable for VARIANT and
+        //   fractional or decimal input.
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -105,15 +108,8 @@ impl ScalarUDFImpl for SparkHexCast {
             | DataType::FixedSizeBinary(_)
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Boolean
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Timestamp(_, _)
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Interval(_)
-            | DataType::Duration(_) => arg_type.clone(),
+            | DataType::Decimal128(_, _) => arg_type.clone(),
+            data_type if is_printed_atomic(data_type) => data_type.clone(),
             data_type if is_marked_variant_storage_type(data_type) => data_type.clone(),
             DataType::Int8
             | DataType::Int16
@@ -187,21 +183,6 @@ fn wrong_num_args<T>(actual: usize) -> Result<T> {
     )
 }
 
-/// Whether the implicit cast to BIGINT can produce a NULL of its own (`Cast.forceNullable`,
-/// `Cast.scala:446`): fractional and decimal sources.
-fn casts_to_bigint_with_null(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-    )
-}
-
 fn encode(array: &ArrayRef) -> Result<ArrayRef> {
     match encode_hex(&[ColumnarValue::Array(Arc::clone(array))])? {
         ColumnarValue::Array(array) => Ok(array),
@@ -225,41 +206,6 @@ fn double_array_to_i64(values: &Float64Array, ansi_mode: bool) -> Result<ArrayRe
     Ok(Arc::new(out))
 }
 
-/// Spark's DECIMAL -> BIGINT cast: truncate the fraction towards zero, then keep the low 64
-/// bits when ANSI is off (`Decimal.toLong` wraps) or raise `CAST_OVERFLOW` when it is on.
-pub(crate) fn decimal_array_to_i64(
-    values: &Decimal128Array,
-    precision: u8,
-    scale: i8,
-    ansi_mode: bool,
-) -> Result<ArrayRef> {
-    let divisor = 10_i128.checked_pow(u32::try_from(scale.max(0)).unwrap_or(0));
-    let out = values
-        .iter()
-        .map(|v| {
-            let Some(unscaled) = v else {
-                return Ok(None);
-            };
-            let whole = match divisor {
-                Some(divisor) if divisor != 0 => unscaled / divisor,
-                _ => unscaled,
-            };
-            match i64::try_from(whole) {
-                Ok(v) => Ok(Some(v)),
-                Err(_) if ansi_mode => Err(cast_overflow_err(
-                    &format!(
-                        "{}BD",
-                        Decimal128Type::format_decimal(unscaled, precision, scale)
-                    ),
-                    &format!("DECIMAL({precision},{scale})"),
-                )),
-                Err(_) => Ok(Some(whole as i64)),
-            }
-        })
-        .collect::<Result<Int64Array>>()?;
-    Ok(Arc::new(out))
-}
-
 /// Whether an array of this type has to be cast to STRING before it is hexed or unhexed: Spark
 /// prints it, and the printed text is what is processed.
 pub(crate) fn prints_as_text(data_type: &DataType) -> bool {
@@ -272,7 +218,16 @@ pub(crate) fn prints_as_text(data_type: &DataType) -> bool {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
-            | DataType::Boolean
+    ) || is_printed_atomic(data_type)
+        || is_marked_variant_storage_type(data_type)
+}
+
+/// The types Spark casts to STRING and prints as they are, with no rule of their own: BOOLEAN,
+/// the datetimes, and the durations and intervals.
+pub(crate) fn is_printed_atomic(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
             | DataType::Date32
             | DataType::Date64
             | DataType::Timestamp(_, _)
@@ -280,7 +235,7 @@ pub(crate) fn prints_as_text(data_type: &DataType) -> bool {
             | DataType::Time64(_)
             | DataType::Duration(_)
             | DataType::Interval(_)
-    ) || is_marked_variant_storage_type(data_type)
+    )
 }
 
 /// The text Spark's CAST to STRING prints, through the same UDF `CAST(x AS STRING)` uses

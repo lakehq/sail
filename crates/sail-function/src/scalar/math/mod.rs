@@ -5,6 +5,7 @@ pub mod random;
 pub mod spark_abs;
 pub mod spark_bin;
 pub mod spark_bround;
+pub mod spark_cast_bigint;
 pub mod spark_ceil_floor;
 pub mod spark_conv;
 pub mod spark_div;

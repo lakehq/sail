@@ -59,17 +59,20 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
     }
 }
 
-/// The text Spark's CAST of a VARIANT to STRING prints (`VariantGet.cast`): a string is its raw
-/// text (no quotes), a variant null is SQL NULL, a float or a double prints as Java does, a
-/// timestamp prints as a TIMESTAMP does (in the session time zone when it has one), and every
-/// other value is its JSON.
+/// The bytes of the STRING Spark's CAST of a VARIANT prints (`VariantGet.cast`): a string is its raw
+/// text (no quotes), a BINARY keeps its bytes (not their base64), a variant null is SQL NULL, a
+/// float or a double prints as Java does, a timestamp prints as a TIMESTAMP does (in the session time
+/// zone when it has one), and every other value is its JSON. They are returned as BINARY because a
+/// Spark STRING holds any bytes, which a UTF-8 array cannot.
 pub fn variant_to_text(array: &ArrayRef, time_zone: Option<&str>) -> Result<ArrayRef> {
     let variant_array = VariantArray::try_new(array.as_ref())?;
-    let zone = time_zone.and_then(|zone| zone.parse::<chrono_tz::Tz>().ok());
-    let mut builder = arrow::array::StringViewBuilder::with_capacity(variant_array.len());
+    let zone = time_zone.and_then(|zone| zone.parse::<arrow::array::timezone::Tz>().ok());
+    let mut builder =
+        arrow::array::BinaryBuilder::with_capacity(variant_array.len(), variant_array.len() * 16);
     for variant in variant_array.iter() {
         match variant {
             None | Some(Variant::Null) => builder.append_null(),
+            Some(Variant::Binary(bytes)) => builder.append_value(bytes),
             Some(Variant::Float(value)) => builder.append_value(spark_f32_to_string(value)),
             Some(Variant::Double(value)) => builder.append_value(spark_f64_to_string(value)),
             Some(Variant::TimestampMicros(value) | Variant::TimestampNanos(value)) => {
