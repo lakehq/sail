@@ -19,6 +19,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let mut conditions = Vec::new();
     let mut branch_values = Vec::new();
+    let mut has_else = false;
     let mut iter = arguments.into_iter();
     while let Some(condition) = iter.next() {
         match iter.next() {
@@ -27,13 +28,36 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 branch_values.push(result);
             }
             _ => {
-                conditions.push(lit(true));
+                // The trailing argument is the `ELSE` value. It is kept among the branch values
+                // so that it takes part in the coercion, which is over all of them.
                 branch_values.push(condition);
+                has_else = true;
                 break;
             }
         }
     }
-    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let mut branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    // The value is declared as the `ELSE` rather than as a branch guarded by `true`: the two
+    // compute the same thing, but only the first says that the case always has a value, and a
+    // case that can fall through to no branch is NULL (`CaseWhen.nullable`, which likewise reads
+    // a branch guarded by a true literal as the value the case ends with).
+    let mut else_expr = match has_else && !conditions.is_empty() {
+        true => branch_values.pop().map(Box::new),
+        false => None,
+    };
+    if else_expr.is_none() && has_else {
+        conditions.push(lit(true));
+    }
+    // A branch the user guarded with a true literal always matches, so it is the value the case
+    // ends with, whatever follows it and whatever `ELSE` was written: `CaseWhen.nullable` stops
+    // at the first such branch and never reads `elseValue`. Only the `ELSE` is replaced, and the
+    // branches are all kept, because the type of a case is merged over every branch it holds and
+    // each of their conditions is type checked (`inputTypesForMerging`, `checkInputDataTypes`).
+    if let Some(index) = conditions.iter().position(is_true_literal)
+        && let Some(value) = branch_values.get(index)
+    {
+        else_expr = Some(Box::new(value.clone()));
+    }
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -42,8 +66,16 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
-        else_expr: None,
+        else_expr,
     }))
+}
+
+/// Whether the condition is the literal `true`, which is the branch a case ends with.
+fn is_true_literal(condition: &expr::Expr) -> bool {
+    matches!(
+        condition,
+        expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+    )
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

@@ -78,10 +78,16 @@ impl PlanResolver<'_> {
                 ));
             }
             let mut plan = cte.plan.as_ref().clone();
-            if let Some(names) = cte.renew_reference(state)? {
+            if let Some(names) = cte.renew_reference(
+                cte.is_definition() && state.is_resolving_cte_definition(),
+                state,
+            )? {
                 plan = rename_logical_plan_reusing_projection(plan, &names)?;
-                state.register_missing_input_boundary(&plan);
             }
+            // A CTE reference is a leaf in Spark's analyzed tree. Its definition is a sibling
+            // of the query, not a descendant whose attributes a filter or sort can recover.
+            // Register every reference, including the first one that keeps its identities.
+            state.register_missing_input_boundary(&plan);
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
             } else {

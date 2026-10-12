@@ -236,6 +236,11 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 (Arc::new(schema), partition_fields)
             }
             _ => {
+                // TODO: Spark reads every column of a file source as nullable, whatever the file
+                //   declares (`DataSource.resolveRelation` uses `dataSchema.asNullable`), so a column
+                //   written NOT NULL comes back nullable. Here the inferred schema keeps what the
+                //   file declares. Making it nullable changes the schema of every file read, so it
+                //   is left to its own change.
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;

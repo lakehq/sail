@@ -56,6 +56,9 @@ macro_rules! define_to_string_udf {
                 Ok($return_type)
             }
 
+            // Formatting a value never makes NULL, so the string is NULL only where the value
+            // is (`Cast.forceNullable` is false for a cast to a string). The second argument
+            // carries the interval metadata rather than a value, so it does not count.
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
                 let ([arg] | [arg, _]) = args.arg_fields else {
                     return exec_err!(

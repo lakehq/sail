@@ -81,3 +81,272 @@ Feature: when output schema
         root
          |-- result: decimal(11,1) (nullable = false)
         """
+
+  @function(nullability)
+  Rule: A case is nullable where it can fall through to no branch
+
+    Scenario: an ELSE gives the case a value for every row
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 'big' ELSE 'small' END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a case without an ELSE falls through to NULL
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 'big' END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a NULL in the ELSE makes the case nullable
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 'big' ELSE NULL END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable condition does not make the case nullable
+      When query
+        """
+        SELECT CASE WHEN b = 'x' THEN 1 ELSE 2 END AS result
+        FROM VALUES ('x'), (NULL) AS t(b)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a branch guarded by a true literal is the value the case ends with
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 'big' WHEN true THEN 'small' END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable branch before a true literal keeps the case nullable
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN NULL WHEN true THEN 'small' END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+  @function(nullability)
+  Rule: A case reports the type its branches widen to
+
+    @sail-bug
+    Scenario: an ELSE wider than the branch widens the type of the case
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 1 ELSE 2.5 END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(11,1) (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a branch wider than the ELSE widens the type of the case
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 2.5 ELSE 1 END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(11,1) (nullable = false)
+        """
+
+  @function(nullability)
+  Rule: The branches of a case widen to one type
+
+    # Spark casts every branch value and the ELSE to the type they widen to
+    # (`CaseWhenTypeCoercion`), so the case reports that type. Sail reports the type of the first
+    # branch instead and leaves the values to widen on their own, so the schema can name a type
+    # the rows do not have. These all report the same wrong type on `main`.
+
+    @sail-bug
+    Scenario: an integral branch widens with a longer one
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN 1 ELSE 2L END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: an integral branch widens with a floating one
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN 1 ELSE 2.5D END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a float branch widens with a double one
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN CAST(1 AS FLOAT) ELSE 2.5D END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: two decimal branches widen to one that holds both
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN CAST(1 AS DECIMAL(4,2)) ELSE CAST(2 AS DECIMAL(8,1)) END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(9,2) (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: the branches widen inside an array
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN ARRAY(1) ELSE ARRAY(2L) END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: long (containsNull = false)
+        """
+
+    @sail-bug
+    Scenario: the branches widen inside a struct
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN named_struct('n', 1) ELSE named_struct('n', 2L) END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- n: long (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: the branches widen inside a map
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN map('k', 1) ELSE map('k', 2L) END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: map (nullable = false)
+         |    |-- key: string
+         |    |-- value: long (valueContainsNull = false)
+        """
+
+    @sail-bug
+    Scenario: a date branch widens with a timestamp one
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN DATE '2020-01-01' ELSE TIMESTAMP '2020-02-02 00:00:00' END AS result FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a string that is not a number fails the widening to an integral branch
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CASE WHEN id > 0 THEN 1 ELSE 'x' END AS result FROM range(2)
+        """
+      Then query error (?s).*CAST_INVALID_INPUT.*
+
+  @function(nullability)
+  Rule: A branch guarded by a true literal ends the case without removing the others
+
+    # `CaseWhen.nullable` stops at the first branch guarded by a true literal and never reads the
+    # `ELSE`, so that branch is the value the case ends with. The branches after it are still part
+    # of the case: its type is merged over all of them and each of their conditions is checked
+    # (`inputTypesForMerging`, `checkInputDataTypes`), so none of them may be dropped.
+
+    Scenario: a true literal ends the case even where an ELSE was written
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 'a' WHEN true THEN 'b' ELSE NULL END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a true literal in the first branch ends the case as well
+      # TODO: a branch after the true literal is unreachable, and Spark reads the case that way
+      #   when it decides whether it can be NULL. Sail declares the value the case ends with as
+      #   the `ELSE`, which is what DataFusion reads, but DataFusion also reads the branches after
+      #   it, and dropping them is what the scenarios below forbid: they are what gives the case
+      #   its type and what gets type checked. Saying it needs a nullability of its own rather
+      #   than one inferred from the branches. The same query reports the same on `main`.
+      When query
+        """
+        SELECT CASE WHEN true THEN 'x' WHEN id > 1 THEN NULL END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a branch after the true literal still gives the case its type
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN NULL WHEN true THEN NULL WHEN id > 0 THEN 5 END AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: a branch after the true literal is still checked against the others
+      When query
+        """
+        SELECT CASE WHEN id > 1 THEN 1 WHEN true THEN 2 WHEN id > 0 THEN ARRAY(1) END AS result FROM range(3)
+        """
+      Then query error (?s).*(DATA_DIFF_TYPES|Failed to coerce).*

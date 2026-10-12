@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef};
-use datafusion_expr::{Distinct, Expr, LogicalPlan, Projection};
+use datafusion_expr::{Distinct, DistinctOn, Expr, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
@@ -146,6 +146,10 @@ impl MissingInputBoundaries {
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Unnest(_) => true,
+            // A subset's `on_expr` (read) is separate from `select_expr` (output), so widening
+            // only the latter carries a column through without changing which rows survive;
+            // plain `Distinct::All` reads every output column, so it stays a boundary.
+            LogicalPlan::Distinct(Distinct::On(_)) => true,
             LogicalPlan::Extension(extension) => {
                 let node = extension.node.as_any();
                 node.is::<ExplicitRepartitionNode>()
@@ -154,10 +158,6 @@ impl MissingInputBoundaries {
                     || node.is::<MonotonicIdNode>()
                     || node.is::<SparkPartitionIdNode>()
             }
-            // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing
-            // attributes. Sail's Distinct lowering cannot do so without
-            // changing its deduplication keys; preserve those keys before supporting it.
-            // The same applies to dropDuplicates with a subset, which Sail lowers to DistinctOn.
             // TODO: Spark's LateralJoin is a unary node over its left input, so a filter can
             // recover attributes removed from that input. Sail lowers it to a Join instead.
             _ => false,
@@ -532,6 +532,23 @@ impl PlanResolver<'_> {
                 Projection::try_new(expr, Arc::new(child))?
             };
             Ok(Some(LogicalPlan::Projection(projection)))
+        } else if let LogicalPlan::Distinct(Distinct::On(distinct_on)) = plan {
+            // Widen only `select_expr` (the output), never `on_expr` (the deduplication keys),
+            // so the extra column changes nothing about which rows are kept.
+            let mut select_expr = distinct_on.select_expr.clone();
+            for (qualifier, field) in child.schema().iter() {
+                let column = Column::new(qualifier.cloned(), field.name());
+                if missing.contains(&column) {
+                    select_expr.push(Expr::Column(column));
+                }
+            }
+            let distinct_on = DistinctOn::try_new(
+                distinct_on.on_expr.clone(),
+                select_expr,
+                distinct_on.sort_expr.clone(),
+                Arc::new(child),
+            )?;
+            Ok(Some(LogicalPlan::Distinct(Distinct::On(distinct_on))))
         } else {
             let expressions = if matches!(plan, LogicalPlan::Unnest(_)) {
                 vec![]
