@@ -22,6 +22,7 @@ use crate::functions_nested_utils::make_scalar_function;
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,
+    force_element_nullable: bool,
 }
 
 impl Default for SparkArray {
@@ -32,19 +33,30 @@ impl Default for SparkArray {
 
 impl SparkArray {
     pub fn new() -> Self {
+        Self::new_with_force_element_nullable(false)
+    }
+
+    /// Builds an ARRAY whose element cast can produce NULL even from a non-null source.
+    /// Spark exposes that through `containsNull` (`Cast.forceNullable`).
+    pub fn new_with_force_element_nullable(force_element_nullable: bool) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![TypeSignature::UserDefined, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("spark_make_array")],
+            force_element_nullable,
         }
     }
 }
 
 impl ScalarUDFImpl for SparkArray {
     fn name(&self) -> &str {
-        "spark_array"
+        if self.force_element_nullable {
+            "spark_array_force_nullable"
+        } else {
+            "spark_array"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -75,7 +87,8 @@ impl ScalarUDFImpl for SparkArray {
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
+        let contains_null =
+            self.force_element_nullable || args.arg_fields.iter().any(|field| field.is_nullable());
         let return_type = match self.return_type(&data_types)? {
             DataType::List(field) => DataType::List(Arc::new(
                 field.as_ref().clone().with_nullable(contains_null),
@@ -130,6 +143,58 @@ impl ScalarUDFImpl for SparkArray {
                 DataType::Utf8
             };
             return Ok(vec![string_type; arg_types.len()]);
+        }
+        // Spark's `CreateArray` uses `widerDecimalType` for DECIMAL and integral arguments.
+        // At precision 38 it calls `boundedPreferIntegralDigits`, reducing scale before the
+        // integral range. DataFusion's comparison coercion instead preserves the largest scale.
+        let decimal_parts = |data_type: &DataType| match data_type {
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                Some((i32::from(*precision), i32::from(*scale)))
+            }
+            _ => None,
+        };
+        let integral_decimal_parts = |data_type: &DataType| match data_type {
+            DataType::Int8 => Some((3, 0)),
+            DataType::Int16 => Some((5, 0)),
+            DataType::Int32 => Some((10, 0)),
+            DataType::Int64 => Some((20, 0)),
+            _ => None,
+        };
+        let decimal_or_integral = arg_types
+            .iter()
+            .map(|data_type| decimal_parts(data_type).or_else(|| integral_decimal_parts(data_type)))
+            .collect::<Option<Vec<_>>>();
+        if let Some(parts) = decimal_or_integral
+            && arg_types
+                .iter()
+                .any(|data_type| decimal_parts(data_type).is_some())
+        {
+            let scale = parts
+                .iter()
+                .map(|(_, scale)| *scale)
+                .max()
+                .unwrap_or_default();
+            let integral_digits = parts
+                .iter()
+                .map(|(precision, scale)| precision - scale)
+                .max()
+                .unwrap_or_default();
+            let precision = scale + integral_digits;
+            let (precision, scale) = if precision > 38 {
+                (38, (scale - (precision - 38)).max(0))
+            } else {
+                (precision, scale)
+            };
+            let common = DataType::Decimal128(
+                u8::try_from(precision)
+                    .map_err(|error| plan_datafusion_err!("invalid decimal precision: {error}"))?,
+                i8::try_from(scale)
+                    .map_err(|error| plan_datafusion_err!("invalid decimal scale: {error}"))?,
+            );
+            return Ok(vec![common; arg_types.len()]);
         }
         let new_type = arg_types
             .iter()

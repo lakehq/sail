@@ -16,7 +16,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 2 from a column holding two different values
       When query
         """
@@ -28,7 +28,7 @@ Feature: conv with an argument coming from a column
         | 256    |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 2 from a column
       When query
         """
@@ -40,7 +40,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: conv takes argument 3 from a column
       When query
         """
@@ -97,3 +97,85 @@ Feature: conv with an argument coming from a column
       Then query result
         | to_binary | to_octal | to_hex |
         | 1010      | 12       | A      |
+
+  Rule: conversion follows Spark's signed and unsigned 64-bit rules
+
+    # `Conv` declares `ImplicitCastInputTypes`: the value is cast to STRING and both bases to INT
+    # before `NumberConverter` runs (`mathExpressions.scala:477-505`).
+    Scenario Outline: conv implicitly casts <case>
+      When query
+        """
+        SELECT conv(<number>, <from_base>, <to_base>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                   | number | from_base              | to_base | result |
+        | a tinyint source base  | 'ff'   | CAST(16 AS TINYINT)    | 10      | 255    |
+        | string bases           | 'ff'   | '16'                   | '10'    | 255    |
+        | a bigint input value   | 255L   | 10                     | 16      | FF     |
+
+    Scenario Outline: conv <case>
+      When query
+        """
+        SELECT conv(<number>, <from_base>, <to_base>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                 | number             | from_base | to_base | result               |
+        | a whitespace-only value returns NULL | ' '                | 2         | 10      | NULL                 |
+        | trims input around binary digits     | '  100  '          | 2         | 10      | 4                    |
+        | retains an unsigned 64-bit value     | 'FFFFFFFFFFFFFFFF' | 16        | 10      | 18446744073709551615 |
+        | accepts a negative destination base  | '-10'              | 16        | -10     | -16                  |
+
+  Rule: conversion follows Spark's NumberConverter branches
+
+    # A negative destination interprets the 64-bit intermediate as signed. Its high bit therefore
+    # yields -1 regardless of whether the source text carried a minus sign
+    # (`NumberConverter.scala:167-192`).
+    Scenario Outline: conv to a negative base: <case>
+      When query
+        """
+        SELECT conv(<input>, 16, -10) AS result
+        """
+      Then query result
+        | result  |
+        | <value> |
+
+      Examples:
+        | case             | input               | value |
+        | the high bit set | 'FFFFFFFFFFFFFFFF'  | -1    |
+        | a negative input | '-FFFFFFFFFFFFFFFF' | -1    |
+
+    # `char2byte` stops at the first invalid digit (`NumberConverter.scala:115-131`).
+    Scenario: conv truncates at an invalid digit
+      When query
+        """
+        SELECT conv('12x3', 10, 10) AS result
+        """
+      Then query result
+        | result |
+        | 12     |
+
+    Scenario: conv of a NULL string in base 36 is NULL
+      When query
+        """
+        SELECT conv(CAST(NULL AS STRING), 36, 10) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @spark-4
+    Scenario: conv overflow raises with ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT conv('FFFFFFFFFFFFFFFFF', 16, 10) AS result
+        """
+      Then query error ARITHMETIC_OVERFLOW

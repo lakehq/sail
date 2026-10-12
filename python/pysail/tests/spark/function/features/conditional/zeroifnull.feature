@@ -60,7 +60,6 @@ Feature: zeroifnull output schema
     # Kept separate because the derived column name repeats the SQL argument, so the two
     # cannot share one Examples slot.
     # Spark derives the name from the literal as written (`-5`); Sail renders it `(- 5)`.
-    @sail-bug
     Scenario: zeroifnull doctest #14 (result)
       When query
         """

@@ -36,21 +36,36 @@ impl PlanResolver<'_> {
                 // keys are resolved against a combined descendant schema.
                 let schema = Self::local_schema(schema, state);
                 let num_fields = schema.fields().len();
+                // The position keeps its SIGN: `-1 as usize` wrapped to 2^64-1 and named a position
+                // nobody wrote. Spark reports the index it read, negative included
+                // (`Analyzer.scala:2157-2161`, `QueryCompilationErrors.scala:698-705`).
                 let position = match literal {
-                    spec::Literal::Int32 { value: Some(value) } => Some(*value as usize),
-                    spec::Literal::Int64 { value: Some(value) } => Some(*value as usize),
-                    _ => None,
+                    // ONLY an INT literal is an ordinal (`TryExtractOrdinal.scala:30-34`,
+                    // `AstBuilder.scala:7591`); a BIGINT is a constant, so `ORDER BY 1L` sorts by
+                    // nothing and `ORDER BY 5L` answers instead of naming a position out of range.
+                    spec::Literal::Int32 { value: Some(value) } => i64::from(*value),
+                    _ => {
+                        return Ok(Self::sort_with_options(
+                            self.resolve_expression(*child, &schema, state).await?,
+                            direction,
+                            null_ordering,
+                        ));
+                    }
                 };
-                match position {
-                    Some(position) if position > 0 && position <= num_fields => {
-                        expr::Expr::Column(Column::from(schema.qualified_field(position - 1)))
-                    }
-                    Some(position) => {
-                        return Err(PlanError::invalid(format!(
-                            "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
-                        )));
-                    }
-                    None => self.resolve_expression(*child, &schema, state).await?,
+                let index = usize::try_from(position)
+                    .ok()
+                    .filter(|index| *index > 0 && *index <= num_fields);
+                if let Some(index) = index {
+                    return Ok(Self::sort_with_options(
+                        expr::Expr::Column(Column::from(schema.qualified_field(index - 1))),
+                        direction,
+                        null_ordering,
+                    ));
+                } else {
+                    return Err(PlanError::invalid(format!(
+                        "[ORDER_BY_POS_OUT_OF_RANGE] ORDER BY position {position} is not in select \
+                         list (valid range is [1, {num_fields}])."
+                    )));
                 }
             }
             _ => self.resolve_expression(*child, schema, state).await?,

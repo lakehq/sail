@@ -103,7 +103,6 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
     # raises a spurious "cannot cast to Decimal128 ... overflow" error instead
     # of returning the float result.
 
-    @sail-bug
     Scenario Outline: Double with decimal: <case>
       When query
         """

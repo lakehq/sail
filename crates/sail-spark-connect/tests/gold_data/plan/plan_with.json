@@ -193,6 +193,7 @@
                                   },
                                   "condition": {
                                     "unresolvedFunction": {
+                                      "isSqlOperator": true,
                                       "functionName": [
                                         "<"
                                       ],
@@ -229,6 +230,7 @@
                               "expressions": [
                                 {
                                   "unresolvedFunction": {
+                                    "isSqlOperator": true,
                                     "functionName": [
                                       "+"
                                     ],

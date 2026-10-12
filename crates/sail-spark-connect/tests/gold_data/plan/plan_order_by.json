@@ -154,6 +154,7 @@
                     "ignoreNulls": null,
                     "filter": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           ">"
                         ],
@@ -362,6 +363,7 @@
                     "ignoreNulls": null,
                     "filter": {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           ">"
                         ],

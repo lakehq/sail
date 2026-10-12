@@ -77,7 +77,6 @@ Feature: nullifzero output schema
     # Kept separate because the derived column name repeats the SQL argument, so the two
     # cannot share one Examples slot.
     # Spark derives the name from the literal as written (`-1`); Sail renders it `(- 1)`.
-    @sail-bug
     Scenario: nullifzero doctest #13 (result)
       When query
         """

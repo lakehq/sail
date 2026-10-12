@@ -403,6 +403,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if is_divide_or_remainder_by_zero_error(&x) {
+                    SparkThrowable::ArithmeticException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -415,6 +417,13 @@ impl From<CommonErrorCause> for SparkThrowable {
 
 fn is_timestamp_parse_error(message: &str) -> bool {
     message.starts_with("Error parsing timestamp")
+}
+
+/// `spark_divide`/`spark_modulo` raise this at runtime via `raise_error(...)` (not a native
+/// Arrow compute error), which otherwise falls through to the generic `AnalysisException` arm
+/// below -- Spark raises `ArithmeticException` for a divisor that turns out to be zero.
+fn is_divide_or_remainder_by_zero_error(message: &str) -> bool {
+    message.starts_with("Division by zero") || message.starts_with("Remainder by zero")
 }
 
 fn is_array_index_out_of_bounds_error(message: &str) -> bool {

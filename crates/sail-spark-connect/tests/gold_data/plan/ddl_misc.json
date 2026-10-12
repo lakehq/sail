@@ -27,6 +27,7 @@
               "onCondition": {
                 "expr": {
                   "unresolvedFunction": {
+                    "isSqlOperator": true,
                     "functionName": [
                       "=="
                     ],

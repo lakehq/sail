@@ -473,6 +473,7 @@ mod tests {
             resolve(
                 &resolver,
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    is_sql_operator: false,
                     function_name: spec::ObjectName::bare("not"),
                     arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
                         value: Some(true)
@@ -506,6 +507,7 @@ mod tests {
                         // The resolver assigns a name (a human-readable string) for the function,
                         // and is then overridden by the explicitly specified outer name.
                         expr: Box::new(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                            is_sql_operator: false,
                             function_name: spec::ObjectName::bare("+"),
                             arguments: vec![
                                 spec::Expr::Alias {
@@ -587,6 +589,7 @@ mod tests {
         let result = resolver
             .resolve_named_expression(
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    is_sql_operator: false,
                     function_name: spec::ObjectName::bare("st_geomfromwkb"),
                     arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
                         value: Some(vec![
@@ -631,6 +634,7 @@ mod tests {
         let result = resolver
             .resolve_named_expression(
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    is_sql_operator: false,
                     function_name: spec::ObjectName::bare("st_geogfromwkb"),
                     arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
                         value: Some(vec![

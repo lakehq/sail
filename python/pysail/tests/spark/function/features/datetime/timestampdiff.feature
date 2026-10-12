@@ -31,3 +31,37 @@ Feature: timestampdiff calendar units
       Then query result
         | date_diff_result | datediff_result |
         | 1                | 1               |
+
+  Rule: the unit form of a date difference is a BIGINT
+
+    # `datediff(DAY, s, e)`, `date_diff(DAY, s, e)` and `timestampdiff(DAY, s, e)` all parse to
+    # `TimestampDiff` (`SqlBaseParser.g4:1328`, `AstBuilder.scala:7106`), whose `dataType` is
+    # `LongType` (`datetimeExpressions.scala:3867`); only the two-argument `datediff` is an INT.
+    Scenario Outline: <function> with a DAY unit is typed bigint
+      When query
+        """
+        SELECT typeof(<function>(DAY, DATE'2024-01-01', DATE'2024-01-15')) AS t
+        """
+      Then query result
+        | t      |
+        | bigint |
+
+      Examples:
+        | function      |
+        | datediff      |
+        | date_diff     |
+        | timestampdiff |
+
+    # A BIGINT is not a date offset: `DateAdd` takes only INT, SMALLINT or TINYINT.
+    Scenario Outline: a date shifted by a DAY-unit difference is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT DATE'2024-01-01' + timestampdiff(DAY, DATE'2024-01-01', DATE'2024-01-15') AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |

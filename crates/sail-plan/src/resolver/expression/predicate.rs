@@ -1,7 +1,6 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
@@ -14,6 +13,8 @@ use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
+use crate::coercion::SAIL_DATE_DIFFERENCE_METADATA_KEY;
+pub(in crate::resolver) use crate::coercion::spark_interval_metadata_for_expression;
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
@@ -355,6 +356,8 @@ pub(super) fn coerce_timestamp_string_predicate(
     Ok(match expression {
         expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
             let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
+            let (left, right) =
+                materialize_date_difference_interval_for_comparison(left, right, schema)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
         expr::Expr::InList(InList {
@@ -417,6 +420,50 @@ pub(super) fn coerce_timestamp_string_predicate(
         }
         expression => expression,
     })
+}
+
+/// `DATE - DATE` is kept as an INT day count until its consumer needs Spark's INTERVAL DAY
+/// behavior. A comparison against a day-time interval is such a consumer; materializing only this
+/// pair avoids changing numeric comparisons, casts, hashing, and aggregates of the day count.
+fn materialize_date_difference_interval_for_comparison(
+    left: expr::Expr,
+    right: expr::Expr,
+    schema: &DFSchemaRef,
+) -> DataFusionResult<(expr::Expr, expr::Expr)> {
+    let is_date_difference = |expr: &expr::Expr| {
+        expr.to_field(schema.as_ref()).is_ok_and(|(_, field)| {
+            field
+                .metadata()
+                .get(SAIL_DATE_DIFFERENCE_METADATA_KEY)
+                .is_some_and(|value| value == "true")
+        })
+    };
+    let (left_is_difference, right_is_difference) =
+        (is_date_difference(&left), is_date_difference(&right));
+    if !left_is_difference && !right_is_difference {
+        return Ok((left, right));
+    }
+    let left_type = left.get_type(schema.as_ref())?;
+    let right_type = right.get_type(schema.as_ref())?;
+    let interval_partner =
+        |data_type: &DataType| matches!(data_type, DataType::Duration(TimeUnit::Microsecond));
+    let as_interval = |days: expr::Expr| {
+        cast(
+            cast(days, DataType::Int64) * lit(86_400_000_000_i64),
+            DataType::Duration(TimeUnit::Microsecond),
+        )
+    };
+    let left = if left_is_difference && (interval_partner(&right_type) || right_is_difference) {
+        as_interval(left)
+    } else {
+        left
+    };
+    let right = if right_is_difference && (interval_partner(&left_type) || left_is_difference) {
+        as_interval(right)
+    } else {
+        right
+    };
+    Ok((left, right))
 }
 
 fn is_null_literal_expression(expression: &expr::Expr) -> bool {
@@ -524,50 +571,14 @@ fn stringify_non_ansi_expression(
         return Ok(expression);
     }
     if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
-        let metadata = interval
-            .to_json()
-            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+        let metadata =
+            sail_common::spec::SparkIntervalMetadataTree::Interval { metadata: interval }
+                .to_json()
+                .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
         return Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression, lit(metadata)]));
     }
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
-}
-
-pub(in crate::resolver) fn spark_interval_metadata_for_expression(
-    expression: &expr::Expr,
-    schema: &DFSchemaRef,
-) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
-    let field = expression.to_field(schema.as_ref())?.1;
-    if !matches!(
-        field.data_type(),
-        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
-    ) {
-        return Ok(None);
-    }
-
-    let interval_type = field.data_type().clone();
-    let mut combined = None::<spec::SparkIntervalMetadata>;
-    expression.apply(|candidate| {
-        let field = candidate.to_field(schema.as_ref())?.1;
-        if field.data_type() != &interval_type {
-            return Ok(TreeNodeRecursion::Jump);
-        }
-        let Some(value) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
-            return Ok(TreeNodeRecursion::Continue);
-        };
-        let candidate = spec::SparkIntervalMetadata::from_json(value)
-            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
-        combined = Some(match combined {
-            None => candidate,
-            Some(current) => current.wider(candidate).ok_or_else(|| {
-                datafusion_common::DataFusionError::Plan(
-                    "incompatible Spark interval metadata in expression".to_string(),
-                )
-            })?,
-        });
-        Ok(TreeNodeRecursion::Jump)
-    })?;
-    Ok(combined)
 }
 
 fn localize_timestamp_for_string(

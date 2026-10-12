@@ -17,6 +17,7 @@
                   "arguments": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "=="
                         ],
@@ -98,6 +99,7 @@
                   "arguments": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "or"
                         ],
@@ -164,6 +166,7 @@
                   "arguments": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "or"
                         ],
@@ -366,6 +369,7 @@
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "+"
                   ],
@@ -385,6 +389,7 @@
                         "arguments": [
                           {
                             "unresolvedFunction": {
+                              "isSqlOperator": true,
                               "functionName": [
                                 ">"
                               ],
@@ -496,6 +501,7 @@
             "arguments": [
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "=="
                   ],
@@ -537,6 +543,7 @@
               },
               {
                 "unresolvedFunction": {
+                  "isSqlOperator": true,
                   "functionName": [
                     "=="
                   ],

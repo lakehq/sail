@@ -40,12 +40,14 @@
                       },
                       "condition": {
                         "unresolvedFunction": {
+                          "isSqlOperator": true,
                           "functionName": [
                             ">"
                           ],
                           "arguments": [
                             {
                               "unresolvedFunction": {
+                                "isSqlOperator": true,
                                 "functionName": [
                                   "-"
                                 ],
@@ -101,6 +103,7 @@
                   "grouping": [
                     {
                       "unresolvedFunction": {
+                        "isSqlOperator": true,
                         "functionName": [
                           "-"
                         ],

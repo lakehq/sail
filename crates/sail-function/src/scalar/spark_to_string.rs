@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, DurationMicrosecondArray, GenericStringBuilder, IntervalYearMonthArray,
-    OffsetSizeTrait, StringViewBuilder,
+    ListArray, MapArray, OffsetSizeTrait, StringViewBuilder, StructArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{DataFusionError, Result, exec_err};
@@ -10,7 +10,9 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_expr::ScalarFunctionArgs;
-use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
+use sail_common::spec::{
+    SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata, SparkIntervalMetadataTree,
+};
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::formatter::{
     SparkDayTimeIntervalFormatter, SparkYearMonthIntervalFormatter,
@@ -88,11 +90,9 @@ macro_rules! define_to_string_udf {
                             "interval metadata must be a non-null constant string".to_string(),
                         )
                     })?;
-                    let mut field = arg_field.as_ref().clone();
-                    field
-                        .metadata_mut()
-                        .insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata);
-                    arg_field = Arc::new(field);
+                    let tree = SparkIntervalMetadataTree::from_json(&metadata)
+                        .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+                    arg_field = with_interval_metadata_tree(arg_field, &tree)?;
                 }
                 let args = ColumnarValue::values_to_arrays(&args)?;
                 let arg = args.one()?;
@@ -101,6 +101,102 @@ macro_rules! define_to_string_udf {
             }
         }
     };
+}
+
+fn with_interval_metadata_tree(
+    field: FieldRef,
+    tree: &SparkIntervalMetadataTree,
+) -> Result<FieldRef> {
+    match tree {
+        SparkIntervalMetadataTree::Interval { metadata } => {
+            let mut field = field.as_ref().clone();
+            field.metadata_mut().insert(
+                SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                metadata
+                    .to_json()
+                    .map_err(|error| DataFusionError::Execution(error.to_string()))?,
+            );
+            Ok(Arc::new(field))
+        }
+        SparkIntervalMetadataTree::List { element } => {
+            let DataType::List(field_element) = field.data_type() else {
+                return exec_err!("Spark interval list metadata requires a LIST field");
+            };
+            let element = with_interval_metadata_tree(Arc::clone(field_element), element)?;
+            Ok(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::List(element)),
+            ))
+        }
+        SparkIntervalMetadataTree::Map { key, value } => {
+            with_map_interval_metadata_tree(field, key.as_deref(), value.as_deref())
+        }
+        SparkIntervalMetadataTree::Struct { fields } => {
+            let DataType::Struct(field_children) = field.data_type() else {
+                return exec_err!("Spark interval struct metadata requires a STRUCT field");
+            };
+            if fields.len() != field_children.len() {
+                return exec_err!("Spark interval struct metadata has the wrong number of fields");
+            }
+            let children = field_children
+                .iter()
+                .zip(fields)
+                .map(|(child, tree)| match tree {
+                    Some(tree) => with_interval_metadata_tree(Arc::clone(child), tree),
+                    None => Ok(Arc::clone(child)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Struct(children.into())),
+            ))
+        }
+    }
+}
+
+fn with_map_interval_metadata_tree(
+    field: FieldRef,
+    key_tree: Option<&SparkIntervalMetadataTree>,
+    value_tree: Option<&SparkIntervalMetadataTree>,
+) -> Result<FieldRef> {
+    let DataType::Map(entries, sorted) = field.data_type() else {
+        return exec_err!("Spark interval map metadata requires a MAP field");
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return exec_err!("Spark MAP field must contain key and value struct fields");
+    };
+    let Some(key) = fields.first() else {
+        return exec_err!("Spark MAP field must contain a key field");
+    };
+    let Some(value) = fields.get(1) else {
+        return exec_err!("Spark MAP field must contain a value field");
+    };
+    let key = match key_tree {
+        Some(tree) => with_interval_metadata_tree(Arc::clone(key), tree)?,
+        None => Arc::clone(key),
+    };
+    let value = match value_tree {
+        Some(tree) => with_interval_metadata_tree(Arc::clone(value), tree)?,
+        None => Arc::clone(value),
+    };
+    let entries = Arc::new(
+        Field::new(
+            entries.name(),
+            DataType::Struct(vec![key, value].into()),
+            entries.is_nullable(),
+        )
+        .with_metadata(entries.metadata().clone()),
+    );
+    Ok(Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Map(entries, *sorted)),
+    ))
 }
 
 define_to_string_udf!(
@@ -134,6 +230,9 @@ fn value_to_string<O: OffsetSizeTrait>(
     if let Some(interval) = spark_interval_metadata(field)? {
         return interval_value_to_string::<O>(array, interval);
     }
+    if has_nested_interval_metadata(field)? {
+        return nested_value_to_string::<O>(array, options, field);
+    }
     let mut builder = GenericStringBuilder::<O>::new();
     let formatter = ArrayFormatter::try_new(array, options)?;
     let nulls = array.nulls();
@@ -158,6 +257,25 @@ fn value_to_string_view(
     if let Some(interval) = spark_interval_metadata(field)? {
         return interval_value_to_string_view(array, interval);
     }
+    if has_nested_interval_metadata(field)? {
+        let values = nested_value_to_string::<i32>(array, options, field)?;
+        let values = values
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::StringArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "map interval formatter returned non-UTF8 values".to_string(),
+                )
+            })?;
+        let mut builder = StringViewBuilder::with_capacity(values.len());
+        for value in values.iter() {
+            match value {
+                Some(value) => builder.append_value(value),
+                None => builder.append_null(),
+            }
+        }
+        return Ok(Arc::new(builder.finish()));
+    }
     let mut builder = StringViewBuilder::with_capacity(array.len());
     let formatter = ArrayFormatter::try_new(array, options)?;
     let nulls = array.nulls();
@@ -176,6 +294,168 @@ fn value_to_string_view(
         }
     }
     Ok(Arc::new(builder.finish()))
+}
+
+fn has_nested_interval_metadata(field: &Field) -> Result<bool> {
+    if spark_interval_metadata(field)?.is_some() {
+        return Ok(true);
+    }
+    match field.data_type() {
+        DataType::List(element) => has_nested_interval_metadata(element),
+        DataType::Map(entries, _) => match entries.data_type() {
+            DataType::Struct(fields) => fields
+                .iter()
+                .map(|field| has_nested_interval_metadata(field))
+                .collect::<Result<Vec<_>>>()
+                .map(|values| values.into_iter().any(|value| value)),
+            _ => Ok(false),
+        },
+        DataType::Struct(fields) => fields
+            .iter()
+            .map(|field| has_nested_interval_metadata(field))
+            .collect::<Result<Vec<_>>>()
+            .map(|values| values.into_iter().any(|value| value)),
+        _ => Ok(false),
+    }
+}
+
+fn nested_value_to_string<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    options: &FormatOptions<'static>,
+    field: &Field,
+) -> Result<ArrayRef> {
+    let mut builder = GenericStringBuilder::<O>::new();
+    for row in 0..array.len() {
+        if array.is_null(row) {
+            builder.append_null();
+            continue;
+        }
+        builder.append_value(format_nested_value(array, field, row, options)?);
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn format_nested_value(
+    array: &dyn Array,
+    field: &Field,
+    index: usize,
+    options: &FormatOptions<'static>,
+) -> Result<String> {
+    if let Some(metadata) = spark_interval_metadata(field)? {
+        let interval = SparkIntervalArray::try_new(array, metadata)?;
+        return interval.format(index, metadata);
+    }
+    match field.data_type() {
+        DataType::List(element) => {
+            let values = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                DataFusionError::Execution(
+                    "expected LIST array for Spark interval formatting".to_string(),
+                )
+            })?;
+            let start = values.value_offsets()[index] as usize;
+            let end = values.value_offsets()[index + 1] as usize;
+            let values = values.values();
+            let mut output = String::from("[");
+            for value_index in start..end {
+                if value_index != start {
+                    output.push_str(", ");
+                }
+                if values.is_null(value_index) {
+                    output.push_str("NULL");
+                } else {
+                    output.push_str(&format_nested_value(
+                        values.as_ref(),
+                        element,
+                        value_index,
+                        options,
+                    )?);
+                }
+            }
+            output.push(']');
+            Ok(output)
+        }
+        DataType::Map(entries, _) => {
+            let DataType::Struct(fields) = entries.data_type() else {
+                return exec_err!("Spark MAP field must contain key and value struct fields");
+            };
+            let Some(key_field) = fields.first() else {
+                return exec_err!("Spark MAP field must contain a key field");
+            };
+            let Some(value_field) = fields.get(1) else {
+                return exec_err!("Spark MAP field must contain a value field");
+            };
+            let map = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                DataFusionError::Execution(
+                    "expected MAP array for Spark interval formatting".to_string(),
+                )
+            })?;
+            let entries = map.entries();
+            let start = map.offsets()[index] as usize;
+            let end = map.offsets()[index + 1] as usize;
+            let keys = entries.column(0);
+            let values = entries.column(1);
+            let mut output = String::from("{");
+            for value_index in start..end {
+                if value_index != start {
+                    output.push_str(", ");
+                }
+                output.push_str(&format_nested_value(
+                    keys.as_ref(),
+                    key_field,
+                    value_index,
+                    options,
+                )?);
+                output.push_str(" -> ");
+                if values.is_null(value_index) {
+                    output.push_str("NULL");
+                } else {
+                    output.push_str(&format_nested_value(
+                        values.as_ref(),
+                        value_field,
+                        value_index,
+                        options,
+                    )?);
+                }
+            }
+            output.push('}');
+            Ok(output)
+        }
+        DataType::Struct(fields) => {
+            let values = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "expected STRUCT array for Spark interval formatting".to_string(),
+                    )
+                })?;
+            let mut output = String::from("{");
+            for (field_index, child_field) in fields.iter().enumerate() {
+                if field_index != 0 {
+                    output.push_str(", ");
+                }
+                let child = values.column(field_index);
+                if child.is_null(index) {
+                    output.push_str("NULL");
+                } else {
+                    output.push_str(&format_nested_value(
+                        child.as_ref(),
+                        child_field,
+                        index,
+                        options,
+                    )?);
+                }
+            }
+            output.push('}');
+            Ok(output)
+        }
+        _ => {
+            let formatter = ArrayFormatter::try_new(array, options)?;
+            let mut output = String::new();
+            formatter.value(index).write(&mut output)?;
+            Ok(output)
+        }
+    }
 }
 
 fn spark_interval_metadata(field: &Field) -> Result<Option<SparkIntervalMetadata>> {

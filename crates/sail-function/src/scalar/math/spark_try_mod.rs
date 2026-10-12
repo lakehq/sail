@@ -115,14 +115,14 @@ impl ScalarUDFImpl for SparkTryMod {
             (DataType::Int32, DataType::Int32) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_binary_op_primitive::<Int32Type, _>(l, r, i32::checked_rem);
+                let result = try_binary_op_primitive::<Int32Type, _>(l, r, java_rem_i32);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Int64, DataType::Int64) => {
                 let l = left_arr.as_primitive::<Int64Type>();
                 let r = right_arr.as_primitive::<Int64Type>();
-                let result = try_binary_op_primitive::<Int64Type, _>(l, r, i64::checked_rem);
+                let result = try_binary_op_primitive::<Int64Type, _>(l, r, java_rem_i64);
 
                 binary_op_scalar_or_array(left, right, result)
             }
@@ -201,6 +201,24 @@ impl ScalarUDFImpl for SparkTryMod {
                 types,
             )),
         }
+    }
+}
+
+/// A Java `%`: `MIN_VALUE % -1` is 0, where `checked_rem` reports the overflow of the quotient and
+/// the result would read NULL. Only a zero divisor is NULL.
+fn java_rem_i32(left: i32, right: i32) -> Option<i32> {
+    if right == -1 {
+        Some(0)
+    } else {
+        left.checked_rem(right)
+    }
+}
+
+fn java_rem_i64(left: i64, right: i64) -> Option<i64> {
+    if right == -1 {
+        Some(0)
+    } else {
+        left.checked_rem(right)
     }
 }
 
