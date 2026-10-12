@@ -66,6 +66,10 @@ pub struct PlanConfig {
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
     pub tvf_allow_multiple_table_arguments: bool,
+    /// Whether subquery expressions are allowed inside a lambda or higher-order function
+    /// (`spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`, default
+    /// false). True restores the legacy behavior Spark rejects under SPARK-47509.
+    pub allow_subquery_in_higher_order_functions: bool,
     /// Whether `COUNT()` is accepted with no arguments. Spark's legacy behavior returns zero;
     /// it does not interpret the call as `COUNT(*)`.
     pub legacy_allow_parameterless_count: bool,
@@ -101,6 +105,7 @@ impl Default for PlanConfig {
             pivot_max_values: 10000,
             shuffle_partitions: 200,
             tvf_allow_multiple_table_arguments: false,
+            allow_subquery_in_higher_order_functions: false,
             legacy_allow_parameterless_count: false,
         }
     }

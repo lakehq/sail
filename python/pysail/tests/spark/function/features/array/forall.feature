@@ -158,7 +158,6 @@ Feature: forall higher-order function
         """
       Then query error .*
 
-    @sail-bug
     Scenario: a constant boolean is accepted in place of a lambda
       When query
         """
@@ -299,7 +298,6 @@ Feature: forall higher-order function
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -323,7 +321,6 @@ Feature: forall higher-order function
          |-- result: boolean (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null array column yields a non-nullable boolean
       When query
         """
@@ -334,3 +331,185 @@ Feature: forall higher-order function
         root
          |-- result: boolean (nullable = false)
         """
+
+    Scenario: a non-nullable array with a null element yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1, CAST(NULL AS INT), 3), x -> x > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    Scenario: an untyped NULL predicate yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1, 2), NULL) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral) so the predicate — and thus the result — is nullable.
+    # Sail's expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports here. The divergence is schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    @sail-bug
+    Scenario: a Cast.forceNullable predicate body yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1.5, 2.5), x -> CAST(x AS INT) > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario Outline: Non-lambda predicate: <case>
+      When query
+        """
+        SELECT forall(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                       | args                               | result |
+        | a constant true predicate                  | array(1, 2), true                  | true   |
+        | a constant false predicate                 | array(1, 2), false                 | false  |
+        | a constant NULL predicate                  | array(1, 2), CAST(NULL AS BOOLEAN) | NULL   |
+        | the empty array wins over a constant false | array(), false                     | true   |
+        | a NULL array wins over a constant false    | CAST(NULL AS ARRAY<INT>), false    | NULL   |
+
+    Scenario: a predicate that only references an outer column
+      When query
+        """
+        SELECT forall(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: a constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT forall(c, false) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+        | NULL   |
+
+    Scenario: a non-boolean constant is still a type error
+      When query
+        """
+        SELECT forall(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: Untyped NULL body
+
+    Scenario: an untyped NULL lambda body
+      When query
+        """
+        SELECT forall(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: an untyped NULL in place of the lambda
+      When query
+        """
+        SELECT forall(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT forall(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT forall(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, forall(array(1), 1), false) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    @sail-bug
+    Scenario: forall with a seeded rand short-circuits per row
+      When query
+        """
+        SELECT forall(c, rand(42) < 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+
+  Rule: Subquery expressions are rejected
+
+    Scenario: a subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT forall(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT forall((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery inside a lambda body is rejected
+      When query
+        """
+        SELECT forall(array(1, 2), x -> x > (SELECT 1)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: A NULL-typed predicate with a side effect is erased, not evaluated
+
+    # Spark's type coercion replaces a lambda body whose type is NULL (here
+    # `assert_true`, whose type is NullType) with a constant NULL of the expected
+    # boolean type, so the body never runs. Sail keeps and evaluates the body, so
+    # the side effect still raises. Pure `x -> NULL` bodies agree; only effectful
+    # NULL-typed bodies diverge.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
+      When query
+        """
+        SELECT forall(array(1, 0), x -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

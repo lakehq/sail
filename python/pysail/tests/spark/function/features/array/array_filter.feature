@@ -604,3 +604,148 @@ Feature: array filter with lambda
         | Lambda with case-insensitive duplicate parameter names is rejected | array(1, 2, 3), (x, X) -> x > 1   |
         | Filter over a non-array first argument is rejected                 | 42, x -> x > 0                    |
         | Filter over a map first argument is rejected                       | map('a', 1), x -> x > 0           |
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario Outline: Non-lambda predicate: <case>
+      When query
+        """
+        SELECT filter(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                    | args                               | result |
+        | constant true keeps every element       | array(1, 2), true                  | [1, 2] |
+        | constant false drops every element      | array(1, 2), false                 | []     |
+        | constant NULL drops every element       | array(1, 2), CAST(NULL AS BOOLEAN) | []     |
+        | constant predicate over an empty array  | array(), true                      | []     |
+        | constant predicate over a NULL array    | CAST(NULL AS ARRAY<INT>), true     | NULL   |
+
+    Scenario: A predicate that only references an outer column
+      When query
+        """
+        SELECT filter(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    Scenario: A constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT filter(c, true) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1, 2] |
+        | []     |
+        | NULL   |
+
+    Scenario: A non-boolean constant is still a type error
+      When query
+        """
+        SELECT filter(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: A subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT filter(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: An untyped NULL in place of the lambda drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT filter(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, filter(array(1), 1), array(0)) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    Scenario: filter with a seeded rand keeps elements per row in order
+      When query
+        """
+        SELECT filter(c, rand(42) > 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1]    |
+        | [3]    |
+
+  Rule: A subquery in a value argument is rejected
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT filter((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    # At an arity that never forms a higher-order function (filter needs 2
+    # arguments), Spark fails on argument count before the subquery validator runs,
+    # so the argument-count error wins over the subquery rejection.
+    Scenario: a subquery at an invalid arity is an argument-count error, not a subquery error
+      When query
+        """
+        SELECT filter((SELECT array(1, 2)))
+        """
+      Then query error (?i)two values|requires 2|WRONG_NUM
+
+  Rule: A NULL-typed predicate with a side effect is erased, not evaluated
+
+    # Spark's type coercion replaces a lambda body whose type is NULL (here
+    # `assert_true`, whose type is NullType) with a constant NULL of the expected
+    # boolean type, so the body never runs and every element is dropped. Sail keeps
+    # and evaluates the body, so the side effect still raises. Pure `x -> NULL`
+    # bodies agree; only effectful NULL-typed bodies diverge.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
+      When query
+        """
+        SELECT filter(array(1, 0), x -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | []     |
