@@ -36,6 +36,32 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Overflow and large values
 
+    # A `-` BEFORE the `INTERVAL` keyword is a generic unary minus over the whole
+    # (already-built, positive) interval value, not a grammar-level sign Spark folds
+    # into the literal -- so the literal's positive magnitude must fit a `Long` on its
+    # own, before any negation, and this exact boundary overflows it ("ArithmeticException:
+    # long overflow", verified against the Spark 4.2 JVM).
+    Scenario: a leading minus before INTERVAL overflows at the i64::MIN boundary
+      When query
+        """
+        SELECT -INTERVAL '106751991 04:00:54.775808' DAY TO SECOND AS result
+        """
+      Then query error (?i)(invalid.*interval|overflow)
+
+    # A `-` INSIDE the literal, right after `INTERVAL` and before the quote, IS a
+    # grammar-level sign (`IntervalUtils.toDTInterval` applies it per field during
+    # summation, never building an intermediate positive value) -- so it reaches
+    # i64::MIN successfully, unlike the leading-minus form above. Verified against
+    # the Spark 4.2 JVM.
+    Scenario: a minus right after INTERVAL reaches the i64::MIN boundary
+      When query
+        """
+        SELECT INTERVAL -'106751991 04:00:54.775808' DAY TO SECOND AS result
+        """
+      Then query result
+        | result                                            |
+        | INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND |
+
     # Spark validates each field of a DAY TO SECOND literal and rejects an out-of-range hour
     # instead of carrying it into days: "requirement failed: hour 25 outside range [0, 23]".
     # Sail normalizes it to `INTERVAL '1 01:00:00' DAY TO SECOND`.

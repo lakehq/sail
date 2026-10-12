@@ -1,7 +1,9 @@
 Feature: CAST date to numeric types returns null
 
   In Spark legacy mode, casting a DATE to any numeric type returns NULL.
-  In ANSI mode, the cast raises an error. TRY_CAST always returns NULL.
+  In ANSI mode, a plain CAST raises an error. TRY_CAST also raises an error, regardless
+  of the ANSI setting: `canAnsiCast` has no DATE <-> NumericType/BooleanType rule at all
+  (only the legacy `canCast` does), and TRY_CAST always analyzes against `canAnsiCast`.
 
   Rule: CAST date to numeric types returns null (legacy mode)
 
@@ -44,3 +46,24 @@ Feature: CAST date to numeric types returns null
         | cast date to int in ANSI mode raises error     | INT     |
         | cast date to double in ANSI mode raises error  | DOUBLE  |
         | cast date to boolean in ANSI mode raises error | BOOLEAN |
+
+  Rule: TRY_CAST date to numeric always raises, regardless of ANSI
+
+    # `canAnsiCast` has no DATE <-> NumericType/BooleanType rule at all (only the legacy
+    # `canCast` does, Cast.scala:237,239,243,271), and TRY_CAST always analyzes against
+    # `canAnsiCast` -- so, unlike a plain CAST, TRY_CAST never falls back to returning
+    # NULL for this pair even with ANSI off.
+    @sail-only
+    Scenario Outline: TRY_CAST: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TRY_CAST(DATE '2023-01-15' AS <type>) AS result
+        """
+      Then query error cannot cast date
+
+      Examples:
+        | case                                            | type    | ansi  |
+        | TRY_CAST date to int raises under ANSI off      | INT     | false |
+        | TRY_CAST date to int raises under ANSI on       | INT     | true  |
+        | TRY_CAST date to boolean raises under ANSI off  | BOOLEAN | false |

@@ -31,11 +31,37 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+// CreateNamedStruct.nullable is false; each field retains its value's
+// nullability (complexTypeCreator.scala:457-477).
+fn named_struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let args = input.arguments;
+    let names = args
+        .chunks(2)
+        .map(|pair| match pair {
+            [Expr::Literal(name, _), _] => name.try_as_str().flatten().map(str::to_owned),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    match names {
+        Some(names)
+            if !names.is_empty()
+                && names
+                    .iter()
+                    .enumerate()
+                    .all(|(i, name)| !names[..i].contains(name)) =>
+        {
+            let values = args.into_iter().skip(1).step_by(2).collect();
+            Ok(ScalarUDF::from(StructFunction::new(names)).call(values))
+        }
+        _ => Ok(expr_fn::named_struct(args)),
+    }
+}
+
 pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("named_struct", F::var_arg(expr_fn::named_struct)),
+        ("named_struct", F::custom(named_struct)),
         ("struct", F::custom(r#struct)),
     ]
 }

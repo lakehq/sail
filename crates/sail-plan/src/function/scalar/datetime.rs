@@ -1354,27 +1354,32 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("time_to_seconds", F::unknown("time_to_seconds")),
         (
             "timestamp_micros",
-            F::cast(DataType::Timestamp(
-                TimeUnit::Microsecond,
-                Some("UTC".into()),
-            )),
+            F::custom(|input| {
+                let session_tz = input.function_context.plan_config.session_timezone.clone();
+                Ok(cast(
+                    input.arguments.one()?,
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz)),
+                ))
+            }),
         ),
         (
             "timestamp_millis",
-            F::unary(|arg| {
-                cast(
-                    cast(arg, DataType::Int64) * lit(1_000_i64),
-                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                )
+            F::custom(|input| {
+                let session_tz = input.function_context.plan_config.session_timezone.clone();
+                Ok(cast(
+                    cast(input.arguments.one()?, DataType::Int64) * lit(1_000_i64),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz)),
+                ))
             }),
         ),
         (
             "timestamp_seconds",
-            F::unary(|arg| {
-                cast(
-                    cast(arg, DataType::Int64) * lit(1_000_000_i64),
-                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                )
+            F::custom(|input| {
+                let session_tz = input.function_context.plan_config.session_timezone.clone();
+                Ok(cast(
+                    cast(input.arguments.one()?, DataType::Int64) * lit(1_000_000_i64),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz)),
+                ))
             }),
         ),
         ("timestampadd", F::custom(timestampadd)),

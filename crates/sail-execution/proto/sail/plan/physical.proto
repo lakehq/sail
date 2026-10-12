@@ -245,6 +245,11 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkYearMonthIntervalFromInt64Udf spark_year_month_interval_from_int64 = 40;
+    SparkDayTimeIntervalFromInt64Udf spark_day_time_interval_from_int64 = 41;
+    SparkStringToTimeUdf spark_string_to_time = 42;
+    SparkDayTimeIntervalUdf spark_day_time_interval = 43;
+    Int64FloorDivUdf int64_floor_div = 44;
   }
 }
 
@@ -338,6 +343,30 @@ message SparkDateFormatUdf {
 
 message SparkMapFromArraysUdf {
   bool last_value_wins = 1;
+}
+
+message SparkYearMonthIntervalFromInt64Udf {
+  int64 multiplier = 1;
+  bool is_try = 2;
+}
+
+message SparkDayTimeIntervalFromInt64Udf {
+  int64 multiplier = 1;
+  bool is_try = 2;
+}
+
+message Int64FloorDivUdf {
+  int64 divisor = 1;
+}
+
+message SparkStringToTimeUdf {
+  bool is_try = 1;
+}
+
+message SparkDayTimeIntervalUdf {
+  // JSON-encoded `SparkIntervalMetadata::DayTime { start_field, end_field }`.
+  string qualifier = 1;
+  bool is_try = 2;
 }
 
 message SparkMapFromEntriesUdf {

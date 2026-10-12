@@ -64,7 +64,10 @@ impl ShowStringFormat {
         Ok(batch
             .columns()
             .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .zip(batch.schema_ref().fields())
+            .map(|(c, f)| {
+                ArrayFormatter::try_new_with_field(c.as_ref(), Some(f.as_ref()), &options)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 

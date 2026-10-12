@@ -60,8 +60,16 @@ impl ScalarUDFImpl for SparkCastToVariant {
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
+        // Cast.forceNullable runs before evaluation and also covers casts to
+        // VARIANT: STRING and DATE inputs force nullable, other supported inputs
+        // retain their own nullability (Cast.scala:427-448).
+        let nullable = args.arg_fields.iter().any(|field| {
+            field.is_nullable()
+                || field.data_type().is_string()
+                || matches!(field.data_type(), DataType::Date32 | DataType::Date64)
+        });
         Ok(Arc::new(
-            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+            Field::new(self.name(), data_type, nullable).with_extension_type(VariantType),
         ))
     }
 

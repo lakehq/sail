@@ -42,7 +42,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | just below the upper threshold  | CAST(9999999.0 AS DOUBLE)        | 9999999.0 |
         | at the lower threshold          | 1e-3                             | 0.001     |
 
-    @sail-bug
     Scenario Outline: DOUBLE rendering Sail gets wrong: <case>
       When query
         """
@@ -77,7 +76,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | result |
         | NaN    |
 
-    @sail-bug
     Scenario Outline: FLOAT uses the SAME thresholds as DOUBLE: <case>
       # Float.toString switches to scientific at the identical 1e-3 / 1e7 boundaries, so a
       # renderer that special-cases only f64 diverges here.
@@ -99,12 +97,10 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
   Rule: A NULL nested in a container renders lowercase under CAST and uppercase under show
     # This is the sharpest CAST-vs-show split. Cast overrides nullString to "null" and
     # ToPrettyString to "NULL", so the SAME value has two spellings depending on the path.
-    # Sail emits the show() spelling from the CAST path.
     #
     # Note the position asymmetry Spark keeps in both modes: the element at index 0 gets no
     # leading space, later ones get one from the separator — hence "[null, null]".
 
-    @sail-bug
     Scenario Outline: NULL inside a container cast to string: <case>
       When query
         """
@@ -147,7 +143,6 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
         | result |
         | Spark  |
 
-    @sail-bug
     Scenario: binary nested in an array casts to its bytes too
       # The nested case is what discriminates: an implementation can get the top level
       # right by special-casing it and still hand the container branch a hex formatter.
@@ -158,6 +153,60 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
       Then query result
         | result  |
         | [ab, c] |
+
+  Rule: BINARY bytes that are not valid UTF-8 keep their identity as a STRING
+    # UTF8String.fromBytes wraps the bytes unchanged, so every byte-level function sees the
+    # original bytes and two different byte strings stay different values. Replacing the invalid
+    # bytes (U+FFFD) would merge them: `X'FF41' = X'FE41'` would be true and a GROUP BY or a JOIN
+    # on the value would return wrong rows. None of these touches a string kernel that reads
+    # the bytes as a `str` (`upper`, `lower`, `reverse`), which is a separate, open problem.
+
+    Scenario Outline: functions over the original bytes: <case>
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                            | expr                                         | result                           |
+        | length counts a lead byte once  | length(CAST(X'FF41' AS STRING))              | 2                                |
+        | octet_length                    | octet_length(CAST(X'FF41' AS STRING))        | 2                                |
+        | bit_length                      | bit_length(CAST(X'FF41' AS STRING))          | 16                               |
+        | truncated sequence length       | length(CAST(X'E282' AS STRING))              | 1                                |
+        | truncated sequence octet_length | octet_length(CAST(X'E282' AS STRING))        | 2                                |
+        | md5                             | md5(CAST(X'FF41' AS STRING))                 | 059bd3b0d5d13f60e9fb4cb516bbfc30 |
+        | crc32                           | crc32(CAST(X'FF41' AS STRING))               | 3542523531                       |
+        | round trip through BINARY       | hex(CAST(CAST(X'FF41' AS STRING) AS BINARY)) | FF41                             |
+        | nested in an array              | length(CAST(array(X'FF41') AS STRING))       | 4                                |
+        | nested in a map                 | length(CAST(map(X'FF41', X'FE41') AS STRING)) | 10                              |
+
+    Scenario: distinct invalid byte strings are not equal
+      When query
+        """
+        SELECT CAST(X'FF41' AS STRING) = CAST(X'FE41' AS STRING) AS different,
+               CAST(X'FF41' AS STRING) <=> CAST(X'FE41' AS STRING) AS different_null_safe,
+               CAST(X'FF41' AS STRING) = CAST(X'FF41' AS STRING) AS same
+        """
+      Then query result
+        | different | different_null_safe | same |
+        | false     | false               | true |
+
+    Scenario: distinct invalid byte strings stay distinct keys
+      When query
+        """
+        SELECT (SELECT count(DISTINCT CAST(b AS STRING))
+                FROM VALUES (X'FF41'), (X'FE41'), (X'FD41') AS t(b)) AS distinct_keys,
+               (SELECT count(*)
+                FROM (SELECT CAST(b AS STRING) AS s FROM VALUES (X'FF41'), (X'FE41') AS t(b)) a
+                JOIN (SELECT CAST(b AS STRING) AS s FROM VALUES (X'FF41') AS t(b)) c
+                  ON a.s = c.s) AS joined_rows
+        """
+      Then query result
+        | distinct_keys | joined_rows |
+        | 3             | 1           |
 
   Rule: Container syntax
     # Field names never appear for a struct, nested strings are never quoted or escaped,
