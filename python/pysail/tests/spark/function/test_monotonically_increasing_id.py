@@ -154,7 +154,30 @@ def test_monotonically_increasing_id_in_sort(spark):
     assert [row.id for row in result.collect()] == list(range(39, 34, -1))
 
 
+@pytest.mark.parametrize("global_sort", [False, True], ids=["local-sort", "global-sort"])
+def test_monotonically_increasing_id_keeps_input_sort(spark, global_sort):
+    size = 20000
+    df = spark.range(size, numPartitions=4).select(((F.col("id") * 7919) % size).alias("k")).repartition(1)
+    ordered = df.orderBy("k") if global_sort else df.sortWithinPartitions("k")
+    indexed = ordered.withColumn("i", F.monotonically_increasing_id())
+    assert indexed.filter(F.col("i") != F.col("k")).count() == 0
+    assert indexed.agg(F.sum(F.when(F.col("i") == F.col("k"), 1).otherwise(0))).first()[0] == size
+
+
 def test_monotonically_increasing_id_in_repartition(spark):
     df = spark.range(40, numPartitions=4).repartition(4, F.monotonically_increasing_id())
     assert df.columns == ["id"]
     assert sorted(row.id for row in df.collect()) == list(range(40))
+
+
+def test_monotonically_increasing_id_keeps_sort_in_each_partition(spark):
+    size, partitions = 20000, 4
+    per_partition = size // partitions
+    indexed = (
+        spark.range(size, numPartitions=partitions)
+        .sortWithinPartitions(F.col("id").desc())
+        .select("id", F.spark_partition_id().alias("p"), F.monotonically_increasing_id().alias("i"))
+    )
+    expected = F.col("p") * (1 << 33) + per_partition - 1 - (F.col("id") % per_partition)
+    matches = indexed.agg(F.sum(F.when(F.col("i") == expected, 1).otherwise(0))).first()[0]
+    assert matches == size
