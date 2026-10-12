@@ -25,6 +25,7 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_cast_decimal_to_float::SparkCastDecimalToFloat;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_decimal_to_timestamp_micros::SparkDecimalToTimestampMicros;
 use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -748,6 +749,17 @@ impl PlanResolver<'_> {
             // sources take the saturating arm above instead; what reaches here is Decimal, or
             // Float/Double under a plain CAST with ANSI on (the NaN-guarded arm above only
             // covers TRY_CAST or ANSI off).
+            // Spark's `decimalToTimestamp` (Cast.scala:791-793) is `(d * 1_000_000).longValue`: the
+            // fraction is dropped and an overflow WRAPS to 64 bits, for CAST and TRY_CAST, ANSI on
+            // and off. Arrow's decimal-to-timestamp cast raises on overflow instead.
+            (from, DataType::Timestamp(TimeUnit::Microsecond, Some(_)), _)
+                if decimal_precision_scale(&from).is_some() =>
+            {
+                cast(
+                    ScalarUDF::from(SparkDecimalToTimestampMicros::new()).call(vec![expr]),
+                    cast_to_type,
+                )
+            }
             (from, DataType::Timestamp(time_unit, Some(_)), _) if from.is_numeric() => {
                 let multiplier = time_unit_to_multiplier(&time_unit);
                 cast(expr.mul(lit(multiplier)), cast_to_type)

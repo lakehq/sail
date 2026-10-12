@@ -230,6 +230,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_decimal_to_float::SparkCastDecimalToFloat;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_decimal_to_timestamp_micros::SparkDecimalToTimestampMicros;
 use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -3350,6 +3351,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_integral_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkIntegralToBinary::new())))
             }
+            "spark_decimal_to_timestamp_micros" => Ok(Arc::new(ScalarUDF::from(
+                SparkDecimalToTimestampMicros::new(),
+            ))),
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -3557,6 +3561,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastStringToInt32>()
             || node_inner.is::<SparkCastDecimalToFloat>()
             || node_inner.is::<SparkIntegralToBinary>()
+            || node_inner.is::<SparkDecimalToTimestampMicros>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
@@ -6717,6 +6722,16 @@ mod tests {
             let decoded = downcast_udf::<Int64FloorDiv>(&decoded, "Int64FloorDiv")?;
             assert_eq!(decoded.divisor(), divisor);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_decimal_to_timestamp_micros_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDecimalToTimestampMicros::new()))?;
+
+        downcast_udf::<SparkDecimalToTimestampMicros>(&decoded, "SparkDecimalToTimestampMicros")?;
+        assert_eq!(decoded.name(), "spark_decimal_to_timestamp_micros");
 
         Ok(())
     }

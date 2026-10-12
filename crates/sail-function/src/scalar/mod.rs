@@ -16,6 +16,7 @@ pub mod multi_expr;
 pub mod predicate;
 pub mod spark_cast_decimal_to_float;
 pub mod spark_cast_string_to_int32;
+pub mod spark_decimal_to_timestamp_micros;
 pub mod spark_integral_to_binary;
 pub mod spark_struct_rename;
 pub mod spark_to_string;

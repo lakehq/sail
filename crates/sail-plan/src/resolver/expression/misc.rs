@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
@@ -404,15 +404,39 @@ impl PlanResolver<'_> {
                 };
                 let index_expr = lit(ScalarValue::Int64(index));
                 let interval_metadata = array_call_interval_metadata(&expr, schema)?;
-                let element = array_element(
-                    expr.clone(),
-                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
-                );
+                // Spark's `SimplifyExtractValueOps` rewrites `array(a, b, c)[1]` to `b`, so the
+                // other elements are never evaluated and the result is as nullable as `b` alone.
+                let element = match created_array_element(&expr, index, field.data_type()) {
+                    Some(element) => element,
+                    None => array_element(
+                        expr.clone(),
+                        lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
+                    ),
+                };
                 let element = match interval_metadata {
                     Some(metadata) => attach_interval_metadata(element, schema, metadata)?,
                     None => element,
                 };
-                if self.config.ansi_mode {
+                // The declared TIME precision lives on the list's value field, not on the type.
+                let element = match field
+                    .metadata()
+                    .get(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+                {
+                    Some(precision)
+                        if matches!(field.data_type(), DataType::Time64(TimeUnit::Microsecond)) =>
+                    {
+                        attach_field_metadata(
+                            element,
+                            schema,
+                            spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY,
+                            precision.clone(),
+                        )?
+                    }
+                    _ => element,
+                };
+                if created_element_in_range(&expr, index) {
+                    element
+                } else if self.config.ansi_mode {
                     let length = cast(array_length(expr.clone()), DataType::Int64);
                     let message = datafusion_fn::concat(vec![
                         lit("[INVALID_ARRAY_INDEX] The index "),
@@ -570,13 +594,24 @@ fn attach_interval_metadata(
     schema: &DFSchemaRef,
     metadata: spec::SparkIntervalMetadata,
 ) -> PlanResult<expr::Expr> {
-    let metadata_json = metadata.to_json()?;
+    attach_field_metadata(
+        value,
+        schema,
+        spec::SAIL_SPARK_INTERVAL_METADATA_KEY,
+        metadata.to_json()?,
+    )
+}
+
+/// Relabels `value`'s field with one Sail-only metadata entry through a (possibly no-op) `Cast`.
+fn attach_field_metadata(
+    value: expr::Expr,
+    schema: &DFSchemaRef,
+    key: &str,
+    metadata_json: String,
+) -> PlanResult<expr::Expr> {
     let field = value.to_field(schema)?.1;
     let mut field_metadata = field.metadata().clone();
-    field_metadata.insert(
-        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-        metadata_json,
-    );
+    field_metadata.insert(key.to_string(), metadata_json);
     let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
     Ok(match value {
         expr::Expr::Cast(cast) => expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field)),
@@ -585,6 +620,32 @@ fn attach_interval_metadata(
         }
         value => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(value), field)),
     })
+}
+
+/// The `index`-th argument of an `array(...)` call, cast to the array's element type, when
+/// `index` is a literal inside the argument list.
+fn created_array_element(
+    array_expr: &expr::Expr,
+    index: Option<i64>,
+    element_type: &DataType,
+) -> Option<expr::Expr> {
+    if matches!(element_type, DataType::Time32(_) | DataType::Time64(_)) {
+        return None;
+    }
+    let expr::Expr::ScalarFunction(expr::ScalarFunction { func, args }) = array_expr else {
+        return None;
+    };
+    func.inner().downcast_ref::<SparkArray>()?;
+    let arg = args.get(usize::try_from(index?).ok()?)?;
+    Some(cast(arg.clone(), element_type.clone()))
+}
+
+fn created_element_in_range(array_expr: &expr::Expr, index: Option<i64>) -> bool {
+    let expr::Expr::ScalarFunction(expr::ScalarFunction { func, args }) = array_expr else {
+        return false;
+    };
+    func.inner().downcast_ref::<SparkArray>().is_some()
+        && index.is_some_and(|i| usize::try_from(i).is_ok_and(|i| i < args.len()))
 }
 
 fn array_call_interval_metadata(

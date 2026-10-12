@@ -17,8 +17,8 @@ use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
-    DateValue, TimeValue, TimestampValue, create_date_parser, create_time_parser,
-    create_timestamp_parser,
+    DateValue, TimeValue, TimestampValue, create_time_parser, create_timestamp_parser,
+    parse_spark_date,
 };
 use crate::literal::interval::{IntervalValue, parse_unqualified_interval_string};
 
@@ -115,7 +115,7 @@ pub fn parse_interval(s: &str) -> SqlResult<IntervalValue> {
 }
 
 pub fn parse_date(s: &str) -> SqlResult<DateValue> {
-    parse_simple!(s, create_date_parser)
+    parse_spark_date(s).ok_or_else(|| SqlError::invalid(format!("invalid date: {s:?}")))
 }
 
 pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {

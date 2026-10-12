@@ -190,9 +190,8 @@ Feature: CAST expressions
     # `decimalToTimestamp` (`Cast.scala:791-793`) is `(d.toBigDecimal * MICROS_PER_SECOND)
     # .longValue`, and `BigDecimal.longValue` WRAPS (returns only the low-order 64 bits) on
     # overflow rather than saturating -- a different, decimal-specific overflow rule from the
-    # integral case above, not yet implemented. Pre-existing (also reproduces on `main`), not
-    # introduced by the CAST-parity work in this branch -- left as a known gap.
-    @sail-bug
+    # integral case above. Every shape of it is in the "DECIMAL to TIMESTAMP" outlines at the
+    # end of this file.
     Scenario: TRY_CAST of an overflowing DECIMAL to TIMESTAMP wraps like Spark
       When query
         """
@@ -605,3 +604,108 @@ Feature: CAST expressions
         | TIMESTAMP     | 2000000000 | NULL                |
         | TIMESTAMP_NTZ | 2000000000 | NULL                |
         | TIMESTAMP     | 100000     | 2243-10-17 00:00:00 |
+
+  # `Cast.decimalToTimestamp` (Cast.scala:791-793) is `(d.toBigDecimal * MICROS_PER_SECOND).longValue`.
+  # `BigDecimal.longValue` drops the fraction (toward zero) and keeps only the low 64 bits of
+  # what is left: it WRAPS instead of saturating or raising. There is no ANSI or TRY branch, so
+  # CAST and TRY_CAST, ANSI on and off, are one rule. Values are micros since the epoch.
+  #
+  # Every operand is `d + CAST(id AS type)` so that the optimizer cannot fold it. A folded
+  # literal runs the interpreted `eval`, whose Scala `BigDecimal.*` first rounds the product to
+  # 34 significant digits; that only changes a decimal of 35 digits or more. The generated code
+  # that runs on table data multiplies exactly, and that is the rule these rows pin.
+  Rule: DECIMAL to TIMESTAMP truncates the fraction and wraps to 64 bits
+
+    Scenario Outline: DECIMAL to TIMESTAMP with ANSI off: <case>
+      Given config spark.sql.ansi.enabled = false
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(CAST(<input> AS TIMESTAMP)) AS cast_result,
+               unix_micros(TRY_CAST(<input> AS TIMESTAMP)) AS try_cast_result
+        FROM range(1)
+        """
+      Then query result
+        | cast_result | try_cast_result |
+        | <result>    | <result>        |
+
+      Examples:
+        | case                     | input                                                                                          | result               |
+        | no overflow              | CAST('1.5' AS DECIMAL(5,1)) + CAST(id AS DECIMAL(5,1))                                         | 1500000              |
+        | negative                 | CAST('-1.5' AS DECIMAL(5,1)) + CAST(id AS DECIMAL(5,1))                                        | -1500000             |
+        | fraction truncates +     | CAST('1.9999999' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                 | 1999999              |
+        | fraction truncates -     | CAST('-1.9999999' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                | -1999999             |
+        | sub-micro fraction       | CAST('0.0000009' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                 | 0                    |
+        | high scale               | CAST('1.000000000000000001' AS DECIMAL(38,18)) + CAST(id AS DECIMAL(38,18))                    | 1000000              |
+        | max long                 | CAST('9223372036854775807' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                       | -1000000             |
+        | max long + 1             | CAST('9223372036854775808' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                       | 0                    |
+        | min long                 | CAST('-9223372036854775808' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                      | 0                    |
+        | min long - 1             | CAST('-9223372036854775809' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                      | -1000000             |
+        | wraps exactly to 0       | CAST('18446744073709.551616' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                     | 0                    |
+        | 38 nines                 | CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 80237960547581376    |
+        | -38 nines                | CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))   | -80237960547581376   |
+        | just below the limit     | CAST('9223372036854.775807' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                      | 9223372036854775807  |
+        | just above the limit     | CAST('9223372036854.775808' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                      | -9223372036854775808 |
+        | 28 digits                | CAST('1234567890123456789012345678' AS DECIMAL(28,0)) + CAST(id AS DECIMAL(28,0))              | -2413264399771308160 |
+        | 29 digits                | CAST('12345678901234567890123456789' AS DECIMAL(29,0)) + CAST(id AS DECIMAL(29,0))             | -5685899923994529984 |
+        | 34 digits                | CAST('1234567890123456789012345678901234' AS DECIMAL(34,0)) + CAST(id AS DECIMAL(34,0))        | -5999815502254940032 |
+        | 35 digits ends 5         | CAST('12345678901234567890123456789012345' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801415745472 |
+        | 35 digits ends 4         | CAST('12345678901234567890123456789012344' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801416745472 |
+        | 35 digits ends 6         | CAST('12345678901234567890123456789012346' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801414745472 |
+        | 36 digits                | CAST('123456789012345678901234567890123456' AS DECIMAL(36,0)) + CAST(id AS DECIMAL(36,0))      | 8761004206977200128  |
+        | 37 digits                | CAST('1234567890123456789012345678901234567' AS DECIMAL(37,0)) + CAST(id AS DECIMAL(37,0))     | -4623678298768756800 |
+        | 38 digits 9s then 5      | CAST('99999999999999999999999999999999999995' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 80237960543581376    |
+        | 38 digits mixed          | CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 9103449233449086848  |
+        | 38 digits mixed negative | CAST('-12345678901234567890123456789012345678' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))   | -9103449233449086848 |
+        | tie to even up           | CAST('10000000000000000000000000000000000005' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 7386721425543678784  |
+        | tie to even down         | CAST('10000000000000000000000000000000000015' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 7386721425553678784  |
+        | scale 10, 38 digits      | CAST('1234567890123456789012345678.9012345678' AS DECIMAL(38,10)) + CAST(id AS DECIMAL(38,10)) | -2413264399770406926 |
+        | scale 18, 38 digits      | CAST('12345678901234567890.123456789012345678' AS DECIMAL(38,18)) + CAST(id AS DECIMAL(38,18)) | -7484280360333952320 |
+        | null input               | CAST(NULL AS DECIMAL(10,2)) + CAST(id AS DECIMAL(10,2))                                        | NULL                 |
+
+    Scenario Outline: DECIMAL to TIMESTAMP with ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(CAST(<input> AS TIMESTAMP)) AS cast_result,
+               unix_micros(TRY_CAST(<input> AS TIMESTAMP)) AS try_cast_result
+        FROM range(1)
+        """
+      Then query result
+        | cast_result | try_cast_result |
+        | <result>    | <result>        |
+
+      Examples:
+        | case                     | input                                                                                          | result               |
+        | no overflow              | CAST('1.5' AS DECIMAL(5,1)) + CAST(id AS DECIMAL(5,1))                                         | 1500000              |
+        | negative                 | CAST('-1.5' AS DECIMAL(5,1)) + CAST(id AS DECIMAL(5,1))                                        | -1500000             |
+        | fraction truncates +     | CAST('1.9999999' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                 | 1999999              |
+        | fraction truncates -     | CAST('-1.9999999' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                | -1999999             |
+        | sub-micro fraction       | CAST('0.0000009' AS DECIMAL(10,7)) + CAST(id AS DECIMAL(10,7))                                 | 0                    |
+        | high scale               | CAST('1.000000000000000001' AS DECIMAL(38,18)) + CAST(id AS DECIMAL(38,18))                    | 1000000              |
+        | max long                 | CAST('9223372036854775807' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                       | -1000000             |
+        | max long + 1             | CAST('9223372036854775808' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                       | 0                    |
+        | min long                 | CAST('-9223372036854775808' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                      | 0                    |
+        | min long - 1             | CAST('-9223372036854775809' AS DECIMAL(19,0)) + CAST(id AS DECIMAL(19,0))                      | -1000000             |
+        | wraps exactly to 0       | CAST('18446744073709.551616' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                     | 0                    |
+        | 38 nines                 | CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 80237960547581376    |
+        | -38 nines                | CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))   | -80237960547581376   |
+        | just below the limit     | CAST('9223372036854.775807' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                      | 9223372036854775807  |
+        | just above the limit     | CAST('9223372036854.775808' AS DECIMAL(25,6)) + CAST(id AS DECIMAL(25,6))                      | -9223372036854775808 |
+        | 28 digits                | CAST('1234567890123456789012345678' AS DECIMAL(28,0)) + CAST(id AS DECIMAL(28,0))              | -2413264399771308160 |
+        | 29 digits                | CAST('12345678901234567890123456789' AS DECIMAL(29,0)) + CAST(id AS DECIMAL(29,0))             | -5685899923994529984 |
+        | 34 digits                | CAST('1234567890123456789012345678901234' AS DECIMAL(34,0)) + CAST(id AS DECIMAL(34,0))        | -5999815502254940032 |
+        | 35 digits ends 5         | CAST('12345678901234567890123456789012345' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801415745472 |
+        | 35 digits ends 4         | CAST('12345678901234567890123456789012344' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801416745472 |
+        | 35 digits ends 6         | CAST('12345678901234567890123456789012346' AS DECIMAL(35,0)) + CAST(id AS DECIMAL(35,0))       | -4657922801414745472 |
+        | 36 digits                | CAST('123456789012345678901234567890123456' AS DECIMAL(36,0)) + CAST(id AS DECIMAL(36,0))      | 8761004206977200128  |
+        | 37 digits                | CAST('1234567890123456789012345678901234567' AS DECIMAL(37,0)) + CAST(id AS DECIMAL(37,0))     | -4623678298768756800 |
+        | 38 digits 9s then 5      | CAST('99999999999999999999999999999999999995' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 80237960543581376    |
+        | 38 digits mixed          | CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 9103449233449086848  |
+        | 38 digits mixed negative | CAST('-12345678901234567890123456789012345678' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))   | -9103449233449086848 |
+        | tie to even up           | CAST('10000000000000000000000000000000000005' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 7386721425543678784  |
+        | tie to even down         | CAST('10000000000000000000000000000000000015' AS DECIMAL(38,0)) + CAST(id AS DECIMAL(38,0))    | 7386721425553678784  |
+        | scale 10, 38 digits      | CAST('1234567890123456789012345678.9012345678' AS DECIMAL(38,10)) + CAST(id AS DECIMAL(38,10)) | -2413264399770406926 |
+        | scale 18, 38 digits      | CAST('12345678901234567890.123456789012345678' AS DECIMAL(38,18)) + CAST(id AS DECIMAL(38,18)) | -7484280360333952320 |
+        | null input               | CAST(NULL AS DECIMAL(10,2)) + CAST(id AS DECIMAL(10,2))                                        | NULL                 |

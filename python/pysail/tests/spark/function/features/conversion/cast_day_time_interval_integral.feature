@@ -444,7 +444,6 @@ Feature: Day-time interval integral casts use the end field without float roundi
       | HOUR      | 2     | 2      |
       | MINUTE    | 90    | 90     |
 
-  @sail-bug
   Scenario Outline: Interval integral shape array element schema: <qualifier>
     When query
       """
