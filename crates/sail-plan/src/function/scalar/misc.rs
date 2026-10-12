@@ -10,6 +10,7 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::distributed_sequence_id::SparkDistributedSequenceId;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -191,6 +192,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("current_user", F::custom(current_user)),
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
+        (
+            "distributed_sequence_id",
+            F::udf(SparkDistributedSequenceId::new()),
+        ),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
         (
             "hll_sketch_estimate",

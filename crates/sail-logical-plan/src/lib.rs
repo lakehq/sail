@@ -1,5 +1,6 @@
 pub mod barrier;
 pub mod check_constraints;
+pub mod distributed_sequence_id;
 pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;

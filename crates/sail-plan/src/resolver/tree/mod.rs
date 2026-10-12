@@ -5,6 +5,7 @@ use datafusion_expr::{EmptyRelation, LogicalPlan};
 
 use crate::resolver::state::PlanResolverState;
 
+pub(crate) mod distributed_sequence_id;
 pub(crate) mod exists;
 pub(crate) mod explode;
 pub(crate) mod monotonic_id;
