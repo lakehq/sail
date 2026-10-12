@@ -106,6 +106,8 @@ pub enum TokenLabel {
     Integer,
     /// A string literal.
     String,
+    /// An unquoted configuration value.
+    ConfigValue,
     /// A statement.
     Statement,
     /// A query.
@@ -128,6 +130,7 @@ impl<'a> From<TokenLabel> for RichPattern<'a, Token<'a>> {
             TokenLabel::Number => RichPattern::Label(Cow::from("number")),
             TokenLabel::Integer => RichPattern::Label(Cow::from("integer")),
             TokenLabel::String => RichPattern::Label(Cow::from("string")),
+            TokenLabel::ConfigValue => RichPattern::Label(Cow::from("configuration value")),
             TokenLabel::Statement => RichPattern::Label(Cow::from("statement")),
             TokenLabel::Query => RichPattern::Label(Cow::from("query")),
             TokenLabel::Expression => RichPattern::Label(Cow::from("expression")),
