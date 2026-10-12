@@ -614,12 +614,7 @@ impl SchemaEvolver {
         schema: &IcebergSchema,
         mut next_field_id: i32,
     ) -> Result<IcebergSchema> {
-        let mut new_fields = Vec::with_capacity(schema.fields().len());
-        for field in schema.fields() {
-            let mut cloned = field.as_ref().clone();
-            Self::reassign_ids_recursive(&mut cloned, &mut next_field_id);
-            new_fields.push(Arc::new(cloned));
-        }
+        let new_fields = Self::assign_field_ids(schema.fields(), &mut next_field_id);
         IcebergSchema::builder()
             .with_fields(new_fields)
             .build()
@@ -629,43 +624,33 @@ impl SchemaEvolver {
     fn reassign_ids_recursive(field: &mut NestedField, next_field_id: &mut i32) {
         field.id = *next_field_id;
         *next_field_id += 1;
-        match field.field_type.as_ref() {
-            Type::Struct(struct_type) => {
-                let mut updated = Vec::with_capacity(struct_type.fields().len());
-                for child in struct_type.fields() {
-                    let mut nested = child.as_ref().clone();
-                    Self::reassign_ids_recursive(&mut nested, next_field_id);
-                    updated.push(Arc::new(nested));
-                }
-                *field.field_type = Type::Struct(StructType::new(updated));
-            }
-            Type::List(list_type) => {
-                let mut element = list_type.element_field.as_ref().clone();
-                Self::reassign_ids_recursive(&mut element, next_field_id);
-                *field.field_type = Type::List(ListType::new(Arc::new(element)));
-            }
-            Type::Map(map_type) => {
-                let mut key = map_type.key_field.as_ref().clone();
-                Self::reassign_ids_recursive(&mut key, next_field_id);
-                let mut value = map_type.value_field.as_ref().clone();
-                Self::reassign_ids_recursive(&mut value, next_field_id);
-                *field.field_type = Type::Map(MapType::new(Arc::new(key), Arc::new(value)));
-            }
-            _ => {}
+        Self::assign_nested_ids(field, next_field_id);
+    }
+
+    fn assign_field_ids(
+        fields: &[Arc<NestedField>],
+        next_field_id: &mut i32,
+    ) -> Vec<Arc<NestedField>> {
+        // Allocate sibling IDs before visiting their children.
+        let mut fields = fields
+            .iter()
+            .map(|field| {
+                let mut field = field.as_ref().clone();
+                field.id = *next_field_id;
+                *next_field_id += 1;
+                field
+            })
+            .collect::<Vec<_>>();
+        for field in &mut fields {
+            Self::assign_nested_ids(field, next_field_id);
         }
+        fields.into_iter().map(Arc::new).collect()
     }
 
     fn assign_type_ids(ty: &mut Type, next_field_id: &mut i32) {
         match ty {
             Type::Struct(struct_type) => {
-                let mut updated_fields = Vec::with_capacity(struct_type.fields().len());
-                for child in struct_type.fields() {
-                    let mut nested = child.as_ref().clone();
-                    nested.id = *next_field_id;
-                    *next_field_id += 1;
-                    Self::assign_nested_ids(&mut nested, next_field_id);
-                    updated_fields.push(Arc::new(nested));
-                }
+                let updated_fields = Self::assign_field_ids(struct_type.fields(), next_field_id);
                 *ty = Type::Struct(StructType::new(updated_fields));
             }
             Type::List(list_type) => {
@@ -679,11 +664,11 @@ impl SchemaEvolver {
                 let mut key = map_type.key_field.as_ref().clone();
                 key.id = *next_field_id;
                 *next_field_id += 1;
-                Self::assign_nested_ids(&mut key, next_field_id);
 
                 let mut value = map_type.value_field.as_ref().clone();
                 value.id = *next_field_id;
                 *next_field_id += 1;
+                Self::assign_nested_ids(&mut key, next_field_id);
                 Self::assign_nested_ids(&mut value, next_field_id);
 
                 *ty = Type::Map(MapType::new(Arc::new(key), Arc::new(value)));
@@ -978,6 +963,47 @@ mod tests {
             payload_struct.fields()[1].id,
             "nested field ids should be unique"
         );
+    }
+
+    #[test]
+    fn fresh_ids_assign_siblings_before_nested_children() {
+        let schema: IcebergSchema = serde_json::from_value(serde_json::json!({
+            "type": "struct",
+            "schema-id": 0,
+            "fields": [
+                {"id": 20, "name": "m", "required": false, "type": {
+                    "type": "map", "key-id": 21, "value-id": 23, "value-required": false,
+                    "key": {"type": "struct", "fields": [
+                        {"id": 22, "name": "x", "required": true, "type": "int"}
+                    ]},
+                    "value": {"type": "list", "element-id": 24, "element": "string", "element-required": false}
+                }},
+                {"id": 30, "name": "s", "required": false, "type": {"type": "struct", "fields": [
+                    {"id": 31, "name": "items", "required": false, "type": {
+                        "type": "list", "element-id": 32, "element": "int", "element-required": false
+                    }},
+                    {"id": 33, "name": "label", "required": false, "type": "string"}
+                ]}},
+                {"id": 40, "name": "tail", "required": false, "type": "string"}
+            ]
+        })).expect("schema");
+        for start in [1, 11] {
+            let assigned = SchemaEvolver::assign_schema_field_ids_starting_at(&schema, start)
+                .expect("fresh IDs");
+            let mut actual = Vec::new();
+            crate::spec::schema::utils::visit_fields_bfs(&assigned, |id, field| {
+                actual.push((id, field.name.clone()));
+            });
+            actual.sort_unstable();
+            let expected = [
+                "m", "s", "tail", "key", "value", "x", "element", "items", "label", "element",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(offset, name)| (start + offset as i32, name.to_string()))
+            .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
