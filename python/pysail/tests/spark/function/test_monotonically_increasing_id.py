@@ -135,14 +135,13 @@ def test_monotonically_increasing_id_in_filter(spark):
 
 @pytest.mark.parametrize("sql", [False, True], ids=["dataframe", "sql"])
 def test_monotonically_increasing_id_in_grouping(spark, sql):
-    df = spark.range(40, numPartitions=4)
     if sql:
         result = spark.sql(
             "SELECT monotonically_increasing_id() % 2 AS m, count(*) AS n "
-            "FROM {df} GROUP BY monotonically_increasing_id() % 2",
-            df=df,
+            "FROM range(0, 40, 1, 4) GROUP BY monotonically_increasing_id() % 2"
         )
     else:
+        df = spark.range(40, numPartitions=4)
         result = df.groupBy((F.monotonically_increasing_id() % 2).alias("m")).count()
     assert sorted(tuple(row) for row in result.collect()) == [(0, 20), (1, 20)]
 
