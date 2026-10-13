@@ -6,9 +6,9 @@ import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from jinja2 import Template
-import pytest
 import pyspark.errors
+import pytest
+from jinja2 import Template
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
