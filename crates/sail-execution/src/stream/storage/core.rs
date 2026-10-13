@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
-use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
 use datafusion::common::{DataFusionError, Result};
@@ -60,12 +59,9 @@ impl StorageStreamManager {
             ));
         }
         let (store, prefix) = self.store_and_prefix(&key, context)?;
-        let options = IpcWriteOptions::default()
-            .try_with_compression(match self.compression {
-                ShuffleCompression::None => None,
-                ShuffleCompression::Lz4 => Some(CompressionType::LZ4_FRAME),
-                ShuffleCompression::Zstd => Some(CompressionType::ZSTD),
-            })
+        let options = self
+            .compression
+            .ipc_write_options()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(Box::new(StorageStreamSink::new(
             store,

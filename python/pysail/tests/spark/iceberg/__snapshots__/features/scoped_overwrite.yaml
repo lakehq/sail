@@ -7,6 +7,7 @@ data:
   deleted-data-files: '0'
   deleted-records: '0'
   operation: overwrite
+  replace-partitions: 'true'
   total-data-files: '3'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -108,6 +109,7 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      replace-partitions: 'true'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -133,9 +135,15 @@ data:
     key-metadata: null
     manifest-length: <bytes>
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
+    min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
   - added-files-count: 1
     added-rows-count: 2
@@ -150,7 +158,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 2
@@ -165,7 +179,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
 ---
 name: "test_dynamic_overwrite_replaces_only_touched_partitions_and_empty_input_is_a_noop.2"
@@ -175,6 +195,7 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  replace-partitions: 'true'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -322,9 +343,15 @@ data:
     key-metadata: null
     manifest-length: <bytes>
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
+    min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
   - added-files-count: 1
     added-rows-count: 2
@@ -339,7 +366,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 2
@@ -354,7 +387,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
 ---
 name: "test_predicate_overwrite_rewrites_only_candidate_manifests.2"
@@ -397,7 +436,7 @@ data:
   added-records: '0'
   deleted-data-files: '1'
   deleted-records: '2'
-  operation: overwrite
+  operation: delete
   total-data-files: '1'
   total-delete-files: '0'
   total-equality-deletes: '0'

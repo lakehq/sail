@@ -4,6 +4,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -16,6 +17,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -28,6 +30,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -41,6 +44,7 @@
   type: Gauge
   value_type: f64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -53,6 +57,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -66,6 +71,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -78,6 +84,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -91,6 +98,143 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.peak_memory_used
+  description: The peak amount of memory used by an aggregate operation.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.group_id_calculation_time
+  description: The time taken to calculate group IDs in an aggregate operation.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.argument_evaluation_time
+  description: The time taken to evaluate aggregate arguments.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.aggregation_time
+  description: The time taken to update aggregate values.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.output_emission_time
+  description: The time taken to emit aggregate results.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.input_row_count
+  description: The number of rows processed by an aggregate operation.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.output_row_count
+  description: The number of rows produced by an aggregate operation.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.aggregate.skipped_row_count
+  description: The number of rows skipped by partial aggregation.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.buffer.peak_memory_used
+  description: The peak amount of memory used by a buffer operation.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.buffer.peak_queued_batch_count
+  description: The peak number of record batches queued by a buffer operation.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -104,6 +248,7 @@
   type: Gauge
   value_type: f64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -120,6 +265,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -134,6 +280,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -147,6 +294,7 @@
   type: Gauge
   value_type: f64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -159,6 +307,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -171,6 +320,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -185,6 +335,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -192,12 +343,13 @@
     - execution.operator.id
     - execution.operator.name
 
-- name: execution.join.build_side_memory_used
-  description: The amount of memory used by the build side of a build-probe join.
+- name: execution.join.build_side_peak_memory_used
+  description: The peak amount of memory used by the build side of a build-probe join.
   unit: byte
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -210,6 +362,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -222,6 +375,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -238,6 +392,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -251,6 +406,7 @@
   type: Gauge
   value_type: f64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -265,6 +421,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -280,6 +437,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -294,6 +452,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -308,6 +467,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -320,6 +480,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -332,6 +493,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -344,6 +506,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -356,6 +519,7 @@
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -365,12 +529,26 @@
 
 - name: execution.join.memory_used
   description: |
-    The amount of memory used by the join operation.
-    This applies to stream joins and sort merge joins.
+    The current amount of memory used by a stream join operation.
   unit: byte
   type: Gauge
   value_type: u64
   attributes:
+    - session.id
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
+- name: execution.join.peak_memory_used
+  description: The peak amount of memory used by a sort-merge join operation.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -383,6 +561,7 @@
   type: Counter
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -396,6 +575,7 @@
   type: Counter
   value_type: u64
   attributes:
+    - session.id
     - execution.job.id
     - execution.stage
     - execution.partition
@@ -409,6 +589,7 @@
   type: Counter
   value_type: u64
   attributes:
+    - session.id
     - flight.statement.type
 
 - name: flight.statement.active_count
@@ -416,6 +597,7 @@
   type: UpDownCounter
   value_type: i64
   attributes:
+    - session.id
     - flight.statement.type
 
 - name: flight.statement.duration
@@ -424,6 +606,7 @@
   type: Histogram
   value_type: f64
   attributes:
+    - session.id
     - flight.statement.type
     - flight.statement.status
 
@@ -432,5 +615,6 @@
   type: Histogram
   value_type: u64
   attributes:
+    - session.id
     - flight.statement.type
     - flight.statement.status

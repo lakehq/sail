@@ -23,6 +23,17 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         """
       Then query error (?i)invalid.*interval
 
+    Scenario: Zero multi-unit intervals preserve their syntactic family
+      When query
+        """
+        SELECT
+          typeof(INTERVAL 0 YEAR 0 MONTH) AS year_month_type,
+          typeof(INTERVAL 0 DAY 0 SECOND) AS day_time_type
+        """
+      Then query result
+        | year_month_type        | day_time_type          |
+        | interval year to month | interval day to second |
+
   Rule: Overflow and large values
 
     # Spark validates each field of a DAY TO SECOND literal and rejects an out-of-range hour
@@ -194,6 +205,23 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | 1 |
 
   Rule: Subquery and projection
+
+    Scenario: VALUES widens interval qualifiers across rows
+      When query
+        """
+        SELECT day_time, year_month
+        FROM VALUES
+          (INTERVAL 1 DAY, INTERVAL 1 YEAR),
+          (INTERVAL 1 HOUR, INTERVAL 1 MONTH),
+          (NULL, NULL)
+        AS t(day_time, year_month)
+        """
+      Then query schema
+        """
+        root
+         |-- day_time: interval day to hour (nullable = true)
+         |-- year_month: interval year to month (nullable = true)
+        """
 
     Scenario: interval in subquery
       When query

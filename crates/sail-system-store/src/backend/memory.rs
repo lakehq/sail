@@ -5,22 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::ops::Bound;
 
-use sail_common_datafusion::system::catalog::{
-    JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::types::MetricValue;
-
 use crate::access::{
     DirectStoreBackend, IndexReader, IndexWriter, SeriesReader, SeriesWriter, StoreReader,
     StoreWriter, TableReader, TableWriter,
 };
+use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::model::{
-    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricNameIndex,
-    MetricPointKey, MetricPointOrdinalKey, MetricPointOrdinalTable, MetricPointSeries,
-    MetricSeriesId, MetricSeriesIdentityIndex, MetricSeriesKey, MetricSeriesMetadata,
-    MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey, OptionTable, SessionPrimaryKey,
-    SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey, TaskTable, WorkerPrimaryKey,
-    WorkerTable,
+    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
+    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPoint,
+    MetricPointValue, MetricPointValues, MetricSeriesId, MetricSeriesIdentityTable,
+    MetricSeriesKey, MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable,
+    OptionPrimaryKey, OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable,
+    TaskPrimaryKey, TaskTable, WorkerPrimaryKey, WorkerTable,
 };
 
 /// All in-memory backend state.
@@ -34,11 +30,17 @@ pub(crate) struct MemoryBackendState {
     workers: BTreeMap<WorkerPrimaryKey, WorkerRow>,
     next_metric_series_id: BTreeMap<(), MetricSeriesId>,
     metric_series: BTreeMap<MetricSeriesId, MetricSeriesMetadata>,
-    metric_point_ordinals: BTreeMap<MetricPointOrdinalKey, u64>,
-    metric_series_identities: BTreeMap<MetricSeriesKey, BTreeSet<MetricSeriesId>>,
+    metric_series_identities: BTreeMap<MetricSeriesKey, MetricSeriesId>,
     metric_names: BTreeMap<String, BTreeSet<MetricSeriesId>>,
     metric_attributes: BTreeMap<MetricAttributeKey, BTreeSet<MetricSeriesId>>,
-    metric_points: BTreeMap<MetricSeriesId, BTreeMap<MetricPointKey, MetricValue>>,
+    metric_integer_points:
+        BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<MetricPointValue<i64>>>>>,
+    metric_float_points:
+        BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<MetricPointValue<f64>>>>>,
+    metric_histogram_points: BTreeMap<
+        MetricSeriesId,
+        Vec<MetricPoint<MetricPointValues<MetricPointValue<crate::types::MetricHistogram>>>>,
+    >,
 }
 
 /// Adapts borrowed in-memory state to the typed store contracts.
@@ -126,10 +128,10 @@ table!(
     metric_series
 );
 table!(
-    MetricPointOrdinalTable,
-    MetricPointOrdinalKey,
-    u64,
-    metric_point_ordinals
+    MetricSeriesIdentityTable,
+    MetricSeriesKey,
+    MetricSeriesId,
+    metric_series_identities
 );
 
 macro_rules! index {
@@ -138,17 +140,6 @@ macro_rules! index {
         where
             S: Borrow<MemoryBackendState>,
         {
-            fn get(&self, key: &$key) -> Result<Vec<MetricSeriesId>, Infallible> {
-                Ok(self
-                    .state
-                    .borrow()
-                    .$field
-                    .get(key)
-                    .into_iter()
-                    .flat_map(|ids| ids.iter().copied())
-                    .collect())
-            }
-
             fn scan(
                 &self,
                 lower: Bound<$key>,
@@ -183,55 +174,94 @@ macro_rules! index {
     };
 }
 
-index!(
-    MetricSeriesIdentityIndex,
-    MetricSeriesKey,
-    metric_series_identities
-);
 index!(MetricNameIndex, String, metric_names);
 index!(MetricAttributeIndex, MetricAttributeKey, metric_attributes);
 
-impl<S> SeriesReader<MetricPointSeries, Infallible> for MemoryAccessor<S>
-where
-    S: Borrow<MemoryBackendState>,
-{
-    fn scan(
-        &self,
-        series: &MetricSeriesId,
-        lower: Bound<MetricPointKey>,
-        upper: Bound<MetricPointKey>,
-        visitor: &mut dyn FnMut(MetricPointKey, MetricValue) -> bool,
-    ) -> Result<(), Infallible> {
-        if let Some(points) = self.state.borrow().metric_points.get(series) {
-            for (key, value) in points.range((lower, upper)) {
-                if !visitor(*key, value.clone()) {
-                    break;
+macro_rules! series {
+    ($marker:ty, $value:ty, $field:ident) => {
+        impl<S> SeriesReader<$marker, Infallible> for MemoryAccessor<S>
+        where
+            S: Borrow<MemoryBackendState>,
+        {
+            fn scan(
+                &self,
+                series: &MetricSeriesId,
+                lower: Bound<crate::predicate::TimestampMicros>,
+                upper: Bound<crate::predicate::TimestampMicros>,
+                visitor: &mut dyn FnMut(crate::predicate::TimestampMicros, $value) -> bool,
+            ) -> Result<(), Infallible> {
+                if let Some(points) = self.state.borrow().$field.get(series) {
+                    let start = match lower {
+                        Bound::Included(timestamp) => {
+                            points.partition_point(|point| point.timestamp < timestamp)
+                        }
+                        Bound::Excluded(timestamp) => {
+                            points.partition_point(|point| point.timestamp <= timestamp)
+                        }
+                        Bound::Unbounded => 0,
+                    };
+                    for point in &points[start..] {
+                        let within_upper_bound = match &upper {
+                            Bound::Included(timestamp) => point.timestamp <= *timestamp,
+                            Bound::Excluded(timestamp) => point.timestamp < *timestamp,
+                            Bound::Unbounded => true,
+                        };
+                        if !within_upper_bound {
+                            break;
+                        }
+                        for value in &point.value {
+                            if !visitor(point.timestamp, value.clone()) {
+                                return Ok(());
+                            }
+                        }
+                    }
                 }
+                Ok(())
             }
         }
-        Ok(())
-    }
+
+        impl<S> SeriesWriter<$marker, Infallible> for MemoryAccessor<S>
+        where
+            S: Borrow<MemoryBackendState> + BorrowMut<MemoryBackendState>,
+        {
+            fn put(
+                &mut self,
+                series: MetricSeriesId,
+                timestamp: crate::predicate::TimestampMicros,
+                value: $value,
+            ) -> Result<(), Infallible> {
+                let points = self.state.borrow_mut().$field.entry(series).or_default();
+                match points.binary_search_by_key(&timestamp, |point| point.timestamp) {
+                    Ok(index) => points[index].value.push(value),
+                    Err(index) => points.insert(
+                        index,
+                        MetricPoint {
+                            timestamp,
+                            value: MetricPointValues::from_buf([value]),
+                        },
+                    ),
+                }
+                Ok(())
+            }
+        }
+    };
 }
 
-impl<S> SeriesWriter<MetricPointSeries, Infallible> for MemoryAccessor<S>
-where
-    S: Borrow<MemoryBackendState> + BorrowMut<MemoryBackendState>,
-{
-    fn put(
-        &mut self,
-        series: MetricSeriesId,
-        point: MetricPointKey,
-        value: MetricValue,
-    ) -> Result<(), Infallible> {
-        self.state
-            .borrow_mut()
-            .metric_points
-            .entry(series)
-            .or_default()
-            .insert(point, value);
-        Ok(())
-    }
-}
+series!(
+    MetricIntegerPointSeries,
+    MetricPointValue<i64>,
+    metric_integer_points
+);
+series!(
+    MetricFloatPointSeries,
+    MetricPointValue<f64>,
+    metric_float_points
+);
+series!(
+    MetricHistogramPointSeries,
+    MetricPointValue<crate::types::MetricHistogram>,
+    metric_histogram_points
+);
 
 impl<S> StoreReader for MemoryAccessor<S>
 where

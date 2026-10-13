@@ -12,8 +12,8 @@ use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::internal_err;
-use sail_common_datafusion::system::predicate::{
-    MapValueFilter, Predicate, TimestampMicros, ValueDomain, ValueFilter,
+use sail_system_store::predicate::{
+    MapValueFilter, Predicate, Predicates, TimestampMicros, ValueDomain, ValueFilter,
 };
 
 pub struct PredicateExtractor {
@@ -54,6 +54,16 @@ impl PredicateExtractor {
         let evaluator = ArrowPredicateEvaluator::<T>::try_new(conjunction)?;
         let predicate: Predicate<T> = Arc::new(move |value: &T| evaluator.evaluate(value));
         Ok(Some(ValueFilter::new(domain, predicate)))
+    }
+
+    #[expect(private_bounds)]
+    pub fn extract_or_default<T: PredicateInput>(
+        &mut self,
+        column: &str,
+    ) -> Result<ValueFilter<T>> {
+        Ok(self
+            .extract(column)?
+            .unwrap_or_else(|| ValueFilter::all(Predicates::always_true())))
     }
 
     #[expect(private_bounds)]
@@ -562,7 +572,7 @@ mod tests {
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal, in_list};
     use datafusion::scalar::ScalarValue;
-    use sail_common_datafusion::system::predicate::{TimestampMicros, ValueRange};
+    use sail_system_store::predicate::{TimestampMicros, ValueRange};
 
     use super::{ArrowPredicateEvaluator, PredicateExtractor};
 

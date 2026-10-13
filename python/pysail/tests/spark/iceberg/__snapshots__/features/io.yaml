@@ -2,12 +2,12 @@
 ---
 name: "test_create_or_replace_preserves_historical_lineage_and_clears_main"
 data:
-  current-schema-id: 1
+  current-schema-id: 0
   current-snapshot-id: -1
   default-sort-order-id: 0
-  default-spec-id: 1
+  default-spec-id: 0
   format-version: 2
-  last-column-id: 4
+  last-column-id: 2
   last-partition-id: 999
   last-sequence-number: 1
   last-updated-ms: <timestamp>
@@ -20,8 +20,6 @@ data:
   partition-specs:
   - fields: []
     spec-id: 0
-  - fields: []
-    spec-id: 1
   properties: {}
   refs:
     before_replace:
@@ -38,17 +36,6 @@ data:
       required: false
       type: string
     schema-id: 0
-    type: struct
-  - fields:
-    - id: 3
-      name: id
-      required: false
-      type: int
-    - id: 4
-      name: value
-      required: false
-      type: string
-    schema-id: 1
     type: struct
   snapshot-log:
   - snapshot-id: <snapshot-id>

@@ -494,21 +494,23 @@ macro_rules! primitive_display {
     };
 }
 
+/// Formats a `f64` with the notation used by Java `Double.toString` and Spark casts.
+pub fn spark_f64_to_string(value: f64) -> String {
+    crate::java_float::format_f64(value)
+}
+
+/// Formats an `f32` with the notation used by Java `Float.toString` and Spark casts.
+pub fn spark_f32_to_string(value: f32) -> String {
+    crate::java_float::format_f32(value)
+}
+
 macro_rules! primitive_display_float {
-    ($($t:ty),+) => {
+    ($($t:ty => $formatter:ident),+) => {
         $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let mut buffer = ryu::Buffer::new();
-                if value.is_infinite() {
-                    if !value.is_sign_positive() {
-                        f.write_str("-")?;
-                    }
-                    f.write_str("Infinity")?;
-                } else {
-                    f.write_str(buffer.format(value))?;
-                }
+                f.write_str(&$formatter(value))?;
                 Ok(())
             }
         })+
@@ -517,7 +519,10 @@ macro_rules! primitive_display_float {
 
 primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
-primitive_display_float!(Float32Type, Float64Type);
+primitive_display_float!(
+    Float32Type => spark_f32_to_string,
+    Float64Type => spark_f64_to_string
+);
 
 impl DisplayIndex for &PrimitiveArray<Float16Type> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -1026,6 +1031,43 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
+    }
+
+    #[test]
+    fn test_spark_float_to_string() {
+        assert_eq!(spark_f64_to_string(1e18), "1.0E18");
+        assert_eq!(spark_f64_to_string(1e-7), "1.0E-7");
+        assert_eq!(spark_f64_to_string(f64::from_bits(1)), "4.9E-324");
+        assert_eq!(spark_f64_to_string(-f64::from_bits(1)), "-4.9E-324");
+        assert_eq!(spark_f64_to_string(-0.0), "-0.0");
+        assert_eq!(spark_f32_to_string(10_000_000.0), "1.0E7");
+        assert_eq!(spark_f32_to_string(f32::from_bits(1)), "1.4E-45");
+        assert_eq!(spark_f32_to_string(-f32::from_bits(1)), "-1.4E-45");
+        assert_eq!(spark_f32_to_string(-0.0), "-0.0");
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0x43d0_0000_0000_0000)),
+            "4.6116860184273879E18"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc36c_415f_f381_377c)),
+            "-6.3625437687430112E16"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc395_327f_1b7a_a2d1)),
+            "-3.8185574490758867E17"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xd75b_54b0)),
+            "-2.41156777E14"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0x4d32_a0e4)),
+            "1.87305536E8"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xddbd_6f50)),
+            "-1.70627712E18"
+        );
     }
 
     #[expect(clippy::unwrap_used)]

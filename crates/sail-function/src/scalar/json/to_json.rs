@@ -414,8 +414,9 @@ fn struct_to_json(
             .map_or(position, |indices| indices[position]);
         let field = &fields[field_index];
         let column = &columns[field_index];
-        // Skip NULL values - PySpark doesn't include them in JSON output
-        if !column.is_null(row_index) {
+        // NullArray has no validity buffer, so is_null() alone misses untyped NULLs.
+        // TODO: Honor the ignoreNullFields option and spark.sql.jsonGenerator.ignoreNullFields.
+        if column.data_type() != &DataType::Null && !column.is_null(row_index) {
             let value = array_value_to_json(column, row_index, options)?;
             map.insert(field.name().clone(), value);
         }

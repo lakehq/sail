@@ -53,15 +53,10 @@ use crate::spec::{Add, ColumnName, DeltaError as DeltaTableError, DeltaResult};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
-    fn hive_partition_path(&self) -> String;
     fn hive_partition_segments(&self) -> Vec<String>;
 }
 
 impl PartitionsExt for IndexMap<String, ScalarValue> {
-    fn hive_partition_path(&self) -> String {
-        self.hive_partition_segments().join("/")
-    }
-
     fn hive_partition_segments(&self) -> Vec<String> {
         if self.is_empty() {
             return vec![];
@@ -149,15 +144,15 @@ pub struct DeltaWriter {
     table_path: Path,
     /// Writer configuration
     config: WriterConfig,
-    /// Current active partition key (hive partition path)
-    current_partition_key: Option<String>,
+    /// Current active partition values in schema order
+    current_partition_key: Option<Vec<ScalarValue>>,
     /// Current active writer (at most one open writer per task)
     current_writer: Option<PartitionWriter>,
     /// Actions produced by completed partition writers
     completed_actions: Vec<Add>,
     /// Partition keys that have been closed (debug-only contract enforcement)
     #[cfg(debug_assertions)]
-    closed_partition_keys: std::collections::HashSet<String>,
+    closed_partition_keys: std::collections::HashSet<Vec<ScalarValue>>,
 }
 
 impl DeltaWriter {
@@ -203,7 +198,8 @@ impl DeltaWriter {
                 continue;
             }
 
-            let partition_key = range.partition_values.hive_partition_path();
+            // Different partition values can share a Hive directory, including NULL and its marker.
+            let partition_key = range.partition_values.values().cloned().collect();
             self.switch_partition_if_needed(partition_key, range.partition_values)
                 .await?;
 
@@ -228,10 +224,10 @@ impl DeltaWriter {
 
     async fn switch_partition_if_needed(
         &mut self,
-        partition_key: String,
+        partition_key: Vec<ScalarValue>,
         partition_values: IndexMap<String, ScalarValue>,
     ) -> Result<(), DeltaTableError> {
-        if self.current_partition_key.as_deref() == Some(partition_key.as_str())
+        if self.current_partition_key.as_ref() == Some(&partition_key)
             && self.current_writer.is_some()
         {
             return Ok(());
@@ -254,7 +250,7 @@ impl DeltaWriter {
         debug_assert!(
             self.config.partition_columns.is_empty()
                 || !self.closed_partition_keys.contains(&partition_key),
-            "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key}"
+            "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key:?}"
         );
 
         self.current_partition_key = Some(partition_key);
@@ -909,6 +905,60 @@ mod tests {
         let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
         assert!(paths.iter().any(|p| p.contains("part=a/")));
         assert!(paths.iter().any(|p| p.contains("part=b/")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streaming_writer_separates_partition_values_sharing_a_directory()
+    -> Result<(), DeltaTableError> {
+        let marker = "__HIVE_DEFAULT_PARTITION__";
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            ),
+            (
+                "part",
+                Arc::new(StringArray::from(vec![
+                    None,
+                    None,
+                    Some(marker),
+                    Some(marker),
+                ])) as ArrayRef,
+            ),
+        ])
+        .map_err(DeltaTableError::generic_err)?;
+        let config = WriterConfig::new(
+            batch.schema(),
+            vec!["part".to_string()],
+            vec!["part".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            32,
+            None,
+            Default::default(),
+            VariantShreddingConfig::default(),
+        );
+        let mut writer =
+            DeltaWriter::new(Arc::new(InMemory::new()), Path::from("delta_table"), config);
+        writer.write(&batch.slice(0, 2)).await?;
+        writer.write(&batch.slice(2, 2)).await?;
+        let adds = writer.close().await?;
+        assert_eq!(adds.len(), 2);
+        assert_eq!(adds[0].partition_values.get("part"), Some(&None));
+        assert_eq!(
+            adds[1].partition_values.get("part"),
+            Some(&Some(marker.to_string()))
+        );
+        for add in adds {
+            assert_eq!(
+                add.get_stats()
+                    .map_err(DeltaTableError::generic_err)?
+                    .map(|stats| stats.num_records),
+                Some(2)
+            );
+        }
         Ok(())
     }
 

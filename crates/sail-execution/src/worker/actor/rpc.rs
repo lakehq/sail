@@ -9,6 +9,7 @@ use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
+use crate::shuffle::ShuffleCompression;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
@@ -45,6 +46,7 @@ impl WorkerActor {
         task_runner: ActorHandle<TaskRunnerActor>,
         context: std::sync::Arc<datafusion::execution::TaskContext>,
         addr: impl ToSocketAddrs,
+        compression: ShuffleCompression,
     ) -> ExecutionResult<()> {
         let listener = TcpListener::bind(addr).await?;
         let port = listener.local_addr()?.port();
@@ -58,10 +60,12 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server =
-            TaskStreamFlightServer::<TaskStreamKey>::new(Box::new(WorkerTaskStreamFetcher {
+        let flight_server = TaskStreamFlightServer::<TaskStreamKey>::new(
+            Box::new(WorkerTaskStreamFetcher {
                 handle: task_runner,
-            }));
+            }),
+            compression,
+        );
         let flight_service = FlightServiceServer::new(flight_server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)

@@ -13,7 +13,9 @@ use sail_celeborn::shuffle::ShuffleClient;
 use crate::id::{JobId, TaskKey};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState};
+use crate::stream::writer::{
+    MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState,
+};
 
 #[derive(Clone)]
 pub(crate) struct CelebornStreamManager {
@@ -90,7 +92,7 @@ impl CelebornStreamManager {
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let sinks = (0..channels)
             .map(|channel| {
-                Ok(Some(CelebornStreamSink {
+                Ok(Some(Box::new(CelebornStreamSink {
                     client: self.client.clone(),
                     shuffle_id,
                     partition_id: i32::try_from(channel)
@@ -98,11 +100,11 @@ impl CelebornStreamManager {
                     map_id,
                     attempt_id,
                     schema: schema.clone(),
-                }))
+                }) as Box<dyn TaskStreamChannelSink>))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Box::new(CelebornTaskStreamSink {
-            sinks,
+            channels: MultiChannelTaskStreamSink { sinks },
             client: self.client.clone(),
             shuffle_id,
             map_id,
@@ -220,7 +222,7 @@ impl TaskStreamChannelSink for CelebornStreamSink {
 }
 
 struct CelebornTaskStreamSink {
-    sinks: Vec<Option<CelebornStreamSink>>,
+    channels: MultiChannelTaskStreamSink,
     client: ShuffleClient,
     shuffle_id: i32,
     map_id: i32,
@@ -230,24 +232,12 @@ struct CelebornTaskStreamSink {
 
 #[tonic::async_trait]
 impl TaskStreamSink for CelebornTaskStreamSink {
-    async fn write(&mut self, channel: usize, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let state = match self.sinks.get_mut(channel).ok_or_else(|| {
-            DataFusionError::Execution(format!("shuffle output channel {channel} not found"))
-        })? {
-            Some(sink) => sink.write(batch).await?,
-            None => TaskStreamWriteState::Closed,
-        };
-        if state == TaskStreamWriteState::Closed {
-            self.sinks[channel] = None;
-        }
-        Ok(if self.sinks.iter().any(Option::is_some) {
-            TaskStreamWriteState::Active
-        } else {
-            TaskStreamWriteState::Closed
-        })
+    async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState> {
+        self.channels.write(batches).await
     }
 
     async fn commit(self: Box<Self>) -> Result<()> {
+        Box::new(self.channels).commit().await?;
         self.client
             .mapper_end(
                 self.shuffle_id,
@@ -260,7 +250,7 @@ impl TaskStreamSink for CelebornTaskStreamSink {
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {
-        Ok(())
+        Box::new(self.channels).abort().await
     }
 }
 

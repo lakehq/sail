@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -30,12 +32,21 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .iter()
         .map(|[key, value]| (key.clone(), value.clone()))
         .unzip();
+    let (keys, values) = if input.function_context.plan_config.ansi_mode {
+        (
+            coerce_ansi_map_strings(keys, schema)?,
+            coerce_ansi_map_strings(values, schema)?,
+        )
+    } else {
+        (keys, values)
+    };
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    let array = ScalarUDF::from(SparkArray::new());
+    let keys = array.call(keys);
+    let values = array.call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
@@ -44,6 +55,68 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context: input.function_context,
     })?;
     cast_map_value_nullability(expr, schema, value_contains_null)
+}
+
+fn coerce_ansi_map_strings(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let types = arguments
+        .iter()
+        .map(|argument| argument.get_type(schema.as_ref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !types.iter().any(DataType::is_string) {
+        return Ok(arguments);
+    }
+    let target = types
+        .iter()
+        .try_fold(DataType::Null, |previous, data_type| {
+            ansi_map_common_type(&previous, data_type)
+        })
+        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
+    arguments
+        .into_iter()
+        .zip(types)
+        .map(|(argument, source)| {
+            if source == target {
+                return Ok(argument);
+            }
+            let converted = cast(argument, target.clone());
+            if source.is_string() && !target.is_binary() {
+                // Spark retains nullable metadata for string-to-atomic casts in ANSI mode.
+                Ok(when(lit(true), converted).end()?)
+            } else {
+                Ok(converted)
+            }
+        })
+        .collect()
+}
+
+fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

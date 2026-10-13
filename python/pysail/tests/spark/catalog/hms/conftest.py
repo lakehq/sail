@@ -16,7 +16,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.utils import AnalysisException
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
-from testcontainers.core.waiting_utils import wait_for_logs
+from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
@@ -35,11 +35,10 @@ _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
 # on macOS where Docker only binds exposed ports on IPv4 (0.0.0.0).
 _HMS_HOST = "127.0.0.1"
-_MINIO_IMAGE = "minio/minio:RELEASE.2025-05-24T17-08-30Z"
-_MINIO_MC_IMAGE = "minio/mc:RELEASE.2025-05-21T01-59-54Z"
-_MINIO_PORT = 9000
-_MINIO_USER = "admin"
-_MINIO_PASSWORD = "password"
+_SILO_IMAGE = "pgsty/silo:RELEASE.2026-09-03T13-18-01Z"
+_SILO_PORT = 9000
+_SILO_USER = "admin"
+_SILO_PASSWORD = "password"
 _HMS_S3_BUCKET = "hms-warehouse"
 
 
@@ -82,11 +81,11 @@ def _hms_s3_core_site_xml(endpoint: str) -> str:
   </property>
   <property>
     <name>fs.s3a.access.key</name>
-    <value>{_MINIO_USER}</value>
+    <value>{_SILO_USER}</value>
   </property>
   <property>
     <name>fs.s3a.secret.key</name>
-    <value>{_MINIO_PASSWORD}</value>
+    <value>{_SILO_PASSWORD}</value>
   </property>
   <property>
     <name>fs.s3a.aws.credentials.provider</name>
@@ -105,8 +104,8 @@ def _spark_s3_options(endpoint: str) -> dict[str, str]:
         "spark.hadoop.fs.s3a.endpoint.region": "us-east-1",
         "spark.hadoop.fs.s3a.path.style.access": "true",
         "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-        "spark.hadoop.fs.s3a.access.key": _MINIO_USER,
-        "spark.hadoop.fs.s3a.secret.key": _MINIO_PASSWORD,
+        "spark.hadoop.fs.s3a.access.key": _SILO_USER,
+        "spark.hadoop.fs.s3a.secret.key": _SILO_PASSWORD,
         "spark.hadoop.fs.s3a.aws.credentials.provider": ("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"),
     }
 
@@ -161,13 +160,13 @@ def hms_warehouse_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# MinIO-backed S3 warehouse
+# Silo-backed S3 warehouse
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def hms_s3_network() -> Generator[Network, None, None]:
-    """Return a Docker network shared by MinIO and the short-lived mc setup."""
+    """Return a Docker network shared by Silo and Hive Metastore."""
     network = Network()
     network.create()
     try:
@@ -177,66 +176,48 @@ def hms_s3_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="session")
-def hms_s3_minio_container(
+def hms_s3_silo_container(
     hms_s3_network: Network,
 ) -> Generator[DockerContainer, None, None]:
-    """Start MinIO for S3-backed HMS warehouse tests."""
-    container = DockerContainer(_MINIO_IMAGE)
-    container.with_exposed_ports(_MINIO_PORT)
-    container.with_env("MINIO_ROOT_USER", _MINIO_USER)
-    container.with_env("MINIO_ROOT_PASSWORD", _MINIO_PASSWORD)
+    """Start Silo for S3-backed HMS warehouse tests."""
+    container = DockerContainer(_SILO_IMAGE)
+    container.with_exposed_ports(_SILO_PORT)
+    container.with_env("MINIO_ROOT_USER", _SILO_USER)
+    container.with_env("MINIO_ROOT_PASSWORD", _SILO_PASSWORD)
     container.with_network(hms_s3_network)
-    container.with_network_aliases("minio")
+    container.with_network_aliases("silo")
     container.with_command(["server", "/data", "--console-address", ":9001"])
-    container.start()
-
-    wait_for_logs(container, "MinIO Object Storage Server", timeout=120)
-
-    yield container
-    container.stop()
+    container.waiting_for(HttpWaitStrategy(_SILO_PORT, "/minio/health/ready").with_startup_timeout(120))
+    with container:
+        yield container
 
 
 @pytest.fixture(scope="session")
-def hms_s3_endpoint(hms_s3_minio_container: DockerContainer) -> str:
-    """Return the host-visible MinIO endpoint used by Sail and Spark."""
-    host = hms_s3_minio_container.get_container_host_ip()
-    port = hms_s3_minio_container.get_exposed_port(_MINIO_PORT)
+def hms_s3_endpoint(hms_s3_silo_container: DockerContainer) -> str:
+    """Return the host-visible Silo endpoint used by Sail and Spark."""
+    host = hms_s3_silo_container.get_container_host_ip()
+    port = hms_s3_silo_container.get_exposed_port(_SILO_PORT)
     return f"http://{host}:{port}"
 
 
 @pytest.fixture(scope="session")
 def hms_s3_internal_endpoint(_hms_s3_bucket: None) -> str:
-    """Return the MinIO endpoint visible to containers on the shared network."""
+    """Return the Silo endpoint visible to containers on the shared network."""
     del _hms_s3_bucket
-    return f"http://minio:{_MINIO_PORT}"
+    return f"http://silo:{_SILO_PORT}"
 
 
 @pytest.fixture(scope="session")
 def _hms_s3_bucket(
-    hms_s3_network: Network,
-    hms_s3_minio_container: DockerContainer,
-) -> Generator[None, None, None]:
-    """Create the S3 warehouse bucket with a short-lived MinIO mc container."""
-    del hms_s3_minio_container
-    command = (
-        "until mc alias set "
-        f"minio http://minio:{_MINIO_PORT} {_MINIO_USER} {_MINIO_PASSWORD}; "
-        "do sleep 1; done; "
-        f"mc rm -r --force minio/{_HMS_S3_BUCKET} || true; "
-        f"mc mb minio/{_HMS_S3_BUCKET}; "
-        "echo hms-s3-bucket-ready; "
-        "tail -f /dev/null"
-    )
-    container = DockerContainer(_MINIO_MC_IMAGE)
-    container.with_network(hms_s3_network)
-    container.with_kwargs(entrypoint="/bin/sh")
-    container.with_command(["-c", command])
-    container.start()
-
-    wait_for_logs(container, "hms-s3-bucket-ready", timeout=120)
-
-    yield
-    container.stop()
+    hms_s3_silo_container: DockerContainer,
+) -> None:
+    """Create the S3 warehouse bucket with Silo's bundled mcli client."""
+    for command in [
+        ["mcli", "alias", "set", "local", f"http://127.0.0.1:{_SILO_PORT}", _SILO_USER, _SILO_PASSWORD],
+        ["mcli", "mb", "--ignore-existing", f"local/{_HMS_S3_BUCKET}"],
+    ]:
+        exit_code, output = hms_s3_silo_container.exec(command)
+        assert exit_code == 0, output.decode()
 
 
 @pytest.fixture(scope="session")
@@ -244,8 +225,8 @@ def hms_s3_env(hms_s3_endpoint: str, _hms_s3_bucket: None) -> dict[str, str]:
     """Return AWS-compatible environment for Sail's S3 object-store client."""
     del _hms_s3_bucket
     return {
-        "AWS_ACCESS_KEY_ID": _MINIO_USER,
-        "AWS_SECRET_ACCESS_KEY": _MINIO_PASSWORD,
+        "AWS_ACCESS_KEY_ID": _SILO_USER,
+        "AWS_SECRET_ACCESS_KEY": _SILO_PASSWORD,
         "AWS_REGION": "us-east-1",
         "AWS_ENDPOINT": hms_s3_endpoint,
         "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
@@ -258,7 +239,7 @@ def hms_s3_core_site_path(
     tmp_path_factory: pytest.TempPathFactory,
     hms_s3_internal_endpoint: str,
 ) -> Path:
-    """Write a Hadoop core-site.xml that maps s3:// URIs to S3A/MinIO."""
+    """Write a Hadoop core-site.xml that maps s3:// URIs to S3A/Silo."""
     path = tmp_path_factory.mktemp("hms_s3_conf") / "core-site.xml"
     path.write_text(_hms_s3_core_site_xml(hms_s3_internal_endpoint), encoding="utf-8")
     return path
@@ -322,7 +303,7 @@ def remote(
     hms_s3_metastore_endpoint: str,
     hms_s3_env: dict[str, str],
 ) -> Generator[str, None, None]:
-    """Start a separate Sail server configured for HMS plus MinIO-backed S3."""
+    """Start a separate Sail server configured for HMS plus Silo-backed S3."""
     catalogs_config = f'[{{name="sail", type="hms", uris=["{hms_s3_metastore_endpoint}"]}}]'
     with spark_connect_server(
         envs={
@@ -428,7 +409,7 @@ def jvm_spark(
             )
             # Iceberg gets a NAMED catalog so it never fights Delta over ``spark_catalog``
             # ownership. It points at the same HMS thrift endpoint; both engines share
-            # table registrations and the S3 (MinIO) metadata files.
+            # table registrations and the S3 (Silo) metadata files.
             .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.iceberg.type", "hive")
             .config("spark.sql.catalog.iceberg.uri", f"thrift://{hms_s3_metastore_endpoint}")

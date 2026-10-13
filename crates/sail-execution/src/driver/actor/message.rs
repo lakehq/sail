@@ -14,12 +14,16 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
+use crate::driver::output::JobOutputOutcome;
+use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
-    Activate,
+    Activate {
+        result: oneshot::Sender<ExecutionResult<()>>,
+    },
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
@@ -36,6 +40,13 @@ pub enum DriverMessage {
     ProbePendingWorker {
         worker_id: WorkerId,
     },
+    WorkerFailedToStart {
+        worker_id: WorkerId,
+        message: String,
+    },
+    RetryWorkerDemand {
+        request: WorkerRetryRequest,
+    },
     ProbeIdleWorker {
         worker_id: WorkerId,
         instant: Instant,
@@ -51,6 +62,7 @@ pub enum DriverMessage {
     },
     CleanUpJob {
         job_id: JobId,
+        outcome: JobOutputOutcome,
     },
     UpdateTask {
         key: TaskKey,
@@ -127,11 +139,13 @@ impl From<TaskStatus> for r#gen::TaskStatus {
 impl SpanAssociation for DriverMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverMessage::Activate => "Activate",
+            DriverMessage::Activate { .. } => "Activate",
             DriverMessage::RegisterWorker { .. } => "RegisterWorker",
             DriverMessage::WorkerHeartbeat { .. } => "WorkerHeartbeat",
             DriverMessage::WorkerKnownPeers { .. } => "WorkerKnownPeers",
             DriverMessage::ProbePendingWorker { .. } => "ProbePendingWorker",
+            DriverMessage::WorkerFailedToStart { .. } => "WorkerFailedToStart",
+            DriverMessage::RetryWorkerDemand { .. } => "RetryWorkerDemand",
             DriverMessage::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverMessage::ExecuteJob { .. } => "ExecuteJob",
@@ -149,7 +163,7 @@ impl SpanAssociation for DriverMessage {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverMessage::Activate => {}
+            DriverMessage::Activate { result: _ } => {}
             DriverMessage::RegisterWorker {
                 worker_id,
                 host,
@@ -166,6 +180,10 @@ impl SpanAssociation for DriverMessage {
                 peer_worker_ids: _,
             }
             | DriverMessage::ProbePendingWorker { worker_id }
+            | DriverMessage::WorkerFailedToStart {
+                worker_id,
+                message: _,
+            }
             | DriverMessage::ProbeIdleWorker {
                 worker_id,
                 instant: _,
@@ -176,12 +194,15 @@ impl SpanAssociation for DriverMessage {
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
+            DriverMessage::RetryWorkerDemand { request } => {
+                p.push((SpanAttribute::RETRY_ATTEMPT, request.attempt.to_string()));
+            }
             DriverMessage::ExecuteJob {
                 plan: _,
                 context: _,
                 result: _,
             } => {}
-            DriverMessage::CleanUpJob { job_id } => {
+            DriverMessage::CleanUpJob { job_id, .. } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::UpdateTask {

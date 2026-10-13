@@ -15,8 +15,7 @@ Feature: try_aes_decrypt with an argument coming from a column
         | result             |
         | 537061726B2053514C |
 
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario Outline: Try_aes_decrypt: <case>
       When query
         """

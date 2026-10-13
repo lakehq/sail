@@ -4,6 +4,7 @@ mod options;
 mod runtime;
 
 pub use cache::*;
+use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
@@ -174,6 +175,11 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Validates catalog restrictions before lakehouse storage metadata is changed.
+    fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
+        Ok(())
+    }
+
     /// Alters a table in the catalog.
     async fn alter_table(
         &self,
@@ -181,6 +187,30 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
+
+    /// Synchronizes a lakehouse alteration with its committed storage schema.
+    /// Catalogs that cache columns should reconcile them before applying the options.
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        _schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.alter_table(database, table, options).await
+    }
+
+    /// Applies all changes in one catalog mutation, including metadata-pointer preconditions.
+    async fn alter_table_atomically(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "Atomic table alterations are not supported by this catalog".to_string(),
+        ))
+    }
 
     /// Creates a view in the catalog.
     async fn create_view(

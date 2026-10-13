@@ -280,6 +280,9 @@ Feature: Delta Lake operationMetrics in commitInfo
         | path             |
         | operation        |
         | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                 | value |
+        | operationMetrics.numTargetFilesAdded | 1     |
 
   Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
 
@@ -320,3 +323,88 @@ Feature: Delta Lake operationMetrics in commitInfo
         | path             |
         | operation        |
         | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                          | value |
+        | operationMetrics.numTargetRowsDeleted                         | 1     |
+        | operationMetrics.numTargetRowsMatchedDeleted                  | 1     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted       | 0     |
+
+    Scenario: Target-only MERGE DELETE on a DV table reports its detailed counter
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge_dv AS t
+        USING src_op_metrics_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 4 THEN DELETE
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                          | value |
+        | operationMetrics.numTargetRowsDeleted                         | 1     |
+        | operationMetrics.numTargetRowsMatchedDeleted                  | 0     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted       | 1     |
+
+  Rule: MERGE operationMetrics (Copy-on-Write rewrite with an existing deletion vector)
+
+    Background:
+      Given variable location for temporary directory op_metrics_merge_existing_dv_cow
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_op_metrics_merge_existing_dv_cow
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_op_metrics_merge_existing_dv_cow
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        AS SELECT * FROM VALUES
+          (1,'deleted'),(2,'old'),(3,'keep'),(4,'keep')
+        AS t(id, value)
+        """
+      Given statement
+        """
+        DELETE FROM delta_op_metrics_merge_existing_dv_cow WHERE id = 1
+        """
+      Given statement
+        """
+        ALTER TABLE delta_op_metrics_merge_existing_dv_cow
+        SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'false')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_op_metrics_merge_existing_dv_cow AS
+        SELECT * FROM VALUES (2,'updated') AS src(id, value)
+        """
+
+    Scenario: COW MERGE excludes previously deleted rows from inferred delete metrics
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge_existing_dv_cow AS t
+        USING src_op_metrics_merge_existing_dv_cow AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                    | value |
+        | operationMetrics.numTargetRowsUpdated                   | 1     |
+        | operationMetrics.numTargetRowsDeleted                   | 0     |
+        | operationMetrics.numTargetRowsMatchedDeleted            | 0     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted | 0     |
+      When query
+        """
+        SELECT id, value
+        FROM delta_op_metrics_merge_existing_dv_cow
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value   |
+        | 2  | updated |
+        | 3  | keep    |
+        | 4  | keep    |

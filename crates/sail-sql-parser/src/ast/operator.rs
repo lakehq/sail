@@ -93,6 +93,8 @@ macro_rules! define_operator {
 }
 
 define_operator!(LeftParenthesis, [LeftParenthesis]);
+define_operator!(HintStart, [Slash, Asterisk, Plus]);
+define_operator!(HintEnd, [Asterisk, Slash]);
 define_operator!(RightParenthesis, [RightParenthesis]);
 define_operator!(LeftBracket, [LeftBracket]);
 define_operator!(RightBracket, [RightBracket]);

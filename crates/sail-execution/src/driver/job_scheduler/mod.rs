@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::events::SystemEventReporter;
-pub use state::TaskState;
+pub use state::{JobState, TaskState};
 
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;

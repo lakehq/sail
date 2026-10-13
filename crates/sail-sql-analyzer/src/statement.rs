@@ -1,10 +1,13 @@
+use std::iter::once;
+
 use either::Either;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
-use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use sail_common::utils::datetime::get_system_timezone;
+use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
-use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
+use sail_sql_parser::ast::literal::{ConfigValue, IntegerLiteral, NumberLiteral, StringLiteral};
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
@@ -17,10 +20,10 @@ use sail_sql_parser::ast::statement::{
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, ShowFunctionScope, ShowFunctionsClause,
-    ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList, Statement,
-    TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
-    ViewColumnList, ViewUsingClause,
+    RowFormatDelimitedClause, SetClause, SetPropertyKeyValue, SetPropertyValue, ShowFunctionScope,
+    ShowFunctionsClause, ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList,
+    Statement, TableColumnIdentityOption, TableColumnIdentityOptions, TimeZoneValue,
+    UpdateTableAlias, ViewColumn, ViewColumnList, ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -30,6 +33,8 @@ use crate::expression::{
     expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
     from_ast_object_name,
 };
+use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
+use crate::literal::utils::Signed;
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
@@ -1117,16 +1122,38 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let node = spec::CommandNode::ClearCache;
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
+        Statement::SetTimeZone { set: _, timezone } => {
+            let node = spec::CommandNode::SetVariable {
+                variable: SESSION_TIME_ZONE_KEY.to_string(),
+                value: from_ast_time_zone(timezone)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::SetProperty { set: _, property } => {
             let Some(property) = property else {
                 return Err(SqlError::todo("list all properties"));
             };
-            let (variable, value) = from_ast_property(property)?;
+            let (variable, value) = from_ast_set_property(property)?;
             let Some(value) = value else {
                 return Err(SqlError::todo("show property"));
             };
             let node = spec::CommandNode::SetVariable { variable, value };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ResetProperty {
+            reset: _,
+            key,
+            rest,
+        } => {
+            // Spark takes the key as it is written, so a string literal is not a key and the parts of a
+            // dotted key are not separated by spaces.
+            let key_is_plain = key.as_ref().is_none_or(is_plain_config_key);
+            let malformed = !rest.is_empty() || matches!(key, Some(PropertyKey::Literal(_)));
+            let variable = key.map(from_ast_property_key).transpose()?;
+            if malformed || (!key_is_plain && variable.as_deref() == Some(SESSION_TIME_ZONE_KEY)) {
+                return Err(SqlError::invalid(INVALID_RESET_COMMAND_FORMAT));
+            }
+            let node = spec::CommandNode::ResetVariable { variable };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::AnalyzeTable {
@@ -1990,45 +2017,226 @@ impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
     }
 }
 
-fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
-    let PropertyKeyValue { key, value } = property;
-    let key = match key {
-        PropertyKey::Name(ObjectName(parts)) => parts
+// The messages of these errors are the templates of Spark (`error-conditions.json`), with its SQLSTATE.
+const INVALID_SET_SYNTAX: &str = "[INVALID_SET_SYNTAX] Expected format is 'SET', 'SET key', or \
+    'SET key=value'. If you want to include special characters in key, or include semicolon in value, \
+    please use backquotes, e.g., SET `key`=`value`. SQLSTATE: 42000";
+
+const INVALID_RESET_COMMAND_FORMAT: &str = "[INVALID_RESET_COMMAND_FORMAT] Expected format is \
+    'RESET' or 'RESET key'. If you want to include special characters in key, please use quotes, \
+    e.g., RESET `key`. SQLSTATE: 42000";
+
+/// The configuration key that `SET TIME ZONE` assigns to.
+/// It must equal `SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE` in `sail-spark-connect`.
+const SESSION_TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
+
+const MICROS_PER_SECOND: i64 = 1_000_000;
+const MICROS_PER_HOUR: u64 = 3_600 * 1_000_000;
+const MICROS_PER_DAY: i64 = 24 * 3_600 * 1_000_000;
+
+/// The largest absolute offset that `SET TIME ZONE INTERVAL ...` accepts.
+const MAX_TIME_ZONE_OFFSET_MICROS: u64 = 18 * MICROS_PER_HOUR;
+
+/// `QueryParsingErrors.intervalValueOutOfRangeError`, where `input` is the part of the interval that
+/// Spark rejects: its months, its days, its whole hours, or its whole seconds.
+fn interval_out_of_range(input: impl std::fmt::Display) -> SqlError {
+    SqlError::invalid(format!(
+        "[INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE] Error parsing '{input}' to \
+        interval. Please ensure that the value provided is in a valid format for defining an \
+        interval. You can reference the documentation for the correct format. The interval value \
+        must be in the range of [-18, +18] hours with second precision. SQLSTATE: 22006"
+    ))
+}
+
+/// Resolves the argument of `SET TIME ZONE` to the value of the session time zone,
+/// following `SparkSqlParser.visitSetTimeZone`.
+fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
+    match timezone {
+        // `LOCAL` is resolved when the statement is analyzed, like `TimeZone.getDefault`
+        // in Spark. The result depends on the host.
+        TimeZoneValue::Local(_) => Ok(get_system_timezone()?),
+        TimeZoneValue::Literal(x) => from_ast_string(x),
+        TimeZoneValue::Interval(_, interval) => {
+            let interval = *interval;
+            // Spark keeps the months, the days and the microseconds of an interval apart
+            // (`SparkSqlParser.scala:379-399`). The days of an interval written with units are the
+            // ones of its `DAY` and `WEEK` parts. An interval written as `FROM ... TO ...` splits
+            // its whole days from the rest.
+            let unit_days = match &interval {
+                IntervalExpr::MultiUnit { head, tail } => {
+                    Some(multi_unit_interval_days(once(head).chain(tail))?)
+                }
+                IntervalExpr::Standard { .. } => None,
+                // Spark requires a unit, so `INTERVAL '1 hour'` is not a time zone displacement.
+                IntervalExpr::Literal(_) => {
+                    return Err(SqlError::invalid(
+                        "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
+                    ));
+                }
+            };
+            let (months, micros) = match from_ast_signed_interval(Signed::Positive(interval))? {
+                IntervalValue::YearMonth { months, .. } => (i64::from(months), 0),
+                IntervalValue::Microsecond { microseconds, .. } => (0, microseconds),
+                IntervalValue::MonthDayNanosecond {
+                    months,
+                    days,
+                    nanoseconds,
+                } => (
+                    i64::from(months),
+                    i64::from(days) * MICROS_PER_DAY + nanoseconds / 1_000,
+                ),
+            };
+            let (days, microseconds) = match unit_days {
+                Some(days) => (days, micros),
+                None => (micros / MICROS_PER_DAY, micros % MICROS_PER_DAY),
+            };
+            if months != 0 {
+                return Err(interval_out_of_range(months));
+            }
+            if days != 0 {
+                return Err(interval_out_of_range(days));
+            }
+            if microseconds.unsigned_abs() > MAX_TIME_ZONE_OFFSET_MICROS {
+                return Err(interval_out_of_range(
+                    microseconds.unsigned_abs() / MICROS_PER_HOUR,
+                ));
+            }
+            if microseconds % MICROS_PER_SECOND != 0 {
+                return Err(interval_out_of_range(microseconds / MICROS_PER_SECOND));
+            }
+            Ok(format_zone_offset(microseconds / MICROS_PER_SECOND))
+        }
+    }
+}
+
+/// Formats an offset like `java.time.ZoneOffset.toString`: `Z`, `+01:00` or `-08:00:30`.
+fn format_zone_offset(total_seconds: i64) -> String {
+    if total_seconds == 0 {
+        return "Z".to_string();
+    }
+    let sign = if total_seconds < 0 { '-' } else { '+' };
+    let abs = total_seconds.abs();
+    let (hours, minutes, seconds) = (abs / 3_600, abs / 60 % 60, abs % 60);
+    if seconds == 0 {
+        format!("{sign}{hours:02}:{minutes:02}")
+    } else {
+        format!("{sign}{hours:02}:{minutes:02}:{seconds:02}")
+    }
+}
+
+/// Whether a key is written as one word, like Spark requires: a dotted name has no spaces and no quoted part.
+/// A key quoted as a whole, or a single name, is fine.
+fn is_plain_config_key(key: &PropertyKey) -> bool {
+    let PropertyKey::Name(ObjectName(parts)) = key else {
+        return true;
+    };
+    if parts.tail.is_empty() {
+        return true;
+    }
+    let is_unquoted =
+        |ident: &Ident| ident.span.end - ident.span.start == ident.value.chars().count();
+    let mut end = parts.head.span.end;
+    is_unquoted(&parts.head)
+        && parts.tail.iter().all(|(period, ident)| {
+            let adjacent = period.span.start == end && ident.span.start == period.span.end;
+            end = ident.span.end;
+            adjacent && is_unquoted(ident)
+        })
+}
+
+fn from_ast_property_key(key: PropertyKey) -> SqlResult<String> {
+    match key {
+        PropertyKey::Name(ObjectName(parts)) => Ok(parts
             .into_items()
             .map(|x| x.value)
             .collect::<Vec<_>>()
-            .join("."),
-        PropertyKey::Literal(x) => from_ast_string(x)?,
-    };
-    let value = if let Some((_, value)) = value {
-        let value = match value {
-            PropertyValue::String(x) => from_ast_string(x)?,
-            PropertyValue::Number(
-                sign,
-                NumberLiteral {
-                    value,
-                    suffix,
-                    span: _,
-                },
-            ) => {
-                let sign = match sign {
-                    Some(Either::Left(Plus { .. })) => "+",
-                    Some(Either::Right(Minus { .. })) => "-",
-                    None => "",
-                };
-                let suffix = match suffix {
-                    None => "",
-                    Some(x) => x.as_str(),
-                };
-                format!("{sign}{value}{suffix}")
+            .join(".")),
+        PropertyKey::Literal(x) => from_ast_string(x),
+    }
+}
+
+fn from_ast_property_value(value: PropertyValue) -> SqlResult<String> {
+    match value {
+        PropertyValue::String(x) => from_ast_string(x),
+        PropertyValue::Number(
+            sign,
+            NumberLiteral {
+                value,
+                suffix,
+                span: _,
+            },
+        ) => {
+            let sign = match sign {
+                Some(Either::Left(Plus { .. })) => "+",
+                Some(Either::Right(Minus { .. })) => "-",
+                None => "",
+            };
+            let suffix = match suffix {
+                None => "",
+                Some(x) => x.as_str(),
+            };
+            Ok(format!("{sign}{value}{suffix}"))
+        }
+        PropertyValue::Boolean(BooleanLiteral::True(_)) => Ok("true".to_string()),
+        PropertyValue::Boolean(BooleanLiteral::False(_)) => Ok("false".to_string()),
+    }
+}
+
+fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let PropertyKeyValue { key, value } = property;
+    let key = from_ast_property_key(key)?;
+    let value = value
+        .map(|(_, value)| from_ast_property_value(value))
+        .transpose()?;
+    Ok((key, value))
+}
+
+fn from_ast_set_property(property: SetPropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let SetPropertyKeyValue { key, value } = property;
+    let key_is_string = matches!(key, PropertyKey::Literal(_));
+    let key_is_plain = is_plain_config_key(&key);
+    let key = from_ast_property_key(key)?;
+    // Spark takes `SET key=value` with the key written as one word, and the session time zone is the key
+    // this statement acts on. Every other key keeps its previous grammar.
+    let malformed_zone_key = key == SESSION_TIME_ZONE_KEY && !key_is_plain;
+    let value = value
+        .map(|(equals, value)| match value {
+            SetPropertyValue::Property(_) | SetPropertyValue::Unquoted(_) if malformed_zone_key => {
+                Err(SqlError::invalid(INVALID_SET_SYNTAX))
             }
-            PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),
-            PropertyValue::Boolean(BooleanLiteral::False(_)) => "false".to_string(),
-        };
-        Some(value)
-    } else {
-        None
-    };
+            SetPropertyValue::Property(_)
+                if key == SESSION_TIME_ZONE_KEY && (equals.is_none() || key_is_string) =>
+            {
+                Err(SqlError::invalid(INVALID_SET_SYNTAX))
+            }
+            // Spark keeps the quotes of the value (`SparkSqlParser.scala:291`), so a quoted session
+            // time zone is invalid there rather than the zone within the quotes.
+            // TODO: Do this for every key once `SET` on the other keys goes through the Spark
+            //   configuration. They are sent to DataFusion as variables, which need the plain value.
+            SetPropertyValue::Property(PropertyValue::String(x))
+                if key == SESSION_TIME_ZONE_KEY =>
+            {
+                Ok(x.text().trim().to_string())
+            }
+            SetPropertyValue::Property(x) => from_ast_property_value(x),
+            // `SET TIME ZONE` followed by anything that is not a zone is not a property named `time`.
+            SetPropertyValue::Unquoted(ConfigValue { value, span: _ })
+                if equals.is_none()
+                    && key.eq_ignore_ascii_case("time")
+                    && value.eq_ignore_ascii_case("zone") =>
+            {
+                Err(SqlError::invalid(
+                    "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
+                ))
+            }
+            // Spark takes the key as it is written, so only an identifier can be followed by a value
+            // that is not quoted.
+            SetPropertyValue::Unquoted(_) if equals.is_none() || key_is_string => {
+                Err(SqlError::invalid(INVALID_SET_SYNTAX))
+            }
+            SetPropertyValue::Unquoted(ConfigValue { value, span: _ }) => Ok(value),
+        })
+        .transpose()?;
     Ok((key, value))
 }
 

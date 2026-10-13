@@ -28,6 +28,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
+use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
@@ -49,6 +50,7 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
     let _ = expr.apply(|e| {
         if let Expr::ScalarFunction(f) = e
             && f.func.signature().volatility == Volatility::Volatile
+            && f.func.as_async().is_none()
         {
             found_name = Some(f.func.name().to_string());
             return Ok(TreeNodeRecursion::Stop);
@@ -274,6 +276,8 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
+        let (plan, projections) =
+            self.rewrite_projection::<ExistsRewriter>(plan, projections, state)?;
         let projections = projections
             .into_iter()
             .map(|x| {
@@ -915,7 +919,7 @@ impl PlanResolver<'_> {
     /// Expands a generator in the grouping into rows, naming the unnested column
     /// after the grouping output. Returns a map from each generator to its column.
     /// A no-op when the grouping has no generator.
-    fn expand_grouping_generators(
+    pub(super) fn expand_grouping_generators(
         &self,
         input: LogicalPlan,
         grouping: Vec<NamedExpr>,
@@ -960,7 +964,7 @@ impl PlanResolver<'_> {
 
     /// Replaces each generator expression with a reference to its materialized
     /// grouping column, so a re-used generator resolves to the same column.
-    fn replace_generator_expressions(
+    pub(super) fn replace_generator_expressions(
         expr: Expr,
         replacements: &[(Expr, Expr)],
     ) -> PlanResult<Expr> {

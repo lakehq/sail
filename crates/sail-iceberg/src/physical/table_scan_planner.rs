@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
@@ -85,8 +84,14 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         };
         let filters = unnormalize_cols(scan.filters.clone());
         let plan = source
-            .provider()
-            .scan(session, scan.projection.as_ref(), &filters, scan.fetch)
+            .scan()
+            .create_physical_plan(
+                session,
+                scan.projection.as_ref(),
+                &filters,
+                scan.fetch,
+                source.prepared(&filters, scan.fetch),
+            )
             .await?;
         Ok(Some(plan))
     }

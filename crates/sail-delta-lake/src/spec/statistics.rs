@@ -130,6 +130,7 @@ impl ColumnCountStat {
 }
 
 /// Statistics associated with an Add action.
+/// Name-based accessors use literal top-level physical names, including dots.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
@@ -153,11 +154,17 @@ pub struct Stats {
 
 impl Stats {
     pub fn from_json_str(value: &str) -> Result<Self, serde_json::error::Error> {
-        serde_json::from_str::<PartialStats>(value).map(|stats| stats.into_stats())
+        serde_json::from_str::<PartialStats>(value)?
+            .into_stats()
+            .ok_or_else(|| serde::de::Error::missing_field("numRecords"))
     }
 
     pub fn from_json_opt(value: Option<&str>) -> Result<Option<Self>, serde_json::error::Error> {
-        value.map(Self::from_json_str).transpose()
+        // Incomplete optional statistics cannot supply an exact row count for a scan.
+        value
+            .map(serde_json::from_str::<PartialStats>)
+            .transpose()
+            .map(|stats| stats.and_then(PartialStats::into_stats))
     }
 
     pub fn to_json_string(&self) -> Result<String, serde_json::error::Error> {
@@ -165,15 +172,15 @@ impl Stats {
     }
 
     pub fn min_value(&self, name: &str) -> Option<&StatValue> {
-        lookup_value_stat(&self.min_values, name)
+        self.min_values.get(name)?.as_value()
     }
 
     pub fn max_value(&self, name: &str) -> Option<&StatValue> {
-        lookup_value_stat(&self.max_values, name)
+        self.max_values.get(name)?.as_value()
     }
 
     pub fn null_count_value(&self, name: &str) -> Option<i64> {
-        let value = lookup_count_stat(&self.null_count, name)?;
+        let value = self.null_count.get(name)?.as_value()?;
         if self.tight_bounds || value == 0 || value == self.num_records {
             Some(value)
         } else {
@@ -184,7 +191,7 @@ impl Stats {
     /// Return the minimum statistic for a column, annotated with whether it is
     /// an *exact* value or merely a *lower bound* (when `tight_bounds = false`).
     pub fn get_min_stat(&self, name: &str) -> MinStat {
-        match lookup_value_stat(&self.min_values, name).cloned() {
+        match self.min_value(name).cloned() {
             Some(val) if self.tight_bounds => MinStat::Exact(val),
             Some(val) => MinStat::LowerBound(val),
             None => MinStat::Absent,
@@ -194,7 +201,7 @@ impl Stats {
     /// Return the maximum statistic for a column, annotated with whether it is
     /// an *exact* value or merely an *upper bound* (when `tight_bounds = false`).
     pub fn get_max_stat(&self, name: &str) -> MaxStat {
-        match lookup_value_stat(&self.max_values, name).cloned() {
+        match self.max_value(name).cloned() {
             Some(val) if self.tight_bounds => MaxStat::Exact(val),
             Some(val) => MaxStat::UpperBound(val),
             None => MaxStat::Absent,
@@ -202,33 +209,10 @@ impl Stats {
     }
 }
 
-fn lookup_value_stat<'a>(
-    map: &'a HashMap<String, ColumnValueStat>,
-    name: &str,
-) -> Option<&'a StatValue> {
-    if let Some(value) = map.get(name).and_then(ColumnValueStat::as_value) {
-        return Some(value);
-    }
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let path: Vec<&str> = parts.collect();
-    map.get(first)?.get_path(&path)?.as_value()
-}
-
-fn lookup_count_stat(map: &HashMap<String, ColumnCountStat>, name: &str) -> Option<i64> {
-    if let Some(value) = map.get(name).and_then(ColumnCountStat::as_value) {
-        return Some(value);
-    }
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let path: Vec<&str> = parts.collect();
-    map.get(first)?.get_path(&path)?.as_value()
-}
-
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct PartialStats {
-    pub num_records: i64,
+    pub num_records: Option<i64>,
     pub min_values: Option<HashMap<String, ColumnValueStat>>,
     pub max_values: Option<HashMap<String, ColumnValueStat>>,
     pub null_count: Option<HashMap<String, ColumnCountStat>>,
@@ -237,7 +221,7 @@ struct PartialStats {
 }
 
 impl PartialStats {
-    fn into_stats(self) -> Stats {
+    fn into_stats(self) -> Option<Stats> {
         let PartialStats {
             num_records,
             min_values,
@@ -245,14 +229,14 @@ impl PartialStats {
             null_count,
             tight_bounds,
         } = self;
-        Stats {
-            num_records,
+        Some(Stats {
+            num_records: num_records?,
             min_values: min_values.unwrap_or_default(),
             max_values: max_values.unwrap_or_default(),
             null_count: null_count.unwrap_or_default(),
             // Per Delta Protocol, tightBounds defaults to true when absent.
             tight_bounds: tight_bounds.unwrap_or(true),
-        }
+        })
     }
 }
 
@@ -634,25 +618,54 @@ mod tests {
     use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray, StructArray};
     use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 
-    use super::{
-        ColumnCountStat, ColumnValueStat, StatValue, Stats, lookup_value_stat,
-        parse_stats_json_array,
-    };
+    use super::{ColumnCountStat, MaxStat, MinStat, StatValue, Stats, parse_stats_json_array};
     use crate::spec::fields::{
         STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
         STATS_FIELD_NUM_RECORDS,
     };
 
     #[test]
-    fn test_lookup_value_stat_supports_top_level_keys_containing_dots() {
-        let stats = HashMap::from([(
-            "first.name".to_string(),
-            ColumnValueStat::Value(StatValue::String("alice".to_string())),
-        )]);
+    #[expect(clippy::unwrap_used)]
+    fn statistics_distinguish_dotted_names_from_nested_paths() {
+        let nested_only = Stats::from_json_str(
+            r#"{"numRecords":2,"minValues":{"a":{"b":7}},"maxValues":{"a":{"b":7}},"nullCount":{"a":{"b":0}}}"#,
+        )
+        .unwrap();
+        assert_eq!(nested_only.min_value("a.b"), None);
+        assert_eq!(nested_only.max_value("a.b"), None);
+        assert_eq!(nested_only.null_count_value("a.b"), None);
+        assert_eq!(nested_only.get_min_stat("a.b"), MinStat::Absent);
+        assert_eq!(nested_only.get_max_stat("a.b"), MaxStat::Absent);
+        assert_eq!(
+            nested_only.min_values["a"]
+                .get_path(&["b"])
+                .unwrap()
+                .as_value(),
+            Some(&StatValue::Number(7.into()))
+        );
+        assert_eq!(
+            nested_only.null_count["a"]
+                .get_path(&["b"])
+                .unwrap()
+                .as_value(),
+            Some(0)
+        );
 
-        let value = lookup_value_stat(&stats, "first.name");
-
-        assert_eq!(value, Some(&StatValue::String("alice".to_string())));
+        let dotted = Stats::from_json_str(
+            r#"{"numRecords":2,"minValues":{"a.b":1,"a":{"b":7}},"maxValues":{"a.b":2,"a":{"b":7}},"nullCount":{"a.b":1,"a":{"b":0}}}"#,
+        )
+        .unwrap();
+        assert_eq!(dotted.min_value("a.b"), Some(&StatValue::Number(1.into())));
+        assert_eq!(dotted.max_value("a.b"), Some(&StatValue::Number(2.into())));
+        assert_eq!(dotted.null_count_value("a.b"), Some(1));
+        assert_eq!(
+            dotted.get_min_stat("a.b"),
+            MinStat::Exact(StatValue::Number(1.into()))
+        );
+        assert_eq!(
+            dotted.get_max_stat("a.b"),
+            MaxStat::Exact(StatValue::Number(2.into()))
+        );
     }
 
     #[test]
@@ -661,6 +674,26 @@ mod tests {
         let stats = Stats::from_json_str(r#"{"numRecords":3,"minValues":{"value":1}}"#).unwrap();
 
         assert!(stats.tight_bounds);
+    }
+
+    #[test]
+    fn optional_stats_keep_missing_row_counts_unknown() -> Result<(), serde_json::Error> {
+        for json in [
+            r#"{}"#,
+            r#"{"numRecords":null}"#,
+            r#"{"minValues":{"v":1}}"#,
+        ] {
+            assert_eq!(Stats::from_json_opt(Some(json))?, None);
+            assert!(Stats::from_json_str(json).is_err());
+        }
+        assert_eq!(Stats::from_json_opt(None)?, None);
+        assert_eq!(
+            Stats::from_json_opt(Some(r#"{"numRecords":0}"#))?.map(|stats| stats.num_records),
+            Some(0),
+        );
+        assert!(Stats::from_json_opt(Some("{")).is_err());
+        assert!(Stats::from_json_opt(Some(r#"{"numRecords":"bad"}"#)).is_err());
+        Ok(())
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
-use sail_common_datafusion::system::catalog::SystemTable;
+use sail_system_store::catalog::SystemTable;
 
 use crate::predicate::{is_column_logical_predicate, is_map_value_logical_predicate};
 

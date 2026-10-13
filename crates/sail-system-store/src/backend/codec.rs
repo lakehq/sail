@@ -5,15 +5,14 @@
 
 use std::collections::BTreeMap;
 
-use sail_common_datafusion::system::predicate::TimestampMicros;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::model::{
-    JobPrimaryKey, MetricAttributeKey, MetricPointKey, MetricPointOrdinalKey, MetricSeriesKey,
-    OptionPrimaryKey, SessionPrimaryKey, StagePrimaryKey, TaskPrimaryKey, WorkerPrimaryKey,
+    JobPrimaryKey, MetricAttributeKey, MetricSeriesKey, MetricSeriesKind, OptionPrimaryKey,
+    SessionPrimaryKey, StagePrimaryKey, TaskPrimaryKey, WorkerPrimaryKey,
 };
+use crate::predicate::TimestampMicros;
 
 #[derive(Debug, Error)]
 #[error("{message}")]
@@ -65,16 +64,16 @@ pub trait ValueCodec: Sized {
 
 impl<T> ValueCodec for T
 where
-    T: DeserializeOwned + Serialize,
+    T: DeserializeOwned + serde::Serialize,
 {
     fn encode_value(&self) -> CodecResult<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|error| {
+        postcard::to_stdvec(self).map_err(|error| {
             CodecError::invalid_value(format!("failed to encode system store value: {error}"))
         })
     }
 
     fn decode_value(input: &[u8]) -> CodecResult<Self> {
-        serde_json::from_slice(input).map_err(|error| {
+        postcard::from_bytes(input).map_err(|error| {
             CodecError::invalid_value(format!("failed to decode system store value: {error}"))
         })
     }
@@ -113,6 +112,34 @@ impl OrderedKeyCodec for u64 {
     }
 }
 
+impl OrderedKeyCodec for TimestampMicros {
+    fn encode_key(&self, output: &mut Vec<u8>) {
+        ((self.0 as u64) ^ (1_u64 << 63)).encode_key(output);
+    }
+
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
+        let mut decoder = KeyDecoder::new(input);
+        let timestamp = decoder.u64()? ^ (1_u64 << 63);
+        decoder.finish()?;
+        Ok(Self(timestamp as i64))
+    }
+}
+
+impl OrderedKeyCodec for (u64, TimestampMicros) {
+    fn encode_key(&self, output: &mut Vec<u8>) {
+        self.0.encode_key(output);
+        self.1.encode_key(output);
+    }
+
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
+        let mut decoder = KeyDecoder::new(input);
+        let id = decoder.u64()?;
+        let timestamp = decoder.u64()? ^ (1_u64 << 63);
+        decoder.finish()?;
+        Ok((id, TimestampMicros(timestamp as i64)))
+    }
+}
+
 impl OrderedKeyCodec for (String, u64) {
     fn encode_key(&self, output: &mut Vec<u8>) {
         self.0.encode_key(output);
@@ -143,25 +170,6 @@ impl OrderedKeyCodec for (MetricAttributeKey, u64) {
         let value = decoder.u64()?;
         decoder.finish()?;
         Ok((key, value))
-    }
-}
-
-impl OrderedKeyCodec for (u64, MetricPointKey) {
-    fn encode_key(&self, output: &mut Vec<u8>) {
-        self.0.encode_key(output);
-        self.1.encode_key(output);
-    }
-
-    fn decode_key(input: &[u8]) -> CodecResult<Self> {
-        let mut decoder = KeyDecoder::new(input);
-        let series = decoder.u64()?;
-        let timestamp = decoder.u64()? ^ (1_u64 << 63);
-        let point = MetricPointKey {
-            timestamp: TimestampMicros(timestamp as i64),
-            ordinal: decoder.u64()?,
-        };
-        decoder.finish()?;
-        Ok((series, point))
     }
 }
 
@@ -258,6 +266,7 @@ ordered_key!(
             name.encode_key(output);
             value.encode_key(output);
         }
+        metric_series_kind_tag(key.kind).encode_key(output);
     },
     |decoder: &mut KeyDecoder<'_>| {
         let name = decoder.string()?;
@@ -266,7 +275,12 @@ ordered_key!(
         for _ in 0..count {
             attributes.insert(decoder.string()?, decoder.string()?);
         }
-        Ok(MetricSeriesKey { name, attributes })
+        let kind = metric_series_kind_from_tag(decoder.u64()?)?;
+        Ok(MetricSeriesKey {
+            name,
+            attributes,
+            kind,
+        })
     }
 );
 ordered_key!(
@@ -280,35 +294,26 @@ ordered_key!(
         value: decoder.string()?
     })
 );
-ordered_key!(
-    MetricPointKey,
-    |key: &MetricPointKey, output: &mut Vec<u8>| {
-        ((key.timestamp.0 as u64) ^ (1_u64 << 63)).encode_key(output);
-        key.ordinal.encode_key(output);
-    },
-    |decoder: &mut KeyDecoder<'_>| {
-        let timestamp = decoder.u64()? ^ (1_u64 << 63);
-        Ok(MetricPointKey {
-            timestamp: TimestampMicros(timestamp as i64),
-            ordinal: decoder.u64()?,
-        })
+fn metric_series_kind_tag(kind: MetricSeriesKind) -> u64 {
+    match kind {
+        MetricSeriesKind::IntegerCount => 0,
+        MetricSeriesKind::FloatCount => 1,
+        MetricSeriesKind::IntegerGauge => 2,
+        MetricSeriesKind::FloatGauge => 3,
+        MetricSeriesKind::Histogram => 4,
     }
-);
-ordered_key!(
-    MetricPointOrdinalKey,
-    |key: &MetricPointOrdinalKey, output: &mut Vec<u8>| {
-        key.series.encode_key(output);
-        ((key.timestamp.0 as u64) ^ (1_u64 << 63)).encode_key(output);
-    },
-    |decoder: &mut KeyDecoder<'_>| {
-        let series = decoder.u64()?;
-        let timestamp = decoder.u64()? ^ (1_u64 << 63);
-        Ok(MetricPointOrdinalKey {
-            series,
-            timestamp: TimestampMicros(timestamp as i64),
-        })
+}
+
+fn metric_series_kind_from_tag(tag: u64) -> CodecResult<MetricSeriesKind> {
+    match tag {
+        0 => Ok(MetricSeriesKind::IntegerCount),
+        1 => Ok(MetricSeriesKind::FloatCount),
+        2 => Ok(MetricSeriesKind::IntegerGauge),
+        3 => Ok(MetricSeriesKind::FloatGauge),
+        4 => Ok(MetricSeriesKind::Histogram),
+        _ => Err(CodecError::invalid_key()),
     }
-);
+}
 
 struct KeyDecoder<'a> {
     input: &'a [u8],
@@ -372,11 +377,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Debug;
 
-    use sail_common_datafusion::system::predicate::TimestampMicros;
-
     use super::{CodecResult, OrderedKeyCodec, OrderedKeyCodecExt, ValueCodec};
     use crate::model::{
-        JobPrimaryKey, MetricAttributeKey, MetricPointKey, MetricSeriesKey, MetricSeriesMetadata,
+        JobPrimaryKey, MetricAttributeKey, MetricSeriesKey, MetricSeriesKind, MetricSeriesMetadata,
         OptionPrimaryKey,
     };
 
@@ -405,39 +408,15 @@ mod tests {
                 ("cluster".to_string(), "a".to_string()),
                 ("worker".to_string(), "b".to_string()),
             ]),
+            kind: MetricSeriesKind::IntegerGauge,
         })?;
         assert_round_trip(MetricAttributeKey {
             key: "worker".to_string(),
             value: "a".to_string(),
         })?;
-        assert_round_trip(MetricPointKey {
-            timestamp: TimestampMicros(-1),
-            ordinal: 7,
-        })?;
-
         let first = ("metric".to_string(), 1_u64).encoded_key();
         let second = ("metric".to_string(), 2_u64).encoded_key();
         assert!(first < second);
-        Ok(())
-    }
-
-    #[test]
-    fn metric_point_storage_key_round_trips() -> CodecResult<()> {
-        let key = (
-            5_u64,
-            MetricPointKey {
-                timestamp: TimestampMicros(-1),
-                ordinal: 7,
-            },
-        );
-        assert_eq!(
-            key.encoded_key(),
-            [
-                0, 0, 0, 0, 0, 0, 0, 5, 127, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0,
-                0, 7,
-            ]
-        );
-        assert_round_trip(key)?;
         Ok(())
     }
 
@@ -447,11 +426,13 @@ mod tests {
             id: 3,
             name: "metric".to_string(),
             attributes: BTreeMap::from([("worker".to_string(), "a".to_string())]),
+            kind: MetricSeriesKind::IntegerGauge,
         };
         let decoded = MetricSeriesMetadata::decode_value(&value.encode_value()?)?;
         assert_eq!(decoded.id, value.id);
         assert_eq!(decoded.name, value.name);
         assert_eq!(decoded.attributes, value.attributes);
+        assert_eq!(decoded.kind, value.kind);
         Ok(())
     }
 }

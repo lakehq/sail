@@ -44,6 +44,7 @@ impl StatementStatus {
 }
 
 pub struct MetricsRecordingContext {
+    pub session_id: String,
     pub statement_type: StatementType,
 }
 
@@ -62,6 +63,10 @@ impl MetricsRecordingStream {
         metrics: Arc<MetricRegistry>,
         context: MetricsRecordingContext,
     ) -> Self {
+        let session_attr = (
+            MetricAttribute::SESSION_ID,
+            Cow::Owned(context.session_id.clone()),
+        );
         let type_attr = (
             MetricAttribute::FLIGHT_STATEMENT_TYPE,
             Cow::Borrowed(context.statement_type.name()),
@@ -69,11 +74,13 @@ impl MetricsRecordingStream {
         metrics
             .flight_statement_active_count
             .adder(1i64)
+            .with_attribute(session_attr.clone())
             .with_attribute(type_attr.clone())
             .emit();
         metrics
             .flight_statement_total_count
             .adder(1u64)
+            .with_attribute(session_attr)
             .with_attribute(type_attr)
             .emit();
         Self {
@@ -89,6 +96,10 @@ impl MetricsRecordingStream {
 
 impl Drop for MetricsRecordingStream {
     fn drop(&mut self) {
+        let session_attr = (
+            MetricAttribute::SESSION_ID,
+            Cow::Owned(self.context.session_id.clone()),
+        );
         let type_attr = (
             MetricAttribute::FLIGHT_STATEMENT_TYPE,
             Cow::Borrowed(self.context.statement_type.name()),
@@ -101,17 +112,20 @@ impl Drop for MetricsRecordingStream {
         self.metrics
             .flight_statement_active_count
             .adder(-1i64)
+            .with_attribute(session_attr.clone())
             .with_attribute(type_attr.clone())
             .emit();
         self.metrics
             .flight_statement_duration
             .recorder(duration)
+            .with_attribute(session_attr.clone())
             .with_attribute(type_attr.clone())
             .with_attribute(status_attr.clone())
             .emit();
         self.metrics
             .flight_statement_row_count
             .recorder(self.rows)
+            .with_attribute(session_attr)
             .with_attribute(type_attr)
             .with_attribute(status_attr)
             .emit();

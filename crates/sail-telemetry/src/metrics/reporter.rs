@@ -4,14 +4,12 @@ use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::metrics::v1::{
     HistogramDataPoint, NumberDataPoint, ResourceMetrics, metric, number_data_point,
 };
-use sail_common_datafusion::system::predicate::TimestampMicros;
-use sail_common_datafusion::system::types::{MetricHistogram, MetricNumber, MetricValue};
+use sail_system_store::predicate::TimestampMicros;
+use sail_system_store::types::{MetricHistogram, MetricNumber, MetricValue};
 use sail_system_store::{MetricSample, SystemStoreHandle};
 
 use crate::SCOPE_NAME;
 use crate::error::{TelemetryError, TelemetryResult};
-
-type MetricAttributes = BTreeMap<String, String>;
 
 #[derive(Clone, Copy)]
 enum NumericMetricKind {
@@ -55,10 +53,6 @@ impl SystemMetricReporter {
 fn decode_metric_samples(resource_metrics: Vec<ResourceMetrics>) -> Vec<MetricSample> {
     let mut samples = vec![];
     for resource_metrics in resource_metrics {
-        let resource_attributes = resource_metrics
-            .resource
-            .map(|resource| canonical_attributes(resource.attributes))
-            .unwrap_or_default();
         for scope in resource_metrics.scope_metrics {
             for metric in scope.metrics {
                 let name = metric.name;
@@ -68,7 +62,6 @@ fn decode_metric_samples(resource_metrics: Vec<ResourceMetrics>) -> Vec<MetricSa
                             append_number_sample(
                                 &mut samples,
                                 &name,
-                                &resource_attributes,
                                 point,
                                 NumericMetricKind::Gauge,
                             );
@@ -79,7 +72,6 @@ fn decode_metric_samples(resource_metrics: Vec<ResourceMetrics>) -> Vec<MetricSa
                             append_number_sample(
                                 &mut samples,
                                 &name,
-                                &resource_attributes,
                                 point,
                                 NumericMetricKind::Count,
                             );
@@ -87,12 +79,7 @@ fn decode_metric_samples(resource_metrics: Vec<ResourceMetrics>) -> Vec<MetricSa
                     }
                     Some(metric::Data::Histogram(histogram)) => {
                         for point in histogram.data_points {
-                            append_histogram_sample(
-                                &mut samples,
-                                &name,
-                                &resource_attributes,
-                                point,
-                            );
+                            append_histogram_sample(&mut samples, &name, point);
                         }
                     }
                     // The public system table contract supports only count, gauge, and explicit
@@ -108,7 +95,6 @@ fn decode_metric_samples(resource_metrics: Vec<ResourceMetrics>) -> Vec<MetricSa
 fn append_number_sample(
     samples: &mut Vec<MetricSample>,
     name: &str,
-    resource_attributes: &MetricAttributes,
     point: NumberDataPoint,
     kind: NumericMetricKind,
 ) {
@@ -127,25 +113,22 @@ fn append_number_sample(
     };
     samples.push(MetricSample {
         name: name.to_string(),
-        attributes: merge_attributes(resource_attributes, point.attributes),
+        attributes: canonical_attributes(point.attributes),
         timestamp,
+        start_timestamp: start_timestamp_micros(point.start_time_unix_nano),
         value,
     });
 }
 
-fn append_histogram_sample(
-    samples: &mut Vec<MetricSample>,
-    name: &str,
-    resource_attributes: &MetricAttributes,
-    point: HistogramDataPoint,
-) {
+fn append_histogram_sample(samples: &mut Vec<MetricSample>, name: &str, point: HistogramDataPoint) {
     let Some(timestamp) = timestamp_micros(point.time_unix_nano) else {
         return;
     };
     samples.push(MetricSample {
         name: name.to_string(),
-        attributes: merge_attributes(resource_attributes, point.attributes),
+        attributes: canonical_attributes(point.attributes),
         timestamp,
+        start_timestamp: start_timestamp_micros(point.start_time_unix_nano),
         value: MetricValue::Histogram(MetricHistogram {
             count: point.count,
             sum: point.sum,
@@ -163,13 +146,13 @@ fn timestamp_micros(timestamp_nanos: u64) -> Option<TimestampMicros> {
         .map(TimestampMicros)
 }
 
-fn merge_attributes(resource: &MetricAttributes, point: Vec<KeyValue>) -> MetricAttributes {
-    let mut attributes = resource.clone();
-    attributes.extend(canonical_attributes(point));
-    attributes
+fn start_timestamp_micros(timestamp_nanos: u64) -> Option<TimestampMicros> {
+    (timestamp_nanos != 0)
+        .then_some(timestamp_nanos)
+        .and_then(timestamp_micros)
 }
 
-fn canonical_attributes(attributes: Vec<KeyValue>) -> MetricAttributes {
+fn canonical_attributes(attributes: Vec<KeyValue>) -> BTreeMap<String, String> {
     attributes
         .into_iter()
         .filter_map(|attribute| {

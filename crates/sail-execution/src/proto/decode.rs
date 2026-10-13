@@ -24,11 +24,14 @@ use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
 use crate::proto::converter::RemotePhysicalProtoConverter;
 
+#[cfg(test)]
 pub fn decode_remote_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
@@ -86,6 +89,7 @@ pub(super) fn try_decode_field_ref(buf: &[u8]) -> Result<FieldRef> {
     Ok(Arc::new(field))
 }
 
+#[cfg(test)]
 pub(super) fn try_decode_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
@@ -105,7 +109,7 @@ pub(super) fn try_decode_physical_plan_with_converter(
     proto_to_physical_plan_with_converter(ctx, codec, proto_converter, &plan)
 }
 
-pub(super) fn proto_to_physical_plan(
+pub(crate) fn proto_to_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     plan: &PhysicalPlanNode,
@@ -177,6 +181,9 @@ pub(super) fn try_decode_higher_order_udf(
         .cloned()
         .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
     Ok(match udf_kind {
+        HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))
+        }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
                 Arc::new(HigherOrderUDF::new_from_impl(
@@ -210,6 +217,9 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
         }
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf { ansi_mode }) => Arc::new(
+            HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(ansi_mode)),
+        ),
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf { swapped }) => {
             if swapped {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))
