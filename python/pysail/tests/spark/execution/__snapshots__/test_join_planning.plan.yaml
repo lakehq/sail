@@ -10,8 +10,8 @@ data:
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[true]
             RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
               ProjectionExec: expr=[#0@0 as #1]
-                RangeExec
+                RangeExec: start=0, end=4, step=1, num_partitions=4, projection=[0]
           SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
             RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=4
               ProjectionExec: expr=[#2@0 as #3]
-                RangeExec
+                RangeExec: start=0, end=4, step=2, num_partitions=4, projection=[0]
