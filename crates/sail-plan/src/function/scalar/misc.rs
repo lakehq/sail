@@ -92,7 +92,9 @@ fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn input_file_name() -> expr::Expr {
-    // DataFusion's UDF errors outside file scans, while Spark returns an empty string.
+    // COALESCE gives the expression Spark's non-nullable string schema; it does not catch errors.
+    // RewriteInputFileMetadataFallback replaces the UDF with an empty string outside file scans
+    // before execution, since DataFusion's UDF cannot be evaluated directly.
     expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
 }
 
