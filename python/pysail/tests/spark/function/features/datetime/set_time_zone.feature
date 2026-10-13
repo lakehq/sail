@@ -983,7 +983,10 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | RESET spark.sql.session.timeZone =                       |
 
     Scenario: RESET without a key drops the zone that was set
+      # Restore all shared test-session overrides after RESET clears them.
       Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.execution.arrow.pyspark.enabled = true
       Given statement
         """
         SET TIME ZONE 'Pacific/Kiritimati'
