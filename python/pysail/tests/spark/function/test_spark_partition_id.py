@@ -76,13 +76,13 @@ def test_spark_partition_id_in_filter(spark):
 
 @pytest.mark.parametrize("sql", [False, True], ids=["dataframe", "sql"])
 def test_spark_partition_id_in_grouping(spark, sql):
-    df = spark.range(40, numPartitions=4)
     if sql:
         result = spark.sql(
-            "SELECT spark_partition_id() + 10 AS p, count(*) AS n FROM {df} GROUP BY spark_partition_id() + 10",
-            df=df,
+            "SELECT spark_partition_id() + 10 AS p, count(*) AS n "
+            "FROM range(0, 40, 1, 4) GROUP BY spark_partition_id() + 10"
         )
     else:
+        df = spark.range(40, numPartitions=4)
         result = df.groupBy((F.spark_partition_id() + 10).alias("p")).count()
     assert sorted(tuple(row) for row in result.collect()) == [(i + 10, 10) for i in range(4)]
 
@@ -106,10 +106,9 @@ def test_spark_partition_id_in_repartition(spark):
 
 
 def test_spark_partition_id_grouping_reuses_value_in_having(spark):
-    df = spark.range(40, numPartitions=4)
     result = spark.sql(
-        "SELECT spark_partition_id() AS p, count(*) AS n FROM {df} GROUP BY spark_partition_id() HAVING p >= 2",
-        df=df,
+        "SELECT spark_partition_id() AS p, count(*) AS n "
+        "FROM range(0, 40, 1, 4) GROUP BY spark_partition_id() HAVING p >= 2"
     )
     assert sorted(tuple(row) for row in result.collect()) == [(2, 10), (3, 10)]
 
