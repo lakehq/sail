@@ -14,7 +14,10 @@ use crate::utils::skip_whitespace;
 
 /// SET values are raw strings or backtick-quoted strings, not SQL literals.
 #[derive(Debug, Clone)]
-pub struct ConfigValue(pub String);
+pub struct ConfigValue {
+    pub span: TokenSpan,
+    pub value: String,
+}
 
 pub(crate) fn config_assignment<'a, I, E>(
     options: &'a ParserOptions,
@@ -40,17 +43,28 @@ where
         }
     })
     .then(ConfigValue::parser((), options).or_not())
-    .map(|(equals, value)| (equals, value.unwrap_or_else(|| ConfigValue(String::new()))))
+    .map(|(equals, value)| {
+        let value = value.unwrap_or_else(|| ConfigValue {
+            span: TokenSpan {
+                start: equals.span.end,
+                end: equals.span.end,
+            },
+            value: String::new(),
+        });
+        (equals, value)
+    })
 }
 
 impl<'a, I, E> TreeParser<'a, I, E> for ConfigValue
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input: &mut InputRef<'a, '_, I, E>| {
+            let before = input.cursor();
             let start = input.save();
             if matches!(
                 input.peek(),
@@ -76,7 +90,10 @@ where
                 ) && let StringValue::Valid { value, .. } =
                     StringStyle::BacktickQuoted.parse(raw, options)
                 {
-                    return Ok(Self(value));
+                    return Ok(Self {
+                        span: input.span_since(&before).into(),
+                        value,
+                    });
                 }
             }
             input.rewind(start);
@@ -105,9 +122,10 @@ where
                 }
             }
             // A line-comment token can include the statement's trailing semicolons.
-            Ok(Self(
-                value.trim().trim_end_matches(';').trim_end().to_string(),
-            ))
+            Ok(Self {
+                span: input.span_since(&before).into(),
+                value: value.trim().trim_end_matches(';').trim_end().to_string(),
+            })
         })
     }
 }
@@ -124,6 +142,6 @@ impl TreeSyntax for ConfigValue {
 
 impl TreeText for ConfigValue {
     fn text(&self) -> String {
-        format!("`{}` ", self.0.replace('`', "``"))
+        format!("`{}` ", self.value.replace('`', "``"))
     }
 }

@@ -2201,7 +2201,7 @@ fn from_ast_set_property(property: SetPropertyKeyValue) -> SqlResult<(String, Op
         && key.eq_ignore_ascii_case("time")
         && rest
             .as_ref()
-            .is_some_and(|rest| rest.0.eq_ignore_ascii_case("zone"))
+            .is_some_and(|rest| rest.value.eq_ignore_ascii_case("zone"))
     {
         return Err(SqlError::invalid(
             "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
@@ -2210,7 +2210,7 @@ fn from_ast_set_property(property: SetPropertyKeyValue) -> SqlResult<(String, Op
     if rest.is_some() || key_is_string || !key_is_plain {
         return Err(SqlError::invalid(INVALID_SET_SYNTAX));
     }
-    Ok((key, value.map(|(_, value)| value.0)))
+    Ok((key, value.map(|(_, value)| value.value)))
 }
 
 fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, String)>> {
