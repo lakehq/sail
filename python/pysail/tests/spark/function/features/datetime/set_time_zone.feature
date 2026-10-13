@@ -2,6 +2,7 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
 
   # Every expected value was measured on Spark 4.2 over Spark Connect (Java 17), starting from a session pinned to UTC.
   # The zone is restored after each scenario by the `config` step.
+  # RESET without a key is covered by the runtime config tests, which use isolated sessions.
   #
   # Only the session time zone is covered. Every other configuration key is outside these statements for now.
   #
@@ -11,7 +12,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
   # - `spark.conf.set` does not validate the zone yet: only these statements reject a zone Spark cannot resolve.
   # - `SET TIME ZONE LOCAL`, and the zone that `RESET` restores, are the zone of the host. Their scenarios check
   #   that the zone set before is gone, not which zone replaces it.
-  # - `RESET` of any other key, and `RESET` without a key, are `@sail-bug` scenarios at the end.
   # - An unquoted offset with a colon (`SET spark.sql.session.timeZone = +08:00`) does not parse yet: `@sail-bug` scenario
   #   in the rule for `SET` on the zone key. With quotes, `SET TIME ZONE '+08:00'` works.
   # - `SET timezone = ...`: Spark stores an unrelated key and leaves the session zone alone.
@@ -981,27 +981,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | RESET a b                                                |
         | RESET spark.sql.session.timeZone spark.sql.ansi.enabled  |
         | RESET spark.sql.session.timeZone =                       |
-
-    Scenario: RESET without a key drops the zone that was set
-      # Restore all shared test-session overrides after RESET clears them.
-      Given config spark.sql.session.timeZone = UTC
-      Given config spark.sql.ansi.enabled = true
-      Given config spark.sql.execution.arrow.pyspark.enabled = true
-      Given statement
-        """
-        SET TIME ZONE 'Pacific/Kiritimati'
-        """
-      Given statement
-        """
-        RESET
-        """
-      When query
-        """
-        SELECT current_timezone() <> 'Pacific/Kiritimati' AS changed
-        """
-      Then query result
-        | changed |
-        | true    |
 
     @spark-4
     Scenario Outline: RESET rejects the key <statement> and keeps the session zone

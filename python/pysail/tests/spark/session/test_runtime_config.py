@@ -75,11 +75,13 @@ def test_sql_reset_all(config_sessions):
     default = session.conf.get("spark.sql.sources.default")
     session.sql("SET spark.sql.sources.default=json")
     session.conf.set("sail.test.config.value", "custom")
+    session.sql("SET TIME ZONE 'Pacific/Kiritimati'")
     result = session.sql("RESET")
     assert result.schema == StructType([])
     assert result.collect() == []
     assert session.conf.get("spark.sql.sources.default") == default
     assert session.conf.get("sail.test.config.value", None) is None
+    assert session.sql("SELECT current_timezone()").first()[0] != "Pacific/Kiritimati"
 
 
 def test_sql_set_timezone_changes_planning(spark):
