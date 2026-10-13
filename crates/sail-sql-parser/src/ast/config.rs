@@ -133,7 +133,7 @@ where
 impl TreeSyntax for ConfigValue {
     fn syntax() -> SyntaxDescriptor {
         SyntaxDescriptor {
-            name: "Configuration Value".to_string(),
+            name: "ConfigValue".to_string(),
             node: SyntaxNode::Terminal(TerminalKind::ConfigValue),
             children: vec![],
         }

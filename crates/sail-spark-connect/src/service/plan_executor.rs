@@ -121,7 +121,7 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let plan = if let Some(batch) = handle_sql_config(ctx, &plan)? {
+    let plan = if let Some(batch) = handle_sql_config(ctx, &plan).await? {
         ctx.read_batch(batch)?.create_physical_plan().await?
     } else {
         resolve_and_execute_plan(ctx, spark.plan_config()?, plan)

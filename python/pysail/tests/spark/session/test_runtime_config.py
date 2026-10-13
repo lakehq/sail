@@ -115,6 +115,19 @@ def test_datafusion_set_value(config_sessions, key, value):
     assert session.range(3).collect() == [Row(id=0), Row(id=1), Row(id=2)]
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail")
+def test_datafusion_reset_rejects_unknown_config(config_sessions):
+    session = config_sessions.create()
+    for statement in [
+        "SET datafusion.execution.unknown_config=1",
+        "RESET datafusion.execution.unknown_config",
+        "RESET datafusion.runtime.unknown_config",
+    ]:
+        with pytest.raises(Exception, match="unknown_config"):
+            session.sql(statement).collect()
+    assert session.sql("RESET").collect() == []
+
+
 @pytest.mark.parametrize(
     ("sql_value", "expected"),
     [

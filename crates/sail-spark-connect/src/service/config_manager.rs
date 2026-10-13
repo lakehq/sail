@@ -8,6 +8,7 @@ use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_plan::resolver::PlanResolver;
 
 use crate::config::ConfigKeyValue;
 use crate::error::{SparkError, SparkResult};
@@ -16,7 +17,7 @@ use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
 
-pub(crate) fn handle_sql_config(
+pub(crate) async fn handle_sql_config(
     ctx: &SessionContext,
     plan: &spec::Plan,
 ) -> SparkResult<Option<RecordBatch>> {
@@ -24,11 +25,17 @@ pub(crate) fn handle_sql_config(
         return Ok(None);
     };
     match &command.node {
-        spec::CommandNode::SetVariable { variable, value }
-            if !variable.starts_with("datafusion.")
-                && !variable.eq_ignore_ascii_case("timezone")
-                && !variable.eq_ignore_ascii_case("time.zone") =>
+        spec::CommandNode::SetVariable { variable, .. }
+            if native_config_key(variable).is_some() =>
         {
+            let spark = ctx.extension::<SparkSession>()?;
+            execute_native_config(ctx, command.node.clone()).await?;
+            if let Some(key) = native_config_key(variable) {
+                spark.add_native_config_key(key.to_string())?;
+            }
+            Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+        }
+        spec::CommandNode::SetVariable { variable, value } => {
             if variable == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(value)
             {
                 warn!(
@@ -62,6 +69,16 @@ pub(crate) fn handle_sql_config(
         }
         spec::CommandNode::ResetVariable { variable } => {
             let spark = ctx.extension::<SparkSession>()?;
+            if let Some(key) = variable.as_deref().and_then(native_config_key) {
+                reset_native_config(ctx, &spark, key).await?;
+                return Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))));
+            }
+            if variable.is_none() {
+                // Only reset native settings changed by SQL, preserving Sail's other defaults.
+                for key in spark.native_config_keys()? {
+                    reset_native_config(ctx, &spark, &key).await?;
+                }
+            }
             let keys = match variable {
                 Some(key) => vec![key.clone()],
                 None => spark
@@ -88,6 +105,43 @@ pub(crate) fn handle_sql_config(
         }
         _ => Ok(None),
     }
+}
+
+fn native_config_key(variable: &str) -> Option<&str> {
+    if variable.eq_ignore_ascii_case("timezone") || variable.eq_ignore_ascii_case("time.zone") {
+        Some("datafusion.execution.time_zone")
+    } else if variable.starts_with("datafusion.") {
+        Some(variable)
+    } else {
+        None
+    }
+}
+
+async fn execute_native_config(
+    ctx: &SessionContext,
+    command: spec::CommandNode,
+) -> SparkResult<()> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let plan = spec::Plan::Command(spec::CommandPlan::new(command));
+    let plan = resolver.resolve_named_plan(plan).await?.plan;
+    ctx.execute_logical_plan(plan).await?;
+    Ok(())
+}
+
+async fn reset_native_config(
+    ctx: &SessionContext,
+    spark: &SparkSession,
+    key: &str,
+) -> SparkResult<()> {
+    execute_native_config(
+        ctx,
+        spec::CommandNode::ResetVariable {
+            variable: Some(key.to_string()),
+        },
+    )
+    .await?;
+    spark.remove_native_config_key(key)
 }
 
 pub(crate) fn handle_config_get(

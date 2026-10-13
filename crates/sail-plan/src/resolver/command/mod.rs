@@ -286,7 +286,10 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::ResetVariable { .. } => {
+            CommandNode::ResetVariable {
+                variable: Some(variable),
+            } => Ok(self.resolve_command_reset_variable(variable)),
+            CommandNode::ResetVariable { variable: None } => {
                 Err(PlanError::unsupported("RESET requires a Spark session"))
             }
             CommandNode::Update {

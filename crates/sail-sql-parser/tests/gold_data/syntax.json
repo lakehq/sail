@@ -1658,7 +1658,7 @@
               }
             },
             {
-              "name": "Configuration Value",
+              "name": "ConfigValue",
               "node": {
                 "terminal": "configValue"
               }
@@ -7435,10 +7435,10 @@
               }
             },
             {
-              "name": "Option(Configuration Value)",
+              "name": "Option(ConfigValue)",
               "node": {
                 "optional": {
-                  "nonTerminal": "Configuration Value"
+                  "nonTerminal": "ConfigValue"
                 }
               }
             },
@@ -8107,10 +8107,10 @@
               }
             },
             {
-              "name": "Option(Tuple(Operator(Equals), Configuration Value))",
+              "name": "Option(Tuple(Operator(Equals), ConfigValue))",
               "node": {
                 "optional": {
-                  "nonTerminal": "Tuple(Operator(Equals), Configuration Value)"
+                  "nonTerminal": "Tuple(Operator(Equals), ConfigValue)"
                 }
               }
             },
@@ -9507,10 +9507,10 @@
                     "nonTerminal": "PropertyKey"
                   },
                   {
-                    "nonTerminal": "Option(Tuple(Operator(Equals), Configuration Value))"
+                    "nonTerminal": "Option(Tuple(Operator(Equals), ConfigValue))"
                   },
                   {
-                    "nonTerminal": "Option(Configuration Value)"
+                    "nonTerminal": "Option(ConfigValue)"
                   }
                 ]
               }
@@ -10406,7 +10406,7 @@
                         "nonTerminal": "Option(PropertyKey)"
                       },
                       {
-                        "nonTerminal": "Option(Configuration Value)"
+                        "nonTerminal": "Option(ConfigValue)"
                       }
                     ]
                   },
@@ -11842,14 +11842,14 @@
               }
             },
             {
-              "name": "Tuple(Operator(Equals), Configuration Value)",
+              "name": "Tuple(Operator(Equals), ConfigValue)",
               "node": {
                 "sequence": [
                   {
                     "nonTerminal": "Operator(Equals)"
                   },
                   {
-                    "nonTerminal": "Configuration Value"
+                    "nonTerminal": "ConfigValue"
                   }
                 ]
               }
