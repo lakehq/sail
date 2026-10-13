@@ -229,9 +229,9 @@ impl PlanResolver<'_> {
         }
     }
 
-    /// Builds a UNION from resolved inputs. This is not part of the recursive
-    /// `resolve_query_set_operation` future, so its locals are not on the stack
-    /// for every nested set operation during resolution.
+    // Builds a UNION from resolved inputs. This is not part of the recursive
+    // `resolve_query_set_operation` future, so its locals are not on the stack
+    // for every nested set operation during resolution.
     #[inline(never)]
     fn resolve_union(
         &self,
