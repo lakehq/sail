@@ -1,0 +1,17 @@
+# serializer version: 1
+---
+name: "test_explain_prepares_sort_merge_join_inputs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as left_key, #3@1 as right_key]
+      SortPreservingMergeExec: [#1@0 ASC]
+        SortMergeJoinExec: join_type=Left, on=[(#1@0, #3@0)]
+          SortExec: expr=[#1@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[#0@0 as #1]
+                RangeExec
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=4
+              ProjectionExec: expr=[#2@0 as #3]
+                RangeExec
