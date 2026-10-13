@@ -137,6 +137,7 @@ impl PlanResolver<'_> {
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
                     function: function.into(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
@@ -284,6 +285,13 @@ impl PlanResolver<'_> {
             CommandNode::MergeInto(merge) => self.resolve_command_merge_into(merge, state).await,
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
+            }
+            CommandNode::ResetVariable { .. } => {
+                // The Spark session handles `RESET spark.sql.session.timeZone` before the plan is
+                // resolved. Any other `RESET` ends up here.
+                Err(PlanError::todo(
+                    "RESET other than spark.sql.session.timeZone",
+                ))
             }
             CommandNode::Update {
                 table,

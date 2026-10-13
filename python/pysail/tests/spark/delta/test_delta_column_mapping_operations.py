@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
 
+pytestmark = pytest.mark.integration
+
+
 _INNER = StructType([StructField("c", IntegerType()), StructField("d", StringType())])
 _SCHEMA = StructType(
     [

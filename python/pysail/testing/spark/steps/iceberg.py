@@ -35,11 +35,11 @@ if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
-# Normalize temp paths created by pytest (`.../pytest-of-*/pytest-<run>/<case>/...`)
+# Normalize temp paths created by pytest, including xdist worker directories.
 _PYTEST_TMP_PREFIX = re.compile(
     r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
     r"(?:[^ \t\r\n\),\]/]+/)*"
-    r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+    r"pytest-of-[^/]+/pytest-\d+/(?:popen-gw\d+/)?[^/]+/",
     re.IGNORECASE,
 )
 

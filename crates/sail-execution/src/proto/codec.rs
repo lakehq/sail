@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -22,13 +22,14 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -80,6 +81,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
+use datafusion_spark::function::json::json_tuple::JsonTuple;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
@@ -195,7 +197,7 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -268,6 +270,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::vector::l2_distance::VectorL2Distance;
+use sail_function::scalar::vector::norm::VectorNorm;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -532,6 +535,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 prefix,
                 storage_schema,
+                input_ordering,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -540,11 +544,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let prefix = object_store::path::Path::parse(prefix)
                     .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
                 let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let input_ordering = input_ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(
+                            &ordering,
+                            &input.schema(),
+                            ctx,
+                            proto_converter,
+                        )
+                    })
+                    .transpose()?;
                 Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
                     input,
                     object_store_url,
                     prefix,
                     storage_schema,
+                    input_ordering,
                 )?))
             }
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -2080,6 +2095,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                input_ordering: checkpoint
+                    .input_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+                    .transpose()?,
             })
         } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -3111,27 +3130,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry to avoid codec for built-in functions.
-        // The `match name` below has no session-registry fallback, so every
-        // scalar UDF needs an explicit arm or distributed decode fails with
-        // "could not find scalar function". DataFusion built-ins without an arm
-        // (e.g. `array_length`, `cardinality` — what Spark `size` lowers to) thus
-        // break ANY cluster query that uses them, including
-        // `filter(arr, x -> size(filter(x, ...)) > 0)`. A registry fallback for
-        // DF built-ins would fix this class at once (Spark* custom UDFs + HOFs
-        // would still need their oneof/arm). This is the prerequisite for
-        // distributing HOFs in aggregate/window nodes (see the TODO in
-        // `WrapHigherOrderFunctions`).
-        //
-        // The fix needs NO proto change. datafusion-proto's from_proto.rs already
-        // resolves a scalar UDF from the session registry FIRST when the encoded
-        // extension buffer is empty: `ctx.udf(name).or_else(|_| codec.try_decode_udf(name, &[]))`.
-        // Today `try_encode_udf` writes an `ExtendedScalarUdf` (UdfKind::Standard {})
-        // for built-ins too, so the non-empty buffer forces this codec path instead.
-        // Fix: in `try_encode_udf`, DON'T write a buffer for plain DataFusion
-        // built-ins (leave it empty), so decode falls through to `ctx.udf(name)`
-        // from the session registry (which already has array_length/cardinality/...).
-        // Keep the explicit oneof/buffer only for Sail's Spark* custom UDFs and HOFs.
+        // Driver-local tasks do not have the worker's default function registry.
+        // Empty definitions use the same built-ins as a default DataFusion session.
+        if buf.is_empty() {
+            static DEFAULT_FUNCTIONS: LazyLock<HashMap<String, Arc<ScalarUDF>>> =
+                LazyLock::new(|| {
+                    let mut functions = HashMap::new();
+                    for udf in SessionStateDefaults::default_scalar_functions() {
+                        for name in std::iter::once(udf.name())
+                            .chain(udf.aliases().iter().map(String::as_str))
+                        {
+                            functions.insert(name.to_string(), Arc::clone(&udf));
+                        }
+                    }
+                    functions
+                });
+            if let Some(udf) = DEFAULT_FUNCTIONS.get(name) {
+                return Ok(Arc::clone(udf));
+            }
+        }
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
@@ -3140,7 +3157,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
         match udf_kind {
-            UdfKind::Standard(r#gen::StandardUdf {}) => {}
+            UdfKind::Standard(r#gen::StandardUdf {}) => {
+                if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
+                    return Ok(Arc::new(kind.udf()));
+                }
+            }
             UdfKind::PySpark(r#gen::PySparkUdf {
                 kind,
                 name,
@@ -3402,6 +3423,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "vector_l2_distance" => Ok(Arc::new(ScalarUDF::from(VectorL2Distance::new()))),
+            "vector_norm" => Ok(Arc::new(ScalarUDF::from(VectorNorm::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "coalesce" => Ok(Arc::new(ScalarUDF::from(CoalesceFunc::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -3468,7 +3490,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "repeat" => Ok(Arc::new(ScalarUDF::from(RepeatFunc::new()))),
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
             "json_object_keys" | "json_keys" => {
@@ -3593,7 +3617,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+        let udf_kind: UdfKind = if (node.as_async().is_some()
+            && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
+            || node_inner.is::<ArrayElement>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -3607,11 +3633,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
+            || node_inner.is::<VectorNorm>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
+            || node_inner.is::<JsonObjectKeys>()
+            || node_inner.is::<JsonTuple>()
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
@@ -3630,6 +3659,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
+            || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
@@ -3920,6 +3950,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        // Driver-local tasks do not register default aggregate functions.
+        if buf.is_empty() {
+            static DEFAULT_FUNCTIONS: LazyLock<HashMap<String, Arc<AggregateUDF>>> =
+                LazyLock::new(|| {
+                    let mut functions = HashMap::new();
+                    for udaf in SessionStateDefaults::default_aggregate_functions() {
+                        for name in std::iter::once(udaf.name())
+                            .chain(udaf.aliases().iter().map(String::as_str))
+                        {
+                            functions.insert(name.to_string(), Arc::clone(&udaf));
+                        }
+                    }
+                    functions
+                });
+            if let Some(udaf) = DEFAULT_FUNCTIONS.get(name) {
+                return Ok(Arc::clone(udaf));
+            }
+        }
         let udaf = ExtendedAggregateUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udaf: {e}"))?;
         let ExtendedAggregateUdf { udaf_kind } = udaf;
@@ -5773,6 +5821,38 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    #[test]
+    fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let decoded = round_trip_udf(kind.udf())?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_some());
+            assert_eq!(decoded.signature(), kind.udf().signature());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_udf_named_jev_preserves_python_codec() -> Result<()> {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
+            let udf = PySparkUDF::new(
+                PySparkUdfKind::Batch,
+                kind.name().to_owned(),
+                vec![1, 2, 3],
+                true,
+                vec![DataType::Utf8],
+                DataType::Utf8,
+                Arc::new(PySparkUdfConfig::default()),
+            );
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+            assert_eq!(decoded.name(), kind.name());
+            assert!(decoded.as_async().is_none());
+            let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
+            assert_eq!(decoded.payload(), &[1, 2, 3]);
+        }
+        Ok(())
+    }
+
     fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
         udf.inner()
             .downcast_ref::<T>()
@@ -6859,6 +6939,16 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_vector_norm_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorNorm::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorNorm>().is_some());
+        assert_eq!(decoded.name(), "vector_norm");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_spark_date_part_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
 
@@ -7341,6 +7431,7 @@ mod tests {
     #[test]
     fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
         let input_schema = Arc::new(Schema::new(vec![Field::new(
             "logical_name",
@@ -7348,15 +7439,30 @@ mod tests {
             true,
         )]));
         let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let ordering = LexOrdering::from([PhysicalSortExpr::new(
+            Arc::new(Column::new("logical_name", 0)),
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )]);
+        let required_ordering = vec![Some(ordering.clone().into())];
         let checkpoint = RemoteCheckpointWriteExec::try_new(
-            Arc::new(EmptyExec::new(input_schema)),
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
             object_store::path::Path::from("checkpoints/session/relation"),
             Arc::clone(&storage_schema),
+            Some(ordering),
         )?;
+        assert_eq!(checkpoint.required_input_ordering(), required_ordering);
+        let checkpoint = Arc::new(checkpoint).replace_children(
+            vec![Arc::new(EmptyExec::new(input_schema))],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        assert_eq!(checkpoint.required_input_ordering(), required_ordering);
         let codec = RemoteExecutionCodec;
 
-        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let bytes = try_encode_physical_plan(&codec, checkpoint)?;
         let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
         let decoded = decoded
             .downcast_ref::<RemoteCheckpointWriteExec>()
@@ -7372,6 +7478,8 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        assert_eq!(decoded.required_input_ordering(), required_ordering);
+        assert!(decoded.properties().output_ordering().is_none());
         Ok(())
     }
 
@@ -7960,14 +8068,6 @@ mod tests {
     /// expression encode/decode with the base schema. The extended-schema
     /// lambda-body branch is covered by
     /// `test_round_trip_distributed_filter_nested_in_lambda_body`.
-    ///
-    /// Note: the original "nested inside a lambda body via `cardinality(...)`"
-    /// formulation could not be used because `cardinality` (a
-    /// `datafusion-functions-nested` scalar UDF) is not registered in the Sail
-    /// codec's scalar-function deserialization table, so it fails to round-trip
-    /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
-    /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
-    /// roundtrip under test, so we nest two `filter's directly instead.
     #[test]
     fn test_round_trip_distributed_filter_nested() -> Result<()> {
         use std::collections::HashMap;

@@ -30,6 +30,25 @@ Feature: collect_list / collect_set
         | array elements                           | (array(1, 2)), (array(3))                                    | [[1, 2], [3]]            |
         | struct elements                          | (named_struct('a', 1)), (named_struct('a', 2))               | [{1}, {2}]               |
 
+    Scenario: grouped collections of nested fields preserve ordered subquery input
+      When query
+        """
+        SELECT grp, collect_list(s.a) AS items, sort_array(collect_set(s.b)) AS labels
+        FROM (
+          SELECT * FROM VALUES
+            (2, 'g1', named_struct('a', 20, 'b', 'b')),
+            (1, 'g1', named_struct('a', 10, 'b', 'a')),
+            (3, 'g2', named_struct('a', 30, 'b', 'c'))
+          AS t(id, grp, s)
+          ORDER BY id
+        )
+        GROUP BY grp ORDER BY grp
+        """
+      Then query result ordered
+        | grp | items    | labels |
+        | g1  | [10, 20] | [a, b] |
+        | g2  | [30]     | [c]    |
+
     # collect_list accepts map elements (unlike collect_set, which requires orderable elements).
     Scenario: map elements
       When query

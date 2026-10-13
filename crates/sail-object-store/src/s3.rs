@@ -129,7 +129,12 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
     let region = builder.get_config_value(&AmazonS3ConfigKey::Region);
     debug!("S3 object store bucket: {bucket} region from builder: {region:?}");
 
-    if region.is_none_or(|r| r.is_empty()) {
+    if should_resolve_bucket_region(&builder, url)? {
+        debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
+        let region = resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?;
+        debug!("S3 object store bucket: {bucket} resolved region: {region}");
+        builder = builder.with_region(region);
+    } else if region.is_none_or(|r| r.is_empty()) {
         let region = match config.region() {
             Some(region) if !region.as_ref().is_empty() => region.to_string(),
             _ => {
@@ -142,6 +147,30 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
     }
 
     builder.build()
+}
+
+/// Discover ordinary AWS bucket regions without overriding explicit URL or endpoint settings.
+fn should_resolve_bucket_region(
+    builder: &AmazonS3Builder,
+    url: &Url,
+) -> object_store::Result<bool> {
+    // Parse without environment settings to distinguish a URL's region from the
+    // process default, which may belong to compute rather than this bucket.
+    let url_builder = parse_s3_url(AmazonS3Builder::new(), url)?;
+    Ok(url.scheme() != "oss"
+        && url_builder
+            .get_config_value(&AmazonS3ConfigKey::Region)
+            .is_none()
+        && url_builder
+            .get_config_value(&AmazonS3ConfigKey::Endpoint)
+            .is_none()
+        && builder
+            .get_config_value(&AmazonS3ConfigKey::Endpoint)
+            .is_none_or(|endpoint| endpoint.is_empty())
+        && builder
+            .get_config_value(&AmazonS3ConfigKey::S3Express)
+            .as_deref()
+            != Some("true"))
 }
 
 pub fn parse_s3_url(
@@ -266,6 +295,51 @@ pub fn parse_s3_url(
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Bucket discovery ignores process regions while preserving explicit storage settings.
+    #[test]
+    fn bucket_region_discovery_preserves_explicit_configuration() {
+        for (raw_url, discover) in [
+            ("s3://bucket/path", true),
+            ("s3a://bucket/path", true),
+            ("https://bucket.s3.amazonaws.com/path", true),
+            ("https://s3.amazonaws.com/bucket/path", true),
+            ("https://bucket.s3.ap-south-1.amazonaws.com/path", false),
+            ("https://s3.ap-south-1.amazonaws.com/bucket/path", false),
+            ("https://bucket.s3-accelerate.amazonaws.com/path", false),
+            (
+                "https://account.r2.cloudflarestorage.com/bucket/path",
+                false,
+            ),
+            ("oss://bucket/path", false),
+            ("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com/path", false),
+            ("s3://bucket--use1-az4--x-s3/path", false),
+        ] {
+            let url = Url::parse(raw_url).unwrap();
+            for region in [None, Some("us-east-1")] {
+                let mut builder = AmazonS3Builder::new();
+                if let Some(region) = region {
+                    builder = builder.with_region(region);
+                }
+                let builder = parse_s3_url(builder, &url).unwrap();
+                assert_eq!(
+                    should_resolve_bucket_region(&builder, &url).unwrap(),
+                    discover,
+                    "url: {raw_url}, process region: {region:?}",
+                );
+            }
+        }
+
+        let url = Url::parse("s3://bucket/path").unwrap();
+        let builder = parse_s3_url(
+            AmazonS3Builder::new()
+                .with_region("us-east-1")
+                .with_endpoint("http://localhost:9000"),
+            &url,
+        )
+        .unwrap();
+        assert!(!should_resolve_bucket_region(&builder, &url).unwrap());
+    }
 
     #[test]
     fn parse_oss_url_sets_bucket() {

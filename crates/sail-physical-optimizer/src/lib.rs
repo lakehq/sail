@@ -29,6 +29,7 @@ use crate::input_file_name::{
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
 mod collect_left;
@@ -37,6 +38,8 @@ mod filter_pushdown;
 mod input_file_name;
 mod join_reorder;
 mod projection_pushdown;
+mod scan_partitions;
+mod select_semi_join_build_side;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -57,6 +60,7 @@ pub fn get_physical_optimizers(
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
+    rules.push(Arc::new(SelectSemiJoinBuildSide));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
@@ -66,6 +70,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
     rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));

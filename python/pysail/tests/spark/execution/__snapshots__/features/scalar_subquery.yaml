@@ -476,6 +476,9 @@ data:
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -506,6 +509,9 @@ data:
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -995,6 +1001,9 @@ data:
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -1025,6 +1034,9 @@ data:
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -1527,6 +1539,9 @@ data:
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -1557,6 +1572,9 @@ data:
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -2293,6 +2311,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2329,6 +2350,9 @@ data:
             ProjectionExec: expr=[column1@0 as #9]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -2934,6 +2958,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2970,6 +2997,9 @@ data:
             ProjectionExec: expr=[column1@0 as #9]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -3428,9 +3458,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
@@ -3456,6 +3486,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -3472,6 +3505,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -3860,9 +3896,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
@@ -3888,6 +3924,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -3918,6 +3957,9 @@ data:
             FilterExec: column1@0 > 100
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -4378,6 +4420,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -4394,6 +4439,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -4895,6 +4943,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -4911,6 +4962,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -5377,6 +5431,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -5393,6 +5450,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -5813,6 +5873,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -5843,6 +5906,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -6319,6 +6385,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -6350,6 +6419,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -6807,6 +6879,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -6839,6 +6914,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -7287,6 +7365,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -7317,6 +7398,9 @@ data:
               ProjectionExec: expr=[column1@0 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -7748,6 +7832,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -7778,6 +7865,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -8231,6 +8321,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -8262,6 +8355,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -8765,6 +8861,9 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -8799,6 +8898,9 @@ data:
             ProjectionExec: expr=[column1@0 as #5]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -9289,6 +9391,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -9321,6 +9426,9 @@ data:
             ProjectionExec: expr=[column1@0 as #5]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -9765,6 +9873,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -9796,6 +9907,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -10248,6 +10362,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -10264,6 +10381,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -10684,6 +10804,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -10700,6 +10823,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeScanPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
@@ -11118,6 +11244,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -11147,6 +11276,9 @@ data:
             ProjectionExec: expr=[column1@0 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -11582,6 +11714,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -11611,6 +11746,9 @@ data:
             ProjectionExec: expr=[column1@0 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
@@ -12059,6 +12197,9 @@ data:
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
+    physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -12089,6 +12230,9 @@ data:
             ProjectionExec: expr=[column1@0 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
+
+    physical_plan after OptimizeScanPartitions:
+    SAME TEXT AS ABOVE
 
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1

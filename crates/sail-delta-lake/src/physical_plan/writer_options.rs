@@ -26,6 +26,7 @@ pub struct DeltaWriterExecOptions {
     pub target_file_size: u64,
     pub write_batch_size: std::num::NonZeroUsize,
     pub merge_schema: bool,
+    pub change_data: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
     #[serde(default)]
@@ -44,6 +45,7 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             target_file_size: options.target_file_size,
             write_batch_size: options.write_batch_size,
             merge_schema: options.merge_schema,
+            change_data: false,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
             generation_expressions: HashMap::new(),

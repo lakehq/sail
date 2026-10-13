@@ -98,6 +98,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
+        logical_plan = sail_plan::function::prepare_async_functions(logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
@@ -202,6 +203,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 object_store_url.clone(),
                 prefix.clone(),
                 Arc::clone(&storage_schema),
+                input.output_ordering().cloned(),
             )?);
             Arc::new(RemoteCheckpointCommitExec::new(
                 writer,

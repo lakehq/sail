@@ -328,7 +328,23 @@ impl ScanByAddsStreamState {
         let scan = if adds.is_empty() {
             None
         } else {
-            Some(self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?)
+            Some(
+                Self::build_bulk_scan(
+                    snapshot,
+                    log_store,
+                    session_state,
+                    &adds,
+                    file_schema,
+                    &self.scan_config,
+                    &self.scan_schema,
+                    self.input_file_projection.as_ref(),
+                    self.pushdown_filter.as_ref().map(Arc::clone),
+                    self.scan_parallelism,
+                    &self.scan_metrics,
+                    &self.context,
+                )
+                .await?,
+            )
         };
 
         let output_schema = Arc::clone(&self.output_schema);
@@ -352,16 +368,21 @@ impl ScanByAddsStreamState {
         Ok(())
     }
 
-    fn build_bulk_scan(
-        &self,
+    #[expect(clippy::too_many_arguments)]
+    async fn build_bulk_scan(
         snapshot: &DeltaSnapshot,
         log_store: &LogStoreRef,
         session_state: &dyn datafusion::catalog::Session,
         adds: &[crate::spec::Add],
         file_schema: SchemaRef,
+        scan_config: &DeltaScanConfig,
+        file_output_schema: &SchemaRef,
+        input_file_projection: Option<&ProjectionExprs>,
+        pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+        scan_parallelism: usize,
+        scan_metrics: &ScanMetrics,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let scan_config = &self.scan_config;
-        let file_output_schema = &self.scan_schema;
         let file_projection = file_scan_projection_for_schema(
             snapshot,
             scan_config,
@@ -378,17 +399,18 @@ impl ScanByAddsStreamState {
                 // Limit must be applied after DV filtering, otherwise deleted rows consume the
                 // physical-file limit and valid rows can be missed.
                 limit: None,
-                pushdown_filter: self.pushdown_filter.clone(),
+                pushdown_filter,
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
             session_state,
             file_schema,
         )
+        .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         if let Some(config) = file_scan_config.file_source.repartitioned(
-            self.scan_parallelism,
+            scan_parallelism,
             session_state
                 .config()
                 .options()
@@ -407,27 +429,26 @@ impl ScanByAddsStreamState {
                 .collect();
             file_scan_config.file_groups =
                 datafusion::datasource::physical_plan::FileGroup::new(files)
-                    .split_files(self.scan_parallelism);
+                    .split_files(scan_parallelism);
             if file_scan_config.file_groups.is_empty() {
                 file_scan_config.file_groups.push(
                     datafusion::datasource::physical_plan::FileGroup::new(vec![]),
                 );
             }
         }
-
-        let (scan_schema, projector) = match &self.input_file_projection {
+        let (scan_schema, projector) = match input_file_projection {
             Some(projection) => {
                 let (config, schema, projector) = materialize_input_file_metadata(
                     file_scan_config,
-                    &self.scan_schema,
+                    file_output_schema,
                     projection,
                 )?;
                 file_scan_config = config;
                 (schema, Some(projector))
             }
-            None => (Arc::clone(&self.scan_schema), None),
+            None => (Arc::clone(file_output_schema), None),
         };
-        self.scan_metrics
+        scan_metrics
             .lock()
             .map_err(|error| DataFusionError::Execution(error.to_string()))?
             .push(file_scan_config.file_source.metrics().clone());
@@ -445,7 +466,7 @@ impl ScanByAddsStreamState {
             .map(|projector| Arc::clone(projector.output_schema()))
             .unwrap_or_else(|| Arc::clone(&scan_schema));
         let column_mapping_mode = snapshot.effective_column_mapping_mode();
-        let stream = execute_stream(scan_exec, Arc::clone(&self.context))?.map(move |batch| {
+        let stream = execute_stream(scan_exec, Arc::clone(context))?.map(move |batch| {
             let batch = restore_logical_record_batch(&batch?, &scan_schema, column_mapping_mode)?;
             match &projector {
                 Some(projector) => projector.project_batch(&batch),
@@ -900,7 +921,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let catalog_managed_commits = self.catalog_managed_commits.clone();
         let limit = self.limit;
-        let pushdown_filter = self.pushdown_filter.clone();
+        let pushdown_filter = self.pushdown_filter.as_ref().map(Arc::clone);
         let scan_parallelism = context
             .session_config()
             .target_partitions()

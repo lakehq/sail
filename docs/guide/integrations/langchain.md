@@ -259,7 +259,7 @@ Output:
 
 ## Using the Toolkit with an Agent
 
-LangChain's `create_agent()` API combines the model, tools, and a system prompt.
+The LangChain `create_agent()` API combines the model, tools, and a system prompt.
 The prompt requires the agent to inspect available data and construct read-only queries.
 
 ```python
@@ -309,7 +309,7 @@ Output:
 Alice has placed the most orders, with 2 orders.
 ```
 
-`create_sail_sql_agent()` remains available for applications that use LangChain's classic `AgentExecutor` API.
+`create_sail_sql_agent()` remains available for applications that use the classic `AgentExecutor` API in LangChain.
 Use `create_agent()` for new applications.
 
 ## Safety Considerations

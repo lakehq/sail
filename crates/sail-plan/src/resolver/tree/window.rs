@@ -93,7 +93,7 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     if found && global {
                         let mut ordering =
                             PlanResolver::input_sort_ordering(&self.plan).unwrap_or_default();
-                        let column = self.state.register_hidden_field_name("");
+                        let column = self.state.next_field_id();
                         self.plan = LogicalPlan::Extension(Extension {
                             node: Arc::new(MonotonicIdNode::try_new(
                                 Arc::new(self.plan.clone()),

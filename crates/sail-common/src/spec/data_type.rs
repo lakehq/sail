@@ -600,11 +600,11 @@ pub enum IntervalFieldType {
     Second = 5,
 }
 
-pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "__sail_spark_interval";
+pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "SAIL::spark::interval";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(
-    tag = "intervalUnit",
+    tag = "unit",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
@@ -847,7 +847,7 @@ mod tests {
         let json = metadata.to_json()?;
         assert_eq!(
             json,
-            r#"{"intervalUnit":"dayTime","startField":"hour","endField":"second"}"#
+            r#"{"unit":"dayTime","startField":"hour","endField":"second"}"#
         );
         assert_eq!(SparkIntervalMetadata::from_json(&json)?, metadata);
         Ok(())
@@ -865,7 +865,7 @@ mod tests {
         );
         assert!(
             SparkIntervalMetadata::from_json(
-                r#"{"intervalUnit":"dayTime","startField":"second","endField":"day"}"#
+                r#"{"unit":"dayTime","startField":"second","endField":"day"}"#
             )
             .is_err()
         );

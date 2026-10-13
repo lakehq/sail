@@ -254,7 +254,7 @@ impl LakeSource for DeltaLakeSource {
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let existing_schema = snapshot
-                        .arrow_schema()
+                        .logical_arrow_schema()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     validate_existing_delta_create_table_schema(
                         existing_schema.as_ref(),
@@ -273,7 +273,20 @@ impl LakeSource for DeltaLakeSource {
                         );
                     }
                 }
-                return Ok(LakeSourceCreateTableResult::default());
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                return Ok(LakeSourceCreateTableResult {
+                    schema: Some(
+                        snapshot
+                            .logical_arrow_schema()
+                            .map_err(|error| DataFusionError::External(Box::new(error)))?,
+                    ),
+                    partition_by: Some(sail_common_datafusion::catalog::identity_partition_fields(
+                        snapshot.metadata().partition_columns(),
+                    )),
+                    ..Default::default()
+                });
             }
         }
 
@@ -434,36 +447,55 @@ impl LakeSource for DeltaLakeSource {
 
     async fn alter_table(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+        let runtime_env = ctx.runtime_env();
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                self.alter_table_properties(ctx, path, lakehouse_table.as_ref(), changes, if_exists)
                     .await
             }
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
             } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
-                    .await
+                self.alter_table_column_type(
+                    ctx,
+                    path,
+                    lakehouse_table.as_ref(),
+                    column_path,
+                    data_type,
+                )
+                .await
             }
             LakeSourceAlterTableOperation::AlterColumnDefault {
                 column_path,
                 default,
             } => {
-                self.alter_table_column_default(runtime_env, path, column_path, default)
-                    .await
+                self.alter_table_column_default(
+                    ctx,
+                    path,
+                    lakehouse_table.as_ref(),
+                    column_path,
+                    default,
+                )
+                .await
             }
             LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
                 self.add_check_constraint(runtime_env, path, &name, &expression)
                     .await
             }
-        }
+        }?;
+        Ok(
+            sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                catalog_updated: catalog_managed_commit_context(lakehouse_table.as_ref()).is_some(),
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -474,7 +506,12 @@ fn reject_catalog_managed_delta_alter(
     let Some(context) = lakehouse_table else {
         return Ok(());
     };
-    if context.commit == CommitAuthority::DeltaRatifiedCommit {
+    if context.commit == CommitAuthority::DeltaRatifiedCommit
+        && matches!(
+            operation,
+            LakeSourceAlterTableOperation::AddCheckConstraint { .. }
+        )
+    {
         return not_impl_err!(
             "{} is not yet supported for catalog-managed Delta tables",
             delta_alter_operation_name(operation)
@@ -793,13 +830,12 @@ async fn open_delta_write_planning_table(
 impl DeltaLakeSource {
     async fn alter_table_properties(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
+        lakehouse_table: Option<&LakehouseExecutionContext>,
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
     ) -> Result<()> {
-        use crate::transaction::CommitBuilder;
-
         if let Some((key, _)) = changes
             .iter()
             .find(|(key, _)| is_check_constraint_property(key))
@@ -809,45 +845,31 @@ impl DeltaLakeSource {
             );
         }
 
+        if catalog_managed_commit_context(lakehouse_table).is_some()
+            && changes.iter().any(|(key, _)| {
+                [
+                    "io.unitycatalog.tableId",
+                    "delta.feature.catalogManaged",
+                    "delta.enableInCommitTimestamps",
+                ]
+                .iter()
+                .any(|reserved| key.eq_ignore_ascii_case(reserved))
+            })
+        {
+            return plan_err!("Cannot alter managed Delta coordination properties");
+        }
+
         // Parse the location into a URL. Handles both absolute filesystem paths
         // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
-        let url = parse_location_to_url(path)?;
-
-        // The `DynamicObjectStoreRegistry` lazily registers schemes such as S3/GCS/ABFS,
-        // so fetching the store from the registry doubles as the registration entry point.
-        let object_store = runtime_env
-            .object_store_registry
-            .get_store(&url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // Only protocol and metadata are needed for ALTER TABLE; skip loading file-level actions.
-        let table = match open_table_with_object_store_and_table_config(
-            url,
-            object_store,
-            Default::default(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            Ok(table) => table,
-            Err(DeltaTableError::InvalidTableLocation(message))
-                if message.contains("No commit files found in _delta_log") =>
-            {
-                // FIXME: This string match is brittle. Replace it with a typed
-                // missing-log/table-not-found error.
-                return Ok(());
-            }
-            Err(e) => return Err(DataFusionError::External(Box::new(e))),
-        };
+        let table = crate::ddl::open_table(ctx, path, lakehouse_table).await?;
 
         let snapshot = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
-        ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE SET/UNSET TBLPROPERTIES")?;
+        if catalog_managed_commit_context(lakehouse_table).is_none() {
+            ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE SET/UNSET TBLPROPERTIES")?;
+        }
 
         // Split `SET` and `UNSET` changes.
         let (set_changes, unset_changes): (Vec<_>, Vec<_>) =
@@ -927,14 +949,15 @@ impl DeltaLakeSource {
             },
         };
 
-        CommitBuilder::default()
-            .with_actions(actions)
-            .build(Some(snapshot), table.log_store(), operation)
-            .await
-            .map(|_| ())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        Ok(())
+        crate::ddl::commit(
+            ctx,
+            lakehouse_table,
+            snapshot,
+            table.log_store(),
+            actions,
+            operation,
+        )
+        .await
     }
 
     async fn add_check_constraint(
@@ -1015,45 +1038,21 @@ impl DeltaLakeSource {
 
     async fn alter_table_column_type(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
+        lakehouse_table: Option<&LakehouseExecutionContext>,
         column_path: Vec<String>,
         data_type: ArrowDataType,
     ) -> Result<()> {
-        use crate::transaction::CommitBuilder;
-
-        let url = parse_location_to_url(path)?;
-        let object_store = runtime_env
-            .object_store_registry
-            .get_store(&url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table = match open_table_with_object_store_and_table_config(
-            url,
-            object_store,
-            Default::default(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            Ok(table) => table,
-            Err(DeltaTableError::InvalidTableLocation(message))
-                if message.contains("No commit files found in _delta_log") =>
-            {
-                // FIXME: This string match is brittle. Replace it with a typed
-                // missing-log/table-not-found error when the Delta table API exposes one.
-                return Ok(());
-            }
-            Err(e) => return Err(DataFusionError::External(Box::new(e))),
-        };
+        let table = crate::ddl::open_table(ctx, path, lakehouse_table).await?;
 
         let snapshot = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
-        ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ALTER COLUMN TYPE")?;
+        if catalog_managed_commit_context(lakehouse_table).is_none() {
+            ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ALTER COLUMN TYPE")?;
+        }
         let current_metadata = snapshot.metadata();
         let current_kernel = StructType::try_from(snapshot.schema())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -1104,64 +1103,39 @@ impl DeltaLakeSource {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let actions = vec![CommitAction::Metadata(updated_metadata)];
-        CommitBuilder::default()
-            .with_actions(actions)
-            .build(
-                Some(snapshot),
-                table.log_store(),
-                DeltaOperation::AlterColumn {
-                    column: operation_column,
-                },
-            )
-            .await
-            .map(|_| ())
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+        crate::ddl::commit(
+            ctx,
+            lakehouse_table,
+            snapshot,
+            table.log_store(),
+            actions,
+            DeltaOperation::AlterColumn {
+                column: operation_column,
+            },
+        )
+        .await
     }
 
     async fn alter_table_column_default(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        ctx: &datafusion::execution::TaskContext,
         path: &str,
+        lakehouse_table: Option<&LakehouseExecutionContext>,
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
-        use crate::transaction::CommitBuilder;
-
-        let url = parse_location_to_url(path)?;
-        let object_store = runtime_env
-            .object_store_registry
-            .get_store(&url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if column_path.len() != 1 {
             return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
         }
-        let table = match open_table_with_object_store_and_table_config(
-            url,
-            object_store,
-            Default::default(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            Ok(table) => table,
-            Err(DeltaTableError::InvalidTableLocation(message))
-                if message.contains("No commit files found in _delta_log") =>
-            {
-                // FIXME: This string match is brittle. Replace it with a typed
-                // missing-log/table-not-found error when the Delta table API exposes one.
-                return Ok(());
-            }
-            Err(e) => return Err(DataFusionError::External(Box::new(e))),
-        };
+        let table = crate::ddl::open_table(ctx, path, lakehouse_table).await?;
 
         let snapshot = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
-        ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ALTER COLUMN DEFAULT")?;
+        if catalog_managed_commit_context(lakehouse_table).is_none() {
+            ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ALTER COLUMN DEFAULT")?;
+        }
         let current_kernel = StructType::try_from(snapshot.schema())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let candidate_kernel =
@@ -1194,18 +1168,17 @@ impl DeltaLakeSource {
         }
         actions.push(CommitAction::Metadata(updated_metadata));
 
-        CommitBuilder::default()
-            .with_actions(actions)
-            .build(
-                Some(snapshot),
-                table.log_store(),
-                DeltaOperation::AlterColumn {
-                    column: operation_column,
-                },
-            )
-            .await
-            .map(|_| ())
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+        crate::ddl::commit(
+            ctx,
+            lakehouse_table,
+            snapshot,
+            table.log_store(),
+            actions,
+            DeltaOperation::AlterColumn {
+                column: operation_column,
+            },
+        )
+        .await
     }
 }
 
