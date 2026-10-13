@@ -4,7 +4,7 @@ import path from "path";
 import yaml from "js-yaml";
 
 const APP_CONFIG_PATH = path.join(
-  __dirname,
+  import.meta.dirname,
   "../../../../crates/sail-common/src/config/application.yaml",
 );
 

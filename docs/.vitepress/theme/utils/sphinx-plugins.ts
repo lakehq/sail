@@ -3,9 +3,9 @@ import path from "path";
 import type { Plugin } from "vite";
 import type { UserConfig } from "vitepress";
 
-import type { SphinxPage } from "./sphinx";
-import { writeFile } from "./file";
-import { loadSphinxPages, requireSphinxPages } from "./sphinx";
+import type { SphinxPage } from "./sphinx.ts";
+import { writeFile } from "./file.ts";
+import { loadSphinxPages, requireSphinxPages } from "./sphinx.ts";
 
 declare module "vitepress" {
   type VitePressSphinxConfig = {
@@ -92,14 +92,17 @@ export const withSphinxPages = async (config: UserConfig) => {
   }
 
   // Cache all sphinx page data for use in *.paths.ts file
-  const cacheFile = path.join(__dirname, "../../cache/sphinx-pages.ts");
+  const cacheFile = path.join(
+    import.meta.dirname,
+    "../../cache/sphinx-pages.ts",
+  );
   const cacheData = JSON.stringify(
     allSphinxPages.map((page) => page.inner),
     null,
     2,
   );
   const cacheContents = `
-import type { SphinxPageData } from "../theme/utils/sphinx"
+import type { SphinxPageData } from "../theme/utils/sphinx.ts"
 export const sphinxPages: SphinxPageData[] = ${cacheData}
 `;
   // Write Cache File for use in docs/reference/python/[page].paths

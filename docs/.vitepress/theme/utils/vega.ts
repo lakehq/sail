@@ -4,7 +4,7 @@ import path from "node:path";
 import { optimize } from "svgo";
 import * as vega from "vega";
 
-import { setClass } from "./svgo-plugins";
+import { setClass } from "./svgo-plugins.ts";
 
 async function render(
   spec: vega.Spec,
