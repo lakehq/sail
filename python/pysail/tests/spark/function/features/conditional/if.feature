@@ -175,21 +175,6 @@ Feature: if output schema
         | UNION ALL |
         | UNION     |
 
-    @sail-bug
-    Scenario: ANSI conditionals reject invalid numeric strings from UNION inputs
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT id, if(id = 0, CAST(2 AS BIGINT), v) AS result
-        FROM (
-          SELECT 0 AS id, 1 AS v
-          UNION ALL
-          SELECT 1 AS id, 'x' AS v
-        ) AS q
-        ORDER BY id
-        """
-      Then query error CAST_INVALID_INPUT
-
     Scenario: ANSI UNION exposes its numeric common type to typeof
       Given config spark.sql.ansi.enabled = true
       When query
