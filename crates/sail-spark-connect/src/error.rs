@@ -427,7 +427,9 @@ fn is_array_index_out_of_bounds_error(message: &str) -> bool {
 /// The leading bracket keeps the match tag-exact; the interval conditions are also
 /// `ArithmeticException` in Spark but are out of scope here.
 fn is_arithmetic_error(message: &str) -> bool {
-    message.contains("[DIVIDE_BY_ZERO]") || message.contains("[ARITHMETIC_OVERFLOW]")
+    message.contains("[DIVIDE_BY_ZERO]")
+        || message.contains("[ARITHMETIC_OVERFLOW]")
+        || message.contains("[NUMERIC_VALUE_OUT_OF_RANGE")
 }
 
 fn cast_error_to_throwable(message: String) -> SparkThrowable {

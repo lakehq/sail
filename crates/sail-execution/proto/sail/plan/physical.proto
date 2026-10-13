@@ -421,6 +421,7 @@ message SparkNegativeUdf {
 
 message SparkIntegerDivUdf {
   bool ansi_mode = 1;
+  bool check_overflow = 2;
 }
 
 message SparkIntervalDivUdf {
