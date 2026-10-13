@@ -17,7 +17,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[sum(delta_exact_aggregates.#1) as __sail_residual_aggregate_2]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(delta_exact_aggregates.#1) as __sail_residual_aggregate_2]
-              DataSourceExec: file_groups={2 groups: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet], [<tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet]]}, projection=[nullable_value@1 as #1], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet:<range>, <tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet:<range>]]}, projection=[nullable_value@1 as #1], file_type=parquet
 ---
 name: "test_explain_codegen_shows_the_distributed_metadata_replay_stages"
 data:
@@ -506,7 +506,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)]
-              DataSourceExec: file_groups={2 groups: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet], [<tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet]]}, projection=[nullable_value@1 as #1, other_nullable@2 as #2], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet:<range>, <tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet:<range>]]}, projection=[nullable_value@1 as #1, other_nullable@2 as #2], file_type=parquet
 ---
 name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false]"
 data:
@@ -517,8 +517,7 @@ data:
         ProjectionExec: expr=[p@0 as #3, q@1 as #4, v@2 as #5]
           SortExec: expr=[v@2 ASC], preserve_partitioning=[true]
             FilterExec: v@2 > 0
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
-                DataSourceExec: file_groups={2 groups: [[<tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet]]}, projection=[p, q, v], file_type=parquet, predicate=v@2 > 0 AND v@0 > 0, pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 > 0 AND v_null_count@4 != row_count@2 AND v_max@3 > 0, required_guarantees=[]
+              DataSourceExec: file_groups={1 group: [[<tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet:<range>, <tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet:<range>]]}, projection=[p, q, v], file_type=parquet, predicate=v@2 > 0 AND v@0 > 0, pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 > 0 AND v_null_count@4 != row_count@2 AND v_max@3 > 0, required_guarantees=[]
 ---
 name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[false].1"
 data:
@@ -551,7 +550,7 @@ data:
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
           ProjectionExec: expr=[v@0 as #3]
             FilterExec: q@1 < p@0 OR v@2 = 200, projection=[v@2]
-              DataSourceExec: file_groups={5 groups: [[<tmp>/typed_partition_filters/p=1/q=1/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=2/q=10/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet], [<tmp>/typed_partition_filters/p=__HIVE_DEFAULT_PARTITION__/q=2/part-<id>.snappy.parquet]]}, projection=[p, q, v], file_type=parquet, predicate=(q@1 < p@0 OR v@2 = 200) AND (q@2 < p@1 OR v@0 = 200)
+              DataSourceExec: file_groups={1 group: [[<tmp>/typed_partition_filters/p=1/q=1/part-<id>.snappy.parquet:<range>, <tmp>/typed_partition_filters/p=10/q=2/part-<id>.snappy.parquet:<range>, <tmp>/typed_partition_filters/p=2/q=10/part-<id>.snappy.parquet:<range>, <tmp>/typed_partition_filters/p=3/q=2/part-<id>.snappy.parquet:<range>, <tmp>/typed_partition_filters/p=__HIVE_DEFAULT_PARTITION__/q=2/part-<id>.snappy.parquet:<range>]]}, projection=[p, q, v], file_type=parquet, predicate=(q@1 < p@0 OR v@2 = 200) AND (q@2 < p@1 OR v@0 = 200)
 ---
 name: "test_partition_and_data_filters_compose_without_losing_exact_conditions[true]"
 data:
@@ -746,8 +745,7 @@ data:
       ProjectionExec: expr=[1 as #2]
         CoalescePartitionsExec: fetch=1
           FilterExec: id@0 = 2, fetch=1
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[<tmp>/delta_row_existence/part-<id>.snappy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
+            DataSourceExec: file_groups={1 group: [[<tmp>/delta_row_existence/part-<id>.snappy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
 ---
 name: "test_sql_row_existence_preserves_metadata_replay_and_filters"
 data:

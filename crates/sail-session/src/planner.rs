@@ -203,6 +203,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 object_store_url.clone(),
                 prefix.clone(),
                 Arc::clone(&storage_schema),
+                input.output_ordering().cloned(),
             )?);
             Arc::new(RemoteCheckpointCommitExec::new(
                 writer,

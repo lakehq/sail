@@ -4,12 +4,14 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
+use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::config::ConfigKeyValue;
-use crate::error::SparkResult;
+use crate::error::{SparkError, SparkResult};
+use crate::service::time_zone::is_valid_time_zone;
 use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
@@ -27,6 +29,18 @@ pub(crate) fn handle_sql_config(
                 && !variable.eq_ignore_ascii_case("timezone")
                 && !variable.eq_ignore_ascii_case("time.zone") =>
         {
+            if variable == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(value)
+            {
+                warn!(
+                    "invalid time zone {:?} for {variable}: the statement is rejected and the \
+                    session keeps its time zone, as Spark does",
+                    value.chars().take(64).collect::<String>()
+                );
+                return Err(SparkError::invalid(format!(
+                    "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{variable}\" \
+                    is invalid. Cannot resolve the given timezone. SQLSTATE: 22022"
+                )));
+            }
             handle_config_set(
                 ctx,
                 vec![KeyValue {

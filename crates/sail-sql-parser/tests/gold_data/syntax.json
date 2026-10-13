@@ -1660,7 +1660,7 @@
             {
               "name": "Configuration Value",
               "node": {
-                "terminal": "configurationValue"
+                "terminal": "configValue"
               }
             },
             {
@@ -2891,19 +2891,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(Overwrite)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(Keyword(Local), StringLiteral)",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Local)"
-                  },
-                  {
-                    "nonTerminal": "StringLiteral"
                   }
                 ]
               }
@@ -7448,6 +7435,14 @@
               }
             },
             {
+              "name": "Option(Configuration Value)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Configuration Value"
+                }
+              }
+            },
+            {
               "name": "Option(DataType)",
               "node": {
                 "optional": {
@@ -7864,6 +7859,14 @@
               }
             },
             {
+              "name": "Option(SetPropertyKeyValue)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "SetPropertyKeyValue"
+                }
+              }
+            },
+            {
               "name": "Option(SetQuantifier)",
               "node": {
                 "optional": {
@@ -8180,14 +8183,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Option(Operator(Equals)), PropertyValue)"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value))))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value)))"
                 }
               }
             },
@@ -9505,6 +9500,22 @@
               }
             },
             {
+              "name": "SetPropertyKeyValue",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "PropertyKey"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Operator(Equals), Configuration Value))"
+                  },
+                  {
+                    "nonTerminal": "Option(Configuration Value)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "SetQuantifier",
               "node": {
                 "choice": [
@@ -10369,10 +10380,20 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Tuple(Keyword(Set), Keyword(Time), Keyword(Zone))"
+                      },
+                      {
+                        "nonTerminal": "TimeZoneValue"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Set)"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value))))"
+                        "nonTerminal": "Option(SetPropertyKeyValue)"
                       }
                     ]
                   },
@@ -10383,16 +10404,9 @@
                       },
                       {
                         "nonTerminal": "Option(PropertyKey)"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "Tuple(Keyword(Set), Keyword(Time), Keyword(Zone))"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Local), StringLiteral)"
+                        "nonTerminal": "Option(Configuration Value)"
                       }
                     ]
                   },
@@ -10953,6 +10967,37 @@
                   },
                   {
                     "nonTerminal": "Either(Keyword(Temp), Keyword(Temporary))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TimeZoneValue",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Local)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Interval)"
+                      },
+                      {
+                        "nonTerminal": "Box(IntervalExpr)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -11931,19 +11976,6 @@
                   },
                   {
                     "nonTerminal": "PropertyValue"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(PropertyKey, Option(Tuple(Operator(Equals), Configuration Value)))",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "PropertyKey"
-                  },
-                  {
-                    "nonTerminal": "Option(Tuple(Operator(Equals), Configuration Value))"
                   }
                 ]
               }

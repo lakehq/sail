@@ -39,17 +39,30 @@ where
             )),
         }
     })
-    .then(ConfigValue::parser((), options))
+    .then(ConfigValue::parser((), options).or_not())
+    .map(|(equals, value)| (equals, value.unwrap_or_else(|| ConfigValue(String::new()))))
 }
 
 impl<'a, I, E> TreeParser<'a, I, E> for ConfigValue
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input: &mut InputRef<'a, '_, I, E>| {
             let start = input.save();
+            if matches!(
+                input.peek(),
+                None | Some(Token::Punctuation(Punctuation::Semicolon))
+            ) {
+                let token = input.next();
+                return Err(E::Error::expected_found(
+                    vec![TokenLabel::ConfigValue],
+                    token.map(Into::into),
+                    input.span_since(start.cursor()),
+                ));
+            }
             skip_whitespace(input);
             if let Some(Token::String {
                 raw,
@@ -103,7 +116,7 @@ impl TreeSyntax for ConfigValue {
     fn syntax() -> SyntaxDescriptor {
         SyntaxDescriptor {
             name: "Configuration Value".to_string(),
-            node: SyntaxNode::Terminal(TerminalKind::ConfigurationValue),
+            node: SyntaxNode::Terminal(TerminalKind::ConfigValue),
             children: vec![],
         }
     }

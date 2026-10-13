@@ -479,6 +479,7 @@ pub enum CommandNode {
         variable: String,
         value: String,
     },
+    /// `RESET <variable>`, or `RESET` for all variables when `variable` is `None`.
     ResetVariable {
         variable: Option<String>,
     },

@@ -59,7 +59,7 @@ pub enum TerminalKind {
     NumberLiteral,
     IntegerLiteral,
     StringLiteral,
-    ConfigurationValue,
+    ConfigValue,
 }
 
 /// A syntax descriptor for an AST node type.
