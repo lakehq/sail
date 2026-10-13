@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -22,7 +22,7 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
@@ -78,6 +78,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
+use datafusion_spark::function::json::json_tuple::JsonTuple;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
@@ -191,7 +192,7 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -3020,27 +3021,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry to avoid codec for built-in functions.
-        // The `match name` below has no session-registry fallback, so every
-        // scalar UDF needs an explicit arm or distributed decode fails with
-        // "could not find scalar function". DataFusion built-ins without an arm
-        // (e.g. `array_length`, `cardinality` — what Spark `size` lowers to) thus
-        // break ANY cluster query that uses them, including
-        // `filter(arr, x -> size(filter(x, ...)) > 0)`. A registry fallback for
-        // DF built-ins would fix this class at once (Spark* custom UDFs + HOFs
-        // would still need their oneof/arm). This is the prerequisite for
-        // distributing HOFs in aggregate/window nodes (see the TODO in
-        // `WrapHigherOrderFunctions`).
-        //
-        // The fix needs NO proto change. datafusion-proto's from_proto.rs already
-        // resolves a scalar UDF from the session registry FIRST when the encoded
-        // extension buffer is empty: `ctx.udf(name).or_else(|_| codec.try_decode_udf(name, &[]))`.
-        // Today `try_encode_udf` writes an `ExtendedScalarUdf` (UdfKind::Standard {})
-        // for built-ins too, so the non-empty buffer forces this codec path instead.
-        // Fix: in `try_encode_udf`, DON'T write a buffer for plain DataFusion
-        // built-ins (leave it empty), so decode falls through to `ctx.udf(name)`
-        // from the session registry (which already has array_length/cardinality/...).
-        // Keep the explicit oneof/buffer only for Sail's Spark* custom UDFs and HOFs.
+        // Driver-local tasks do not have the worker's default function registry.
+        // Empty definitions use the same built-ins as a default DataFusion session.
+        if buf.is_empty() {
+            static DEFAULT_FUNCTIONS: LazyLock<HashMap<String, Arc<ScalarUDF>>> =
+                LazyLock::new(|| {
+                    let mut functions = HashMap::new();
+                    for udf in SessionStateDefaults::default_scalar_functions() {
+                        for name in std::iter::once(udf.name())
+                            .chain(udf.aliases().iter().map(String::as_str))
+                        {
+                            functions.insert(name.to_string(), Arc::clone(&udf));
+                        }
+                    }
+                    functions
+                });
+            if let Some(udf) = DEFAULT_FUNCTIONS.get(name) {
+                return Ok(Arc::clone(udf));
+            }
+        }
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
@@ -3387,6 +3386,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "repeat" => Ok(Arc::new(ScalarUDF::from(RepeatFunc::new()))),
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
             "json_object_keys" | "json_keys" => {
@@ -3534,6 +3534,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
+            || node_inner.is::<JsonObjectKeys>()
+            || node_inner.is::<JsonTuple>()
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
@@ -3849,6 +3851,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        // Driver-local tasks do not register default aggregate functions.
+        if buf.is_empty() {
+            static DEFAULT_FUNCTIONS: LazyLock<HashMap<String, Arc<AggregateUDF>>> =
+                LazyLock::new(|| {
+                    let mut functions = HashMap::new();
+                    for udaf in SessionStateDefaults::default_aggregate_functions() {
+                        for name in std::iter::once(udaf.name())
+                            .chain(udaf.aliases().iter().map(String::as_str))
+                        {
+                            functions.insert(name.to_string(), Arc::clone(&udaf));
+                        }
+                    }
+                    functions
+                });
+            if let Some(udaf) = DEFAULT_FUNCTIONS.get(name) {
+                return Ok(Arc::clone(udaf));
+            }
+        }
         let udaf = ExtendedAggregateUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udaf: {e}"))?;
         let ExtendedAggregateUdf { udaf_kind } = udaf;
@@ -6936,6 +6956,105 @@ mod tests {
         assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
     }
 
+    /// Distributed round-trip for `transform_values(m, (k, v) -> v + 1)` over
+    /// `{1: NULL, 2: 20}`. Proves the `TransformValues` higher-order UDF kind
+    /// survives remote encode/decode, including the value type it derives from
+    /// the lambda rather than from the input map.
+    #[test]
+    fn test_round_trip_distributed_transform_values() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        builder.keys().append_value(1);
+        builder.values().append_null();
+        builder.keys().append_value(2);
+        builder.values().append_value(20);
+        builder.append(true)?;
+        let map = builder.finish();
+
+        let fields = vec![Field::new("m", map.data_type().clone(), true)];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new())),
+            vec![col("m"), lambda(["k", "v"], value + lit(1i32))],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+        assert_eq!(as_hof(&decoded)?.name(), "transform_values");
+        assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
+    }
+
+    /// Distributed round-trip for `transform_keys(m, (k, v) -> k + 1)` over
+    /// `{1: 10, 2: 20}`. Proves the `TransformKeys` higher-order UDF kind
+    /// survives remote encode/decode, carrying the duplicate-key policy the
+    /// planner resolved from the session config.
+    #[test]
+    fn test_round_trip_distributed_transform_keys() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+
+        for last_value_wins in [false, true] {
+            let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+            builder.keys().append_value(1);
+            builder.values().append_value(10);
+            builder.keys().append_value(2);
+            builder.values().append_value(20);
+            builder.append(true)?;
+            let map = builder.finish();
+
+            let fields = vec![Field::new("m", map.data_type().clone(), true)];
+            let schema = Arc::new(Schema::new(fields.clone()));
+            let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+            let key = Expr::LambdaVariable(LambdaVariable::new(
+                "k".to_string(),
+                Some(Arc::new(Field::new("k", DataType::Int32, false))),
+            ));
+            let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+                    last_value_wins,
+                ))),
+                vec![col("m"), lambda(["k", "v"], key + lit(1i32))],
+            ));
+            let physical = create_physical_expr(
+                &logical,
+                &dfschema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
+            let decoded = round_trip_expr(&physical, &schema)?;
+            assert_eq!(as_hof(&decoded)?.name(), "transform_keys");
+            assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])?;
+        }
+        Ok(())
+    }
+
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
     /// Proves the `Exists` higher-order UDF kind survives remote encode/decode.
     #[test]
@@ -7846,14 +7965,6 @@ mod tests {
     /// expression encode/decode with the base schema. The extended-schema
     /// lambda-body branch is covered by
     /// `test_round_trip_distributed_filter_nested_in_lambda_body`.
-    ///
-    /// Note: the original "nested inside a lambda body via `cardinality(...)`"
-    /// formulation could not be used because `cardinality` (a
-    /// `datafusion-functions-nested` scalar UDF) is not registered in the Sail
-    /// codec's scalar-function deserialization table, so it fails to round-trip
-    /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
-    /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
-    /// roundtrip under test, so we nest two `filter's directly instead.
     #[test]
     fn test_round_trip_distributed_filter_nested() -> Result<()> {
         use std::collections::HashMap;

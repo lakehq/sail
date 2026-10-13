@@ -3,7 +3,7 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use crate::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
@@ -12,15 +12,15 @@ use crate::ast::keywords::{
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
     Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
     Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
-    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
-    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
-    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
-    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
-    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
-    When, With, Zone,
+    Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
+    Matched, Merge, Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat,
+    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
+    Replace, Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted,
+    Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
+    Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values,
+    Verbose, View, Views, When, With, Zone,
 };
-use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
+use crate::ast::literal::{ConfigValue, IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
     Ampersand, Asterisk, Caret, Colon, Comma, DoubleEquals, DoubleGreaterThan, DoubleLessThan,
     DoubleVerticalBar, Equals, ExclamationMark, GreaterThan, GreaterThanEquals, LeftParenthesis,
@@ -297,13 +297,22 @@ pub enum Statement {
         clear: Clear,
         cache: Cache,
     },
-    SetProperty {
-        set: Set,
-        property: Option<PropertyKeyValue>,
-    },
+    // `SET TIME ZONE` must be defined before `SET <property>`, since the latter
+    // would otherwise match `SET TIME` and leave `ZONE` unparsed.
     SetTimeZone {
         set: (Set, Time, Zone),
-        timezone: Either<Local, StringLiteral>,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        timezone: TimeZoneValue,
+    },
+    SetProperty {
+        set: Set,
+        property: Option<SetPropertyKeyValue>,
+    },
+    ResetProperty {
+        reset: Reset,
+        key: Option<PropertyKey>,
+        // Anything after the key is kept only to report the statement as malformed like Spark.
+        rest: Vec<ConfigValue>,
     },
     AnalyzeTable {
         analyze: (Analyze, Table),
@@ -372,6 +381,35 @@ pub struct PropertyKeyList {
     pub left: LeftParenthesis,
     pub properties: Sequence<PropertyKey, Comma>,
     pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TimeZoneValue {
+    Local(Local),
+    Literal(StringLiteral),
+    Interval(
+        Interval,
+        #[parser(function = |e, o| boxed(compose(e, o)))] Box<IntervalExpr>,
+    ),
+}
+
+/// The key and the optional value of `SET <key> [= <value>]`.
+/// Unlike a table property, the value can be unquoted (e.g. `Asia/Kolkata`).
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct SetPropertyKeyValue {
+    pub key: PropertyKey,
+    pub value: Option<(Option<Equals>, SetPropertyValue)>,
+}
+
+// TODO: An unquoted offset such as `+08:00` or `-8:00` is not parsed. `Property` is tried first and
+//   takes the leading sign and number as `PropertyValue::Number`, and the choice does not go back to
+//   `Unquoted` for the `:00` that is left. Spark takes the whole text after `=`. Trying `Unquoted` first
+//   for a value of several tokens needs a check that the values `SET` sends to DataFusion do not change.
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SetPropertyValue {
+    Property(PropertyValue),
+    Unquoted(ConfigValue),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
