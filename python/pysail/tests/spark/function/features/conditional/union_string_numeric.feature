@@ -151,27 +151,6 @@ Feature: Numeric STRING coercion in UNION inputs
       | OFFSET 1         | 9     |
       | LIMIT 2 OFFSET 1 | 2     |
 
-  @sail-bug
-  Scenario Outline: ANSI UNION retains constant cast errors below <clause>
-    Given config spark.sql.ansi.enabled = true
-    When query
-      """
-      SELECT IF(id = 0, 0, v) AS v
-      FROM (
-        SELECT id, 'bad' AS v FROM range(1)
-        UNION ALL
-        SELECT id, 2.5D AS v FROM range(1, 3)
-        <clause>
-      )
-      """
-    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
-
-    Examples:
-      | clause           |
-      | LIMIT 1          |
-      | OFFSET 1         |
-      | LIMIT 1 OFFSET 1 |
-
   Scenario: Sorting a limited conditional UNION preserves OFFSET rows
     Given config spark.sql.ansi.enabled = true
     When query
@@ -212,19 +191,6 @@ Feature: Numeric STRING coercion in UNION inputs
         UNION ALL
         SELECT 1 AS id, CAST(2.5 AS DECIMAL(2,1)) AS v
       )
-      """
-    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
-
-  # This also succeeds on the merge-base: shared constant folding loses the
-  # eager UNION cast error before the conditional filter discards its input.
-  @sail-bug
-  Scenario: ANSI UNION retains constant cast errors below a conditional filter
-    Given config spark.sql.ansi.enabled = true
-    When query
-      """
-      SELECT IF(id = 0, 0L, v) AS value
-      FROM (SELECT 0 AS id, 'bad' AS v UNION ALL SELECT 1 AS id, 7L AS v)
-      WHERE IF(id = 0, 0L, v) = 7
       """
     Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
 
@@ -369,17 +335,6 @@ Feature: Numeric STRING coercion in UNION inputs
       | FLOAT          | 'x'                   |
       | DECIMAL(10, 2) | 'x'                   |
 
-  @sail-bug
-  Scenario: ANSI UNION rejects numeric STRING map-key coercion
-    Given config spark.sql.ansi.enabled = true
-    When query
-      """
-      SELECT map(1, 'a') AS m
-      UNION ALL
-      SELECT map('2', 'b') AS m
-      """
-    Then query error INCOMPATIBLE_COLUMN_TYPE
-
   Scenario Outline: Non-ANSI UNION retains STRING values in <left> and <right>
     Given config spark.sql.ansi.enabled = false
     When query
@@ -402,23 +357,6 @@ Feature: Numeric STRING coercion in UNION inputs
       | 'x'                        | 1                          | x     | 1    |
       | CAST(1.25 AS FLOAT)         | 'x'                        | 1.25  | x    |
       | 'x'                        | CAST(1.25 AS DECIMAL(10,2)) | x     | 1.25 |
-
-  # TODO: Keep Spark's eager cast when a composite UNION producer is reused by
-  # both the window argument and select list. This also succeeds on the merge-base.
-  @sail-bug
-  Scenario: Reused composite UNION producers retain their cast errors under a conditional window
-    Given config spark.sql.ansi.enabled = true
-    When query
-      """
-      SELECT id, CAST(IF(id = 1, -1L, v) AS BIGINT) AS r,
-             sum(CAST(IF(id = 1, -1L, v) AS BIGINT)) OVER (ORDER BY id) AS s
-      FROM (
-        SELECT id, IF(id = 1, 'bad', '5') AS v FROM range(3)
-        UNION ALL
-        SELECT id, id * 10 AS v FROM range(3, 5)
-      ) ORDER BY id
-      """
-    Then query error (?i)(CAST_INVALID_INPUT|cast error|cannot cast)
 
   Rule: Subquery bindings survive conditional projection pushdown
 

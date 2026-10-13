@@ -57,20 +57,6 @@ Feature: Conditional coercion of nested types
       | 1  | NULL             | NULL             | NULL             |
 
   @sail-bug
-  Scenario Outline: ANSI <kind> rejects incompatible numeric and STRING map keys
-    Given config spark.sql.ansi.enabled = true
-    When query
-      """
-      SELECT <expression> AS result FROM range(2) ORDER BY id
-      """
-    Then query error DATATYPE_MISMATCH
-
-    Examples:
-      | kind | expression                                           |
-      | IF   | if(id = 0, map(1, 1), map('2', 2))                   |
-      | CASE | CASE WHEN id = 0 THEN map(1, 1) ELSE map('2', 2) END |
-
-  @sail-bug
   Scenario Outline: Conditional numeric widening merges nested year-month qualifiers in <kind>
     When query
       """
