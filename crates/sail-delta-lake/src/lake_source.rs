@@ -172,7 +172,7 @@ impl LakeSource for DeltaLakeSource {
             .flatten()
             .filter(|(key, _)| {
                 key.strip_prefix("option.")
-                    .is_some_and(|key| !key.starts_with("fs."))
+                    .is_some_and(|key| !key.to_ascii_lowercase().starts_with("fs."))
             })
             .cloned()
             .collect();

@@ -123,6 +123,7 @@ impl PlanResolver<'_> {
                 )
             })
             .collect();
+        // Spark's SQLConf.redactOptions applies both patterns to keys and values.
         for pattern in [
             &self.config.redaction_options_regex,
             &self.config.redaction_regex,

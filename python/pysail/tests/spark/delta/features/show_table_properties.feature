@@ -167,7 +167,7 @@ Feature: delta SHOW TBLPROPERTIES
     Then query result row where "key" is "api.token" has "value" equal to "*********(redacted)"
     Then query result row where "key" is "custom.a" has "value" equal to "*********(redacted)"
 
-  Scenario: Show Delta catalog properties includes persisted storage options
+  Scenario Outline: Show Delta catalog properties includes persisted storage options
     Given variable options_location for temporary directory show_properties_options
     Given final statement
       """
@@ -176,7 +176,7 @@ Feature: delta SHOW TBLPROPERTIES
     Given statement template
       """
       CREATE TABLE show_properties_options (id INT) USING delta
-      OPTIONS ('compression' = 'gzip', 'fs.custom' = 'private', 'url' = 'https://example.invalid')
+      OPTIONS ('compression' = 'gzip', '<fs_key>' = 'private', 'url' = 'https://example.invalid')
       LOCATION {{ options_location.sql }}
       """
     When query
@@ -196,3 +196,15 @@ Feature: delta SHOW TBLPROPERTIES
       | delta.minWriterVersion | 2 |
       | option.compression | gzip |
       | option.url | *********(redacted) |
+    When query
+      """
+      SHOW TBLPROPERTIES show_properties_options ('option.<fs_key>')
+      """
+    Then query result row where "key" is "option.<fs_key>" has "value" containing "does not have property: option.<fs_key>"
+
+    Examples:
+      | fs_key |
+      | fs.custom |
+      | FS.custom |
+      | Fs.custom |
+      | fS.custom |

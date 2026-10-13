@@ -1,5 +1,49 @@
 Feature: Catalog SHOW TBLPROPERTIES compatibility
 
+  Scenario Outline: Show properties applies options and global redaction to keys and values
+    Given variable location for temporary directory show_properties_redaction
+    Given final statement
+      """
+      DROP TABLE IF EXISTS show_properties_redaction
+      """
+    Given statement template
+      """
+      CREATE TABLE show_properties_redaction (id INT) USING parquet
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES (
+        'custom.a' = 'contains url text',
+        'custom.b' = 'contains password text',
+        'api.token' = 'private',
+        'service.url' = 'https://example.invalid',
+        'plain' = 'unchanged'
+      )
+      """
+    Given config spark.sql.redaction.options.regex = <pattern>
+    When query
+      """
+      SHOW TBLPROPERTIES show_properties_redaction
+      """
+    Then query result
+      | key | value |
+      | api.token | *********(redacted) |
+      | custom.a | <custom_value> |
+      | custom.b | *********(redacted) |
+      | plain | unchanged |
+      | service.url | <url_value> |
+    When query
+      """
+      SHOW TBLPROPERTIES show_properties_redaction ('custom.a')
+      """
+    Then query result
+      | key | value |
+      | custom.a | <custom_value> |
+
+    Examples:
+      | pattern | custom_value | url_value |
+      | (?i)url | *********(redacted) | *********(redacted) |
+      | (?!) | contains url text | https://example.invalid |
+      | (?i)custom | *********(redacted) | https://example.invalid |
+
   Scenario Outline: Show properties accepts Java lookaround in the redaction setting
     Given variable location for temporary directory show_properties_redaction
     Given final statement
