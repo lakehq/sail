@@ -11,7 +11,7 @@
 // limitations under the License.
 
 use apache_avro::Schema as AvroSchema;
-use apache_avro::schema::{RecordField as AvroRecordField, RecordFieldOrder, UnionSchema};
+use apache_avro::schema::{RecordField as AvroRecordField, UnionSchema};
 use serde_json::{Number, Value as JsonValue};
 
 /// Avro custom attribute used to annotate Iceberg field ids.
@@ -70,9 +70,7 @@ pub fn record_field(
         name: avro_name.clone(),
         doc: None,
         default,
-        aliases: None,
-        order: RecordFieldOrder::Ignore,
-        position: 0,
+        aliases: Vec::new(),
         schema,
         custom_attributes: Default::default(),
     };

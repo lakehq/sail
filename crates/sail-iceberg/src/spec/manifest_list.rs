@@ -186,7 +186,8 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut writer = Writer::new(schema, Vec::new());
+        let mut writer = Writer::new(schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         for mf in &self.entries {
             if version >= FormatVersion::V2

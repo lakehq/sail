@@ -347,7 +347,8 @@ impl ManifestWriter {
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
             super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
-        let mut writer = AvroWriter::new(&encoding_schema, Vec::new());
+        let mut writer = AvroWriter::new(&encoding_schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         // Add user metadata per Iceberg spec
         let schema_json = serde_json::to_vec(&self.metadata.schema)
@@ -400,7 +401,7 @@ impl ManifestWriter {
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
-                .append(value)
+                .append_value(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
         }
 
