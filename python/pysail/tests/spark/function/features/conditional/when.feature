@@ -67,6 +67,80 @@ Feature: when output schema
         | NTZ first | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'             | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'      |
         | LTZ first | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'        | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'            |
 
+  Rule: Spark-compatible coercion for temporal branches
+
+    Scenario Outline: Conditional temporal branches retain TIMESTAMP values and schema with <kind> in <zone> and ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN <first> ELSE ts END AS case_result,
+          CASE WHEN id = 1 THEN ts ELSE <first> END AS reversed_case,
+          IF(id = 0, <first>, ts) AS if_result,
+          NVL2(NULLIF(id, 0), ts, <first>) AS nvl2_result
+        FROM (
+          SELECT id, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321' AS ts FROM range(2)
+        ) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | reversed_case              | if_result                  | nvl2_result                |
+        | <first_value>              | <first_value>              | <first_value>              | <first_value>              |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp (nullable = false)
+         |-- reversed_case: timestamp (nullable = false)
+         |-- if_result: timestamp (nullable = false)
+         |-- nvl2_result: timestamp (nullable = false)
+        """
+
+      Examples:
+        | kind          | zone                | ansi  | first                                        | first_value                |
+        | DATE          | UTC                 | false | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | UTC                 | true  | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | America/Los_Angeles | false | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | America/Los_Angeles | true  | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | TIMESTAMP_NTZ | UTC                 | false | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | UTC                 | true  | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | America/Los_Angeles | false | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | America/Los_Angeles | true  | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+
+    Scenario Outline: Conditional temporal coercion preserves nullable <kind> columns
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CASE id % 2 WHEN 0 THEN d ELSE ts END AS case_result,
+          IF(id % 2 = 0, d, ts) AS if_result,
+          NVL2(NULLIF(id % 2, 0), ts, d) AS nvl2_result
+        FROM VALUES
+          (0, <first>, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (1, <first>, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (2, CAST(NULL AS <kind>), TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (3, <first>, CAST(NULL AS TIMESTAMP_LTZ))
+        AS t(id, d, ts) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | if_result                  | nvl2_result                |
+        | <first_value>              | <first_value>              | <first_value>              |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+        | NULL                       | NULL                       | NULL                       |
+        | NULL                       | NULL                       | NULL                       |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp (nullable = true)
+         |-- if_result: timestamp (nullable = true)
+         |-- nvl2_result: timestamp (nullable = true)
+        """
+
+      Examples:
+        | kind          | first                                   | first_value                |
+        | DATE          | DATE '2024-07-01'                        | 2024-07-01 00:00:00         |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456' | 2024-07-01 01:02:03.123456 |
+
   Rule: Spark-compatible coercion for numeric branches
 
     Scenario Outline: CASE widens numeric branches to the Spark common type with ANSI enabled: <case>
@@ -332,8 +406,6 @@ Feature: when output schema
         | INT then STRING              | 1                                   | '2'                             | bigint        |
         | ARRAY INT then ARRAY STRING  | array(1)                            | array('2')                      | array<bigint> |
 
-    # TODO: Coerce mixed timestamp branches to Spark's wider common type.
-    @sail-bug
     Scenario: CASE widens TIMESTAMP_NTZ with TIMESTAMP
       Given config spark.sql.ansi.enabled = true
       When query

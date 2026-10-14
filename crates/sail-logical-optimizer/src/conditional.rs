@@ -1,96 +1,16 @@
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::dml::WriteOp;
-use datafusion_expr::expr::Case;
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, ScalarUDF};
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 
-/// Finish lowering Spark conditionals after their schemas have been resolved.
-#[derive(Debug, Default)]
-pub struct SimplifyConditionals;
-
-impl OptimizerRule for SimplifyConditionals {
-    fn name(&self) -> &str {
-        "simplify_conditionals"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        // This rule runs on every node in every optimizer pass. Most nodes have no NVL2,
-        // so skip schema construction and name preservation for them.
-        if !has_expression(
-            &plan,
-            |expr| matches!(expr, Expr::Case(case) if is_nvl2_case(case)),
-        )? {
-            return Ok(Transformed::no(plan));
-        }
-        let schema = expression_schema(&plan)?;
-        map_node_expressions(plan, |expr| {
-            expr.transform_up(|expr| {
-                let Expr::Case(mut case) = expr else {
-                    return Ok(Transformed::no(expr));
-                };
-                if !is_nvl2_case(&case) {
-                    return Ok(Transformed::no(Expr::Case(case)));
-                }
-                // NVL2 uses simple CASE during resolution to keep Spark's
-                // branch-based nullability. After binding, searched CASE
-                // has a faster vectorized evaluator. Keep the nullable
-                // branch in ELSE so this also preserves the final schema.
-                let Some(condition) = case.expr.take() else {
-                    unreachable!()
-                };
-                let (_, if_null) = case.when_then_expr.remove(0);
-                let Some(if_non_null) = case.else_expr.take() else {
-                    unreachable!()
-                };
-                let tested = match *condition {
-                    Expr::IsNull(tested) => tested,
-                    // Constant folding resolved the tested value, but DataFusion
-                    // simplifies only searched CASE. Select the branch, as Spark
-                    // folds NVL2's `If(IsNotNull(...))` replacement.
-                    Expr::Literal(datafusion_common::ScalarValue::Boolean(Some(is_null)), _) => {
-                        return Ok(Transformed::yes(if is_null {
-                            *if_null
-                        } else {
-                            *if_non_null
-                        }));
-                    }
-                    _ => unreachable!(),
-                };
-                let (condition, then_expr, else_expr) = if if_null.nullable(&schema)? {
-                    (tested.is_not_null(), if_non_null, if_null)
-                } else {
-                    (tested.is_null(), if_null, if_non_null)
-                };
-                case.when_then_expr = vec![(Box::new(condition), then_expr)];
-                case.else_expr = Some(else_expr);
-                Ok(Transformed::yes(Expr::Case(case)))
-            })
-        })
-    }
-}
-
 /// DataFusion probes IN-list values on an empty batch to build constant sets.
 /// CASE can return a scalar on that batch even when it depends on input rows.
-/// Guard the consumer, rather than adding a wrapper to every nested NVL2.
 /// Columns also need protection: physical projection pushdown may inline CASE
 /// into them before an IN expression is reconstructed on a cluster worker.
 ///
@@ -138,20 +58,6 @@ impl LogicalRewriter for GuardInListValues {
             })
         })
     }
-}
-
-/// The simple CASE that NVL2 lowers to during resolution, including after its
-/// tested `IS NULL` has been folded into a constant.
-fn is_nvl2_case(case: &Case) -> bool {
-    matches!(
-        case.expr.as_deref(),
-        Some(Expr::IsNull(_) | Expr::Literal(datafusion_common::ScalarValue::Boolean(Some(_)), _))
-    ) && case.when_then_expr.len() == 1
-        && matches!(
-            case.when_then_expr[0].0.as_ref(),
-            Expr::Literal(datafusion_common::ScalarValue::Boolean(Some(true)), _)
-        )
-        && case.else_expr.is_some()
 }
 
 /// An IN-list value that is neither a literal nor already guarded.

@@ -46,10 +46,16 @@ def test_nested_nvl2_with_untyped_null_preserves_values_and_schema(spark, depth,
 
 
 @pytest.mark.parametrize("value", [1, None])
-def test_nvl2_retains_nullable_branch_after_binding_a_cast_parameter(spark, value):
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+@pytest.mark.parametrize(
+    "expression",
+    ["nvl2(x, x, CAST({marker} AS BIGINT))", "CASE WHEN x IS NOT NULL THEN x ELSE CAST({marker} AS BIGINT) END"],
+    ids=["nvl2", "case"],
+)
+def test_conditional_retains_nullable_branch_after_binding_a_cast_parameter(spark, value, marker, named, expression):
     result = spark.sql(
-        "SELECT nvl2(x, x, CAST(? AS BIGINT)) AS v FROM VALUES (CAST(NULL AS BIGINT)), (7L) AS t(x)",
-        args=[value],
+        f"SELECT {expression.format(marker=marker)} AS v FROM VALUES (CAST(NULL AS BIGINT)), (7L) AS t(x)",  # noqa: S608
+        args={"value": value} if named else [value],
     )
     assert result.dtypes == [("v", "bigint")]
     assert result.schema["v"].nullable

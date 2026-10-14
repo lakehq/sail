@@ -208,6 +208,22 @@ Feature: nvl2 output schema
         | result              |
         | 2024-01-01 00:00:00 |
 
+    Scenario: NVL2 and CASE expose the common binary type to enclosing expressions
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id,
+          typeof(nvl2(nullif(id, 0), 'a', X'62')) AS nvl2_type,
+          typeof(CASE WHEN id <> 0 THEN 'a' ELSE X'62' END) AS case_type,
+          hex(nvl2(nullif(id, 0), 'a', X'62')) AS nvl2_value,
+          hex(CASE WHEN id <> 0 THEN 'a' ELSE X'62' END) AS case_value
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | id | nvl2_type | case_type | nvl2_value | case_value |
+        | 0  | binary    | binary    | 62         | 62         |
+        | 1  | binary    | binary    | 61         | 61         |
+
     Scenario: nvl2 declares the common timestamp type in its output schema
       When query
         """

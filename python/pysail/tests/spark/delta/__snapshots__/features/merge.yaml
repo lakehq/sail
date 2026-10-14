@@ -527,9 +527,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after simplify_conditionals:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -722,9 +719,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
-    logical_plan after simplify_conditionals:
     SAME TEXT AS ABOVE
 
     logical_plan:

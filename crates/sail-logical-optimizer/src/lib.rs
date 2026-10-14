@@ -10,7 +10,6 @@ mod scalar_iterator_udf;
 mod union_conditional;
 
 pub use conditional::GuardInListValues;
-use conditional::SimplifyConditionals;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
@@ -55,6 +54,5 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // folding can change the type or nullability of higher-order function
     // arguments, and the lambda variable fields must be refreshed to match.
     custom.push(Arc::new(ResolveLambdaVariables));
-    custom.push(Arc::new(SimplifyConditionals));
     custom
 }

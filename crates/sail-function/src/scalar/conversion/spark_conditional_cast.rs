@@ -83,8 +83,8 @@ impl ScalarUDFImpl for SparkConditionalCast {
                 args.args.len(),
             ));
         };
-        // IN-list planning probes expressions with an empty batch. Keep a row-dependent
-        // NVL2 from looking constant when its CASE happens to return a scalar for that batch.
+        // IN-list planning probes expressions with an empty batch. A row-dependent
+        // CASE can return a scalar for that batch, so prevent it from looking constant.
         if args.number_rows == 0 {
             return Ok(ColumnarValue::Array(new_empty_array(&self.target_type)));
         }

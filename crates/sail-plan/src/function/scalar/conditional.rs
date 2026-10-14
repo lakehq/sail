@@ -3,10 +3,11 @@ use std::sync::Arc;
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
-use datafusion_expr::{ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, lit, try_cast, when};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::{SparkCaseWhen, SparkNvl2, preserve_nested_metadata};
+use sail_function::scalar::conditional::{SparkCaseWhen, preserve_nested_metadata};
 use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -38,6 +39,11 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     let mut branch_values = coerce_branch_values(branch_values, &function_context)?;
+    let data_types = argument_types(&branch_values, &function_context)?;
+    let first_type = data_types.iter().find(|data_type| !data_type.is_null());
+    let same_type = data_types
+        .iter()
+        .all(|data_type| data_type.is_null() || Some(data_type) == first_type);
     let first_true = conditions.iter().position(|condition| {
         matches!(
             condition,
@@ -75,11 +81,16 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // A nullable default already makes DataFusion's CASE nullable. Avoid inspecting
     // conditions that a surrounding null-typed higher-order expression may discard.
     let datafusion_nullable = default_nullable || result.nullable(function_context.schema)?;
-    if datafusion_nullable == nullable {
+    // Binding parameters recomputes the schema. Keep branch-based nullability
+    // until then; a NULL-typed result is always nullable regardless of binding.
+    let needs_binding = first_type.is_some()
+        && result.exists(|expr| Ok(matches!(expr, expr::Expr::Placeholder(_))))?;
+    if datafusion_nullable == nullable && same_type && !needs_binding {
         return Ok(result);
     }
     // Retain every branch for type checking and aggregate extraction. The logical
-    // function supplies Spark's schema and lowers to CASE after analysis.
+    // function supplies the common result type and Spark's nullability, then
+    // lowers to CASE after analysis.
     let expr::Expr::Case(case) = result else {
         unreachable!()
     };
@@ -113,29 +124,10 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (tested, if_non_null, if_null) = arguments.three()?;
-    let branches = coerce_branch_values(vec![if_non_null, if_null], &function_context)?;
-    let (mut if_non_null, mut if_null) = branches.two()?;
-    let function = SparkNvl2::new(Arc::clone(&function_context.plan_config.session_timezone));
-    // Lower branches that already have their common type, avoiding repeated
-    // field derivation through nested logical NVL2 functions.
-    // A NULL-typed branch can take its numeric sibling's type now. Leaving it untyped
-    // keeps every enclosing NVL2 as a UDF and repeatedly derives nested fields.
-    // Other branches needing coercion retain the logical UDF.
-    let mut non_null_type = if_non_null.get_type(function_context.schema)?;
-    let mut null_type = if_null.get_type(function_context.schema)?;
-    if non_null_type.is_numeric() && null_type.is_null() {
-        if_null = cast(if_null, non_null_type.clone());
-        null_type = non_null_type.clone();
-    } else if null_type.is_numeric() && non_null_type.is_null() {
-        if_non_null = cast(if_non_null, null_type.clone());
-        non_null_type = null_type.clone();
-    }
-    let resolved = non_null_type == null_type
-        && function.return_type(&[DataType::Null, non_null_type, null_type.clone()])? == null_type;
-    if resolved {
-        return Ok(SparkNvl2::lower(tested, if_non_null, if_null));
-    }
-    Ok(ScalarUDF::from(function).call(vec![tested, if_non_null, if_null]))
+    case(ScalarFunctionInput {
+        arguments: vec![tested.is_not_null(), if_non_null, if_null],
+        function_context,
+    })
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -144,6 +136,8 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let data_types = argument_types(&arguments, &function_context)?;
+    // TODO: Coerce COALESCE's DATE/TIMESTAMP branches to microsecond TIMESTAMP;
+    // DataFusion's common type can be Timestamp(Nanosecond, None).
     let arguments = coerce_string_temporal_values(arguments, data_types, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
 }
@@ -156,6 +150,21 @@ fn coerce_branch_values(
 ) -> PlanResult<Vec<expr::Expr>> {
     let data_types = argument_types(&arguments, function_context)?;
     if data_types.iter().any(is_temporal_type) {
+        if data_types
+            .iter()
+            .all(|data_type| data_type.is_null() || is_temporal_type(data_type))
+            && let Some(common_type) =
+                common_temporal_type(&data_types, &function_context.plan_config.session_timezone)
+        {
+            // Spark uses microseconds and retains LTZ if any branch has a timezone.
+            // TODO: Match Spark's nullable DATE-to-TIMESTAMP_NTZ cast schema.
+            // TODO: Preserve stored-view cast timezones during later analysis.
+            return arguments
+                .into_iter()
+                .zip(data_types.iter())
+                .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &common_type))
+                .collect();
+        }
         // A temporal branch cannot have a numeric common type.
         coerce_string_temporal_values(arguments, data_types, function_context)
     } else {
@@ -516,8 +525,6 @@ fn integral_decimal_precision(data_type: &DataType) -> Option<u8> {
     }
 }
 
-// TODO: Coerce DATE and TIMESTAMP branches to Spark's microsecond TIMESTAMP.
-//  DataFusion's common type is Timestamp(Nanosecond, None), which cannot be returned.
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     data_types: Vec<DataType>,
