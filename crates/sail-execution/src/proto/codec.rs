@@ -159,7 +159,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
-use sail_function::scalar::conditional::{SparkNvl2, SparkShiftCount};
+use sail_function::scalar::conditional::{SparkCaseWhen, SparkNvl2, SparkShiftCount};
 use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
@@ -3423,6 +3423,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
             "spark_shift_count" => Ok(Arc::new(ScalarUDF::from(SparkShiftCount::default()))),
+            "spark_case_when" => Ok(Arc::new(ScalarUDF::from(SparkCaseWhen::default()))),
             "shiftleft" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::left()))),
             "shiftright" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right()))),
             "shiftrightunsigned" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right_unsigned()))),
@@ -3571,6 +3572,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkShiftCount>()
+            || node_inner.is::<SparkCaseWhen>()
             || node_inner.is::<SparkBitShift>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
@@ -6642,6 +6644,14 @@ mod tests {
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_case_when_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkCaseWhen::default()))?;
+        assert_eq!(decoded.name(), "spark_case_when");
+        assert!(decoded.inner().is::<SparkCaseWhen>());
         Ok(())
     }
 

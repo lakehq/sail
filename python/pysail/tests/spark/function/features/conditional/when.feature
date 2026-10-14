@@ -254,6 +254,50 @@ Feature: when output schema
          |-- explicit_null: long (nullable = true)
         """
 
+    Scenario: A literal TRUE branch determines CASE nullability before later branches
+      When query
+        """
+        SELECT
+          CASE WHEN true THEN 1L END AS no_default,
+          CASE WHEN id = 0 THEN 0L WHEN true THEN 1L ELSE NULL END AS null_default,
+          CASE WHEN true THEN 1L WHEN id = 0 THEN NULL ELSE 2L END AS later_branch,
+          CASE WHEN id = 0 THEN NULL WHEN true THEN 1L ELSE 2L END AS earlier_branch
+        FROM range(2)
+        """
+      Then query result
+        | no_default | null_default | later_branch | earlier_branch |
+        | 1          | 0            | 1            | NULL           |
+        | 1          | 1            | 1            | 1              |
+      And query schema
+        """
+        root
+         |-- no_default: long (nullable = false)
+         |-- null_default: long (nullable = false)
+         |-- later_branch: long (nullable = false)
+         |-- earlier_branch: long (nullable = true)
+        """
+
+    Scenario: An unreachable CASE default still makes a projection aggregate
+      When query
+        """
+        SELECT CASE WHEN true THEN 1L ELSE sum(id) END AS v FROM range(3)
+        """
+      Then query result
+        | v |
+        | 1 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
+    Scenario: An unreachable CASE default must have a compatible type
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 ELSE array(2) END AS v
+        """
+      Then query error (?i)(DATATYPE_MISMATCH|coerce.*common types)
+
   Rule: Spark-compatible coercion for non-numeric branches
 
     Scenario Outline: CASE widens numeric STRING branches to the Spark common type: <case>

@@ -6,7 +6,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::{SparkNvl2, preserve_nested_metadata};
+use sail_function::scalar::conditional::{SparkCaseWhen, SparkNvl2, preserve_nested_metadata};
 use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -38,11 +38,21 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     let mut branch_values = coerce_branch_values(branch_values, &function_context)?;
-    let nullable = branch_values.iter().try_fold(false, |nullable, value| {
-        value
-            .nullable(function_context.schema)
-            .map(|value_nullable| nullable || value_nullable)
-    })?;
+    let first_true = conditions.iter().position(|condition| {
+        matches!(
+            condition,
+            expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+        )
+    });
+    let reachable = first_true.map_or(branch_values.len(), |index| index + 1);
+    let nullable = branch_values[..reachable]
+        .iter()
+        .try_fold(false, |nullable, value| {
+            value
+                .nullable(function_context.schema)
+                .map(|value_nullable| nullable || value_nullable)
+        })?
+        || (first_true.is_none() && branch_values.len() == conditions.len());
     let else_expr = if branch_values.len() > conditions.len() {
         branch_values.pop().map(Box::new)
     } else {
@@ -54,21 +64,26 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
     // The SQL analyzer already turns simple CASE operands into equality conditions.
-    let mut result = expr::Expr::Case(expr::Case {
+    let result = expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr,
         else_expr,
     });
-    if nullable
-        && !result.nullable(function_context.schema)?
-        && let expr::Expr::Case(case) = &mut result
-    {
-        // CASE TRUE retains Spark's branch nullability when searched CASE infers
-        // that a nullable THEN value cannot be NULL under its condition.
-        case.expr = Some(Box::new(lit(true)));
+    if result.nullable(function_context.schema)? == nullable {
+        return Ok(result);
     }
-    // TODO: Match Spark's nullability when a literal WHEN TRUE makes ELSE unreachable.
-    Ok(result)
+    // Retain every branch for type checking and aggregate extraction. The logical
+    // function supplies Spark's schema and lowers to CASE after analysis.
+    let expr::Expr::Case(case) = result else {
+        unreachable!()
+    };
+    let arguments = case
+        .when_then_expr
+        .into_iter()
+        .flat_map(|(condition, value)| [*condition, *value])
+        .chain(case.else_expr.map(|value| *value))
+        .collect();
+    Ok(ScalarUDF::from(SparkCaseWhen::default()).call(arguments))
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
