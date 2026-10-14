@@ -226,8 +226,8 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
-    // FIXME: Capture and restore the remaining creation-time SQL configuration;
-    //  only ANSI mode and decimal truncation policy for conditional coercion are retained.
+    // FIXME: Capture and restore the remaining creation-time SQL configuration.
+    //  Currently only ANSI mode and decimal truncation policy are retained.
     async fn resolve_table_view(
         &self,
         definition: String,

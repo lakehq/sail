@@ -74,7 +74,6 @@ impl PlanResolver<'_> {
         };
         let mut properties = properties.into_iter().collect::<BTreeMap<_, _>>();
         // FIXME: Capture all eligible creation-time SQL settings, as Spark does.
-        // For now, capture only the settings used by conditional coercion.
         properties.insert(
             format!("{VIEW_SQL_CONFIG_PREFIX}spark.sql.ansi.enabled"),
             self.config.ansi_mode.to_string(),
