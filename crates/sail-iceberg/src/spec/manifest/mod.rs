@@ -20,10 +20,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use apache_avro::reader::datum::GenericDatumReader;
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{
-    Reader as AvroReader, Schema as AvroSchema, from_avro_datum, from_value as avro_from_value,
-};
+use apache_avro::writer::datum::GenericDatumWriter;
+use apache_avro::{Reader as AvroReader, Schema as AvroSchema, from_value as avro_from_value};
 use serde_json::Value as JsonValue;
 
 mod _serde;
@@ -34,13 +34,14 @@ mod schema;
 mod writer;
 
 // Provide data file avro helpers API surface
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
 
 use crate::spec::Schema as IcebergSchema;
+use crate::spec::avro_utils::create_avro_writer;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
@@ -57,7 +58,10 @@ fn parse_avro_object_header(bytes: &[u8]) -> Result<AvroObjectHeader, String> {
         return Err("Invalid Avro object container magic".to_string());
     }
     let mut cursor = std::io::Cursor::new(&bytes[AVRO_OBJECT_HEADER.len()..]);
-    let metadata = from_avro_datum(&AvroSchema::map(AvroSchema::Bytes), &mut cursor, None)
+    let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
+    let metadata = GenericDatumReader::builder(&metadata_schema)
+        .build()
+        .and_then(|reader| reader.read_value(&mut cursor))
         .map_err(|error| format!("Avro object metadata error: {error}"))?;
     let AvroValue::Map(metadata) = metadata else {
         return Err("Avro object metadata is not a map".to_string());
@@ -97,11 +101,11 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
         .into_iter()
         .map(|(key, value)| (key, AvroValue::Bytes(value)))
         .collect::<HashMap<_, _>>();
-    let encoded_metadata = apache_avro::to_avro_datum(
-        &AvroSchema::map(AvroSchema::Bytes),
-        AvroValue::Map(metadata),
-    )
-    .map_err(|error| format!("Avro header serialization error: {error}"))?;
+    let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
+    let encoded_metadata = GenericDatumWriter::builder(&metadata_schema)
+        .build()
+        .and_then(|writer| writer.write_value_to_vec(AvroValue::Map(metadata)))
+        .map_err(|error| format!("Avro header serialization error: {error}"))?;
 
     let mut output = Vec::with_capacity(
         AVRO_OBJECT_HEADER.len() + encoded_metadata.len() + marker.len() + bytes.len()
@@ -382,7 +386,8 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     version: FormatVersion,
 ) -> Result<usize, String> {
     let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version);
-    let mut avro_writer = AvroWriter::new(&encoding_schema, Vec::new());
+    let mut avro_writer = create_avro_writer(&encoding_schema, Vec::new())
+        .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
     for data_file in data_files {
         let serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
@@ -391,7 +396,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
         avro_writer
-            .append(value)
+            .append_value(value)
             .map_err(|e| format!("Avro append error: {e}"))?;
     }
 
@@ -707,9 +712,10 @@ mod tests {
         .map_err(|error| format!("Avro to_value error: {error}"))?
         .resolve(&legacy_schema)
         .map_err(|error| format!("Avro resolve error: {error}"))?;
-        let mut writer = AvroWriter::new(&legacy_schema, Vec::new());
+        let mut writer = AvroWriter::new(&legacy_schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
         writer
-            .append(value)
+            .append_value(value)
             .map_err(|error| format!("Avro append error: {error}"))?;
         let bytes = writer
             .into_inner()
