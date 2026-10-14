@@ -38,10 +38,8 @@ impl ScalarUDFImpl for SparkCaseWhen {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() < 2 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (2, usize::MAX),
-                arg_types.len(),
+            return Err(plan_datafusion_err!(
+                "CASE requires at least one WHEN/THEN pair"
             ));
         }
         let then_types = arg_types
