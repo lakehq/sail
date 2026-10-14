@@ -3422,6 +3422,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
             "spark_shift_count" => Ok(Arc::new(ScalarUDF::from(SparkShiftCount::default()))),
+            "shiftleft" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::left()))),
+            "shiftright" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right()))),
             "shiftrightunsigned" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right_unsigned()))),
             "spark_bitwise_not" | "bitwise_not" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
@@ -3568,7 +3570,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkShiftCount>()
-            || (node_inner.is::<SparkBitShift>() && node.name() == "shiftrightunsigned")
+            || node_inner.is::<SparkBitShift>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
@@ -6651,10 +6653,16 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_unsigned_shift_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkBitShift::right_unsigned()))?;
-        assert_eq!(decoded.name(), "shiftrightunsigned");
-        assert!(decoded.inner().is::<SparkBitShift>());
+    fn test_round_trip_spark_bit_shift_udfs() -> Result<()> {
+        for (name, udf) in [
+            ("shiftleft", SparkBitShift::left()),
+            ("shiftright", SparkBitShift::right()),
+            ("shiftrightunsigned", SparkBitShift::right_unsigned()),
+        ] {
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+            assert_eq!(decoded.name(), name);
+            assert!(decoded.inner().is::<SparkBitShift>());
+        }
         Ok(())
     }
 
