@@ -6,6 +6,23 @@ from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructT
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
+def test_when_otherwise_schema(spark):
+    df = spark.createDataFrame([(-1,), (1,), (None,)], "x int")
+    result = df.select(
+        F.when(df.x < 0, -1).when(df.x > 0, 1).otherwise(0).alias("exhaustive"),
+        F.when(df.x.isNotNull(), df.x).otherwise(0).alias("nullable_branch"),
+        F.when(df.x > 0, 1).alias("no_default"),
+    )
+    assert result.schema == StructType(
+        [
+            StructField("exhaustive", IntegerType(), False),
+            StructField("nullable_branch", IntegerType(), True),
+            StructField("no_default", IntegerType(), True),
+        ]
+    )
+    assert result.collect() == [Row(-1, -1, None), Row(1, 1, 1), Row(0, 0, None)]
+
+
 def test_get_item_ignore_case(spark):
     df = spark.sql("SELECT struct(1 AS b) AS a")
     assert df.select(df.a.getItem("b")).collect() == [Row(**{"a.b": 1})]

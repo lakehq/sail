@@ -67,10 +67,561 @@ Feature: when output schema
         | NTZ first | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'             | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'      |
         | LTZ first | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'        | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'            |
 
+  Rule: Spark-compatible coercion for temporal branches
+
+    Scenario Outline: Conditional temporal branches retain TIMESTAMP values and schema with <kind> in <zone> and ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      And config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN <first> ELSE ts END AS case_result,
+          CASE WHEN id = 1 THEN ts ELSE <first> END AS reversed_case,
+          IF(id = 0, <first>, ts) AS if_result,
+          NVL2(NULLIF(id, 0), ts, <first>) AS nvl2_result
+        FROM (
+          SELECT id, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321' AS ts FROM range(2)
+        ) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | reversed_case              | if_result                  | nvl2_result                |
+        | <first_value>              | <first_value>              | <first_value>              | <first_value>              |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp (nullable = false)
+         |-- reversed_case: timestamp (nullable = false)
+         |-- if_result: timestamp (nullable = false)
+         |-- nvl2_result: timestamp (nullable = false)
+        """
+
+      Examples:
+        | kind          | zone                | ansi  | first                                        | first_value                |
+        | DATE          | UTC                 | false | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | UTC                 | true  | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | America/Los_Angeles | false | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | DATE          | America/Los_Angeles | true  | DATE '2024-07-01'                             | 2024-07-01 00:00:00         |
+        | TIMESTAMP_NTZ | UTC                 | false | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | UTC                 | true  | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | America/Los_Angeles | false | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+        | TIMESTAMP_NTZ | America/Los_Angeles | true  | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456'      | 2024-07-01 01:02:03.123456 |
+
+    Scenario Outline: Conditional temporal coercion preserves nullable <kind> columns
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CASE id % 2 WHEN 0 THEN d ELSE ts END AS case_result,
+          IF(id % 2 = 0, d, ts) AS if_result,
+          NVL2(NULLIF(id % 2, 0), ts, d) AS nvl2_result
+        FROM VALUES
+          (0, <first>, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (1, <first>, TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (2, CAST(NULL AS <kind>), TIMESTAMP_LTZ '2024-07-02 03:04:05.654321'),
+          (3, <first>, CAST(NULL AS TIMESTAMP_LTZ))
+        AS t(id, d, ts) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | if_result                  | nvl2_result                |
+        | <first_value>              | <first_value>              | <first_value>              |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+        | NULL                       | NULL                       | NULL                       |
+        | NULL                       | NULL                       | NULL                       |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp (nullable = true)
+         |-- if_result: timestamp (nullable = true)
+         |-- nvl2_result: timestamp (nullable = true)
+        """
+
+      Examples:
+        | kind          | first                                   | first_value                |
+        | DATE          | DATE '2024-07-01'                        | 2024-07-01 00:00:00         |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456' | 2024-07-01 01:02:03.123456 |
+
+    Scenario Outline: CASE and IF retain DATE to TIMESTAMP_NTZ cast nullability with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN DATE '2024-07-01'
+               ELSE TIMESTAMP_NTZ '2024-07-02 03:04:05.654321' END AS case_result,
+          IF(id = 0, DATE '2024-07-01', TIMESTAMP_NTZ '2024-07-02 03:04:05.654321') AS if_result
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | if_result                  |
+        | 2024-07-01 00:00:00         | 2024-07-01 00:00:00         |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp_ntz (nullable = true)
+         |-- if_result: timestamp_ntz (nullable = true)
+        """
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+  Rule: Spark-compatible coercion for numeric branches
+
+    Scenario Outline: CASE widens numeric branches to the Spark common type with ANSI enabled: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN <first_branch> ELSE <second_branch> END AS result,
+          typeof(CASE WHEN id = 0 THEN <first_branch> ELSE <second_branch> END) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result         | result_type   |
+        | 0  | <first_value>  | <result_type> |
+        | 1  | <second_value> | <result_type> |
+
+      Examples:
+        | case                        | first_branch                | second_branch               | first_value   | second_value | result_type   |
+        | INT then BIGINT             | 1                           | CAST(3000000000 AS BIGINT)  | 1             | 3000000000   | bigint        |
+        | BIGINT then INT             | CAST(3000000000 AS BIGINT)  | 1                           | 3000000000    | 1            | bigint        |
+        | SMALLINT then BIGINT        | CAST(1 AS SMALLINT)         | CAST(2 AS BIGINT)           | 1             | 2            | bigint        |
+        | INT then DOUBLE             | 1                           | CAST(1.5 AS DOUBLE)         | 1.0           | 1.5          | double        |
+        | INT then FLOAT              | 1                           | CAST(1.5 AS FLOAT)          | 1.0           | 1.5          | double        |
+        | INT then DECIMAL            | 1                           | CAST(1.75 AS DECIMAL(10,2)) | 1.00          | 1.75         | decimal(12,2) |
+        | INT then wider DECIMAL      | 1                           | CAST(1 AS DECIMAL(20,0))    | 1             | 1            | decimal(20,0) |
+        | BIGINT then DECIMAL         | CAST(3000000000 AS BIGINT)  | CAST(1.25 AS DECIMAL(5,2))  | 3000000000.00 | 1.25         | decimal(22,2) |
+        | FLOAT then DECIMAL          | CAST(1.5 AS FLOAT)          | CAST(1.25 AS DECIMAL(5,2))  | 1.5           | 1.25         | double        |
+
+    @spark-4.0
+    Scenario: CASE keeps integral digits when the common DECIMAL precision exceeds the maximum
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(1.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END AS result,
+          typeof(CASE WHEN id = 0 THEN CAST(1.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result | result_type   |
+        | 0  | 2      | decimal(38,0) |
+        | 1  | 1      | decimal(38,0) |
+
+    Scenario: CASE widens integral and FLOAT branches to FLOAT with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN 1 ELSE CAST(1.5 AS FLOAT) END AS result,
+          typeof(CASE WHEN id = 0 THEN 1 ELSE CAST(1.5 AS FLOAT) END) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result | result_type |
+        | 0  | 1.0    | float       |
+        | 1  | 1.5    | float       |
+
+    Scenario: CASE widens numeric branches in order across all branches
+      When query
+        """
+        SELECT
+          id,
+          CASE
+            WHEN id = 0 THEN CAST(1 AS TINYINT)
+            WHEN id = 1 THEN NULL
+            WHEN id = 2 THEN 2
+            ELSE CAST(2.5 AS DECIMAL(3,1))
+          END AS result,
+          typeof(CASE
+            WHEN id = 0 THEN CAST(1 AS TINYINT)
+            WHEN id = 1 THEN NULL
+            WHEN id = 2 THEN 2
+            ELSE CAST(2.5 AS DECIMAL(3,1))
+          END) AS result_type,
+          CASE WHEN id = 0 THEN 1 WHEN id = 1 THEN CAST(3000000000 AS BIGINT) END AS no_else
+        FROM VALUES (0), (1), (2), (3) AS t(id)
+        """
+      Then query result
+        | id | result | result_type   | no_else    |
+        | 0  | 1.0    | decimal(11,1) | 1          |
+        | 1  | NULL   | decimal(11,1) | 3000000000 |
+        | 2  | 2.0    | decimal(11,1) | NULL       |
+        | 3  | 2.5    | decimal(11,1) | NULL       |
+
+    Scenario: CASE declares the widened numeric type in the output schema
+      When query
+        """
+        SELECT CASE WHEN c <= 0 THEN 1 ELSE c END AS result
+        FROM VALUES (CAST(3000000000 AS BIGINT)), (CAST(0 AS BIGINT)), (CAST(NULL AS BIGINT)) AS t(c)
+        """
+      Then query result
+        | result     |
+        | 3000000000 |
+        | 1          |
+        | NULL       |
+      And query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: sequence over a widened CASE bound can be exploded
+      When query
+        """
+        SELECT c, i, typeof(i) AS i_type
+        FROM (
+          SELECT c, explode(sequence(0, CASE WHEN c <= 0 THEN 1 ELSE c END - 1)) AS i
+          FROM VALUES (CAST(3 AS BIGINT)), (CAST(1 AS BIGINT)), (CAST(0 AS BIGINT)) AS t(c)
+        )
+        """
+      Then query result
+        | c | i | i_type |
+        | 3 | 0 | bigint |
+        | 3 | 1 | bigint |
+        | 3 | 2 | bigint |
+        | 1 | 0 | bigint |
+        | 0 | 0 | bigint |
+
+    Scenario Outline: Exhaustive numeric CASE declares non-nullable output with ANSI <ansi>: <form>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS v FROM range(2)
+        """
+      Then query result
+        | v |
+        | 1 |
+        | 2 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
+      Examples:
+        | ansi  | form     | expression                                    |
+        | true  | searched | CASE WHEN id = 0 THEN 1L ELSE 2L END           |
+        | false | searched | CASE WHEN id = 0 THEN 1L ELSE 2L END           |
+        | true  | simple   | CASE id WHEN 0 THEN 1L ELSE 2L END             |
+        | false | simple   | CASE id WHEN 0 THEN 1L ELSE 2L END             |
+
+    Scenario: CASE retains nullable result branches even when the conditions exclude NULL
+      When query
+        """
+        SELECT
+          CASE WHEN x IS NOT NULL THEN x ELSE 0 END AS searched,
+          CASE x WHEN 1 THEN x ELSE 0 END AS simple,
+          CASE WHEN x < 0 THEN x WHEN x >= 0 THEN x ELSE 0 END AS multiple,
+          CASE WHEN false THEN CAST(NULL AS INT) ELSE 0 END AS unreachable
+        FROM VALUES (-1), (1), (CAST(NULL AS INT)) AS t(x)
+        """
+      Then query result
+        | searched | simple | multiple | unreachable |
+        | -1       | 0      | -1       | 0           |
+        | 1        | 1      | 1        | 0           |
+        | 0        | 0      | 0        | 0           |
+      And query schema
+        """
+        root
+         |-- searched: integer (nullable = true)
+         |-- simple: integer (nullable = true)
+         |-- multiple: integer (nullable = true)
+         |-- unreachable: integer (nullable = true)
+        """
+
+    Scenario: CASE without a default and CASE with a NULL default remain nullable
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN 1L END AS implicit_null,
+          CASE id WHEN 0 THEN 1L ELSE NULL END AS explicit_null
+        FROM range(2)
+        """
+      Then query result
+        | implicit_null | explicit_null |
+        | 1             | 1             |
+        | NULL          | NULL          |
+      And query schema
+        """
+        root
+         |-- implicit_null: long (nullable = true)
+         |-- explicit_null: long (nullable = true)
+        """
+
+    Scenario: A literal TRUE branch determines CASE nullability before later branches
+      When query
+        """
+        SELECT
+          CASE WHEN true THEN 1L END AS no_default,
+          CASE WHEN id = 0 THEN 0L WHEN true THEN 1L ELSE NULL END AS null_default,
+          CASE WHEN true THEN 1L WHEN id = 0 THEN NULL ELSE 2L END AS later_branch,
+          CASE WHEN id = 0 THEN NULL WHEN true THEN 1L ELSE 2L END AS earlier_branch
+        FROM range(2)
+        """
+      Then query result
+        | no_default | null_default | later_branch | earlier_branch |
+        | 1          | 0            | 1            | NULL           |
+        | 1          | 1            | 1            | 1              |
+      And query schema
+        """
+        root
+         |-- no_default: long (nullable = false)
+         |-- null_default: long (nullable = false)
+         |-- later_branch: long (nullable = false)
+         |-- earlier_branch: long (nullable = true)
+        """
+
+    Scenario: An unreachable CASE default still makes a projection aggregate
+      When query
+        """
+        SELECT CASE WHEN true THEN 1L ELSE sum(id) END AS v FROM range(3)
+        """
+      Then query result
+        | v |
+        | 1 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
+    Scenario: An unreachable CASE default must have a compatible type
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 ELSE array(2) END AS v
+        """
+      Then query error (?i)(DATATYPE_MISMATCH|coerce.*common types)
+
+    Scenario: A literal TRUE CASE does not evaluate a malformed numeric default
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CASE WHEN true THEN id ELSE 'bad' END AS v FROM range(2)
+        """
+      Then query result
+        | v |
+        | 0 |
+        | 1 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
+  Rule: Spark-compatible coercion for non-numeric branches
+
+    Scenario Outline: CASE widens numeric STRING branches to the Spark common type: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(CASE WHEN id = 0 THEN <first_branch> ELSE <second_branch> END) AS result_type
+        FROM VALUES (0) AS t(id)
+        """
+      Then query result
+        | result_type   |
+        | <result_type> |
+
+      Examples:
+        | case                         | first_branch                        | second_branch                   | result_type   |
+        | INT then STRING              | 1                                   | '2'                             | bigint        |
+        | ARRAY INT then ARRAY STRING  | array(1)                            | array('2')                      | array<bigint> |
+
+    Scenario: CASE widens TIMESTAMP_NTZ with TIMESTAMP
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(CASE WHEN id = 0 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'
+                           ELSE TIMESTAMP '2024-01-01 00:00:00' END) AS result_type
+        FROM VALUES (0) AS t(id)
+        """
+      Then query result
+        | result_type |
+        | timestamp   |
+
+    Scenario: CASE declares the existing common type of nested integral branches
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(CASE WHEN id = 0 THEN array(1) ELSE array(CAST(2 AS BIGINT)) END) AS result_type
+        FROM VALUES (0) AS t(id)
+        """
+      Then query result
+        | result_type   |
+        | array<bigint> |
+
+    Scenario: CASE over a CASE with INT and STRING branches keeps STRING values with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE CASE WHEN id = 1 THEN 1 ELSE 'x' END END AS result
+        FROM VALUES (0), (1), (2) AS t(id)
+        """
+      Then query result
+        | id | result |
+        | 0  | 2      |
+        | 1  | 1      |
+        | 2  | x      |
+
+    Scenario: CASE preserves STRING values across a projection with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE v END AS result
+        FROM (
+          SELECT id, CASE WHEN id = 1 THEN 1 ELSE 'x' END AS v
+          FROM VALUES (0), (1), (2) AS t(id)
+        ) AS q
+        """
+      Then query result
+        | id | result |
+        | 0  | 2      |
+        | 1  | 1      |
+        | 2  | x      |
+
+  Rule: Legacy DECIMAL truncation
+
+    @spark-4.0
+    Scenario Outline: CASE honors the legacy DECIMAL truncation config: <retain_fraction_digits>
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = <retain_fraction_digits>
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END AS result,
+          typeof(CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result         | result_type   |
+        | 0  | <first_value>  | <result_type> |
+        | 1  | <second_value> | <result_type> |
+
+      Examples:
+        | retain_fraction_digits | first_value   | second_value | result_type    |
+        | false                  | -3            | 1            | decimal(38,0)  |
+        | true                   | -2.5000000000 | 1.0000000000 | decimal(38,10) |
+
+    @spark-4.0
+    @sail-bug
+    Scenario: Legacy decimal conditional overflow returns NULL with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT id, if(id = 0,
+          CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)),
+          CAST(1 AS DECIMAL(38,10))) AS result
+        FROM range(2)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result       |
+        | 0  | NULL         |
+        | 1  | 1.0000000000 |
+
+  Rule: Persistent views
+
+    Scenario: CASE in a persistent view keeps the type resolved with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_float_bigint_legacy_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(1.5 AS FLOAT) ELSE CAST(3 AS BIGINT) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_float_bigint_legacy_view
+        """
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_float_bigint_legacy_view
+        """
+      Then query result
+        | id | v   | v_type |
+        | 0  | 1.5 | float  |
+        | 1  | 3.0 | float  |
+
+    Scenario: CASE in a persistent view keeps the type resolved with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_float_bigint_ansi_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(1.5 AS FLOAT) ELSE CAST(3 AS BIGINT) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_float_bigint_ansi_view
+        """
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_float_bigint_ansi_view
+        """
+      Then query result
+        | id | v   | v_type |
+        | 0  | 1.5 | double |
+        | 1  | 3.0 | double |
+
+    @spark-4.0
+    Scenario: CASE in a persistent view keeps its nonlegacy DECIMAL truncation policy
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_decimal_nonlegacy_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10))
+          ELSE CAST(1 AS DECIMAL(38,0)) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_decimal_nonlegacy_view
+        """
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_decimal_nonlegacy_view
+        """
+      Then query result
+        | id | v  | v_type        |
+        | 0  | -3 | decimal(38,0) |
+        | 1  | 1  | decimal(38,0) |
+
+    @spark-4.0
+    Scenario: CASE in a persistent view keeps its legacy DECIMAL truncation policy
+      Given config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = true
+      And statement
+        """
+        CREATE OR REPLACE VIEW case_decimal_legacy_view AS
+        SELECT id, CASE WHEN id = 0 THEN CAST(-2.5 AS DECIMAL(38,10))
+          ELSE CAST(1 AS DECIMAL(38,0)) END AS v FROM range(2)
+        """
+      And final statement
+        """
+        DROP VIEW IF EXISTS case_decimal_legacy_view
+        """
+      And config spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false
+      When query
+        """
+        SELECT id, v, typeof(v) AS v_type FROM case_decimal_legacy_view
+        """
+      Then query result
+        | id | v             | v_type         |
+        | 0  | -2.5000000000 | decimal(38,10) |
+        | 1  | 1.0000000000  | decimal(38,10) |
+
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to when yields the schema Spark declares
       When query
         """

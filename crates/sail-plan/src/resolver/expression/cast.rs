@@ -10,6 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
@@ -149,6 +150,11 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (
+                DataType::Date32 | DataType::Date64,
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ) => ScalarUDF::from(SparkConditionalCast::new(cast_to_type)).call(vec![expr]),
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),

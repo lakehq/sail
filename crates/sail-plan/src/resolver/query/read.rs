@@ -11,7 +11,9 @@ use datafusion_expr::{
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseOperation, TableColumnStatus, TableKind, VIEW_SQL_CONFIG_PREFIX,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -157,15 +159,21 @@ impl PlanResolver<'_> {
                 definition,
                 columns,
                 comment: _,
-                properties: _,
+                properties,
             } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                self.resolve_table_view(definition, columns, table_reference.clone(), state)
-                    .await?
+                self.resolve_table_view(
+                    definition,
+                    columns,
+                    properties,
+                    table_reference.clone(),
+                    state,
+                )
+                .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {
@@ -218,17 +226,48 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    // FIXME: Capture and restore the remaining creation-time SQL configuration.
+    //  Currently only ANSI mode and decimal truncation policy are retained.
     async fn resolve_table_view(
         &self,
         definition: String,
         columns: Vec<TableColumnStatus>,
+        properties: Vec<(String, String)>,
         table_reference: TableReference,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        // Older views without a captured ANSI setting use non-ANSI coercion.
+        let ansi_mode = properties
+            .iter()
+            .find(|(key, _)| {
+                key.strip_prefix(VIEW_SQL_CONFIG_PREFIX) == Some("spark.sql.ansi.enabled")
+            })
+            .and_then(|(_, value)| value.parse::<bool>().ok())
+            .unwrap_or(false);
+        // Older views retain the existing nonlegacy decimal rule.
+        let legacy_decimal_retain_fraction_digits = properties
+            .iter()
+            .find(|(key, _)| {
+                key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
+                    == Some("spark.sql.legacy.decimal.retainFractionDigitsOnTruncate")
+            })
+            .and_then(|(_, value)| value.parse::<bool>().ok())
+            .unwrap_or(false);
+        let resolver = if self.config.ansi_mode != ansi_mode
+            || self.config.legacy_decimal_retain_fraction_digits
+                != legacy_decimal_retain_fraction_digits
+        {
+            let mut config = self.config.as_ref().clone();
+            config.ansi_mode = ansi_mode;
+            config.legacy_decimal_retain_fraction_digits = legacy_decimal_retain_fraction_digits;
+            &Self::new(self.ctx, Arc::new(config))
+        } else {
+            self
+        };
         let plan = match spec_plan {
-            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
                 return Err(PlanError::invalid("view definition must be a query"));
             }

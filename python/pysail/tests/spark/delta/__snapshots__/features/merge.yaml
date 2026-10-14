@@ -211,6 +211,9 @@ data:
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after push_union_conditional:
+    SAME TEXT AS ABOVE
+
     logical_plan after simplify_expressions:
     RowLevelWrite: command=Merge, mode=CopyOnWrite, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
@@ -534,6 +537,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_union_conditional:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:

@@ -65,6 +65,45 @@ Feature: CAST expressions
   @function(nullability)
   Rule: Output schema
 
+    Scenario Outline: DATE to TIMESTAMP_NTZ casts are nullable with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(d AS TIMESTAMP_NTZ) AS ntz, CAST(d AS TIMESTAMP_LTZ) AS ltz
+        FROM VALUES (DATE '1969-12-31'), (DATE '2024-07-01') AS t(d) ORDER BY d
+        """
+      Then query result ordered
+        | ntz                 | ltz                 |
+        | 1969-12-31 00:00:00 | 1969-12-31 00:00:00 |
+        | 2024-07-01 00:00:00 | 2024-07-01 00:00:00 |
+      And query schema
+        """
+        root
+         |-- ntz: timestamp_ntz (nullable = true)
+         |-- ltz: timestamp (nullable = false)
+        """
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario: DATE to TIMESTAMP_NTZ casts preserve NULL values
+      When query
+        """
+        SELECT CAST(d AS TIMESTAMP_NTZ) AS result
+        FROM VALUES (0, DATE '2024-07-01'), (1, CAST(NULL AS DATE)) AS t(id, d) ORDER BY id
+        """
+      Then query result ordered
+        | result              |
+        | 2024-07-01 00:00:00 |
+        | NULL                |
+      And query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = true)
+        """
+
     Scenario: a non-null literal input to cast yields the schema Spark declares
       Given config spark.sql.ansi.enabled = false
       When query
