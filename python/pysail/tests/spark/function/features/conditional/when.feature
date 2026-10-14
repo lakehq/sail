@@ -298,6 +298,22 @@ Feature: when output schema
         """
       Then query error (?i)(DATATYPE_MISMATCH|coerce.*common types)
 
+    Scenario: A literal TRUE CASE does not evaluate a malformed numeric default
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CASE WHEN true THEN id ELSE 'bad' END AS v FROM range(2)
+        """
+      Then query result
+        | v |
+        | 0 |
+        | 1 |
+      And query schema
+        """
+        root
+         |-- v: long (nullable = false)
+        """
+
   Rule: Spark-compatible coercion for non-numeric branches
 
     Scenario Outline: CASE widens numeric STRING branches to the Spark common type: <case>
