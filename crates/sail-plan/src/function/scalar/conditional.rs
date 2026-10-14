@@ -6,9 +6,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::{
-    SparkConditionalCast, SparkNvl2, preserve_nested_metadata,
-};
+use sail_function::scalar::conditional::{SparkNvl2, preserve_nested_metadata};
+use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;

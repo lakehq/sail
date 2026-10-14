@@ -9,7 +9,7 @@ use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, ScalarUDF};
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
-use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 
 /// Finish lowering Spark conditionals after their schemas have been resolved.
 #[derive(Debug, Default)]

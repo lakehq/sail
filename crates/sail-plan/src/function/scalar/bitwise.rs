@@ -3,7 +3,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conditional::{SparkConditionalCast, SparkShiftCount};
+use sail_function::scalar::conditional::SparkShiftCount;
+use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder, ScalarFunctionInput};

@@ -15,7 +15,7 @@ use datafusion_expr::{
 };
 use regex::Regex;
 use sail_common::spec;
-use sail_function::scalar::conditional::SparkConditionalCast;
+use sail_function::scalar::conversion::spark_conditional_cast::SparkConditionalCast;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::config::PlanConfig;
