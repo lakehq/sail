@@ -10,14 +10,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use apache_avro::Schema as AvroSchema;
+use std::collections::HashMap;
+use std::io::Write;
+
 use apache_avro::schema::{RecordField as AvroRecordField, UnionSchema};
+use apache_avro::types::Value as AvroValue;
+use apache_avro::{AvroResult, Schema as AvroSchema, Writer as AvroWriter};
 use serde_json::{Number, Value as JsonValue};
 
 /// Avro custom attribute used to annotate Iceberg field ids.
 pub const FIELD_ID_ATTR: &str = "field-id";
 /// Avro custom attribute used to retain an Iceberg field's original name.
 pub const ICEBERG_FIELD_NAME_ATTR: &str = "iceberg-field-name";
+
+/// Create an uncompressed Avro writer with an explicit codec in the header.
+pub(crate) fn create_avro_writer<W: Write>(
+    schema: &AvroSchema,
+    writer: W,
+) -> AvroResult<AvroWriter<'_, W>> {
+    // Avro 0.22 omits the null codec, but PyIceberg treats a missing codec as
+    // its default Iceberg compression (gzip) rather than uncompressed Avro.
+    AvroWriter::builder()
+        .schema(schema)
+        .writer(writer)
+        .user_metadata(HashMap::from([(
+            "avro.codec".to_string(),
+            AvroValue::Bytes(b"null".to_vec()),
+        )]))
+        .build()
+}
 
 /// Convert an Iceberg field name to a valid Avro field name.
 pub(crate) fn avro_compatible_name(name: &str) -> String {

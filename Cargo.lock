@@ -7993,6 +7993,7 @@ dependencies = [
  "fastrace",
  "futures",
  "h2",
+ "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",

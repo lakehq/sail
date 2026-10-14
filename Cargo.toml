@@ -33,6 +33,7 @@ pbjson-build = "0.9.0"
 educe = "0.8.1"
 tower = { version = "0.5.3", features = ["full"] }
 hyper = { version = "1.11.1", features = ["client", "http2"] }
+http-body-util = "0.1.4"
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http2", "tokio"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http2", "native-tokio", "ring", "tls12"] }
 h2 = "0.4.19"

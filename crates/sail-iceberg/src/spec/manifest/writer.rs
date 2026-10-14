@@ -20,12 +20,13 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
 use crate::spec::FormatVersion;
+use crate::spec::avro_utils::create_avro_writer;
 use crate::spec::manifest_list::{FieldSummary, ManifestContentType, ManifestFile};
 use crate::spec::types::{Datum, Literal, PrimitiveLiteral, PrimitiveType, Type};
 
@@ -347,7 +348,7 @@ impl ManifestWriter {
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
             super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
-        let mut writer = AvroWriter::new(&encoding_schema, Vec::new())
+        let mut writer = create_avro_writer(&encoding_schema, Vec::new())
             .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         // Add user metadata per Iceberg spec

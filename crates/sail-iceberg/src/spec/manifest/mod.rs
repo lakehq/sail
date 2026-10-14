@@ -34,13 +34,14 @@ mod schema;
 mod writer;
 
 // Provide data file avro helpers API surface
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
 
 use crate::spec::Schema as IcebergSchema;
+use crate::spec::avro_utils::create_avro_writer;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
@@ -385,7 +386,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     version: FormatVersion,
 ) -> Result<usize, String> {
     let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version);
-    let mut avro_writer = AvroWriter::new(&encoding_schema, Vec::new())
+    let mut avro_writer = create_avro_writer(&encoding_schema, Vec::new())
         .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
     for data_file in data_files {
