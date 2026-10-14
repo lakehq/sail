@@ -54,7 +54,7 @@ impl AggregateUDFImpl for ThetaSketchAggFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let lg_nom_entries = resolve_lg_nom_entries(&acc_args, 1, "theta_sketch_agg")?;
-        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)))
+        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -179,12 +179,12 @@ struct ThetaSketchAggAccumulator {
 }
 
 impl ThetaSketchAggAccumulator {
-    fn new(lg_nom_entries: u8) -> Self {
-        Self {
-            sketch: new_update_sketch(lg_nom_entries),
+    fn new(lg_nom_entries: u8) -> Result<Self> {
+        Ok(Self {
+            sketch: new_update_sketch(lg_nom_entries)?,
             merged: None,
             lg_nom_entries,
-        }
+        })
     }
 
     fn evaluate_bytes(&self) -> Result<Vec<u8>> {

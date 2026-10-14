@@ -79,6 +79,7 @@ message RemoteCheckpointWriteExecNode {
   string object_store_url = 2;
   string prefix = 3;
   bytes storage_schema = 4;
+  LexOrdering input_ordering = 5;
 }
 
 message RemoteCheckpointCommitExecNode {
@@ -154,6 +155,8 @@ message HigherOrderUdf {
     ConvertTzUdf convert_tz_lazy = 8;
     SparkMapFilterUdf map_filter = 9;
     SparkRegexpInstrUdf regexp_instr = 10;
+    SparkTransformValuesUdf transform_values = 11;
+    SparkTransformKeysUdf transform_keys = 12;
   }
 }
 
@@ -170,6 +173,12 @@ message SparkRegexpInstrUdf {
 message SparkArrayForallUdf {}
 
 message SparkMapFilterUdf {}
+
+message SparkTransformValuesUdf {}
+
+message SparkTransformKeysUdf {
+  bool last_value_wins = 1;
+}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only

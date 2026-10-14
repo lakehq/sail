@@ -526,8 +526,7 @@ data:
     ProjectionExec: expr=[#3@0 as name]
       ProjectionExec: expr=[name@0 as #3]
         FilterExec: value@1 >= 200, projection=[name@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/dv_explain/part-<id>.snappy.parquet]]}, projection=[name, value], file_type=parquet, predicate=value@2 >= 200 AND value@2 >= 200, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 200 AND value_null_count@1 != row_count@2 AND value_max@0 >= 200, required_guarantees=[]
+          DataSourceExec: file_groups={1 group: [[<tmp>/dv_explain/part-<id>.snappy.parquet]]}, projection=[name, value], file_type=parquet, predicate=value@2 >= 200 AND value@2 >= 200, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 200 AND value_null_count@1 != row_count@2 AND value_max@0 >= 200, required_guarantees=[]
 ---
 name: "test_explain_extended_delete_on_dv_table_shows_mergeonread_mode"
 data:

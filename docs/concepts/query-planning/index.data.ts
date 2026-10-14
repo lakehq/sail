@@ -1,3 +1,5 @@
-import { createGraphvizLoader } from "../../.vitepress/theme/utils/graphviz";
+import { createGraphvizLoader } from "../../.vitepress/theme/utils/graphviz.ts";
 
-export default createGraphvizLoader(["./*.dot"], __dirname, { scale: 0.5 });
+export default createGraphvizLoader(["./*.dot"], import.meta.dirname, {
+  scale: 0.5,
+});

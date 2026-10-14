@@ -89,7 +89,10 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
             .source
             .downcast_ref::<crate::change_data_feed::ChangeDataFeedSource>()
         {
-            return source.scan(session, scan.projection.as_deref()).map(Some);
+            return source
+                .scan(session, scan.projection.as_deref())
+                .await
+                .map(Some);
         }
         if let Some(source) = scan.source.downcast_ref::<DeltaMetadataAggregateSource>() {
             return plan_delta_metadata_aggregate(session, source)

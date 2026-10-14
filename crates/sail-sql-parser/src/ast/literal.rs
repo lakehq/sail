@@ -293,6 +293,73 @@ impl TreeText for IntegerLiteral {
     }
 }
 
+/// An unquoted configuration value such as `Asia/Kolkata`.
+/// The value is made of the adjacent non-whitespace tokens, up to a whitespace character,
+/// a semicolon, or the end of the input.
+#[derive(Debug, Clone)]
+pub struct ConfigValue {
+    pub span: TokenSpan,
+    pub value: String,
+}
+
+impl<'a, I, E> TreeParser<'a, I, E> for ConfigValue
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
+    fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+        custom(|input: &mut InputRef<'a, '_, I, E>| {
+            let marker = input.save();
+            let mut value = String::new();
+            loop {
+                let before = input.save();
+                match input.next() {
+                    Some(Token::Word { raw, keyword: _ }) => value.push_str(raw),
+                    Some(Token::Punctuation(p)) if p != Punctuation::Semicolon => {
+                        value.push_str(&Token::Punctuation(p).to_string());
+                    }
+                    _ => {
+                        input.rewind(before);
+                        break;
+                    }
+                }
+            }
+            if value.is_empty() {
+                let token = input.next();
+                return Err(E::Error::expected_found(
+                    vec![TokenLabel::ConfigValue],
+                    token.map(Into::into),
+                    input.span_since(marker.cursor()),
+                ));
+            }
+            let literal = ConfigValue {
+                span: input.span_since(marker.cursor()).into(),
+                value,
+            };
+            skip_whitespace(input);
+            Ok(literal)
+        })
+    }
+}
+
+impl TreeSyntax for ConfigValue {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "ConfigValue".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::ConfigValue),
+            children: vec![],
+        }
+    }
+}
+
+impl TreeText for ConfigValue {
+    fn text(&self) -> String {
+        format!("{} ", self.value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StringLiteral {
     pub span: TokenSpan,
