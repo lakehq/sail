@@ -141,6 +141,32 @@ Feature: when output schema
         | DATE          | DATE '2024-07-01'                        | 2024-07-01 00:00:00         |
         | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-07-01 01:02:03.123456' | 2024-07-01 01:02:03.123456 |
 
+    Scenario Outline: CASE and IF retain DATE to TIMESTAMP_NTZ cast nullability with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN DATE '2024-07-01'
+               ELSE TIMESTAMP_NTZ '2024-07-02 03:04:05.654321' END AS case_result,
+          IF(id = 0, DATE '2024-07-01', TIMESTAMP_NTZ '2024-07-02 03:04:05.654321') AS if_result
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | case_result                | if_result                  |
+        | 2024-07-01 00:00:00         | 2024-07-01 00:00:00         |
+        | 2024-07-02 03:04:05.654321 | 2024-07-02 03:04:05.654321 |
+      And query schema
+        """
+        root
+         |-- case_result: timestamp_ntz (nullable = true)
+         |-- if_result: timestamp_ntz (nullable = true)
+        """
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
   Rule: Spark-compatible coercion for numeric branches
 
     Scenario Outline: CASE widens numeric branches to the Spark common type with ANSI enabled: <case>

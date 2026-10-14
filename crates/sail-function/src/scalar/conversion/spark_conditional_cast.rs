@@ -14,7 +14,7 @@ use datafusion_expr::{
 
 use crate::error::invalid_arg_count_exec_err;
 
-// Strict casts introduced by conditional branch and numeric argument coercion. Keeping the cast
+// Strict casts that need Spark's schema or lazy conditional evaluation. Keeping the cast
 // in a UDF lets DataFusion defer invalid literals in unselected CASE branches.
 // TODO: Preserve Spark's eager constant-cast errors outside conditional branches,
 //  including UNION inputs consumed by a conditional filter. Shared constant folding
@@ -67,7 +67,12 @@ impl ScalarUDFImpl for SparkConditionalCast {
             // Spark Cast.forceNullable includes fractional-to-integral casts,
             // including in ANSI mode where an invalid value raises an error.
             || ((source.data_type().is_floating() || source.data_type().is_decimal())
-            && self.target_type.is_integer());
+            && self.target_type.is_integer())
+            // DATE-to-TIMESTAMP_NTZ is also nullable in Spark's cast schema.
+            || matches!(
+                (source.data_type(), &self.target_type),
+                (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, None))
+            );
         Ok(Arc::new(Field::new(
             self.name(),
             self.target_type.clone(),

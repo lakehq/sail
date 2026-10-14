@@ -1,3 +1,5 @@
+import datetime as dt
+
 import pytest
 
 
@@ -60,6 +62,20 @@ def test_conditional_retains_nullable_branch_after_binding_a_cast_parameter(spar
     assert result.dtypes == [("v", "bigint")]
     assert result.schema["v"].nullable
     assert result.collect() == [(value,), (7,)]
+
+
+@pytest.mark.parametrize("value", [dt.date(2024, 7, 1), None])
+@pytest.mark.parametrize(("marker", "named"), [("?", False), (":value", True)], ids=["positional", "named"])
+def test_date_to_timestamp_ntz_keeps_nullable_schema_after_binding(spark, value, marker, named):
+    result = spark.sql(
+        f"SELECT CAST(d AS TIMESTAMP_NTZ) AS direct, "  # noqa: S608
+        f"coalesce(d, CAST(NULL AS TIMESTAMP_NTZ)) AS coalesced FROM (SELECT CAST({marker} AS DATE) AS d)",
+        args={"value": value} if named else [value],
+    )
+    assert result.dtypes == [("direct", "timestamp_ntz"), ("coalesced", "timestamp_ntz")]
+    assert all(field.nullable for field in result.schema)
+    expected = "2024-07-01 00:00:00" if value is not None else None
+    assert result.selectExpr("CAST(direct AS STRING)", "CAST(coalesced AS STRING)").collect() == [(expected, expected)]
 
 
 @pytest.mark.parametrize("alias", ["", " AS t"], ids=["anonymous", "named"])

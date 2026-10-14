@@ -6674,6 +6674,7 @@ mod tests {
             DataType::Int64,
             DataType::Float64,
             DataType::Decimal128(22, 2),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
             DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
             DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
         ] {

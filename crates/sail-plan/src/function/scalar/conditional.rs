@@ -136,9 +136,7 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let data_types = argument_types(&arguments, &function_context)?;
-    // TODO: Coerce COALESCE's DATE/TIMESTAMP branches to microsecond TIMESTAMP;
-    // DataFusion's common type can be Timestamp(Nanosecond, None).
-    let arguments = coerce_string_temporal_values(arguments, data_types, &function_context)?;
+    let arguments = coerce_temporal_values(arguments, data_types, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
 }
 
@@ -150,23 +148,8 @@ fn coerce_branch_values(
 ) -> PlanResult<Vec<expr::Expr>> {
     let data_types = argument_types(&arguments, function_context)?;
     if data_types.iter().any(is_temporal_type) {
-        if data_types
-            .iter()
-            .all(|data_type| data_type.is_null() || is_temporal_type(data_type))
-            && let Some(common_type) =
-                common_temporal_type(&data_types, &function_context.plan_config.session_timezone)
-        {
-            // Spark uses microseconds and retains LTZ if any branch has a timezone.
-            // TODO: Match Spark's nullable DATE-to-TIMESTAMP_NTZ cast schema.
-            // TODO: Preserve stored-view cast timezones during later analysis.
-            return arguments
-                .into_iter()
-                .zip(data_types.iter())
-                .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &common_type))
-                .collect();
-        }
         // A temporal branch cannot have a numeric common type.
-        coerce_string_temporal_values(arguments, data_types, function_context)
+        coerce_temporal_values(arguments, data_types, function_context)
     } else {
         coerce_numeric_values(arguments, data_types, function_context)
     }
@@ -525,7 +508,7 @@ fn integral_decimal_precision(data_type: &DataType) -> Option<u8> {
     }
 }
 
-fn coerce_string_temporal_values(
+fn coerce_temporal_values(
     arguments: Vec<expr::Expr>,
     data_types: Vec<DataType>,
     function_context: &FunctionContextInput<'_>,
@@ -533,6 +516,19 @@ fn coerce_string_temporal_values(
     let has_string = data_types.iter().any(is_string_type);
     let temporal_type =
         common_temporal_type(&data_types, &function_context.plan_config.session_timezone);
+    if data_types
+        .iter()
+        .all(|data_type| data_type.is_null() || is_temporal_type(data_type))
+        && let Some(common_type) = &temporal_type
+    {
+        // Spark uses microseconds and retains LTZ if any branch has a timezone.
+        // TODO: Preserve stored-view cast timezones during later analysis.
+        return arguments
+            .into_iter()
+            .zip(data_types.iter())
+            .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, common_type))
+            .collect();
+    }
     let arguments = if has_string {
         if let Some(temporal_type) = temporal_type {
             if function_context.plan_config.ansi_mode {
@@ -583,6 +579,8 @@ fn coerce_to_temporal(
             }
             _ => Ok(cast(arg, target_type.clone())),
         }
+    } else if is_date_type(data_type) && matches!(target_type, DataType::Timestamp(_, None)) {
+        Ok(ScalarUDF::from(SparkConditionalCast::new(target_type.clone())).call(vec![arg]))
     } else if is_temporal_type(data_type) {
         Ok(cast(arg, target_type.clone()))
     } else {

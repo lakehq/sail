@@ -69,9 +69,7 @@ Feature: nvl2 output schema
          |-- result: void (nullable = true)
         """
 
-    @sail-bug
     Scenario: NVL2 includes DATE to TIMESTAMP_NTZ cast nullability
-      # The shared DATE cast currently reports non-nullability in Sail.
       When query
         """
         SELECT nvl2(nullif(id, 0), DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-02 03:04:05') AS result
