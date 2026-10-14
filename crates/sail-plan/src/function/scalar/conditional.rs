@@ -32,25 +32,43 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 branch_values.push(result);
             }
             _ => {
-                conditions.push(lit(true));
                 branch_values.push(condition);
                 break;
             }
         }
     }
-    let branch_values = coerce_branch_values(branch_values, &function_context)?;
+    let mut branch_values = coerce_branch_values(branch_values, &function_context)?;
+    let nullable = branch_values.iter().try_fold(false, |nullable, value| {
+        value
+            .nullable(function_context.schema)
+            .map(|value_nullable| nullable || value_nullable)
+    })?;
+    let else_expr = if branch_values.len() > conditions.len() {
+        branch_values.pop().map(Box::new)
+    } else {
+        None
+    };
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
-    // TODO: Preserve Spark's non-nullable result for exhaustive CASE branches.
-    // The implicit ELSE NULL still makes these results nullable in DataFusion.
-    Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
+    // The SQL analyzer already turns simple CASE operands into equality conditions.
+    let mut result = expr::Expr::Case(expr::Case {
+        expr: None,
         when_then_expr,
-        else_expr: None,
-    }))
+        else_expr,
+    });
+    if nullable
+        && !result.nullable(function_context.schema)?
+        && let expr::Expr::Case(case) = &mut result
+    {
+        // CASE TRUE retains Spark's branch nullability when searched CASE infers
+        // that a nullable THEN value cannot be NULL under its condition.
+        case.expr = Some(Box::new(lit(true)));
+    }
+    // TODO: Match Spark's nullability when a literal WHEN TRUE makes ELSE unreachable.
+    Ok(result)
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

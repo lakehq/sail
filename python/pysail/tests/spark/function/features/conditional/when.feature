@@ -188,12 +188,11 @@ Feature: when output schema
         | 1 | 0 | bigint |
         | 0 | 0 | bigint |
 
-    @sail-bug
-    Scenario Outline: Exhaustive numeric CASE declares non-nullable output with ANSI <ansi>
+    Scenario Outline: Exhaustive numeric CASE declares non-nullable output with ANSI <ansi>: <form>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT CASE WHEN id = 0 THEN 1L ELSE 2L END AS v FROM range(2)
+        SELECT <expression> AS v FROM range(2)
         """
       Then query result
         | v |
@@ -206,9 +205,54 @@ Feature: when output schema
         """
 
       Examples:
-        | ansi  |
-        | true  |
-        | false |
+        | ansi  | form     | expression                                    |
+        | true  | searched | CASE WHEN id = 0 THEN 1L ELSE 2L END           |
+        | false | searched | CASE WHEN id = 0 THEN 1L ELSE 2L END           |
+        | true  | simple   | CASE id WHEN 0 THEN 1L ELSE 2L END             |
+        | false | simple   | CASE id WHEN 0 THEN 1L ELSE 2L END             |
+
+    Scenario: CASE retains nullable result branches even when the conditions exclude NULL
+      When query
+        """
+        SELECT
+          CASE WHEN x IS NOT NULL THEN x ELSE 0 END AS searched,
+          CASE x WHEN 1 THEN x ELSE 0 END AS simple,
+          CASE WHEN x < 0 THEN x WHEN x >= 0 THEN x ELSE 0 END AS multiple,
+          CASE WHEN false THEN CAST(NULL AS INT) ELSE 0 END AS unreachable
+        FROM VALUES (-1), (1), (CAST(NULL AS INT)) AS t(x)
+        """
+      Then query result
+        | searched | simple | multiple | unreachable |
+        | -1       | 0      | -1       | 0           |
+        | 1        | 1      | 1        | 0           |
+        | 0        | 0      | 0        | 0           |
+      And query schema
+        """
+        root
+         |-- searched: integer (nullable = true)
+         |-- simple: integer (nullable = true)
+         |-- multiple: integer (nullable = true)
+         |-- unreachable: integer (nullable = true)
+        """
+
+    Scenario: CASE without a default and CASE with a NULL default remain nullable
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN 1L END AS implicit_null,
+          CASE id WHEN 0 THEN 1L ELSE NULL END AS explicit_null
+        FROM range(2)
+        """
+      Then query result
+        | implicit_null | explicit_null |
+        | 1             | 1             |
+        | NULL          | NULL          |
+      And query schema
+        """
+        root
+         |-- implicit_null: long (nullable = true)
+         |-- explicit_null: long (nullable = true)
+        """
 
   Rule: Spark-compatible coercion for non-numeric branches
 
