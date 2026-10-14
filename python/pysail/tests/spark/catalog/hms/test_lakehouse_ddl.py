@@ -271,3 +271,104 @@ def test_lakehouse_table_rename(spark, jvm_spark, hms_s3_database, fmt):
     spark.sql(f"INSERT INTO {target} VALUES (2)")
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert [r.id for r in jvm_spark.sql(f"SELECT id FROM {reference} ORDER BY id").collect()] == [1, 2]
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_lakehouse_replace_columns(spark, jvm_spark, hms_s3_database, fmt):
+    from pysail.testing.spark.ddl import exercise_lakehouse_replace_columns
+
+    name = f"{hms_s3_database}.replace_columns"
+    reference = _reference_name(hms_s3_database, "replace_columns", fmt)
+    properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+    spark.sql(f"CREATE TABLE {name} (id INT, value STRING) USING {fmt} {properties}")
+    expected = exercise_lakehouse_replace_columns(spark, name, fmt)
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [tuple(row) for row in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == expected
+    assert jvm_spark.table(reference).schema["value"].metadata["comment"] == "123"
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_lakehouse_set_location(spark, jvm_spark, hms_s3_database, fmt):
+    name = f"{hms_s3_database}.location_source"
+    reference = _reference_name(hms_s3_database, "location_source", fmt)
+    spark.sql(f"CREATE TABLE {name} (id INT) USING {fmt}")
+    spark.sql(f"INSERT INTO {name} VALUES (1)")
+    old_location = _describe_extended_properties(spark, name)["Location"]
+    if fmt == "delta":
+        target = f"{hms_s3_database}.location_target"
+        spark.sql(f"CREATE TABLE {target} (id INT) USING delta")
+        spark.sql(f"INSERT INTO {target} VALUES (2)")
+        new_location = _describe_extended_properties(spark, target)["Location"]
+        first = 2
+    else:
+        new_location = old_location + "_moved"
+        first = 1
+    spark.sql(f"ALTER TABLE {name} SET LOCATION '{new_location}'")
+    assert _describe_extended_properties(spark, name)["Location"].rstrip("/") == new_location.rstrip("/")
+    spark.sql(f"INSERT INTO {name} VALUES (3)")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [r.id for r in jvm_spark.sql(f"SELECT id FROM {reference} ORDER BY id").collect()] == [first, 3]
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (4)")
+    assert [r.id for r in spark.table(name).orderBy("id").collect()] == [first, 3, 4]
+    if fmt == "iceberg":
+        iceberg = jvm_spark._jvm.org.apache.iceberg
+        loaded = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)
+        assert loaded.location().rstrip("/") == new_location.rstrip("/")
+    # Verify the same catalog operation in the reference runtime, then write through Sail.
+    reference_location = old_location if fmt == "delta" else new_location + "_reference"
+    jvm_spark.sql(f"ALTER TABLE {reference} SET LOCATION '{reference_location}'")
+    spark.sql(f"INSERT INTO {name} VALUES (5)")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    expected = [1, 5] if fmt == "delta" else [1, 3, 4, 5]
+    assert [r.id for r in jvm_spark.sql(f"SELECT id FROM {reference} ORDER BY id").collect()] == expected
+
+
+def test_iceberg_write_order(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    from pysail.testing.spark.ddl import exercise_iceberg_write_order
+
+    name = f"{hms_s3_database}.write_order"
+    reference = f"iceberg.{name}"
+    spark.sql(f"CREATE TABLE {name} (id INT, value INT) USING iceberg")
+    exercise_iceberg_write_order(spark, name)
+    _, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, "write_order", hms_s3_env)
+    order_id = metadata["default-sort-order-id"]
+    assert order_id != 0
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert jvm_spark.sql(f"SELECT * FROM {reference}").count() == 4
+    jvm_spark.sql(f"ALTER TABLE {reference} WRITE UNORDERED")
+    jvm_spark.sql(f"ALTER TABLE {reference} WRITE ORDERED BY id DESC NULLS LAST, value ASC")
+    _, reference_metadata = _iceberg_metadata(jvm_spark, hms_s3_database, "write_order", hms_s3_env)
+    assert reference_metadata["default-sort-order-id"] == order_id
+    assert reference_metadata["sort-orders"] == metadata["sort-orders"]
+    spark.sql(f"INSERT INTO {name} VALUES (5, 5)")
+    assert spark.table(name).count() == 5
+
+
+def test_iceberg_partition_evolution(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    from pysail.testing.spark.ddl import exercise_iceberg_partition_evolution
+
+    name = f"{hms_s3_database}.partition_evolution"
+    reference = f"iceberg.{name}"
+    spark.sql(f"CREATE TABLE {name} (id INT, part STRING) USING iceberg PARTITIONED BY (part)")
+    exercise_iceberg_partition_evolution(spark, name)
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [(1, "zz"), (3, "updated"), (4, "longer")]
+    _, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, "partition_evolution", hms_s3_env)
+    jvm_spark.sql(f"ALTER TABLE {reference} ADD PARTITION FIELD bucket(4, id) AS id_bucket")
+    spark.sql(f"INSERT INTO {name} VALUES (5, 'after')")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert jvm_spark.sql(f"SELECT * FROM {reference}").count() == 4
+    _, updated = _iceberg_metadata(jvm_spark, hms_s3_database, "partition_evolution", hms_s3_env)
+    assert updated["partition-specs"][:len(metadata["partition-specs"])] == metadata["partition-specs"]
+
+
+def test_iceberg_v2_merge_on_read_update(spark, jvm_spark, hms_s3_database):
+    name = f"{hms_s3_database}.mor_update"
+    reference = f"iceberg.{name}"
+    spark.sql(f"CREATE TABLE {name} (id INT, value INT) USING iceberg PARTITIONED BY (bucket(2, id)) TBLPROPERTIES ('format-version'='2', 'write.update.mode'='merge-on-read')")
+    spark.sql(f"INSERT INTO {name} VALUES (1, 10), (2, 20), (3, 30)")
+    spark.sql(f"UPDATE {name} SET value=value+1 WHERE id<=2")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [(1, 11), (2, 21), (3, 30)]
+    jvm_spark.sql(f"UPDATE {reference} SET value=value+1 WHERE id>=2")
+    assert [tuple(r) for r in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [(1, 11), (2, 22), (3, 31)]

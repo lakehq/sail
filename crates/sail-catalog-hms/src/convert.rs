@@ -937,6 +937,27 @@ pub(crate) fn alter_columns(
             }
         }
     }
+    replace_columns_with_partitions(table, &updated, partition_names)
+}
+
+pub(crate) fn replace_columns(
+    table: &mut Table,
+    schema: &arrow::datatypes::Schema,
+) -> CatalogResult<()> {
+    let partition_names = table
+        .partition_keys
+        .iter()
+        .flatten()
+        .map(|c| c.name.as_ref().map(ToString::to_string).unwrap_or_default())
+        .collect();
+    replace_columns_with_partitions(table, schema, partition_names)
+}
+
+fn replace_columns_with_partitions(
+    table: &mut Table,
+    updated: &arrow::datatypes::Schema,
+    partition_names: Vec<String>,
+) -> CatalogResult<()> {
     let mut columns = Vec::new();
     let mut partitions = Vec::new();
     for field in updated.fields() {

@@ -1375,10 +1375,24 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterPartitionSpec {
+        add: Option<(Expr, Option<String>)>,
+        drop: Option<Expr>,
+    },
+    SetWriteOrder {
+        order: Vec<SortOrder>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
     RenameTable {
         name: ObjectName,
     },
     Unknown,
+    ReplaceColumns {
+        columns: Vec<super::ColumnChange>,
+    },
     AlterColumns {
         changes: Vec<super::ColumnChange>,
     },

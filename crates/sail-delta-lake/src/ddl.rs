@@ -54,6 +54,325 @@ pub(crate) async fn drop_check_constraint(
     .await
 }
 
+pub(crate) async fn set_location(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+    location: &str,
+) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+    if lakehouse.is_none() {
+        return plan_err!("SET LOCATION requires a catalog table");
+    }
+    let current = open_table(ctx, path, lakehouse).await?;
+    let target = open_table(ctx, location, None).await?;
+    let current = current
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let target = target
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    crate::lake_source::ensure_not_catalog_managed_delta(current, "ALTER TABLE SET LOCATION")?;
+    crate::lake_source::ensure_not_catalog_managed_delta(target, "ALTER TABLE SET LOCATION")?;
+    if crate::schema::normalize::strip_internal_delta_metadata(current.schema())
+        != crate::schema::normalize::strip_internal_delta_metadata(target.schema())
+        || current.metadata().partition_columns() != target.metadata().partition_columns()
+    {
+        return plan_err!(
+            "SET LOCATION requires the same schema and partition columns at the new Delta location"
+        );
+    }
+    Ok(
+        sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+            schema: Some(Arc::new(target.schema().clone())),
+            ..Default::default()
+        },
+    )
+}
+
+pub(crate) async fn replace_columns(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+    requested: &datafusion::arrow::datatypes::Schema,
+) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+    use datafusion::arrow::datatypes::{DataType, Schema};
+    use sail_common::spec::ColumnChange;
+    use sail_common_datafusion::column_features::ColumnFeatures;
+
+    use crate::schema::type_widening::{
+        add_type_widening_metadata, collect_type_changes, is_supported_type_change_for_write,
+        protocol_can_write_type_widening,
+    };
+    use crate::spec::{ColumnMappingMode, StructType};
+
+    let table = open_table(ctx, path, lakehouse).await?;
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .clone();
+    if catalog_managed_commit_context(lakehouse).is_none() {
+        crate::lake_source::ensure_not_catalog_managed_delta(
+            &snapshot,
+            "ALTER TABLE REPLACE COLUMNS",
+        )?;
+    }
+    if snapshot
+        .schema()
+        .fields()
+        .iter()
+        .any(|f| ColumnFeatures::from_field(f).identity().is_some())
+    {
+        return plan_err!("REPLACE COLUMNS is not supported for Delta identity columns");
+    }
+    let current = StructType::try_from(snapshot.schema())?;
+    let arrow = Schema::try_from(&current)?;
+    let mut drops = Vec::new();
+    let DataType::Struct(fields) = replace_delta_type(
+        &DataType::Struct(arrow.fields().clone()),
+        &DataType::Struct(requested.fields().clone()),
+        &[],
+        snapshot.effective_column_mapping_mode() != ColumnMappingMode::None,
+        &mut drops,
+    )?
+    else {
+        return plan_err!("Invalid replacement schema");
+    };
+    if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
+        validate_unmapped_names(&fields)?;
+    }
+    for partition in snapshot.metadata().partition_columns() {
+        if !fields.iter().any(|f| f.name() == partition) {
+            return plan_err!("Cannot drop a partition column");
+        }
+    }
+    if !drops.is_empty()
+        && (snapshot
+            .metadata()
+            .configuration()
+            .keys()
+            .any(|key| key.starts_with("delta.constraints."))
+            || arrow.fields().iter().any(|f| {
+                ColumnFeatures::from_field(f)
+                    .generation_expression()
+                    .is_some()
+            }))
+    {
+        return plan_err!(
+            "Cannot drop columns while CHECK constraints or generated columns depend on the schema"
+        );
+    }
+    let updated = Schema::new(fields);
+    let candidate =
+        preserve_schema_metadata(&current, &StructType::try_from(&updated)?, updated.fields())?;
+    let type_changes = collect_type_changes(&current, &candidate)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    if !type_changes.is_empty() {
+        if !snapshot.table_properties().enable_type_widening()
+            || !protocol_can_write_type_widening(snapshot.protocol())
+        {
+            return plan_err!(
+                "Changing column types requires delta.enableTypeWidening=true and the typeWidening table feature"
+            );
+        }
+        for (_, change) in &type_changes {
+            if !is_supported_type_change_for_write(
+                snapshot.protocol(),
+                &change.from_type,
+                &change.to_type,
+            ) {
+                return plan_err!(
+                    "Unsupported column type change: {} -> {}",
+                    change.from_type,
+                    change.to_type
+                );
+            }
+        }
+    }
+    let candidate = add_type_widening_metadata(&current, &candidate)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let (candidate, mut metadata) = crate::schema::manager::evolve_schema(
+        &current,
+        &candidate,
+        snapshot.metadata(),
+        snapshot.effective_column_mapping_mode(),
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut properties = Vec::new();
+    const STATS: &str = "delta.dataSkippingStatsColumns";
+    let changes = drops
+        .into_iter()
+        .map(|path| ColumnChange::Drop {
+            path,
+            if_exists: false,
+        })
+        .collect::<Vec<_>>();
+    if let Some(value) = metadata.configuration().get(STATS)
+        && let Some(value) = update_statistics_columns(value, &changes)?
+    {
+        metadata = metadata.add_config_key(STATS.into(), value.clone());
+        properties.push((STATS.into(), value));
+    }
+    let requested_native = preserve_schema_metadata(
+        &StructType::try_new(vec![])?,
+        &StructType::try_from(requested)?,
+        requested.fields(),
+    )?;
+    let columns = requested
+        .fields()
+        .iter()
+        .map(|field| {
+            crate::lake_source::operation_column_json(&requested_native, &[field.name().clone()])
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let schema = Arc::new(Schema::try_from(&candidate)?);
+    let desired = crate::schema::protocol_for_metadata(&metadata)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let desired = crate::lake_source::avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+        snapshot.protocol(),
+        &desired,
+        metadata.configuration(),
+    );
+    let protocol = snapshot.protocol().merge_upgrade_requirements(&desired);
+    let mut actions = Vec::new();
+    if &protocol != snapshot.protocol() {
+        actions.push(CommitAction::Protocol(protocol));
+    }
+    actions.push(CommitAction::Metadata(metadata));
+    commit(
+        ctx,
+        lakehouse,
+        snapshot,
+        table.log_store(),
+        actions,
+        DeltaOperation::ReplaceColumns { columns },
+    )
+    .await?;
+    Ok(
+        sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+            catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
+            schema: Some(schema),
+            properties,
+            partition_by: None,
+        },
+    )
+}
+
+/// Match existing columns by name, preserving their identity and collection nullability.
+fn replace_delta_type(
+    current: &datafusion::arrow::datatypes::DataType,
+    target: &datafusion::arrow::datatypes::DataType,
+    path: &[String],
+    mapping: bool,
+    drops: &mut Vec<Vec<String>>,
+) -> Result<datafusion::arrow::datatypes::DataType> {
+    use datafusion::arrow::datatypes::{DataType, FieldRef};
+    fn field(
+        old: &FieldRef,
+        new: &FieldRef,
+        path: &[String],
+        mapping: bool,
+        drops: &mut Vec<Vec<String>>,
+        collection: bool,
+    ) -> Result<FieldRef> {
+        if old.is_nullable() && !new.is_nullable() {
+            return plan_err!("Cannot tighten nullability of '{}'", path.join("."));
+        }
+        let ty = replace_delta_type(old.data_type(), new.data_type(), path, mapping, drops)?;
+        let mut updated = old.as_ref().clone().with_data_type(ty);
+        if !collection {
+            updated = updated.with_nullable(new.is_nullable());
+        }
+        if let Some(comment) = new.metadata().get("comment") {
+            updated
+                .metadata_mut()
+                .insert("comment".into(), comment.clone());
+        }
+        Ok(Arc::new(updated))
+    }
+    match (current, target) {
+        (DataType::Struct(old), DataType::Struct(new)) => {
+            let removed = old
+                .iter()
+                .filter(|f| !new.iter().any(|n| n.name().eq_ignore_ascii_case(f.name())))
+                .collect::<Vec<_>>();
+            let added = new
+                .iter()
+                .any(|f| !old.iter().any(|o| o.name().eq_ignore_ascii_case(f.name())));
+            if !removed.is_empty() {
+                if added {
+                    return plan_err!(
+                        "Ambiguous REPLACE COLUMNS: cannot add and drop fields in the same struct"
+                    );
+                }
+                if !mapping {
+                    return plan_err!("Delta DROP COLUMN requires column mapping");
+                }
+                for removed in removed {
+                    let mut removed_path = path.to_vec();
+                    removed_path.push(removed.name().clone());
+                    drops.push(removed_path);
+                }
+            }
+            let fields = new
+                .iter()
+                .map(|new| {
+                    let mut nested = path.to_vec();
+                    nested.push(new.name().clone());
+                    if let Some(old) = old
+                        .iter()
+                        .find(|old| old.name().eq_ignore_ascii_case(new.name()))
+                    {
+                        field(old, new, &nested, mapping, drops, false)
+                    } else {
+                        if !new.is_nullable() {
+                            return plan_err!(
+                                "Cannot add a required column to an existing Delta table"
+                            );
+                        }
+                        reject_nested_required_fields(new.data_type())?;
+                        Ok(new.clone())
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(DataType::Struct(fields.into()))
+        }
+        (DataType::List(old), DataType::List(new)) => {
+            let mut nested = path.to_vec();
+            nested.push("element".into());
+            Ok(DataType::List(field(
+                old, new, &nested, mapping, drops, true,
+            )?))
+        }
+        (DataType::Map(old, sorted), DataType::Map(new, _)) => {
+            let (DataType::Struct(old_fields), DataType::Struct(new_fields)) =
+                (old.data_type(), new.data_type())
+            else {
+                return plan_err!("Invalid map schema");
+            };
+            let fields = old_fields
+                .iter()
+                .zip(new_fields)
+                .map(|(old, new)| {
+                    let mut nested = path.to_vec();
+                    nested.push(if old.name() == "keys" { "key" } else { "value" }.into());
+                    field(old, new, &nested, mapping, drops, true)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(DataType::Map(
+                Arc::new(
+                    old.as_ref()
+                        .clone()
+                        .with_data_type(DataType::Struct(fields.into())),
+                ),
+                *sorted,
+            ))
+        }
+        (old, new) if old == new || (!old.is_nested() && !new.is_nested()) => Ok(new.clone()),
+        _ => plan_err!("Cannot change the structure of column '{}'", path.join(".")),
+    }
+}
+
 pub(crate) async fn alter_columns(
     ctx: &TaskContext,
     path: &str,
@@ -237,6 +556,7 @@ pub(crate) async fn alter_columns(
             catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
             schema: Some(schema),
             properties,
+            partition_by: None,
         },
     )
 }

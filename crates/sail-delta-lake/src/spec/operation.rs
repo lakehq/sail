@@ -66,6 +66,9 @@ pub enum DeltaOperation {
     DynamicPartitionOverwrite {
         partition_by: Option<Vec<String>>,
     },
+    ReplaceColumns {
+        columns: Vec<Value>,
+    },
     AddColumns {
         columns: Vec<Value>,
     },
@@ -142,6 +145,7 @@ pub enum DeltaOperation {
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::ReplaceColumns { .. } => "REPLACE COLUMNS",
             Self::AddColumns { .. } => "ADD COLUMNS",
             Self::DropColumns { .. } => "DROP COLUMNS",
             Self::RenameColumn { .. } => "RENAME COLUMN",
@@ -191,7 +195,7 @@ impl DeltaOperation {
                     insert_json(&mut parameters, "partitionBy", partitions)?;
                 }
             }
-            Self::AddColumns { columns } => {
+            Self::ReplaceColumns { columns } | Self::AddColumns { columns } => {
                 insert_json(&mut parameters, "columns", columns)?;
             }
             Self::DropColumns { columns } => {

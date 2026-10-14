@@ -17,10 +17,11 @@ use crate::logical::row_level::{select_copy_on_write_rows, target_write_state, w
 pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
     let (mode, snapshot_id) = target_write_state(&info.target_plan, RowLevelCommand::Update)?;
     if mode == RowLevelWriteMode::MergeOnRead
-        && !super::row_level::target_scan(&info.target_plan)?.has_row_lineage()
+        && super::row_level::target_scan(&info.target_plan)?.format_version()
+            == crate::spec::FormatVersion::V1
     {
         return not_impl_err!(
-            "Iceberg UPDATE with write.update.mode=merge-on-read requires format-version 3"
+            "Iceberg UPDATE with write.update.mode=merge-on-read requires format-version 2 or 3"
         );
     }
     super::row_level::validate_row_level_columns(

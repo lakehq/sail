@@ -63,6 +63,8 @@ pub struct LakeSourceCreateTableResult {
 
 #[derive(Debug, Default)]
 pub struct LakeSourceAlterTableResult {
+    /// Current logical partition transforms after format metadata has committed.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
     /// The lake source committed catalog metadata together with the format metadata.
     pub catalog_updated: bool,
     /// Committed schema for catalogs that keep a copy of the table's columns.
@@ -81,6 +83,23 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterPartitionSpec {
+        add: Option<(CatalogPartitionField, Option<String>)>,
+        drop: Option<CatalogPartitionField>,
+    },
+    SetPartitioning {
+        partition_by: Vec<CatalogPartitionField>,
+    },
+    SetWriteOrder {
+        order: Vec<crate::catalog::CatalogSortField>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
+    ReplaceColumns {
+        schema: datafusion::arrow::datatypes::SchemaRef,
+    },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
     },
@@ -177,7 +196,12 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
-            LakeSourceAlterTableOperation::AlterColumns { .. } => not_impl_err!(
+            LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
+            | LakeSourceAlterTableOperation::SetPartitioning { .. }
+            | LakeSourceAlterTableOperation::SetWriteOrder { .. }
+            | LakeSourceAlterTableOperation::SetLocation { .. }
+            | LakeSourceAlterTableOperation::ReplaceColumns { .. }
+            | LakeSourceAlterTableOperation::AlterColumns { .. } => not_impl_err!(
                 "Column alteration not supported for lake source '{}'",
                 self.name()
             ),

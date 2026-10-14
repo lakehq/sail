@@ -455,6 +455,21 @@ impl LakeSource for DeltaLakeSource {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
+            | LakeSourceAlterTableOperation::SetPartitioning { .. } => {
+                return not_impl_err!("Partition spec evolution requires an Iceberg table");
+            }
+            LakeSourceAlterTableOperation::SetWriteOrder { .. } => {
+                return not_impl_err!("WRITE ORDERED BY requires an Iceberg table");
+            }
+            LakeSourceAlterTableOperation::SetLocation { location } => {
+                return crate::ddl::set_location(ctx, path, lakehouse_table.as_ref(), &location)
+                    .await;
+            }
+            LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
+                return crate::ddl::replace_columns(ctx, path, lakehouse_table.as_ref(), &schema)
+                    .await;
+            }
             LakeSourceAlterTableOperation::AlterColumns { changes } => {
                 return crate::ddl::alter_columns(ctx, path, lakehouse_table.as_ref(), &changes)
                     .await;
@@ -536,6 +551,11 @@ fn reject_catalog_managed_delta_alter(
 
 fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
+        LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
+        | LakeSourceAlterTableOperation::SetPartitioning { .. } => "ALTER TABLE PARTITION FIELD",
+        LakeSourceAlterTableOperation::SetWriteOrder { .. } => "ALTER TABLE WRITE",
+        LakeSourceAlterTableOperation::SetLocation { .. } => "ALTER TABLE SET LOCATION",
+        LakeSourceAlterTableOperation::ReplaceColumns { .. } => "ALTER TABLE REPLACE COLUMNS",
         LakeSourceAlterTableOperation::AlterColumns { .. } => "ALTER TABLE COLUMNS",
         LakeSourceAlterTableOperation::SetTableProperties { .. } => {
             "ALTER TABLE SET/UNSET TBLPROPERTIES"

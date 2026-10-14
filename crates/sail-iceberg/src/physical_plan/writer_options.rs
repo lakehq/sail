@@ -44,6 +44,8 @@ pub struct VariantShreddingOptionPresence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IcebergWriterExecOptions {
     pub copy_on_write_partitioning: bool,
+    #[serde(default)]
+    pub copy_on_write_single_partition: bool,
     pub target_file_size_bytes: Option<u64>,
     pub compression_codec: Option<String>,
     pub compression_level: Option<String>,
@@ -63,6 +65,7 @@ impl Default for IcebergWriterExecOptions {
     fn default() -> Self {
         Self {
             copy_on_write_partitioning: true,
+            copy_on_write_single_partition: false,
             target_file_size_bytes: None,
             compression_codec: None,
             compression_level: None,
@@ -84,6 +87,7 @@ impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
     fn from(options: IcebergWriteOptions) -> Self {
         Self {
             copy_on_write_partitioning: true,
+            copy_on_write_single_partition: false,
             target_file_size_bytes: options.target_file_size_bytes,
             compression_codec: options.compression_codec,
             compression_level: options.compression_level,

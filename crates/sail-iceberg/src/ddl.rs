@@ -97,6 +97,34 @@ fn catalog_alter_options(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<Vec<AlterTableOptions>> {
     Ok(match operation {
+        LakeSourceAlterTableOperation::AlterPartitionSpec { add, drop } => {
+            vec![AlterTableOptions::AlterPartitionSpec {
+                add: add.clone(),
+                drop: drop.clone(),
+            }]
+        }
+        LakeSourceAlterTableOperation::SetPartitioning { partition_by } => {
+            vec![AlterTableOptions::SetPartitioning {
+                partition_by: partition_by.clone(),
+            }]
+        }
+        LakeSourceAlterTableOperation::SetWriteOrder {
+            order,
+            distribution,
+        } => vec![AlterTableOptions::SetWriteOrder {
+            order: order.clone(),
+            distribution: distribution.clone(),
+        }],
+        LakeSourceAlterTableOperation::SetLocation { location } => {
+            vec![AlterTableOptions::SetLocation {
+                location: location.clone(),
+            }]
+        }
+        LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
+            vec![AlterTableOptions::ReplaceColumns {
+                fields: schema.fields().clone(),
+            }]
+        }
         LakeSourceAlterTableOperation::AlterColumns { changes } => {
             vec![AlterTableOptions::AlterColumns {
                 changes: changes.clone(),
@@ -150,6 +178,35 @@ pub(crate) fn apply_operation(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     match operation {
+        LakeSourceAlterTableOperation::AlterPartitionSpec { add, drop } => {
+            alter_partition_spec(metadata, add.as_ref(), drop.as_ref())
+        }
+        LakeSourceAlterTableOperation::SetPartitioning { partition_by } => {
+            let schema = metadata
+                .current_schema()
+                .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
+            let spec = crate::lake_source::create_table_partition_spec(schema, partition_by)?
+                .assign_ids(metadata);
+            commit_partition_spec(metadata, spec);
+            Ok(())
+        }
+        LakeSourceAlterTableOperation::SetWriteOrder {
+            order,
+            distribution,
+        } => set_write_order(metadata, order, distribution.as_deref()),
+        LakeSourceAlterTableOperation::SetLocation { location } => {
+            if location.trim().is_empty() {
+                return plan_err!("Table location cannot be empty");
+            }
+            metadata.location = location.trim_end_matches('/').to_string();
+            Ok(())
+        }
+        LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
+            if schema.fields().iter().any(|field| !field.is_nullable()) {
+                return plan_err!("Cannot add a required column to an existing Iceberg table");
+            }
+            commit_schema(metadata, schema)
+        }
         LakeSourceAlterTableOperation::AlterColumns { changes } => alter_columns(metadata, changes),
         LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
             for (key, _) in changes {
@@ -253,6 +310,11 @@ pub fn catalog_alter_updates(
         requirements.push(TableRequirement::UuidMatch { uuid });
     }
     let mut updates = Vec::new();
+    if updated.location != metadata.location {
+        updates.push(TableUpdate::SetLocation {
+            location: updated.location.clone(),
+        });
+    }
     if updated.format_version != metadata.format_version {
         updates.push(TableUpdate::UpgradeFormatVersion {
             format_version: updated.format_version,
@@ -286,6 +348,57 @@ pub fn catalog_alter_updates(
             });
             updates.push(TableUpdate::SetCurrentSchema { schema_id: -1 });
         }
+    }
+    if updated.default_spec_id != metadata.default_spec_id {
+        requirements.push(TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: metadata.current_schema_id,
+        });
+        requirements.push(TableRequirement::DefaultSpecIdMatch {
+            default_spec_id: metadata.default_spec_id,
+        });
+        requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id: metadata.last_partition_id,
+        });
+        let spec = updated
+            .default_partition_spec()
+            .ok_or_else(|| DataFusionError::Plan("Missing Iceberg partition spec".into()))?;
+        let spec_id = if metadata
+            .partition_specs
+            .iter()
+            .any(|old| old.spec_id() == spec.spec_id())
+        {
+            spec.spec_id()
+        } else {
+            updates.push(TableUpdate::AddSpec { spec: spec.into() });
+            -1
+        };
+        updates.push(TableUpdate::SetDefaultSpec { spec_id });
+    }
+    if updated.default_sort_order_id != metadata.default_sort_order_id {
+        requirements.push(TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: metadata.current_schema_id,
+        });
+        requirements.push(TableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: i64::from(metadata.default_sort_order_id.unwrap_or(0)),
+        });
+        let order = updated
+            .sort_orders
+            .iter()
+            .find(|order| Some(order.order_id as i32) == updated.default_sort_order_id)
+            .ok_or_else(|| DataFusionError::Plan("Missing Iceberg sort order".into()))?;
+        let sort_order_id = if metadata
+            .sort_orders
+            .iter()
+            .any(|old| old.order_id == order.order_id)
+        {
+            order.order_id
+        } else {
+            updates.push(TableUpdate::AddSortOrder {
+                sort_order: order.clone(),
+            });
+            -1
+        };
+        updates.push(TableUpdate::SetDefaultSortOrder { sort_order_id });
     }
     let properties = updated
         .properties
@@ -351,16 +464,206 @@ fn parse_default(expression: &str, field: &NestedField) -> Result<Literal> {
     Ok(literal)
 }
 
+fn commit_partition_spec(metadata: &mut TableMetadata, spec: crate::spec::PartitionSpec) {
+    metadata.default_spec_id = spec.spec_id();
+    metadata.last_partition_id = metadata
+        .last_partition_id
+        .max(spec.last_assigned_field_id());
+    if !metadata
+        .partition_specs
+        .iter()
+        .any(|old| old.spec_id() == spec.spec_id())
+    {
+        metadata.partition_specs.push(spec);
+    }
+}
+
+fn alter_partition_spec(
+    metadata: &mut TableMetadata,
+    add: Option<&(
+        sail_common_datafusion::catalog::CatalogPartitionField,
+        Option<String>,
+    )>,
+    drop: Option<&sail_common_datafusion::catalog::CatalogPartitionField>,
+) -> Result<()> {
+    use crate::spec::{PartitionField, PartitionSpec, Transform};
+    use crate::utils::partition_transform::{
+        iceberg_transform_from_partition_field, partition_field_name,
+    };
+    let schema = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
+    let mut fields = metadata
+        .default_partition_spec()
+        .map(|spec| spec.fields().to_vec())
+        .unwrap_or_default();
+    if fields.iter().any(|field| !field.source_ids.is_empty()) {
+        return not_impl_err!("Evolution of multi-source partition specs");
+    }
+    // V1 tombstones are retained by assign_ids when constructing the next spec.
+    fields.retain(|field| field.transform != Transform::Void);
+    if let Some(drop) = drop {
+        let source = schema.field_id_by_name(&drop.column);
+        let transform = iceberg_transform_from_partition_field(drop);
+        let index = fields
+            .iter()
+            .position(|field| match source {
+                Some(source) => field.source_id == source && field.transform == transform,
+                None => transform == Transform::Identity && field.name == drop.column,
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!("Partition field '{}' does not exist", drop.column))
+            })?;
+        fields.remove(index);
+    }
+    if let Some((add, name)) = add {
+        let source = schema.field_by_name(&add.column).ok_or_else(|| {
+            DataFusionError::Plan(format!("Partition source '{}' does not exist", add.column))
+        })?;
+        if !matches!(source.field_type.as_ref(), Type::Primitive(_))
+            || schema.field_path_by_id(source.id).is_none()
+        {
+            return plan_err!("Cannot partition by non-primitive column '{}'", add.column);
+        }
+        let transform = iceberg_transform_from_partition_field(add);
+        if matches!(transform, Transform::Bucket(0) | Transform::Truncate(0)) {
+            return plan_err!("Bucket count and truncate width must be positive");
+        }
+        transform
+            .result_type(&source.field_type)
+            .map_err(DataFusionError::Plan)?;
+        let name = name.clone().unwrap_or_else(|| partition_field_name(add));
+        if fields.iter().any(|field| {
+            field.name == name || (field.source_id == source.id && field.transform == transform)
+        }) {
+            return plan_err!("Duplicate partition field '{name}'");
+        }
+        if let Some(named) = schema.field_by_name(&name)
+            && (named.id != source.id || transform != Transform::Identity)
+        {
+            return plan_err!("Partition field name '{name}' conflicts with a schema field");
+        }
+        fields.push(PartitionField::new(source.id, 0, name, transform));
+    }
+    let mut builder = PartitionSpec::builder();
+    for field in fields {
+        builder =
+            builder.add_field_with_id(field.source_id, field.field_id, field.name, field.transform);
+    }
+    let spec = builder.build().assign_ids(metadata);
+    commit_partition_spec(metadata, spec);
+    Ok(())
+}
+
+fn set_write_order(
+    metadata: &mut TableMetadata,
+    requested: &[sail_common_datafusion::catalog::CatalogSortField],
+    distribution: Option<&str>,
+) -> Result<()> {
+    use crate::spec::{NullOrder, SortDirection, SortField, SortOrder};
+    use crate::utils::partition_transform::iceberg_transform_from_partition_field;
+    let schema = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
+    let fields = requested
+        .iter()
+        .map(|field| {
+            let source = schema.field_by_name(&field.field.column).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Sort column '{}' does not exist",
+                    field.field.column
+                ))
+            })?;
+            if !matches!(source.field_type.as_ref(), Type::Primitive(_))
+                || schema.field_path_by_id(source.id).is_none()
+            {
+                return plan_err!(
+                    "Cannot sort by non-primitive column '{}'",
+                    field.field.column
+                );
+            }
+            let transform = iceberg_transform_from_partition_field(&field.field);
+            if matches!(
+                transform,
+                crate::spec::Transform::Bucket(0) | crate::spec::Transform::Truncate(0)
+            ) {
+                return plan_err!("Bucket count and truncate width must be positive");
+            }
+            transform
+                .result_type(&source.field_type)
+                .map_err(DataFusionError::Plan)?;
+            Ok(SortField {
+                source_id: source.id,
+                source_ids: vec![],
+                transform,
+                direction: if field.ascending {
+                    SortDirection::Ascending
+                } else {
+                    SortDirection::Descending
+                },
+                null_order: if field.nulls_first {
+                    NullOrder::First
+                } else {
+                    NullOrder::Last
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let order_id = if let Some(order) = metadata
+        .sort_orders
+        .iter()
+        .find(|order| order.fields == fields)
+    {
+        order.order_id
+    } else {
+        let order_id = if fields.is_empty() {
+            0
+        } else {
+            metadata
+                .sort_orders
+                .iter()
+                .map(|order| order.order_id)
+                .max()
+                .unwrap_or(0)
+                + 1
+        };
+        metadata.sort_orders.push(SortOrder { order_id, fields });
+        order_id
+    };
+    metadata.default_sort_order_id = Some(
+        order_id
+            .try_into()
+            .map_err(|_| DataFusionError::Plan("Iceberg sort order ID overflow".into()))?,
+    );
+    if let Some(distribution) = distribution {
+        metadata
+            .properties
+            .insert("write.distribution-mode".into(), distribution.into());
+    }
+    Ok(())
+}
+
 fn alter_columns(
     metadata: &mut TableMetadata,
     changes: &[sail_common::spec::ColumnChange<datafusion::arrow::datatypes::DataType>],
 ) -> Result<()> {
-    use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
+    use crate::datasource::type_converter::iceberg_schema_to_arrow;
     let current = metadata
         .current_schema()
         .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
     let arrow = iceberg_schema_to_arrow(current)?;
     let updated = sail_common_datafusion::column_change::alter_schema(&arrow, changes)?;
+    commit_schema(metadata, &updated)
+}
+
+fn commit_schema(
+    metadata: &mut TableMetadata,
+    updated: &datafusion::arrow::datatypes::Schema,
+) -> Result<()> {
+    use crate::datasource::type_converter::arrow_field_to_iceberg;
+    let current = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
     let mut last_id = metadata.last_column_id;
     let fields = updated
         .fields()
@@ -387,7 +690,9 @@ fn alter_columns(
     for spec in &metadata.partition_specs {
         if spec.spec_id() == metadata.default_spec_id {
             for field in spec.fields() {
-                if schema.field_by_id(field.source_id).is_none() {
+                if field.transform != crate::spec::Transform::Void
+                    && schema.field_by_id(field.source_id).is_none()
+                {
                     return plan_err!("Cannot drop a column used by the current partition spec");
                 }
             }
@@ -396,7 +701,9 @@ fn alter_columns(
     for order in &metadata.sort_orders {
         if Some(order.order_id) == metadata.default_sort_order_id.map(i64::from) {
             for field in &order.fields {
-                if schema.field_by_id(field.source_id).is_none() {
+                if field.transform != crate::spec::Transform::Void
+                    && schema.field_by_id(field.source_id).is_none()
+                {
                     return plan_err!("Cannot drop a column used by the current sort order");
                 }
             }

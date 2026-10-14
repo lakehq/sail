@@ -513,6 +513,14 @@ pub fn alter_columns(
             .collect::<Vec<_>>(),
     );
     let schema = crate::column_change::alter_schema(&schema, changes)?;
+    replace_columns(columns, &schema);
+    Ok(())
+}
+
+pub fn replace_columns(
+    columns: &mut Vec<TableColumnStatus>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) {
     *columns = schema
         .fields()
         .iter()
@@ -533,5 +541,4 @@ pub fn alter_columns(
             }
         })
         .collect();
-    Ok(())
 }

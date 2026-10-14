@@ -494,6 +494,17 @@ impl CatalogCommand {
                     // Skip straight to catalog-only update.
                     // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
                     // for Delta tables but plain tables fall through to SessionCatalog.
+                    if matches!(
+                        options,
+                        AlterTableOptions::SetWriteOrder { .. }
+                            | AlterTableOptions::AlterPartitionSpec { .. }
+                            | AlterTableOptions::SetPartitioning { .. }
+                    ) && !format.eq_ignore_ascii_case("iceberg")
+                    {
+                        return Err(CatalogError::NotSupported(
+                            "Partition and write order evolution require an Iceberg table".into(),
+                        ));
+                    }
                     if !is_lakehouse_format(&format) {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
@@ -535,13 +546,26 @@ impl CatalogCommand {
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
                     if !result.catalog_updated {
-                        let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                        let mut catalog_options = catalog_sync_alter_options(&format, &options)?;
                         if let Some(schema) = result.schema {
+                            if matches!(catalog_options, AlterTableOptions::ReplaceColumns { .. }) {
+                                catalog_options = AlterTableOptions::ReplaceColumns {
+                                    fields: schema.fields().clone(),
+                                };
+                            }
                             manager
                                 .alter_table_with_schema(&table, catalog_options, schema)
                                 .await?;
                         } else {
                             manager.alter_table(&table, catalog_options).await?;
+                        }
+                        if let Some(partition_by) = result.partition_by {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetPartitioning { partition_by },
+                                )
+                                .await?;
                         }
                         if !result.properties.is_empty() {
                             manager

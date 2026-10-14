@@ -72,11 +72,15 @@ impl MemoryCatalogProvider {
         if let Some(schema) = schema
             && let TableKind::Table { columns, .. } = &mut updated.kind
         {
+            let replace_schema = options
+                .iter()
+                .any(|option| matches!(option, AlterTableOptions::ReplaceColumns { .. }));
             *columns = schema
                 .fields()
                 .iter()
                 .map(|field| {
                     let previous = columns.iter().find(|column| column.name == *field.name());
+                    let inherited = previous.filter(|_| !replace_schema);
                     let features = ColumnFeatures::from_field(field);
                     TableColumnStatus {
                         name: field.name().clone(),
@@ -87,17 +91,17 @@ impl MemoryCatalogProvider {
                             .get("comment")
                             .or_else(|| field.metadata().get("doc"))
                             .cloned()
-                            .or_else(|| previous.and_then(|column| column.comment.clone())),
+                            .or_else(|| inherited.and_then(|column| column.comment.clone())),
                         // Formats may store typed defaults instead of SQL expressions.
                         default: features
                             .current_default()
-                            .or_else(|| previous.and_then(|column| column.default.clone())),
+                            .or_else(|| inherited.and_then(|column| column.default.clone())),
                         generated_always_as: features.generation_expression().or_else(|| {
-                            previous.and_then(|column| column.generated_always_as.clone())
+                            inherited.and_then(|column| column.generated_always_as.clone())
                         }),
                         identity: features
                             .identity()
-                            .or_else(|| previous.and_then(|column| column.identity.clone())),
+                            .or_else(|| inherited.and_then(|column| column.identity.clone())),
                         is_partition: previous.is_some_and(|column| column.is_partition),
                         is_bucket: previous.is_some_and(|column| column.is_bucket),
                         is_cluster: previous.is_some_and(|column| column.is_cluster),
@@ -111,8 +115,42 @@ impl MemoryCatalogProvider {
                     columns,
                     properties,
                     partition_by,
+                    location,
                     ..
                 } => match options {
+                    AlterTableOptions::AlterPartitionSpec { .. } => Ok(()),
+                    AlterTableOptions::SetPartitioning {
+                        partition_by: updated,
+                    } => {
+                        *partition_by = updated;
+                        for column in columns.iter_mut() {
+                            column.is_partition =
+                                partition_by.iter().any(|field| field.column == column.name);
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::SetWriteOrder { distribution, .. } => {
+                        if let Some(value) = distribution {
+                            properties.retain(|(key, _)| key != "write.distribution-mode");
+                            properties.push(("write.distribution-mode".into(), value));
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::SetLocation { location: updated } => {
+                        *location = Some(updated);
+                        Ok(())
+                    }
+                    AlterTableOptions::ReplaceColumns {
+                        fields: replacement,
+                    } => {
+                        if schema.is_none() {
+                            sail_common_datafusion::catalog::replace_columns(
+                                columns,
+                                &arrow::datatypes::Schema::new(replacement),
+                            );
+                        }
+                        Ok(())
+                    }
                     AlterTableOptions::AlterColumns { changes } => {
                         for change in &changes {
                             if let sail_catalog::provider::ColumnChange::Rename { path, name } =

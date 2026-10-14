@@ -17,6 +17,42 @@ pub fn alter_schema(schema: &Schema, changes: &[ColumnChange<DataType>]) -> Resu
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
+/// Build the target schema for REPLACE COLUMNS without applying ADD COLUMN restrictions.
+pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> {
+    let mut fields = Vec::new();
+    for column in columns {
+        let ColumnChange::Add {
+            path,
+            data_type,
+            nullable,
+            comment,
+            default,
+            position,
+        } = column
+        else {
+            return plan_err!("REPLACE COLUMNS requires column definitions");
+        };
+        let [name] = path.as_slice() else {
+            return plan_err!("REPLACE COLUMNS requires top-level column definitions");
+        };
+        if default.is_some() || position.is_some() {
+            return plan_err!("REPLACE COLUMNS does not support DEFAULT or positional clauses");
+        }
+        let mut field = Field::new(name, data_type.clone(), *nullable);
+        if let Some(comment) = comment {
+            field
+                .metadata_mut()
+                .insert("comment".into(), comment.clone());
+        }
+        fields.push(Arc::new(field));
+    }
+    if fields.is_empty() {
+        return plan_err!("Cannot replace a table schema with no columns");
+    }
+    validate_fields(&fields)?;
+    Ok(Schema::new(fields))
+}
+
 fn validate_fields(fields: &[FieldRef]) -> Result<()> {
     let mut names = std::collections::HashSet::new();
     for field in fields {

@@ -166,3 +166,67 @@ def test_rest_table_rename_across_namespaces(spark, reference_catalog):
     finally:
         spark.sql(f"DROP NAMESPACE {source} CASCADE")
         spark.sql(f"DROP NAMESPACE {destination} CASCADE")
+
+
+def test_rest_replace_columns(spark, reference_catalog):
+    from pysail.testing.spark.ddl import exercise_lakehouse_replace_columns
+
+    table = "rest_replace.t"
+    spark.sql("CREATE NAMESPACE rest_replace")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, value STRING) USING iceberg")
+        before = reference_catalog.load_table(table).schema()
+        exercise_lakehouse_replace_columns(spark, table, "iceberg")
+        after = reference_catalog.load_table(table).schema()
+        assert after.find_field("id").field_id > before.highest_field_id
+        assert after.find_field("value").doc == "123"
+    finally:
+        spark.sql("DROP NAMESPACE rest_replace CASCADE")
+
+
+def test_rest_set_location(spark, reference_catalog):
+    table = "rest_location.t"
+    spark.sql("CREATE NAMESPACE rest_location")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        location = reference_catalog.load_table(table).location() + "_moved"
+        spark.sql(f"ALTER TABLE {table} SET LOCATION '{location}'")
+        assert reference_catalog.load_table(table).location() == location
+        spark.sql(f"INSERT INTO {table} VALUES (2)")
+        assert [r.id for r in spark.table(table).orderBy("id").collect()] == [1, 2]
+    finally:
+        spark.sql("DROP NAMESPACE rest_location CASCADE")
+
+
+def test_rest_write_order(spark, reference_catalog):
+    from pysail.testing.spark.ddl import exercise_iceberg_write_order
+
+    table = "rest_order.t"
+    spark.sql("CREATE NAMESPACE rest_order")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg")
+        exercise_iceberg_write_order(spark, table)
+        loaded = reference_catalog.load_table(table)
+        assert len(loaded.sort_order().fields) == 2
+        assert loaded.sort_order().fields[0].direction.value == "desc"
+        assert loaded.properties["write.distribution-mode"] == "range"
+        spark.sql(f"ALTER TABLE {table} WRITE UNORDERED")
+        assert reference_catalog.load_table(table).sort_order().order_id == 0
+    finally:
+        spark.sql("DROP NAMESPACE rest_order CASCADE")
+
+
+def test_rest_partition_evolution(spark, reference_catalog):
+    from pysail.testing.spark.ddl import exercise_iceberg_partition_evolution
+
+    table = "rest_partitions.t"
+    spark.sql("CREATE NAMESPACE rest_partitions")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, part STRING) USING iceberg PARTITIONED BY (part)")
+        exercise_iceberg_partition_evolution(spark, table)
+        loaded = reference_catalog.load_table(table)
+        assert loaded.spec().fields[0].name == "part_prefix"
+        assert str(loaded.spec().fields[0].transform) == "truncate[2]"
+    finally:
+        spark.sql("DROP NAMESPACE rest_partitions CASCADE")

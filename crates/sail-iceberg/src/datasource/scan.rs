@@ -296,6 +296,10 @@ impl IcebergScan {
         Ok(self)
     }
 
+    pub(crate) fn format_version(&self) -> crate::spec::FormatVersion {
+        self.format_version
+    }
+
     pub(crate) fn has_row_lineage(&self) -> bool {
         self.format_version == crate::spec::FormatVersion::V3
     }

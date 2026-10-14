@@ -764,8 +764,72 @@ pub struct ViewColumn {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TableWriteSpec {
+    Distributed {
+        distributed: Distributed,
+        by: By,
+        partition: Partition,
+    },
+    Ordered {
+        locally: Option<crate::ast::keywords::Locally>,
+        ordered: crate::ast::keywords::Ordered,
+        by: By,
+        #[parser(function = |e, o| compose(e, o))]
+        columns: TableWriteOrderList,
+    },
+    Unordered(crate::ast::keywords::Unordered),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TableWriteOrderList {
+    Delimited {
+        left: LeftParenthesis,
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+        columns: Sequence<crate::ast::expression::OrderByExpr, Comma>,
+        right: RightParenthesis,
+    },
+    NotDelimited {
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+        columns: Sequence<crate::ast::expression::OrderByExpr, Comma>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    AddPartitionField {
+        add: Add,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        transform: Expr,
+        name: Option<(As, Ident)>,
+    },
+    DropPartitionField {
+        drop: Drop,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        transform: Expr,
+    },
+    ReplacePartitionField {
+        replace: Replace,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        old: Expr,
+        with: With,
+        #[parser(function = |(e, _), _| boxed(e))]
+        new: Box<Expr>,
+        name: Option<(As, Ident)>,
+    },
+    Write {
+        write: crate::ast::keywords::Write,
+        #[parser(function = |(e, _), o| compose(e, o))]
+        specifications: Vec<TableWriteSpec>,
+    },
     RenameTable {
         rename: Rename,
         to: To,

@@ -54,7 +54,7 @@ use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::manifest::ManifestStatus;
 use crate::spec::metadata::table_metadata::SnapshotLog;
-use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{
     DataContentType, DataFile, Literal, PartitionKey, PartitionSpec, Schema as IcebergSchema,
@@ -355,16 +355,7 @@ impl IcebergCommitExec {
     }
 
     fn unbound_partition_spec(spec: &PartitionSpec) -> UnboundPartitionSpec {
-        let fields = spec
-            .fields()
-            .iter()
-            .map(|field| UnboundPartitionField {
-                source_id: field.source_id,
-                name: field.name.clone(),
-                transform: field.transform,
-            })
-            .collect();
-        UnboundPartitionSpec { fields }
+        spec.into()
     }
 
     async fn load_catalog_table_info(

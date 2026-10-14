@@ -23,6 +23,22 @@ pub(crate) fn apply_alter_table_input(
     input: &mut TableInput,
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
+    if let AlterTableOptions::SetLocation { location } = &options {
+        let storage = input.storage_descriptor.as_mut().ok_or_else(|| {
+            CatalogError::InvalidArgument("Missing Glue storage descriptor".into())
+        })?;
+        storage.location = Some(location.clone());
+        if let Some(serde) = storage.serde_info.as_mut()
+            && let Some(parameters) = serde.parameters.as_mut()
+            && parameters.contains_key("path")
+        {
+            parameters.insert("path".into(), location.clone());
+        }
+        return Ok(());
+    }
+    if let AlterTableOptions::ReplaceColumns { fields } = &options {
+        return replace_columns(input, &arrow::datatypes::Schema::new(fields.clone()));
+    }
     if let AlterTableOptions::AlterColumns { changes } = &options {
         return alter_columns(input, changes);
     }
@@ -89,7 +105,17 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<HashMap<String, String>> {
     match options {
-        AlterTableOptions::AlterColumns { .. } => {
+        // Iceberg partition specs live in format metadata; Glue partition keys stay empty.
+        AlterTableOptions::AlterPartitionSpec { .. }
+        | AlterTableOptions::SetPartitioning { .. } => {}
+        AlterTableOptions::SetWriteOrder { distribution, .. } => {
+            if let Some(value) = distribution {
+                parameters.insert("write.distribution-mode".into(), value);
+            }
+        }
+        AlterTableOptions::SetLocation { .. }
+        | AlterTableOptions::ReplaceColumns { .. }
+        | AlterTableOptions::AlterColumns { .. } => {
             return Err(CatalogError::NotSupported(
                 "Column schema changes require catalog schema synchronization".into(),
             ));
@@ -160,9 +186,8 @@ fn alter_columns(
     changes: &[sail_catalog::provider::ColumnChange<arrow::datatypes::DataType>],
 ) -> CatalogResult<()> {
     use arrow::datatypes::{Field, Schema};
-    use aws_sdk_glue::types::Column;
 
-    use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
+    use crate::data_type::glue_type_to_arrow;
     let original = input
         .storage_descriptor
         .as_ref()
@@ -211,6 +236,30 @@ fn alter_columns(
             }
         }
     }
+    replace_columns_with_partitions(input, &updated, partition_names)
+}
+
+pub(crate) fn replace_columns(
+    input: &mut TableInput,
+    schema: &arrow::datatypes::Schema,
+) -> CatalogResult<()> {
+    let partition_names = input
+        .partition_keys
+        .iter()
+        .flatten()
+        .map(|c| c.name.clone())
+        .collect();
+    replace_columns_with_partitions(input, schema, partition_names)
+}
+
+fn replace_columns_with_partitions(
+    input: &mut TableInput,
+    updated: &arrow::datatypes::Schema,
+    partition_names: Vec<String>,
+) -> CatalogResult<()> {
+    use aws_sdk_glue::types::Column;
+
+    use crate::data_type::arrow_to_glue_type;
     let mut columns = Vec::new();
     let mut partitions = Vec::new();
     for field in updated.fields() {

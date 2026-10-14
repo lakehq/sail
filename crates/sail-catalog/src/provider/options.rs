@@ -137,6 +137,23 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterPartitionSpec {
+        add: Option<(CatalogPartitionField, Option<String>)>,
+        drop: Option<CatalogPartitionField>,
+    },
+    SetPartitioning {
+        partition_by: Vec<CatalogPartitionField>,
+    },
+    SetWriteOrder {
+        order: Vec<sail_common_datafusion::catalog::CatalogSortField>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
+    ReplaceColumns {
+        fields: datafusion::arrow::datatypes::Fields,
+    },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
     },
@@ -171,6 +188,36 @@ impl From<&AlterTableOptions>
     fn from(options: &AlterTableOptions) -> Self {
         use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
         match options {
+            AlterTableOptions::AlterPartitionSpec { add, drop } => {
+                LakeSourceAlterTableOperation::AlterPartitionSpec {
+                    add: add.clone(),
+                    drop: drop.clone(),
+                }
+            }
+            AlterTableOptions::SetPartitioning { partition_by } => {
+                LakeSourceAlterTableOperation::SetPartitioning {
+                    partition_by: partition_by.clone(),
+                }
+            }
+            AlterTableOptions::SetWriteOrder {
+                order,
+                distribution,
+            } => LakeSourceAlterTableOperation::SetWriteOrder {
+                order: order.clone(),
+                distribution: distribution.clone(),
+            },
+            AlterTableOptions::SetLocation { location } => {
+                LakeSourceAlterTableOperation::SetLocation {
+                    location: location.clone(),
+                }
+            }
+            AlterTableOptions::ReplaceColumns { fields } => {
+                LakeSourceAlterTableOperation::ReplaceColumns {
+                    schema: std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(
+                        fields.clone(),
+                    )),
+                }
+            }
             AlterTableOptions::AlterColumns { changes } => {
                 LakeSourceAlterTableOperation::AlterColumns {
                     changes: changes.clone(),

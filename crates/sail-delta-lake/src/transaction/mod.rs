@@ -456,6 +456,7 @@ impl OperationMetrics {
             | DeltaOperation::AddColumns { .. }
             | DeltaOperation::DropColumns { .. }
             | DeltaOperation::RenameColumn { .. }
+            | DeltaOperation::ReplaceColumns { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles

@@ -100,6 +100,32 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
+        // Iceberg partition specs live in format metadata; HMS partition keys stay empty.
+        AlterTableOptions::AlterPartitionSpec { .. }
+        | AlterTableOptions::SetPartitioning { .. } => {}
+        AlterTableOptions::SetWriteOrder { distribution, .. } => {
+            if let Some(value) = distribution {
+                hms_table
+                    .parameters
+                    .get_or_insert_with(AHashMap::new)
+                    .insert("write.distribution-mode".into(), value.into());
+            }
+        }
+        AlterTableOptions::SetLocation { location } => {
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::InvalidArgument("Missing HMS storage descriptor".into())
+            })?;
+            storage.location = Some(location.clone().into());
+            if let Some(serde) = storage.serde_info.as_mut() {
+                let parameters = serde.parameters.get_or_insert_with(AHashMap::new);
+                if parameters.contains_key("path") {
+                    parameters.insert("path".into(), location.into());
+                }
+            }
+        }
+        AlterTableOptions::ReplaceColumns { fields } => {
+            crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
+        }
         AlterTableOptions::AlterColumns { changes } => {
             crate::convert::alter_columns(hms_table, &changes)?
         }

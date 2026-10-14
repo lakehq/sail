@@ -2460,6 +2460,80 @@ fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
     match operation {
+        AlterTableOperation::AddPartitionField {
+            transform, name, ..
+        } => Ok(spec::AlterTableOperation::AlterPartitionSpec {
+            add: Some((
+                from_ast_expression(transform)?,
+                name.map(|(_, name)| name.value),
+            )),
+            drop: None,
+        }),
+        AlterTableOperation::DropPartitionField { transform, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: None,
+                drop: Some(from_ast_expression(transform)?),
+            })
+        }
+        AlterTableOperation::ReplacePartitionField { old, new, name, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: Some((from_ast_expression(*new)?, name.map(|(_, name)| name.value))),
+                drop: Some(from_ast_expression(old)?),
+            })
+        }
+        AlterTableOperation::Write { specifications, .. } => {
+            use sail_sql_parser::ast::statement::{TableWriteOrderList, TableWriteSpec};
+            let mut distributed = false;
+            let mut order = None;
+            let mut distribution = None;
+            for specification in specifications {
+                match specification {
+                    TableWriteSpec::Distributed { .. } => {
+                        if distributed {
+                            return Err(SqlError::invalid("Duplicate write distribution clause"));
+                        }
+                        distributed = true;
+                    }
+                    TableWriteSpec::Ordered {
+                        locally, columns, ..
+                    } => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        let columns = match columns {
+                            TableWriteOrderList::Delimited { columns, .. }
+                            | TableWriteOrderList::NotDelimited { columns } => columns,
+                        };
+                        order = Some(
+                            columns
+                                .into_items()
+                                .map(crate::expression::from_ast_order_by)
+                                .collect::<SqlResult<Vec<_>>>()?,
+                        );
+                        distribution = locally.is_none().then(|| "range".to_string());
+                    }
+                    TableWriteSpec::Unordered(_) => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        order = Some(vec![]);
+                        distribution = Some("none".to_string());
+                    }
+                }
+            }
+            if !distributed && order.is_none() {
+                return Err(SqlError::invalid(
+                    "Missing write ordering or distribution clause",
+                ));
+            }
+            if distributed {
+                distribution = Some("hash".into());
+            }
+            Ok(spec::AlterTableOperation::SetWriteOrder {
+                order: order.unwrap_or_default(),
+                distribution,
+            })
+        }
         AlterTableOperation::SetTableProperties { properties, .. } => {
             let properties = from_ast_property_list(properties)?;
             Ok(spec::AlterTableOperation::SetTableProperties { properties })
@@ -2522,11 +2596,20 @@ fn from_ast_alter_table_operation(
                 name: from_ast_object_name(name)?,
             })
         }
+        AlterTableOperation::SetLocation {
+            partition, value, ..
+        } => {
+            if partition.is_some() {
+                return Err(SqlError::unsupported("ALTER TABLE PARTITION SET LOCATION"));
+            }
+            Ok(spec::AlterTableOperation::SetLocation {
+                location: from_ast_string(value)?,
+            })
+        }
         AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
-        | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::RenameColumn { old, new, .. } => {
             let names: Vec<String> = from_ast_object_name(new)?.into();
@@ -2593,10 +2676,9 @@ fn from_ast_alter_table_operation(
             })
         }
         AlterTableOperation::ReplaceColumns { items, .. } => {
-            // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
-            // clauses) even though we do not yet translate these operations.
-            from_ast_column_alteration_list(items)?;
-            Ok(spec::AlterTableOperation::Unknown)
+            Ok(spec::AlterTableOperation::ReplaceColumns {
+                columns: from_ast_column_alteration_list(items)?,
+            })
         }
     }
 }
