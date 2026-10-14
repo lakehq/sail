@@ -238,9 +238,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
-        let mut config = self.config.as_ref().clone();
         // Older views without a captured ANSI setting use non-ANSI coercion.
-        config.ansi_mode = properties
+        let ansi_mode = properties
             .iter()
             .find(|(key, _)| {
                 key.strip_prefix(VIEW_SQL_CONFIG_PREFIX) == Some("spark.sql.ansi.enabled")
@@ -248,7 +247,7 @@ impl PlanResolver<'_> {
             .and_then(|(_, value)| value.parse::<bool>().ok())
             .unwrap_or(false);
         // Older views retain the existing nonlegacy decimal rule.
-        config.legacy_decimal_retain_fraction_digits = properties
+        let legacy_decimal_retain_fraction_digits = properties
             .iter()
             .find(|(key, _)| {
                 key.strip_prefix(VIEW_SQL_CONFIG_PREFIX)
@@ -256,7 +255,17 @@ impl PlanResolver<'_> {
             })
             .and_then(|(_, value)| value.parse::<bool>().ok())
             .unwrap_or(false);
-        let resolver = Self::new(self.ctx, Arc::new(config));
+        let resolver = if self.config.ansi_mode != ansi_mode
+            || self.config.legacy_decimal_retain_fraction_digits
+                != legacy_decimal_retain_fraction_digits
+        {
+            let mut config = self.config.as_ref().clone();
+            config.ansi_mode = ansi_mode;
+            config.legacy_decimal_retain_fraction_digits = legacy_decimal_retain_fraction_digits;
+            &Self::new(self.ctx, Arc::new(config))
+        } else {
+            self
+        };
         let plan = match spec_plan {
             spec::Plan::Query(query_plan) => resolver.resolve_query_plan(query_plan, state).await?,
             _ => {
