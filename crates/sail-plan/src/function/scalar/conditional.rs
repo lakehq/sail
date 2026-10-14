@@ -58,6 +58,9 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         None
     };
+    let default_nullable = else_expr
+        .as_ref()
+        .map_or(Ok(true), |value| value.nullable(function_context.schema))?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -69,7 +72,10 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         when_then_expr,
         else_expr,
     });
-    if result.nullable(function_context.schema)? == nullable {
+    // A nullable default already makes DataFusion's CASE nullable. Avoid inspecting
+    // conditions that a surrounding null-typed higher-order expression may discard.
+    let datafusion_nullable = default_nullable || result.nullable(function_context.schema)?;
+    if datafusion_nullable == nullable {
         return Ok(result);
     }
     // Retain every branch for type checking and aggregate extraction. The logical
