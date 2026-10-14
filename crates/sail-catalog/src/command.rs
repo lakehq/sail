@@ -92,6 +92,11 @@ pub enum CatalogCommand {
         table: Vec<String>,
         options: DropTableOptions,
     },
+    RenameTable {
+        table: Vec<String>,
+        destination: Vec<String>,
+        if_exists: bool,
+    },
     AlterTable {
         table: Vec<String>,
         if_exists: bool,
@@ -188,6 +193,7 @@ impl CatalogCommand {
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::AlterTable { .. } => "AlterTable",
+            CatalogCommand::RenameTable { .. } => "RenameTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -255,6 +261,7 @@ impl CatalogCommand {
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::AlterTable { .. }
+            | CatalogCommand::RenameTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => display.bools().schema()?,
@@ -440,6 +447,17 @@ impl CatalogCommand {
                 manager.drop_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::RenameTable {
+                table,
+                destination,
+                if_exists,
+            } => {
+                match manager.rename_table(&table, &destination).await {
+                    Err(CatalogError::NotFound(CatalogObject::Table, _)) if if_exists => {}
+                    result => result?,
+                };
+                display.bools().to_record_batch(vec![true])?
+            }
             CatalogCommand::AlterTable {
                 table,
                 if_exists,
@@ -524,6 +542,16 @@ impl CatalogCommand {
                                 .await?;
                         } else {
                             manager.alter_table(&table, catalog_options).await?;
+                        }
+                        if !result.properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetTableProperties {
+                                        properties: result.properties,
+                                    },
+                                )
+                                .await?;
                         }
                     }
                     return Ok(display.bools().to_record_batch(vec![true])?);
@@ -1039,6 +1067,12 @@ fn catalog_sync_alter_options(
             // Existence was checked against the format metadata before committing.
             Ok(AlterTableOptions::UnsetTableProperties {
                 keys: keys.clone(),
+                if_exists: true,
+            })
+        }
+        AlterTableOptions::DropCheckConstraint { name, .. } => {
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: vec![format!("delta.constraints.{}", name.to_lowercase())],
                 if_exists: true,
             })
         }

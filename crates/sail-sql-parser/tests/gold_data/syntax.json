@@ -214,6 +214,22 @@
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
+                        "nonTerminal": "Keyword(Constraint)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
                         "nonTerminal": "Either(Keyword(Column), Keyword(Columns))"
                       },
                       {

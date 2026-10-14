@@ -110,8 +110,33 @@ impl MemoryCatalogProvider {
                 TableKind::Table {
                     columns,
                     properties,
+                    partition_by,
                     ..
                 } => match options {
+                    AlterTableOptions::AlterColumns { changes } => {
+                        for change in &changes {
+                            if let sail_catalog::provider::ColumnChange::Rename { path, name } =
+                                change
+                                && let [old] = path.as_slice()
+                            {
+                                for partition in partition_by.iter_mut() {
+                                    if partition.column.eq_ignore_ascii_case(old) {
+                                        partition.column = name.clone();
+                                    }
+                                }
+                            }
+                        }
+                        if schema.is_none() {
+                            sail_common_datafusion::catalog::alter_columns(columns, &changes)
+                                .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+                        }
+                        for column in columns.iter_mut() {
+                            column.is_partition = partition_by.iter().any(|partition| {
+                                partition.column.eq_ignore_ascii_case(&column.name)
+                            });
+                        }
+                        Ok(())
+                    }
                     AlterTableOptions::SetTableProperties {
                         properties: new_props,
                     } => {
@@ -156,7 +181,8 @@ impl MemoryCatalogProvider {
                             ))
                         })
                     }
-                    AlterTableOptions::AddCheckConstraint { .. } => {
+                    AlterTableOptions::AddCheckConstraint { .. }
+                    | AlterTableOptions::DropCheckConstraint { .. } => {
                         Err(CatalogError::NotSupported(
                             "CHECK constraints are handled by lake sources".to_string(),
                         ))
@@ -452,6 +478,39 @@ impl CatalogProvider for MemoryCatalogProvider {
                 }
             }
         }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        if database != destination_database {
+            return Err(CatalogError::NotSupported(
+                "Memory catalog cannot rename across databases".into(),
+            ));
+        }
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        if !db.tables.contains_key(table) {
+            return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
+        }
+        if db.tables.contains_key(destination_table) || db.views.contains_key(destination_table) {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                destination_table.into(),
+            ));
+        }
+        let mut status = db
+            .tables
+            .remove(table)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
+        status.name = destination_table.into();
+        db.tables.insert(destination_table.into(), status);
+        Ok(())
     }
 
     async fn alter_table(

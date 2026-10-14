@@ -97,6 +97,11 @@ fn catalog_alter_options(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<Vec<AlterTableOptions>> {
     Ok(match operation {
+        LakeSourceAlterTableOperation::AlterColumns { changes } => {
+            vec![AlterTableOptions::AlterColumns {
+                changes: changes.clone(),
+            }]
+        }
         LakeSourceAlterTableOperation::SetTableProperties { changes, .. } => {
             let mut properties = Vec::new();
             let mut keys = Vec::new();
@@ -133,7 +138,8 @@ fn catalog_alter_options(
                 default: default.clone(),
             }]
         }
-        LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+        LakeSourceAlterTableOperation::AddCheckConstraint { .. }
+        | LakeSourceAlterTableOperation::DropCheckConstraint { .. } => {
             return not_impl_err!("CHECK constraints for Iceberg tables");
         }
     })
@@ -144,6 +150,7 @@ pub(crate) fn apply_operation(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     match operation {
+        LakeSourceAlterTableOperation::AlterColumns { changes } => alter_columns(metadata, changes),
         LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
             for (key, _) in changes {
                 if (key != "format-version"
@@ -223,7 +230,8 @@ pub(crate) fn apply_operation(
                 Ok(())
             })
         }
-        LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+        LakeSourceAlterTableOperation::AddCheckConstraint { .. }
+        | LakeSourceAlterTableOperation::DropCheckConstraint { .. } => {
             not_impl_err!("CHECK constraints for Iceberg tables")
         }
     }
@@ -307,18 +315,11 @@ fn update_column(
     path: &[String],
     update: impl FnOnce(&mut NestedField) -> Result<()>,
 ) -> Result<()> {
-    let [name] = path else {
-        return not_impl_err!("Iceberg ALTER COLUMN currently requires a top-level column");
-    };
     let current = metadata
         .current_schema()
         .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".to_string()))?;
     let mut fields = current.fields().to_vec();
-    let field = fields
-        .iter_mut()
-        .find(|field| field.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| DataFusionError::Plan(format!("Column '{name}' does not exist")))?;
-    update(Arc::make_mut(field))?;
+    update_nested_field(&mut fields, path, update)?;
     let schema_id = metadata
         .schemas
         .iter()
@@ -348,4 +349,200 @@ fn parse_default(expression: &str, field: &NestedField) -> Result<Literal> {
         );
     }
     Ok(literal)
+}
+
+fn alter_columns(
+    metadata: &mut TableMetadata,
+    changes: &[sail_common::spec::ColumnChange<datafusion::arrow::datatypes::DataType>],
+) -> Result<()> {
+    use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
+    let current = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
+    let arrow = iceberg_schema_to_arrow(current)?;
+    let updated = sail_common_datafusion::column_change::alter_schema(&arrow, changes)?;
+    let mut last_id = metadata.last_column_id;
+    let fields = updated
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut field = arrow_field_to_iceberg(field)?;
+            assign_new_ids(&mut field, &mut last_id, current);
+            Ok(Arc::new(field))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let schema_id = metadata
+        .schemas
+        .iter()
+        .map(Schema::schema_id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let schema = Schema::builder()
+        .with_schema_id(schema_id)
+        .with_identifier_field_ids(current.identifier_field_ids())
+        .with_fields(fields)
+        .build()
+        .map_err(DataFusionError::Plan)?;
+    for spec in &metadata.partition_specs {
+        if spec.spec_id() == metadata.default_spec_id {
+            for field in spec.fields() {
+                if schema.field_by_id(field.source_id).is_none() {
+                    return plan_err!("Cannot drop a column used by the current partition spec");
+                }
+            }
+        }
+    }
+    for order in &metadata.sort_orders {
+        if Some(order.order_id) == metadata.default_sort_order_id.map(i64::from) {
+            for field in &order.fields {
+                if schema.field_by_id(field.source_id).is_none() {
+                    return plan_err!("Cannot drop a column used by the current sort order");
+                }
+            }
+        }
+    }
+    if let Some(mapping) = metadata
+        .properties
+        .get(crate::spec::DEFAULT_SCHEMA_NAME_MAPPING)
+    {
+        let mapping: crate::spec::NameMapping = serde_json::from_str(mapping)
+            .map_err(|e| DataFusionError::Plan(format!("Invalid Iceberg name mapping: {e}")))?;
+        mapping.field_names().map_err(DataFusionError::Plan)?;
+        let mapping = crate::spec::NameMapping::new(update_name_mapping(
+            mapping.fields().iter(),
+            schema.fields(),
+        ));
+        metadata.properties.insert(
+            crate::spec::DEFAULT_SCHEMA_NAME_MAPPING.into(),
+            serde_json::to_string(&mapping).map_err(|e| DataFusionError::External(Box::new(e)))?,
+        );
+    }
+    metadata.schemas.push(schema);
+    metadata.current_schema_id = schema_id;
+    metadata.last_column_id = last_id;
+    Ok(())
+}
+
+fn update_name_mapping<'a>(
+    mapping: impl Iterator<Item = &'a crate::spec::MappedField>,
+    fields: &[Arc<NestedField>],
+) -> Vec<crate::spec::MappedField> {
+    use crate::spec::MappedField;
+    let mut result = Vec::new();
+    for mapped in mapping {
+        let field = fields.iter().find(|f| Some(f.id) == mapped.field_id());
+        // Keep historical aliases unless another field has claimed the name.
+        let mut names = mapped
+            .names()
+            .iter()
+            .filter(|name| {
+                !fields
+                    .iter()
+                    .any(|f| &f.name == *name && Some(f.id) != mapped.field_id())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let nested = if let Some(field) = field {
+            if !names.contains(&field.name) {
+                names.push(field.name.clone());
+            }
+            update_name_mapping(
+                mapped.fields().iter().map(Arc::as_ref),
+                &nested_fields(&field.field_type),
+            )
+        } else {
+            mapped.fields().iter().map(|f| f.as_ref().clone()).collect()
+        };
+        result.push(MappedField::new(mapped.field_id(), names, nested));
+    }
+    for field in fields {
+        if !result
+            .iter()
+            .any(|mapped| mapped.field_id() == Some(field.id))
+        {
+            result.push(MappedField::new(
+                Some(field.id),
+                vec![field.name.clone()],
+                update_name_mapping(std::iter::empty(), &nested_fields(&field.field_type)),
+            ));
+        }
+    }
+    result
+}
+
+fn nested_fields(ty: &Type) -> Vec<Arc<NestedField>> {
+    match ty {
+        Type::Struct(value) => value.fields().to_vec(),
+        Type::List(value) => vec![value.element_field.clone()],
+        Type::Map(value) => vec![value.key_field.clone(), value.value_field.clone()],
+        _ => vec![],
+    }
+}
+
+fn assign_new_ids(field: &mut NestedField, last_id: &mut i32, current: &Schema) {
+    // Column DDL does not change existing primitive types. Preserve format-specific
+    // annotations that Arrow cannot represent (for example geometry CRS).
+    if let Some(old) = current.field_by_id(field.id)
+        && matches!(old.field_type.as_ref(), Type::Primitive(_))
+    {
+        field.field_type = old.field_type.clone();
+    }
+    if field.id == 0 {
+        *last_id += 1;
+        field.id = *last_id;
+    }
+    match field.field_type.as_mut() {
+        Type::Struct(value) => {
+            let mut fields = value.fields().to_vec();
+            for field in &mut fields {
+                assign_new_ids(Arc::make_mut(field), last_id, current);
+            }
+            *value = crate::spec::StructType::new(fields);
+        }
+        Type::List(value) => {
+            assign_new_ids(Arc::make_mut(&mut value.element_field), last_id, current)
+        }
+        Type::Map(value) => {
+            assign_new_ids(Arc::make_mut(&mut value.key_field), last_id, current);
+            assign_new_ids(Arc::make_mut(&mut value.value_field), last_id, current);
+        }
+        _ => {}
+    }
+}
+
+fn update_nested_field(
+    fields: &mut [Arc<NestedField>],
+    path: &[String],
+    update: impl FnOnce(&mut NestedField) -> Result<()>,
+) -> Result<()> {
+    let Some((name, rest)) = path.split_first() else {
+        return plan_err!("Column name must not be empty");
+    };
+    let field = fields
+        .iter_mut()
+        .find(|field| field.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| DataFusionError::Plan(format!("Column '{name}' does not exist")))?;
+    let field = Arc::make_mut(field);
+    if rest.is_empty() {
+        return update(field);
+    }
+    match field.field_type.as_mut() {
+        Type::Struct(value) => {
+            let mut fields = value.fields().to_vec();
+            update_nested_field(&mut fields, rest, update)?;
+            *value = crate::spec::StructType::new(fields);
+            Ok(())
+        }
+        Type::List(value) if rest[0].eq_ignore_ascii_case("element") => {
+            update_nested_field(std::slice::from_mut(&mut value.element_field), rest, update)
+        }
+        Type::Map(value) if rest[0].eq_ignore_ascii_case("key") => {
+            update_nested_field(std::slice::from_mut(&mut value.key_field), rest, update)
+        }
+        Type::Map(value) if rest[0].eq_ignore_ascii_case("value") => {
+            update_nested_field(std::slice::from_mut(&mut value.value_field), rest, update)
+        }
+        _ => plan_err!("Column '{}' is not a nested field", path.join(".")),
+    }
 }

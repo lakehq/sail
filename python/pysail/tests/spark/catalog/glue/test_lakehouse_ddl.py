@@ -41,3 +41,20 @@ def test_glue_lakehouse_ddl(spark, tmp_path, moto_endpoint, fmt):
         assert spark.table(name).first().id == 4  # noqa: PLR2004
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_glue_column_changes(spark, tmp_path, moto_endpoint, fmt):
+    from pysail.testing.spark.ddl import exercise_lakehouse_column_changes
+
+    table = f"columns_{fmt}"
+    name = f"test_db.{table}"
+    properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+    try:
+        spark.sql(f"CREATE TABLE {name} (id INT, value STRING) USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}")
+        exercise_lakehouse_column_changes(spark, name)
+        stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
+        assert [c["Name"] for c in stored["StorageDescriptor"]["Columns"]] == ["renamed", "id"]
+        assert stored["StorageDescriptor"]["Columns"][0]["Comment"] == "renamed column"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

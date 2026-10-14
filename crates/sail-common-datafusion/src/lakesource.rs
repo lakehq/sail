@@ -67,6 +67,8 @@ pub struct LakeSourceAlterTableResult {
     pub catalog_updated: bool,
     /// Committed schema for catalogs that keep a copy of the table's columns.
     pub schema: Option<SchemaRef>,
+    /// Property changes implied by the alteration, such as renamed statistics columns.
+    pub properties: Vec<(String, String)>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.
@@ -79,6 +81,9 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterColumns {
+        changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+    },
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
     ///
     /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
@@ -101,7 +106,14 @@ pub enum LakeSourceAlterTableOperation {
         default: Option<String>,
     },
     /// Adds a CHECK constraint after the caller has validated existing rows.
-    AddCheckConstraint { name: String, expression: String },
+    AddCheckConstraint {
+        name: String,
+        expression: String,
+    },
+    DropCheckConstraint {
+        name: String,
+        if_exists: bool,
+    },
 }
 
 /// A lakehouse data source with table metadata, DML, and DDL semantics.
@@ -165,6 +177,10 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterColumns { .. } => not_impl_err!(
+                "Column alteration not supported for lake source '{}'",
+                self.name()
+            ),
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
                     .await
@@ -183,7 +199,8 @@ pub trait LakeSource: DataSource {
                 self.alter_table_column_default(runtime_env, path, column_path, default)
                     .await
             }
-            LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+            LakeSourceAlterTableOperation::AddCheckConstraint { .. }
+            | LakeSourceAlterTableOperation::DropCheckConstraint { .. } => {
                 not_impl_err!(
                     "CHECK constraint alteration not supported for lake source '{}'",
                     self.name()

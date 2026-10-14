@@ -795,6 +795,12 @@ pub enum AlterTableOperation {
         expression: Expr,
         right: RightParenthesis,
     },
+    DropConstraint {
+        drop: Drop,
+        constraint: Constraint,
+        if_exists: Option<(If, Exists)>,
+        name: Ident,
+    },
     DropColumns {
         drop: Drop,
         columns: Either<Column, Columns>,

@@ -469,6 +469,21 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::RenameTable { name } => {
+                return self.resolve_catalog_command(CatalogCommand::RenameTable {
+                    table: table.into(),
+                    destination: name.into(),
+                    if_exists,
+                });
+            }
+            spec::AlterTableOperation::AlterColumns { changes } => {
+                AlterTableOptions::AlterColumns {
+                    changes: changes
+                        .into_iter()
+                        .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                        .collect::<PlanResult<Vec<_>>>()?,
+                }
+            }
             spec::AlterTableOperation::SetTableProperties { properties } => {
                 AlterTableOptions::SetTableProperties { properties }
             }
@@ -485,6 +500,12 @@ impl PlanResolver<'_> {
                 AlterTableOptions::AlterColumnDefault {
                     name: name.into(),
                     default,
+                }
+            }
+            spec::AlterTableOperation::DropCheckConstraint { name, if_exists } => {
+                AlterTableOptions::DropCheckConstraint {
+                    name: String::from(name).to_lowercase(),
+                    if_exists,
                 }
             }
             spec::AlterTableOperation::AddCheckConstraint { .. } => {

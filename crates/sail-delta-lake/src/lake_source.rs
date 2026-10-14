@@ -455,6 +455,10 @@ impl LakeSource for DeltaLakeSource {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterColumns { changes } => {
+                return crate::ddl::alter_columns(ctx, path, lakehouse_table.as_ref(), &changes)
+                    .await;
+            }
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(ctx, path, lakehouse_table.as_ref(), changes, if_exists)
                     .await
@@ -482,6 +486,16 @@ impl LakeSource for DeltaLakeSource {
                     lakehouse_table.as_ref(),
                     column_path,
                     default,
+                )
+                .await
+            }
+            LakeSourceAlterTableOperation::DropCheckConstraint { name, if_exists } => {
+                crate::ddl::drop_check_constraint(
+                    ctx,
+                    path,
+                    lakehouse_table.as_ref(),
+                    name,
+                    if_exists,
                 )
                 .await
             }
@@ -522,6 +536,7 @@ fn reject_catalog_managed_delta_alter(
 
 fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
+        LakeSourceAlterTableOperation::AlterColumns { .. } => "ALTER TABLE COLUMNS",
         LakeSourceAlterTableOperation::SetTableProperties { .. } => {
             "ALTER TABLE SET/UNSET TBLPROPERTIES"
         }
@@ -530,6 +545,7 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
             "ALTER TABLE ALTER COLUMN DEFAULT"
         }
         LakeSourceAlterTableOperation::AddCheckConstraint { .. } => "ALTER TABLE ADD CONSTRAINT",
+        LakeSourceAlterTableOperation::DropCheckConstraint { .. } => "ALTER TABLE DROP CONSTRAINT",
     }
 }
 
@@ -620,7 +636,7 @@ pub(crate) async fn plan_delta_write(
         return not_impl_err!("writing streaming data to Delta table");
     }
 
-    let mode = match mode {
+    let mut mode = match mode {
         SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
@@ -632,9 +648,7 @@ pub(crate) async fn plan_delta_write(
                 source,
             }
         }
-        SinkMode::OverwritePartitions => {
-            return not_impl_err!("unsupported sink mode for Delta: OverwritePartitions");
-        }
+        SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
     let requested_partition_columns = partition_by
@@ -645,7 +659,18 @@ pub(crate) async fn plan_delta_write(
     let table_url = DeltaLakeSource::parse_table_url(ctx, vec![path]).await?;
     let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
     let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
-
+    match delta_options
+        .partition_overwrite_mode
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "static" => {}
+        "dynamic" if matches!(mode, PhysicalSinkMode::Overwrite) => {
+            mode = PhysicalSinkMode::OverwritePartitions
+        }
+        "dynamic" => {}
+        other => return plan_err!("Invalid partitionOverwriteMode: {other}"),
+    }
     let object_store = ctx
         .runtime_env()
         .object_store_registry
@@ -696,9 +721,6 @@ pub(crate) async fn plan_delta_write(
                 physical_input.schema(),
             )));
         }
-        PhysicalSinkMode::OverwritePartitions => {
-            return not_impl_err!("unsupported sink mode for Delta: {mode:?}");
-        }
         _ => {}
     }
 
@@ -716,6 +738,24 @@ pub(crate) async fn plan_delta_write(
         .as_ref()
         .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
+    if existing_partition_columns
+        .as_ref()
+        .is_none_or(Vec::is_empty)
+    {
+        if matches!(mode, PhysicalSinkMode::OverwritePartitions) {
+            mode = PhysicalSinkMode::Overwrite;
+        }
+    } else if delta_options
+        .partition_overwrite_mode
+        .eq_ignore_ascii_case("dynamic")
+        && matches!(mode, PhysicalSinkMode::OverwriteIf { .. })
+    {
+        return plan_err!("Cannot combine dynamic partition overwrite with replaceWhere");
+    }
+    if matches!(mode, PhysicalSinkMode::OverwritePartitions) && delta_options.overwrite_schema {
+        return plan_err!("Cannot use overwriteSchema with dynamic partition overwrite");
+    }
+
     if let Some(existing_partitions) = &existing_partition_columns
         && !partition_by.is_empty()
         && partition_by != *existing_partitions
@@ -729,7 +769,7 @@ pub(crate) async fn plan_delta_write(
                     partition_by
                 );
             }
-            PhysicalSinkMode::OverwriteIf { .. } => {
+            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
                 return plan_err!(
                     "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                         Cannot change partitioning with replaceWhere or conditional overwrite.",
@@ -752,7 +792,9 @@ pub(crate) async fn plan_delta_write(
     let partition_columns = match (&existing_partition_columns, &mode) {
         (
             Some(existing_partitions),
-            PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
+            PhysicalSinkMode::Append
+            | PhysicalSinkMode::OverwriteIf { .. }
+            | PhysicalSinkMode::OverwritePartitions,
         ) if partition_by.is_empty() => existing_partitions.clone(),
         (Some(existing_partitions), PhysicalSinkMode::Overwrite)
             if partition_by.is_empty() && !delta_options.overwrite_schema =>
@@ -762,6 +804,9 @@ pub(crate) async fn plan_delta_write(
         _ => partition_by,
     };
 
+    if matches!(mode, PhysicalSinkMode::OverwritePartitions) && partition_columns.is_empty() {
+        mode = PhysicalSinkMode::Overwrite;
+    }
     let logical_schema = logical_input.schema();
     let table_config = DeltaPlannerConfig::new(
         table_url,
@@ -1111,6 +1156,7 @@ impl DeltaLakeSource {
             actions,
             DeltaOperation::AlterColumn {
                 column: operation_column,
+                position: None,
             },
         )
         .await
@@ -1176,6 +1222,7 @@ impl DeltaLakeSource {
             actions,
             DeltaOperation::AlterColumn {
                 column: operation_column,
+                position: None,
             },
         )
         .await
@@ -1262,7 +1309,7 @@ fn apply_default_to_field(field: &StructField, default: Option<String>) -> Struc
     }
 }
 
-fn operation_column_json(
+pub(crate) fn operation_column_json(
     schema: &StructType,
     column_path: &[String],
 ) -> crate::spec::DeltaResult<serde_json::Value> {
@@ -1276,7 +1323,7 @@ fn operation_column_json(
     }))
 }
 
-fn ensure_not_catalog_managed_delta(
+pub(crate) fn ensure_not_catalog_managed_delta(
     snapshot: &crate::table::DeltaSnapshot,
     operation: &str,
 ) -> Result<()> {
@@ -1299,7 +1346,8 @@ fn resolve_operation_column_field(
         ));
     };
     let field = schema
-        .field(name)
+        .fields()
+        .find(|field| field.name().eq_ignore_ascii_case(name))
         .ok_or_else(|| DeltaTableError::missing_column(column_path.join(".")))?;
     if nested_path.is_empty() {
         Ok(field.clone())
@@ -1322,7 +1370,8 @@ fn resolve_operation_nested_field(
     match data_type {
         DeltaDataType::Struct(struct_type) => {
             let field = struct_type
-                .field(name)
+                .fields()
+                .find(|field| field.name().eq_ignore_ascii_case(name))
                 .ok_or_else(|| DeltaTableError::missing_column(full_path.join(".")))?;
             if nested_path.is_empty() {
                 Ok(field.clone())
@@ -1396,7 +1445,7 @@ fn protocol_without_feature(protocol: &Protocol, feature: TableFeature) -> Proto
     )
 }
 
-fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+pub(crate) fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
     existing: &Protocol,
     desired: &Protocol,
     configuration: &HashMap<String, String>,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-pub use sail_common::spec::CreateTableMode;
+pub use sail_common::spec::{ColumnChange, CreateTableMode};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -137,6 +137,9 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterColumns {
+        changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -152,6 +155,10 @@ pub enum AlterTableOptions {
         name: Vec<String>,
         default: Option<String>,
     },
+    DropCheckConstraint {
+        name: String,
+        if_exists: bool,
+    },
     AddCheckConstraint {
         name: String,
         expression: String,
@@ -164,6 +171,11 @@ impl From<&AlterTableOptions>
     fn from(options: &AlterTableOptions) -> Self {
         use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
         match options {
+            AlterTableOptions::AlterColumns { changes } => {
+                LakeSourceAlterTableOperation::AlterColumns {
+                    changes: changes.clone(),
+                }
+            }
             AlterTableOptions::SetTableProperties { properties } => {
                 LakeSourceAlterTableOperation::SetTableProperties {
                     changes: properties
@@ -189,6 +201,12 @@ impl From<&AlterTableOptions>
                 LakeSourceAlterTableOperation::AlterColumnDefault {
                     column_path: name.clone(),
                     default: default.clone(),
+                }
+            }
+            AlterTableOptions::DropCheckConstraint { name, if_exists } => {
+                LakeSourceAlterTableOperation::DropCheckConstraint {
+                    name: name.clone(),
+                    if_exists: *if_exists,
                 }
             }
             AlterTableOptions::AddCheckConstraint { name, expression } => {

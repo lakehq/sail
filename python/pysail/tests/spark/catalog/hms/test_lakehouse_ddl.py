@@ -241,3 +241,33 @@ def test_iceberg_typed_default_interoperability(spark, jvm_spark, hms_s3_databas
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     jvm_spark.sql(f"INSERT INTO {reference} (id) VALUES (2)")
     assert [tuple(r) for r in spark.sql(f"SELECT amount, d, ts FROM {name}").collect()] == [expected, expected]
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_lakehouse_column_changes(spark, jvm_spark, hms_s3_database, fmt):
+    from pysail.testing.spark.ddl import exercise_lakehouse_column_changes
+
+    name = f"{hms_s3_database}.column_changes"
+    reference = _reference_name(hms_s3_database, "column_changes", fmt)
+    properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+    spark.sql(f"CREATE TABLE {name} (id INT, value STRING) USING {fmt} {properties}")
+    exercise_lakehouse_column_changes(spark, name)
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [tuple(row) for row in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [("one", 1), ("two", 2)]
+    assert jvm_spark.table(reference).schema["renamed"].metadata["comment"] == "renamed column"
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_lakehouse_table_rename(spark, jvm_spark, hms_s3_database, fmt):
+    database = hms_s3_database
+    table = f"{database}.rename_source"
+    target = f"{database}.rename_target"
+    reference = f"iceberg.{target}" if fmt == "iceberg" else target
+    spark.sql(f"CREATE TABLE {table} (id INT) USING {fmt}")
+    spark.sql(f"INSERT INTO {table} VALUES (1)")
+    spark.sql(f"ALTER TABLE {table} RENAME TO rename_target")
+    assert not spark.catalog.tableExists(table)
+    assert jvm_spark.sql(f"SELECT id FROM {reference}").first().id == 1
+    spark.sql(f"INSERT INTO {target} VALUES (2)")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [r.id for r in jvm_spark.sql(f"SELECT id FROM {reference} ORDER BY id").collect()] == [1, 2]

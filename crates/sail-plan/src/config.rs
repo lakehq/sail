@@ -57,6 +57,8 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    /// Default for partition overwrite writes; operation options take precedence.
+    pub dynamic_partition_overwrite: bool,
     /// The maximum number of distinct values collected for a pivot without an explicit
     /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
     pub pivot_max_values: usize,
@@ -98,6 +100,7 @@ impl Default for PlanConfig {
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            dynamic_partition_overwrite: false,
             pivot_max_values: 10000,
             shuffle_partitions: 200,
             tvf_allow_multiple_table_arguments: false,

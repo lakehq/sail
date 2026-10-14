@@ -126,3 +126,43 @@ def test_rest_invalid_ddl_preserves_metadata(spark, reference_catalog):
         assert spark.table(table).first().id == 7  # noqa: PLR2004
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
+
+
+def test_rest_column_changes_preserve_ids_and_catalog_schema(spark, reference_catalog):
+    from pysail.testing.spark.ddl import exercise_lakehouse_column_changes
+
+    namespace = "rest_column_changes"
+    table = f"{namespace}.t"
+    spark.sql(f"CREATE NAMESPACE {namespace}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, value STRING) USING iceberg")
+        before = reference_catalog.load_table(table).schema().find_field("value").field_id
+        exercise_lakehouse_column_changes(spark, table)
+        reference = reference_catalog.load_table(table)
+        assert reference.schema().find_field("renamed").field_id == before
+        assert reference.schema().find_field("renamed").doc == "renamed column"
+        assert reference.scan().to_arrow().sort_by("id").to_pylist() == [
+            {"renamed": "one", "id": 1},
+            {"renamed": "two", "id": 2},
+        ]
+    finally:
+        spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
+
+
+def test_rest_table_rename_across_namespaces(spark, reference_catalog):
+    source = "rest_rename_source"
+    destination = "rest_rename_destination"
+    spark.sql(f"CREATE NAMESPACE {source}")
+    spark.sql(f"CREATE NAMESPACE {destination}")
+    try:
+        spark.sql(f"CREATE TABLE {source}.t (id INT) USING iceberg")
+        spark.sql(f"INSERT INTO {source}.t VALUES (1)")
+        before = reference_catalog.load_table(f"{source}.t").metadata_location
+        spark.sql(f"ALTER TABLE {source}.t RENAME TO {destination}.renamed")
+        assert not reference_catalog.table_exists(f"{source}.t")
+        assert reference_catalog.load_table(f"{destination}.renamed").metadata_location == before
+        spark.sql(f"INSERT INTO {destination}.renamed VALUES (2)")
+        assert [r.id for r in spark.sql(f"SELECT * FROM {destination}.renamed ORDER BY id").collect()] == [1, 2]
+    finally:
+        spark.sql(f"DROP NAMESPACE {source} CASCADE")
+        spark.sql(f"DROP NAMESPACE {destination} CASCADE")

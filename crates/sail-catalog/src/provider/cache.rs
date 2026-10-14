@@ -399,6 +399,23 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.validate_alter_table(options)
     }
 
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        self.inner
+            .rename_table(database, table, destination_database, destination_table)
+            .await?;
+        if let Some(cache) = &self.table_cache {
+            cache.invalidate(database).await;
+            cache.invalidate(destination_database).await;
+        }
+        Ok(())
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,

@@ -100,6 +100,9 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
+        AlterTableOptions::AlterColumns { changes } => {
+            crate::convert::alter_columns(hms_table, &changes)?
+        }
         AlterTableOptions::SetTableProperties { properties } => {
             reject_spark_properties(&properties)?;
             managed_table::validate_metadata_location_precondition(
@@ -172,7 +175,8 @@ pub(crate) fn apply_alter_table_options(
         AlterTableOptions::AlterColumnDefault { name, default } => {
             alter_spark_column_default(hms_table, &name, default)?;
         }
-        AlterTableOptions::AddCheckConstraint { .. } => {
+        AlterTableOptions::AddCheckConstraint { .. }
+        | AlterTableOptions::DropCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(
                 "CHECK constraints are handled by lake sources".to_string(),
             ));
@@ -1173,6 +1177,36 @@ impl CatalogProvider for HmsCatalogProvider {
             }
             _ => Ok(()),
         }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let target_db = validate_namespace(destination_database)?;
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let target_db = target_db.clone();
+            let table = table.to_string();
+            let target_table = destination_table.to_string();
+            async move {
+                let mut metadata = Self::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table,
+                    "Failed to fetch HMS table for rename",
+                )
+                .await?;
+                metadata.db_name = Some(target_db.into());
+                metadata.table_name = Some(target_table.into());
+                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+            }
+        })
+        .await
     }
 
     async fn alter_table(

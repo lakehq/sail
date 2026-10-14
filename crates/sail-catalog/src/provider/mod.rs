@@ -175,6 +175,19 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    async fn rename_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _destination_database: &Namespace,
+        _destination_table: &str,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(format!(
+            "RENAME TABLE for catalog {}",
+            self.get_name()
+        )))
+    }
+
     /// Validates catalog restrictions before lakehouse storage metadata is changed.
     fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
         Ok(())

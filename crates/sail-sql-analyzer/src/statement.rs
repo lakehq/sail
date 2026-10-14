@@ -14,16 +14,17 @@ use sail_sql_parser::ast::statement::{
     AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
-    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
-    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
-    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
-    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SetPropertyKeyValue, SetPropertyValue, ShowFunctionScope,
-    ShowFunctionsClause, ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList,
-    Statement, TableColumnIdentityOption, TableColumnIdentityOptions, TimeZoneValue,
-    UpdateTableAlias, ViewColumn, ViewColumnList, ViewUsingClause,
+    ColumnDropList, ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause,
+    CreateTableClause, CreateViewClause, CreateViewDefinition, DeleteTableAlias,
+    DescribeFunctionName, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
+    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
+    SetPropertyKeyValue, SetPropertyValue, ShowFunctionScope, ShowFunctionsClause,
+    ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList, Statement,
+    TableColumnIdentityOption, TableColumnIdentityOptions, TimeZoneValue, UpdateTableAlias,
+    ViewColumn, ViewColumnList, ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -2380,30 +2381,45 @@ impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
     }
 }
 
-// TODO: implement the conversion properly for column-level ALTER TABLE operations
-fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
-    // TODO: implement the conversion properly
+fn from_ast_column_position(position: ColumnPosition) -> SqlResult<spec::ColumnPosition> {
+    match position {
+        ColumnPosition::First(_) => Ok(spec::ColumnPosition::First),
+        ColumnPosition::After(_, name) => {
+            let name: Vec<String> = from_ast_object_name(name)?.into();
+            let [name] = name.as_slice() else {
+                return Err(SqlError::invalid("AFTER requires a sibling column name"));
+            };
+            Ok(spec::ColumnPosition::After(name.clone()))
+        }
+    }
+}
+
+fn from_ast_column_alteration_list(
+    items: ColumnAlterationList,
+) -> SqlResult<Vec<spec::ColumnChange>> {
     let columns = match items {
-        ColumnAlterationList::Delimited {
-            left: _,
-            columns,
-            right: _,
-        } => columns,
-        ColumnAlterationList::NotDelimited { columns } => columns,
+        ColumnAlterationList::Delimited { columns, .. }
+        | ColumnAlterationList::NotDelimited { columns } => columns,
     };
-    let _ = columns
+    columns
         .into_items()
-        .map(|x| {
+        .map(|column| {
             let ColumnAlteration {
-                name: _,
-                data_type: _,
+                name,
+                data_type,
                 options,
-            } = x;
-            let _: ColumnAlterationOptions = options.try_into()?;
-            Ok(())
+            } = column;
+            let options: ColumnAlterationOptions = options.try_into()?;
+            Ok(spec::ColumnChange::Add {
+                path: from_ast_object_name(name)?.into(),
+                data_type: from_ast_data_type(data_type)?,
+                nullable: !options.not_null,
+                comment: options.comment.map(from_ast_string).transpose()?,
+                default: options.default.map(|expr| expr.text().trim().to_string()),
+                position: options.position.map(from_ast_column_position).transpose()?,
+            })
         })
-        .collect::<SqlResult<Vec<_>>>()?;
-    Ok(())
+        .collect()
 }
 
 fn from_ast_merge_optional_condition<T>(
@@ -2495,18 +2511,88 @@ fn from_ast_alter_table_operation(
                 },
             })
         }
-        AlterTableOperation::RenameTable { .. }
-        | AlterTableOperation::RenamePartition { .. }
-        | AlterTableOperation::DropColumns { .. }
-        | AlterTableOperation::RenameColumn { .. }
+        AlterTableOperation::DropConstraint {
+            name, if_exists, ..
+        } => Ok(spec::AlterTableOperation::DropCheckConstraint {
+            name: name.value.into(),
+            if_exists: if_exists.is_some(),
+        }),
+        AlterTableOperation::RenameTable { name, .. } => {
+            Ok(spec::AlterTableOperation::RenameTable {
+                name: from_ast_object_name(name)?,
+            })
+        }
+        AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
         | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AddColumns { items, .. }
-        | AlterTableOperation::ReplaceColumns { items, .. } => {
+        AlterTableOperation::RenameColumn { old, new, .. } => {
+            let names: Vec<String> = from_ast_object_name(new)?.into();
+            let [name] = names.as_slice() else {
+                return Err(SqlError::invalid(
+                    "RENAME COLUMN requires a single new name",
+                ));
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![spec::ColumnChange::Rename {
+                    path: from_ast_object_name(old)?.into(),
+                    name: name.clone(),
+                }],
+            })
+        }
+        AlterTableOperation::DropColumns {
+            names, if_exists, ..
+        } => {
+            let columns = match names {
+                ColumnDropList::Delimited { columns, .. }
+                | ColumnDropList::NotDelimited { columns } => columns,
+            };
+            let changes = columns
+                .into_items()
+                .map(|name| {
+                    Ok(spec::ColumnChange::Drop {
+                        path: from_ast_object_name(name)?.into(),
+                        if_exists: if_exists.is_some(),
+                    })
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::AlterTableOperation::AlterColumns { changes })
+        }
+        AlterTableOperation::AlterColumn {
+            name, operation, ..
+        } => {
+            let path = from_ast_object_name(name)?.into();
+            let change = match operation {
+                AlterColumnOperation::Comment(_, value) => spec::ColumnChange::Comment {
+                    path,
+                    comment: from_ast_string(value)?,
+                },
+                AlterColumnOperation::SetNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: false,
+                },
+                AlterColumnOperation::DropNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: true,
+                },
+                AlterColumnOperation::Position(position) => spec::ColumnChange::Position {
+                    path,
+                    position: from_ast_column_position(position)?,
+                },
+                _ => return Err(SqlError::invalid("Unexpected ALTER COLUMN operation")),
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![change],
+            })
+        }
+        AlterTableOperation::AddColumns { items, .. } => {
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: from_ast_column_alteration_list(items)?,
+            })
+        }
+        AlterTableOperation::ReplaceColumns { items, .. } => {
             // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
             // clauses) even though we do not yet translate these operations.
             from_ast_column_alteration_list(items)?;

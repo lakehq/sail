@@ -447,10 +447,15 @@ impl OperationMetrics {
             // counts from the snapshot diff it produces.
             DeltaOperation::Restore { .. }
             | DeltaOperation::Write { .. }
+            | DeltaOperation::DynamicPartitionOverwrite { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
             | DeltaOperation::AddConstraint { .. }
+            | DeltaOperation::DropConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
+            | DeltaOperation::AddColumns { .. }
+            | DeltaOperation::DropColumns { .. }
+            | DeltaOperation::RenameColumn { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles

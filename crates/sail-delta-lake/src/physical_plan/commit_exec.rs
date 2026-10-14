@@ -836,6 +836,38 @@ impl ExecutionPlan for DeltaCommitExec {
                 None
             };
 
+            if matches!(sink_mode, PhysicalSinkMode::OverwritePartitions)
+                && let Some(snapshot) = &reference
+            {
+                let partition_key = |add: &crate::spec::Add| {
+                    let mut key = add
+                        .partition_values
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>();
+                    key.sort();
+                    key
+                };
+                let partitions = final_actions
+                    .iter()
+                    .filter_map(|action| match action {
+                        CommitAction::Add(add) => Some(partition_key(add)),
+                        _ => None,
+                    })
+                    .collect::<std::collections::HashSet<_>>();
+                let removed = snapshot
+                    .adds()
+                    .iter()
+                    .filter(|add| partitions.contains(&partition_key(add)))
+                    .cloned()
+                    .collect();
+                final_actions.extend(
+                    crate::datasource::actions::adds_to_remove_actions(removed)
+                        .into_iter()
+                        .map(CommitAction::Remove),
+                );
+            }
+
             if table_exists {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,
