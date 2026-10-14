@@ -266,14 +266,15 @@ impl PlanResolver<'_> {
         let plan =
             LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
         if columns.is_empty() {
-            return Ok(plan);
+            Ok(plan)
+        } else {
+            let names = state.register_field_names(columns.iter().map(|c| &c.name));
+            let plan = rename_logical_plan(plan, &names)?;
+            // Spark renames view columns below the view's alias, so missing-reference
+            // recovery must not see the definition's column names under this output.
+            state.register_missing_input_boundary(&plan);
+            Ok(plan)
         }
-        let names = state.register_field_names(columns.iter().map(|c| &c.name));
-        let plan = rename_logical_plan(plan, &names)?;
-        // Spark renames view columns below the view's alias, so missing-reference
-        // recovery must not see the definition's column names under this output.
-        state.register_missing_input_boundary(&plan);
-        Ok(plan)
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
