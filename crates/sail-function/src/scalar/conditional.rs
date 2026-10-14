@@ -43,7 +43,9 @@ impl ScalarUDFImpl for SparkCaseWhen {
             ));
         }
         let then_types = arg_types
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| pair[1].clone())
             .collect::<Vec<_>>();
         let else_type = if arg_types.len().is_multiple_of(2) {
@@ -70,7 +72,7 @@ impl ScalarUDFImpl for SparkCaseWhen {
             .collect::<Vec<_>>();
         let mut nullable = false;
         let mut exhaustive = false;
-        for (index, pair) in args.arg_fields.chunks_exact(2).enumerate() {
+        for (index, pair) in args.arg_fields.as_chunks::<2>().0.iter().enumerate() {
             nullable |= pair[1].is_nullable();
             if matches!(
                 args.scalar_arguments[index * 2],
