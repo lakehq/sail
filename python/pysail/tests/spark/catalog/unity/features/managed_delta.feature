@@ -716,3 +716,44 @@ Feature: Unity Catalog managed Delta table operations
       | metaData.configuration["my.tag"]    | "managed" |
       | metaData.configuration["delta.feature.catalogManaged"] | "supported" |
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_partitioned_t version 1 references staged Delta commit in location
+
+  Scenario: Show catalog table properties reads Unity managed Delta tables before and after writes
+    Given statement
+      """
+      CREATE TABLE sail.sail_test_catalog.unity_table_test.show_properties (id INT) USING delta
+      TBLPROPERTIES ('custom.show' = 'initial')
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties
+      """
+    Then query result row where "key" is "custom.show" has "value" equal to "initial"
+    Then query schema
+      """
+      root
+       |-- key: string (nullable = false)
+       |-- value: string (nullable = false)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.missing')
+      """
+    Then query result row where "key" is "custom.missing" has "value" containing "does not have property: custom.missing"
+    Given statement
+      """
+      INSERT INTO sail.sail_test_catalog.unity_table_test.show_properties VALUES (1)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |
