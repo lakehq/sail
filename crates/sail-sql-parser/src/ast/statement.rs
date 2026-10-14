@@ -131,6 +131,12 @@ pub enum Statement {
         name: ObjectName,
         purge: Option<Purge>,
     },
+    ShowTableProperties {
+        show: Show,
+        tblproperties: Tblproperties,
+        name: ObjectName,
+        property: Option<(LeftParenthesis, PropertyKey, RightParenthesis)>,
+    },
     ShowTables {
         show: Show,
         tables: Tables,
