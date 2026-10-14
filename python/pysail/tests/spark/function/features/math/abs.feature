@@ -140,6 +140,7 @@ Feature: abs comprehensive tests
         | CAST(-9223372036854775808 AS BIGINT) | -9223372036854775808 |
 
     @sail-bug
+    # TODO(parser-int-min-literal): remove this tag once the parser keeps INT for `-2147483648`.
     # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
     # Root cause: Sail's SQL parses `-2147483648` as unary-minus + positive
     # literal; the positive side overflows INT32 (max 2147483647) and gets
@@ -172,6 +173,7 @@ Feature: abs comprehensive tests
       Examples:
         | input                                |
         | CAST(-128 AS TINYINT)                |
+        | CAST(-32768 AS SMALLINT)             |
         | CAST(-2147483648 AS INT)             |
         | CAST(-9223372036854775808 AS BIGINT) |
 
@@ -246,8 +248,8 @@ Feature: abs comprehensive tests
     # `interval day`, Sail publishes `interval day to second`. The start/end fields live in the
     # field metadata, and a UDF's return field does not reach the projection's output schema
     # (measured: neither `df.schema`, `show` nor `typeof`). Only a cast carrying the field does.
-    # Fixed on `fix/interval` (PR #2350), whose `preserve_interval_range` wraps `abs`; remove the
-    # tags below once it lands.
+    # TODO(#2350): fixed on `fix/interval` (PR #2350), whose `preserve_interval_range` wraps `abs`;
+    # remove the tags below once it lands.
     @sail-bug
     Scenario Outline: Interval subrange: <case>
       When query
@@ -356,6 +358,7 @@ Feature: abs comprehensive tests
         | -2147483648 |
 
     @sail-bug
+    # TODO(#2350): remove this tag together with the ones in `Rule: Interval values`.
     # Vectorized abs path is correct — same root cause as the scalar interval
     # scenarios in `Rule: Interval values`: Sail widens Spark interval subranges
     # to DAY TO SECOND at the type layer. The vectorized kernel succeeds; the
@@ -739,6 +742,7 @@ Feature: abs comprehensive tests
         | case                              | digits | p  | s | input                                   | result                                   |
         | 34 digits stay exact              | 34     | 38 | 0 | -1234567890123456789012345678901234     | 1234567890123456789012345678901234       |
         | positive 36 digits stay exact     | 36     | 38 | 0 | 123456789012345678901234567890123456    | 123456789012345678901234567890123456     |
+        | positive 38 digits stay exact     | 38     | 38 | 0 | 99999999999999999999999999999999999999  | 99999999999999999999999999999999999999   |
 
     Scenario Outline: abs of a negative DECIMAL with <digits> digits: <case>
       When query
@@ -754,6 +758,10 @@ Feature: abs comprehensive tests
         | 35 digits, tie rounds to even     | 35     | 38 | 0 | -12345678901234567890123456789012345    | 12345678901234567890123456789012340      |
         | 38 digits with scale, rounds up   | 38     | 38 | 2 | -123456789012345678901234567890123456.78 | 123456789012345678901234567890123500.00  |
         | 37 nines round up to 10^37        | 37     | 38 | 0 | -9999999999999999999999999999999999999  | 10000000000000000000000000000000000000   |
+        | 35 digits, tie with odd quotient rounds up to even | 35 | 38 | 0 | -12345678901234567890123456789012335 | 12345678901234567890123456789012340 |
+        | 35 digits, below half rounds down | 35     | 38 | 0 | -12345678901234567890123456789012341    | 12345678901234567890123456789012340      |
+        | 35 digits, above half rounds up   | 35     | 38 | 0 | -12345678901234567890123456789012346    | 12345678901234567890123456789012350      |
+        | 37 digits, tie two digits deep, odd quotient | 37 | 38 | 0 | -1234567890123456789012345678901235500 | 1234567890123456789012345678901236000 |
 
     # Spark 3.5 raises DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION here instead.
     @spark-4
@@ -787,6 +795,10 @@ Feature: abs comprehensive tests
         | scale 0, 38 nines          | 38 | 0  | -99999999999999999999999999999999999999 | 100000000000000000000000000000000000000  | 1[.]000000000000000000000000000000000E[+]38   |
         | scale 0, 35 nines          | 35 | 0  | -99999999999999999999999999999999999    | 100000000000000000000000000000000000     | 1[.]000000000000000000000000000000000E[+]35   |
         | scale 10 keeps plain form  | 38 | 10 | -9999999999999999999999999999.9999999999 | 10000000000000000000000000000[.]0000000000 | 10000000000000000000000000000[.]00000        |
+        | scale 1, plain rounded value | 35 | 1  | -9999999999999999999999999999999999.9   | 10000000000000000000000000000000000[.]0  | 1[.]000000000000000000000000000000000E[+]34   |
+        | precision 36               | 36 | 0  | -999999999999999999999999999999999999   | 1000000000000000000000000000000000000    | 1[.]000000000000000000000000000000000E[+]36   |
+        | precision 37               | 37 | 0  | -9999999999999999999999999999999999999  | 10000000000000000000000000000000000000   | 1[.]000000000000000000000000000000000E[+]37   |
+        | scale equals precision, original is plain | 38 | 38 | -0.99999999999999999999999999999999999999 | 1[.]00000000000000000000000000000000000000 | 1[.]000000000000000000000000000000000 |
 
   Rule: Nullability follows the argument
 
@@ -851,6 +863,7 @@ Feature: abs comprehensive tests
          |-- result: double (nullable = true)
         """
 
+    # TODO(cast-string-double): remove this tag once the string to DOUBLE cast raises [CAST_INVALID_INPUT].
     # Same message-class gap as `SELECT CAST('abc' AS DOUBLE)`: Sail's cast text has no
     # [CAST_INVALID_INPUT] class. Cast-level, outside abs: tracked in the string-to-double cast PR.
     @sail-bug
@@ -870,6 +883,7 @@ Feature: abs comprehensive tests
 
   Rule: String grammar follows Java's Double.parseDouble
 
+    # TODO(cast-string-double): remove this tag once the string to DOUBLE cast follows Java's grammar.
     # Spark casts the string with java.lang.Double.valueOf, which accepts a trailing type suffix
     # (d, D, f, F) and hexadecimal floating point. Sail's string to DOUBLE cast (Arrow) does not,
     # so these are NULL (ANSI off) or an error (ANSI on). Cast-level, outside abs: tracked in the
@@ -1030,6 +1044,7 @@ Feature: abs comprehensive tests
         | 2.0    |
         | NaN    |
 
+    # TODO(cast-string-double): remove this tag together with the Outline above.
     # Same cast-level message-class gap as the Outline above (no [CAST_INVALID_INPUT]); this one
     # is the column form, where only one row is malformed.
     @sail-bug
@@ -1040,6 +1055,111 @@ Feature: abs comprehensive tests
         SELECT abs(s) AS result FROM VALUES ('-1'), ('x') AS t(s)
         """
       Then query error \[CAST_INVALID_INPUT\]
+
+  Rule: Every integral width, FLOAT and compositions
+
+    Scenario Outline: abs of a FLOAT column keeps NaN, infinity and NULL: ANSI=<ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(c) AS result
+        FROM VALUES (CAST(-0.0 AS FLOAT)), (CAST('NaN' AS FLOAT)), (CAST('-Infinity' AS FLOAT)), (CAST(NULL AS FLOAT)) AS t(c)
+        """
+      Then query result
+        | result   |
+        | 0.0      |
+        | NaN      |
+        | Infinity |
+        | NULL     |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: abs of a <type> column holding MIN wraps under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(c) AS result FROM VALUES (CAST(<min> AS <type>)), (CAST(NULL AS <type>)) AS t(c)
+        """
+      Then query result
+        | result |
+        | <min>  |
+        | NULL   |
+
+      Examples:
+        | type     | min                  |
+        | TINYINT  | -128                 |
+        | SMALLINT | -32768               |
+        | INT      | -2147483648          |
+        | BIGINT   | -9223372036854775808 |
+
+    Scenario Outline: abs of a <type> column holding MIN errors under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(c) AS result FROM VALUES (CAST(<min> AS <type>)), (CAST(NULL AS <type>)) AS t(c)
+        """
+      Then query error \[ARITHMETIC_OVERFLOW\]
+
+      Examples:
+        | type     | min                  |
+        | TINYINT  | -128                 |
+        | SMALLINT | -32768               |
+        | INT      | -2147483648          |
+        | BIGINT   | -9223372036854775808 |
+
+    Scenario: abs inside an aggregate
+      When query
+        """
+        SELECT sum(abs(c)) AS result FROM VALUES (-3), (2), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: abs inside a window
+      When query
+        """
+        SELECT max(abs(c)) OVER () AS result FROM VALUES (-3), (2), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query result
+        | result |
+        | 3      |
+        | 3      |
+        | 3      |
+
+    Scenario: abs inside a lambda
+      When query
+        """
+        SELECT transform(array(-1, 2), x -> abs(x)) AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    Scenario: abs of an array element
+      When query
+        """
+        SELECT abs(a[0]) AS result FROM VALUES (array(-1, 2)) AS t(a)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    # A branch that is never taken must not evaluate abs, even when it would overflow.
+    Scenario: abs overflow in a dead IF branch does not fire under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          IF(false, abs(CAST(-2147483648 AS INT)), 1) AS int_min,
+          IF(false, abs(CAST(-99999999999999999999999999999999999999 AS DECIMAL(38,0))), 1) AS wide_decimal
+        """
+      Then query result
+        | int_min | wide_decimal |
+        | 1       | 1            |
 
   Rule: Foldable expressions go through constant folding
 

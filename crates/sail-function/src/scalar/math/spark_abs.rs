@@ -262,7 +262,8 @@ impl ScalarUDFImpl for SparkAbs {
         }
         if matches!(
             args.args[0].data_type(),
-            DataType::Float32
+            DataType::Float16
+                | DataType::Float32
                 | DataType::Float64
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _)
@@ -630,8 +631,11 @@ impl ScalarUDFImpl for SparkAbs {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64 => Ok(ExprSimplifyResult::Original(args)),
-            // Floats, decimals, unsigned, null: no ANSI overflow concern — delegate.
-            _ => Ok(ExprSimplifyResult::Simplified(abs(args.one()?))),
+            // Floats, decimals, unsigned, null: no ANSI overflow concern — delegate. DataFusion's
+            // `abs` always reports a nullable result, so only a nullable argument may be rewritten;
+            // otherwise the executed plan would be nullable where Spark's `Abs` is not.
+            _ if info.nullable(&args[0])? => Ok(ExprSimplifyResult::Simplified(abs(args.one()?))),
+            _ => Ok(ExprSimplifyResult::Original(args)),
         }
     }
 
