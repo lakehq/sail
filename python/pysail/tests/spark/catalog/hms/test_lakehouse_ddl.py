@@ -12,6 +12,29 @@ from pysail.tests.spark.catalog.hms.conftest import _describe_extended_propertie
 from pysail.tests.spark.catalog.hms.test_iceberg_catalog_commit import _metadata_location
 
 
+def test_hms_identifier_fields(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    from pysail.testing.spark.ddl import exercise_iceberg_identifier_fields
+
+    table = "identifiers"
+    name = f"{hms_s3_database}.{table}"
+    reference = f"iceberg.{name}"
+    spark.sql(f"CREATE TABLE {name} (id INT NOT NULL, key INT NOT NULL, value STRING) USING iceberg")
+    exercise_iceberg_identifier_fields(spark, name)
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert jvm_spark.table(reference).count() == 2
+    _, stored = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    schema = next(s for s in stored["schemas"] if s["schema-id"] == stored["current-schema-id"])
+    assert schema["identifier-field-ids"] == [schema["fields"][0]["id"]]
+    jvm_spark.sql(f"ALTER TABLE {reference} SET IDENTIFIER FIELDS key")
+    spark.sql(f"ALTER TABLE {name} DROP IDENTIFIER FIELDS key")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    _, stored = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    schema = next(s for s in stored["schemas"] if s["schema-id"] == stored["current-schema-id"])
+    assert not schema.get("identifier-field-ids")
+    jvm_spark.sql(f"INSERT INTO {reference} SELECT 3, 30, 'reference'")
+    assert spark.table(name).count() == 3
+
+
 def _reference_name(database, table, fmt):
     return f"iceberg.{database}.{table}" if fmt == "iceberg" else f"{database}.{table}"
 
@@ -253,7 +276,10 @@ def test_lakehouse_column_changes(spark, jvm_spark, hms_s3_database, fmt):
     spark.sql(f"CREATE TABLE {name} (id INT, value STRING) USING {fmt} {properties}")
     exercise_lakehouse_column_changes(spark, name)
     jvm_spark.sql(f"REFRESH TABLE {reference}")
-    assert [tuple(row) for row in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [("one", 1), ("two", 2)]
+    assert [tuple(row) for row in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [
+        ("one", 1),
+        ("two", 2),
+    ]
     assert jvm_spark.table(reference).schema["renamed"].metadata["comment"] == "renamed column"
 
 
@@ -352,23 +378,33 @@ def test_iceberg_partition_evolution(spark, jvm_spark, hms_s3_database, hms_s3_e
     spark.sql(f"CREATE TABLE {name} (id INT, part STRING) USING iceberg PARTITIONED BY (part)")
     exercise_iceberg_partition_evolution(spark, name)
     jvm_spark.sql(f"REFRESH TABLE {reference}")
-    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [(1, "zz"), (3, "updated"), (4, "longer")]
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [
+        (1, "zz"),
+        (3, "updated"),
+        (4, "longer"),
+    ]
     _, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, "partition_evolution", hms_s3_env)
     jvm_spark.sql(f"ALTER TABLE {reference} ADD PARTITION FIELD bucket(4, id) AS id_bucket")
     spark.sql(f"INSERT INTO {name} VALUES (5, 'after')")
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert jvm_spark.sql(f"SELECT * FROM {reference}").count() == 4
     _, updated = _iceberg_metadata(jvm_spark, hms_s3_database, "partition_evolution", hms_s3_env)
-    assert updated["partition-specs"][:len(metadata["partition-specs"])] == metadata["partition-specs"]
+    assert updated["partition-specs"][: len(metadata["partition-specs"])] == metadata["partition-specs"]
 
 
 def test_iceberg_v2_merge_on_read_update(spark, jvm_spark, hms_s3_database):
     name = f"{hms_s3_database}.mor_update"
     reference = f"iceberg.{name}"
-    spark.sql(f"CREATE TABLE {name} (id INT, value INT) USING iceberg PARTITIONED BY (bucket(2, id)) TBLPROPERTIES ('format-version'='2', 'write.update.mode'='merge-on-read')")
+    spark.sql(
+        f"CREATE TABLE {name} (id INT, value INT) USING iceberg PARTITIONED BY (bucket(2, id)) TBLPROPERTIES ('format-version'='2', 'write.update.mode'='merge-on-read')"
+    )
     spark.sql(f"INSERT INTO {name} VALUES (1, 10), (2, 20), (3, 30)")
     spark.sql(f"UPDATE {name} SET value=value+1 WHERE id<=2")
     jvm_spark.sql(f"REFRESH TABLE {reference}")
-    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [(1, 11), (2, 21), (3, 30)]
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [
+        (1, 11),
+        (2, 21),
+        (3, 30),
+    ]
     jvm_spark.sql(f"UPDATE {reference} SET value=value+1 WHERE id>=2")
     assert [tuple(r) for r in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [(1, 11), (2, 22), (3, 31)]

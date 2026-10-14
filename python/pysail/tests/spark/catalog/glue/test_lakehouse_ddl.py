@@ -7,6 +7,28 @@ from pysail.testing.spark.ddl import exercise_lakehouse_alter
 from pysail.tests.spark.catalog.glue.test_iceberg_commit import _glue_client
 
 
+def test_glue_identifier_fields(spark, tmp_path, moto_endpoint):
+    from pysail.testing.spark.ddl import exercise_iceberg_identifier_fields
+
+    table = "identifiers"
+    name = f"test_db.{table}"
+    try:
+        spark.sql(
+            f"CREATE TABLE {name} (id INT NOT NULL, key INT NOT NULL, value STRING) "
+            f"USING iceberg LOCATION '{tmp_path.as_uri()}'"
+        )
+        exercise_iceberg_identifier_fields(spark, name)
+        stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
+        reference = StaticTable.from_metadata(stored["Parameters"]["metadata_location"])
+        assert reference.schema().identifier_field_ids == [reference.schema().find_field("renamed").field_id]
+        assert reference.scan().to_arrow().num_rows == 2
+        spark.sql(f"ALTER TABLE {name} DROP IDENTIFIER FIELDS renamed")
+        stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
+        assert not StaticTable.from_metadata(stored["Parameters"]["metadata_location"]).schema().identifier_field_ids
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 @pytest.mark.parametrize("fmt", ["delta", "iceberg"])
 def test_glue_lakehouse_ddl(spark, tmp_path, moto_endpoint, fmt):
     table = f"ddl_{fmt}"
@@ -99,7 +121,9 @@ def test_glue_iceberg_partition_evolution(spark, tmp_path, moto_endpoint):
 
     table = "test_db.partition_evolution"
     try:
-        spark.sql(f"CREATE TABLE {table} (id INT, part STRING) USING iceberg PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, part STRING) USING iceberg PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}'"
+        )
         exercise_iceberg_partition_evolution(spark, table)
         stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name="partition_evolution")["Table"]
         assert stored.get("PartitionKeys", []) == []

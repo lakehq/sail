@@ -1375,6 +1375,10 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterIdentifierFields {
+        names: Vec<ObjectName>,
+        drop: bool,
+    },
     AlterPartitionSpec {
         add: Option<(Expr, Option<String>)>,
         drop: Option<Expr>,

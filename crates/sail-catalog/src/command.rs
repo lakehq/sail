@@ -496,13 +496,14 @@ impl CatalogCommand {
                     // for Delta tables but plain tables fall through to SessionCatalog.
                     if matches!(
                         options,
-                        AlterTableOptions::SetWriteOrder { .. }
+                        AlterTableOptions::AlterIdentifierFields { .. }
+                            | AlterTableOptions::SetWriteOrder { .. }
                             | AlterTableOptions::AlterPartitionSpec { .. }
                             | AlterTableOptions::SetPartitioning { .. }
                     ) && !format.eq_ignore_ascii_case("iceberg")
                     {
                         return Err(CatalogError::NotSupported(
-                            "Partition and write order evolution require an Iceberg table".into(),
+                            "Identifier, partition and write order evolution require an Iceberg table".into(),
                         ));
                     }
                     if !is_lakehouse_format(&format) {

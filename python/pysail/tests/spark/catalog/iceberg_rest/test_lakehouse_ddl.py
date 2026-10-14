@@ -12,6 +12,31 @@ from pyiceberg.types import DoubleType
 from pysail.testing.spark.ddl import exercise_lakehouse_alter
 
 
+def test_rest_identifier_fields(spark, reference_catalog):
+    from pysail.testing.spark.ddl import exercise_iceberg_identifier_fields
+
+    namespace = "rest_identifiers"
+    table = f"{namespace}.t"
+    spark.sql(f"CREATE NAMESPACE {namespace}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT NOT NULL, key INT NOT NULL, value STRING) USING iceberg")
+        original = reference_catalog.load_table(table).schema()
+        exercise_iceberg_identifier_fields(spark, table)
+        reference = reference_catalog.load_table(table)
+        assert reference.schema().identifier_field_ids == [original.find_field("id").field_id]
+        before = reference.metadata_location
+        with pytest.raises(Exception, match="optional"):
+            spark.sql(f"ALTER TABLE {table} SET IDENTIFIER FIELDS value")
+        assert reference_catalog.load_table(table).metadata_location == before
+        with reference.update_schema() as update:
+            update.set_identifier_fields("key")
+        spark.sql(f"ALTER TABLE {table} DROP IDENTIFIER FIELDS key")
+        assert reference_catalog.load_table(table).schema().identifier_field_ids == []
+        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2
+    finally:
+        spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
+
+
 @pytest.fixture
 def reference_catalog(iceberg_rest_endpoint, seaweedfs_host_endpoint):
     return RestCatalog(

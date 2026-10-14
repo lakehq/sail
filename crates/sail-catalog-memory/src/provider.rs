@@ -118,7 +118,8 @@ impl MemoryCatalogProvider {
                     location,
                     ..
                 } => match options {
-                    AlterTableOptions::AlterPartitionSpec { .. } => Ok(()),
+                    AlterTableOptions::AlterIdentifierFields { .. }
+                    | AlterTableOptions::AlterPartitionSpec { .. } => Ok(()),
                     AlterTableOptions::SetPartitioning {
                         partition_by: updated,
                     } => {

@@ -83,6 +83,10 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterIdentifierFields {
+        names: Vec<Vec<String>>,
+        drop: bool,
+    },
     AlterPartitionSpec {
         add: Option<(CatalogPartitionField, Option<String>)>,
         drop: Option<CatalogPartitionField>,
@@ -196,7 +200,8 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
-            LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
+            LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
+            | LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
             | LakeSourceAlterTableOperation::SetPartitioning { .. }
             | LakeSourceAlterTableOperation::SetWriteOrder { .. }
             | LakeSourceAlterTableOperation::SetLocation { .. }

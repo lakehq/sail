@@ -106,7 +106,8 @@ pub(crate) fn apply_alter_table_options(
 ) -> CatalogResult<HashMap<String, String>> {
     match options {
         // Iceberg partition specs live in format metadata; Glue partition keys stay empty.
-        AlterTableOptions::AlterPartitionSpec { .. }
+        AlterTableOptions::AlterIdentifierFields { .. }
+        | AlterTableOptions::AlterPartitionSpec { .. }
         | AlterTableOptions::SetPartitioning { .. } => {}
         AlterTableOptions::SetWriteOrder { distribution, .. } => {
             if let Some(value) = distribution {

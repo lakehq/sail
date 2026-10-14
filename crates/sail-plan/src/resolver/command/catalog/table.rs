@@ -469,6 +469,12 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::AlterIdentifierFields { names, drop } => {
+                AlterTableOptions::AlterIdentifierFields {
+                    names: names.into_iter().map(|name| name.into()).collect(),
+                    drop,
+                }
+            }
             spec::AlterTableOperation::AlterPartitionSpec { add, drop } => {
                 AlterTableOptions::AlterPartitionSpec {
                     add: add

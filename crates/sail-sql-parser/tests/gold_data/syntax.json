@@ -144,6 +144,38 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Set)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Fields)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Fields)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Add)"
                       },
                       {

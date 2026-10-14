@@ -799,6 +799,18 @@ pub enum TableWriteOrderList {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    SetIdentifierFields {
+        set: Set,
+        identifier: crate::ast::keywords::Identifier,
+        fields: Fields,
+        names: Sequence<ObjectName, Comma>,
+    },
+    DropIdentifierFields {
+        drop: Drop,
+        identifier: crate::ast::keywords::Identifier,
+        fields: Fields,
+        names: Sequence<ObjectName, Comma>,
+    },
     AddPartitionField {
         add: Add,
         partition: Partition,

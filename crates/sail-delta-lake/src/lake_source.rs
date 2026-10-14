@@ -455,6 +455,9 @@ impl LakeSource for DeltaLakeSource {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
+                not_impl_err!("Identifier fields require an Iceberg table")
+            }
             LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
             | LakeSourceAlterTableOperation::SetPartitioning { .. } => {
                 return not_impl_err!("Partition spec evolution requires an Iceberg table");
@@ -551,6 +554,9 @@ fn reject_catalog_managed_delta_alter(
 
 fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
+        LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
+            "ALTER TABLE IDENTIFIER FIELDS"
+        }
         LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
         | LakeSourceAlterTableOperation::SetPartitioning { .. } => "ALTER TABLE PARTITION FIELD",
         LakeSourceAlterTableOperation::SetWriteOrder { .. } => "ALTER TABLE WRITE",

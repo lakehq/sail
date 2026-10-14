@@ -2460,6 +2460,24 @@ fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
     match operation {
+        AlterTableOperation::SetIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: false,
+            })
+        }
+        AlterTableOperation::DropIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: true,
+            })
+        }
         AlterTableOperation::AddPartitionField {
             transform, name, ..
         } => Ok(spec::AlterTableOperation::AlterPartitionSpec {

@@ -97,6 +97,12 @@ fn catalog_alter_options(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<Vec<AlterTableOptions>> {
     Ok(match operation {
+        LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
+            vec![AlterTableOptions::AlterIdentifierFields {
+                names: names.clone(),
+                drop: *drop,
+            }]
+        }
         LakeSourceAlterTableOperation::AlterPartitionSpec { add, drop } => {
             vec![AlterTableOptions::AlterPartitionSpec {
                 add: add.clone(),
@@ -178,6 +184,9 @@ pub(crate) fn apply_operation(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     match operation {
+        LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
+            alter_identifier_fields(metadata, names, *drop)
+        }
         LakeSourceAlterTableOperation::AlterPartitionSpec { add, drop } => {
             alter_partition_spec(metadata, add.as_ref(), drop.as_ref())
         }
@@ -639,6 +648,63 @@ fn set_write_order(
         metadata
             .properties
             .insert("write.distribution-mode".into(), distribution.into());
+    }
+    Ok(())
+}
+
+fn alter_identifier_fields(
+    metadata: &mut TableMetadata,
+    names: &[Vec<String>],
+    drop: bool,
+) -> Result<()> {
+    use std::collections::HashSet;
+    let current = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
+    let mut ids = if drop {
+        current.identifier_field_ids().collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    for name in names {
+        let name = name.join(".");
+        let field = current.field_by_name(&name).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Identifier field '{name}' not found in current schema"
+            ))
+        })?;
+        if drop {
+            if !ids.remove(&field.id) {
+                return plan_err!("'{name}' is not an identifier field");
+            }
+        } else {
+            ids.insert(field.id);
+        }
+    }
+    // Reuse the native schema validator: identifiers must be required primitive
+    // fields, outside lists/maps, with required struct ancestors, excluding floats.
+    let schema = Schema::builder()
+        .with_schema_id(
+            metadata
+                .schemas
+                .iter()
+                .map(Schema::schema_id)
+                .max()
+                .unwrap_or(0)
+                + 1,
+        )
+        .with_fields(current.fields().to_vec())
+        .with_identifier_field_ids(ids.iter().copied())
+        .build()
+        .map_err(DataFusionError::Plan)?;
+    if let Some(existing) = metadata.schemas.iter().find(|existing| {
+        existing.as_struct() == schema.as_struct()
+            && existing.identifier_field_ids().collect::<HashSet<_>>() == ids
+    }) {
+        metadata.current_schema_id = existing.schema_id();
+    } else {
+        metadata.current_schema_id = schema.schema_id();
+        metadata.schemas.push(schema);
     }
     Ok(())
 }

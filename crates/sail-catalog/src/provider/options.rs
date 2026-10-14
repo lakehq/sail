@@ -137,6 +137,10 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterIdentifierFields {
+        names: Vec<Vec<String>>,
+        drop: bool,
+    },
     AlterPartitionSpec {
         add: Option<(CatalogPartitionField, Option<String>)>,
         drop: Option<CatalogPartitionField>,
@@ -188,6 +192,12 @@ impl From<&AlterTableOptions>
     fn from(options: &AlterTableOptions) -> Self {
         use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
         match options {
+            AlterTableOptions::AlterIdentifierFields { names, drop } => {
+                LakeSourceAlterTableOperation::AlterIdentifierFields {
+                    names: names.clone(),
+                    drop: *drop,
+                }
+            }
             AlterTableOptions::AlterPartitionSpec { add, drop } => {
                 LakeSourceAlterTableOperation::AlterPartitionSpec {
                     add: add.clone(),

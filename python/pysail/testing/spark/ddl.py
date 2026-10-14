@@ -2,6 +2,21 @@
 """Shared SQL assertions for catalog-backed lakehouse DDL."""
 
 
+def exercise_iceberg_identifier_fields(spark, table):
+    """Evolve identifiers while retaining column identities and row-level writes."""
+    spark.sql(f"INSERT INTO {table} SELECT 1, 10, 'old'")
+    spark.sql(f"ALTER TABLE {table} SET IDENTIFIER FIELDS id, key")
+    spark.sql(f"ALTER TABLE {table} DROP IDENTIFIER FIELDS id")
+    spark.sql(f"ALTER TABLE {table} SET IDENTIFIER FIELDS id")
+    spark.sql(f"ALTER TABLE {table} RENAME COLUMN id TO renamed")
+    spark.sql(f"UPDATE {table} SET value = 'updated' WHERE renamed = 1")
+    spark.sql(f"INSERT INTO {table} SELECT 2, 20, 'new'")
+    assert [(r.renamed, r.key, r.value) for r in spark.table(table).orderBy("renamed").collect()] == [
+        (1, 10, "updated"),
+        (2, 20, "new"),
+    ]
+
+
 def exercise_lakehouse_alter(spark, table):
     """Exercise schema, default and property changes on a prepared three-column table."""
     spark.sql(f"INSERT INTO {table} VALUES (1, 'one', 'a')")
@@ -58,7 +73,10 @@ def exercise_iceberg_write_order(spark, table):
     spark.sql(f"INSERT INTO {table} VALUES (3, 8), (1, 4), (NULL, 2), (3, 1)")
     spark.sql(f"UPDATE {table} SET value = 9 WHERE value = 8")
     assert [tuple(r) for r in spark.sql(f"SELECT * FROM {table} ORDER BY id DESC NULLS LAST, value").collect()] == [
-        (3, 1), (3, 9), (1, 4), (None, 2)
+        (3, 1),
+        (3, 9),
+        (1, 4),
+        (None, 2),
     ]
 
 
@@ -73,7 +91,11 @@ def exercise_iceberg_partition_evolution(spark, table):
     spark.sql(f"INSERT INTO {table} VALUES (4, 'longer')")
     spark.sql(f"UPDATE {table} SET part = 'zz' WHERE id = 1")
     spark.sql(f"DELETE FROM {table} WHERE id = 2")
-    spark.sql(f"MERGE INTO {table} t USING (SELECT 3 AS id, 'updated' AS part) s ON t.id=s.id WHEN MATCHED THEN UPDATE SET part=s.part")
+    spark.sql(
+        f"MERGE INTO {table} t USING (SELECT 3 AS id, 'updated' AS part) s ON t.id=s.id WHEN MATCHED THEN UPDATE SET part=s.part"
+    )
     assert [tuple(r) for r in spark.sql(f"SELECT * FROM {table} ORDER BY id").collect()] == [
-        (1, "zz"), (3, "updated"), (4, "longer")
+        (1, "zz"),
+        (3, "updated"),
+        (4, "longer"),
     ]
