@@ -581,24 +581,6 @@ fn is_date_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Date32 | DataType::Date64)
 }
 
-pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
-    use crate::function::common::ScalarFunctionBuilder as F;
-
-    vec![
-        ("coalesce", F::custom(coalesce)),
-        ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
-        ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
-        ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::custom(nvl2)),
-        ("zeroifnull", F::custom(zeroifnull)),
-        ("when", F::custom(case)),
-        ("case", F::custom(case)),
-    ]
-}
-
 fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -664,4 +646,22 @@ fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     };
     Ok(expr_fn::coalesce(vec![arg, zero]))
+}
+
+pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
+    vec![
+        ("coalesce", F::custom(coalesce)),
+        ("if", F::custom(if_expr)),
+        ("ifnull", F::binary(expr_fn::nvl)),
+        ("nanvl", F::binary(expr_fn::nanvl)),
+        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullifzero", F::custom(nullifzero)),
+        ("nvl", F::binary(expr_fn::nvl)),
+        ("nvl2", F::custom(nvl2)),
+        ("zeroifnull", F::custom(zeroifnull)),
+        ("when", F::custom(case)),
+        ("case", F::custom(case)),
+    ]
 }
