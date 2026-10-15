@@ -10,7 +10,7 @@ use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-const MICROS_PER_DAY: i64 = 86_400_000_000; // 24 * 60 * 60 * 1_000_000
+use crate::scalar::datetime::utils::make_timestamp_from_date_time;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeTimestampNtz {
@@ -221,13 +221,6 @@ fn contains_scalar_null(args: &[ColumnarValue]) -> bool {
             false
         }
     })
-}
-
-/// Helper function to create timestamp from Date32 (days since epoch) and Time64 (microseconds since midnight)
-fn make_timestamp_from_date_time(date: i32, time: i64) -> Option<i64> {
-    (date as i64)
-        .checked_mul(MICROS_PER_DAY)
-        .and_then(|v| v.checked_add(time))
 }
 
 /// Helper function to create timestamp from date/time components

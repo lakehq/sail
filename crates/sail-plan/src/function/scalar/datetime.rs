@@ -13,7 +13,7 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -1115,8 +1115,6 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     .when(lit(true), months_between)
     .end()?)
 }
-
-const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
 
 /// Parses a `window` duration/start-time argument (interval string, day-time
 /// interval, or integer number of microseconds, matching Spark's

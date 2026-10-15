@@ -20,6 +20,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
+use sail_common::utils::datetime::MICROS_PER_DAY;
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
@@ -30,7 +31,6 @@ use crate::scalar::datetime::spark_timestamp_add::{add_ltz_interval, add_ntz_int
 use crate::scalar::datetime::utils::is_fixed_zero_offset_timezone;
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
-const MICROS_PER_DAY: i64 = 86_400_000_000;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
 
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -3,7 +3,10 @@ use std::iter::once;
 use either::Either;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
-use sail_common::utils::datetime::get_system_timezone;
+use sail_common::utils::datetime::{
+    MAX_TIME_ZONE_OFFSET_MICROS, MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_SECOND,
+    get_system_timezone,
+};
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
@@ -527,7 +530,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                 "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
                             )
                         })?;
-                    let input = spec::QueryPlan::new(spec::QueryNode::Read {
+                    let input = QueryPlan::new(spec::QueryNode::Read {
                         read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                             format: Some(format.value),
                             schema,
@@ -2041,13 +2044,6 @@ const INVALID_RESET_COMMAND_FORMAT: &str = "[INVALID_RESET_COMMAND_FORMAT] Expec
 /// The configuration key that `SET TIME ZONE` assigns to.
 /// It must equal `SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE` in `sail-spark-connect`.
 const SESSION_TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
-
-const MICROS_PER_SECOND: i64 = 1_000_000;
-const MICROS_PER_HOUR: u64 = 3_600 * 1_000_000;
-const MICROS_PER_DAY: i64 = 24 * 3_600 * 1_000_000;
-
-/// The largest absolute offset that `SET TIME ZONE INTERVAL ...` accepts.
-const MAX_TIME_ZONE_OFFSET_MICROS: u64 = 18 * MICROS_PER_HOUR;
 
 /// `QueryParsingErrors.intervalValueOutOfRangeError`, where `input` is the part of the interval that
 /// Spark rejects: its months, its days, its whole hours, or its whole seconds.
