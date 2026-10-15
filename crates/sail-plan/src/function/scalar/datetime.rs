@@ -13,7 +13,7 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -65,14 +65,6 @@ fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> PlanResult<E
             ScalarUDF::from(SparkDate::new(!context.plan_config.ansi_mode)).call(vec![expr]),
         );
     }
-    if !matches!(
-        data_type,
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) | DataType::Null
-    ) {
-        return Err(PlanError::invalid(format!(
-            "date argument requires DATE, TIMESTAMP or STRING, got {data_type}"
-        )));
-    }
     let date = cast_temporal(
         expr,
         &data_type,
@@ -89,7 +81,17 @@ fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> PlanResult<E
 }
 
 fn date_field(input: ScalarFunctionInput, part: &str) -> PlanResult<Expr> {
-    let date = datetime_date(input.arguments.one()?, &input.function_context)?;
+    let argument = input.arguments.one()?;
+    let data_type = argument.get_type(input.function_context.schema)?;
+    let date = if data_type.is_string()
+        || matches!(
+            data_type,
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) | DataType::Null
+        ) {
+        datetime_date(argument, &input.function_context)?
+    } else {
+        argument
+    };
     Ok(integer_part(date, part))
 }
 
@@ -636,19 +638,11 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
     time_with_try(input, true)
 }
 
-/// Shared `to_time` / `try_to_time` planner for string inputs.
+/// Shared `to_time` / `try_to_time` planner, including Sail's temporal inputs.
 /// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     let udf = ScalarUDF::from(SparkTime::new(is_try));
-    if matches!(input.arguments.len(), 1 | 2) {
-        let data_type = input.arguments[0].get_type(input.function_context.schema)?;
-        if !data_type.is_string() && !data_type.is_null() {
-            return Err(PlanError::invalid(format!(
-                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] The first parameter requires the \"STRING\" type, but the input has type {data_type}"
-            )));
-        }
-    }
     if input.arguments.len() == 1 {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
@@ -818,15 +812,6 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
     let arg = input.arguments.one()?;
-    match arg.get_type(input.function_context.schema)? {
-        DataType::Null => return Ok(cast(arg, DataType::Int64)),
-        DataType::Timestamp(_, Some(_)) => {}
-        other => {
-            return Err(PlanError::analysis(format!(
-                "unix timestamp units require TIMESTAMP, got {other}"
-            )));
-        }
-    }
     let micros = cast(
         cast(
             arg,
@@ -890,11 +875,9 @@ fn convert_tz(
     }
 }
 
-// TODO: Reject every non-atomic time-zone type during analysis, even when Arrow can cast
-//  it to Utf8 (for example, ARRAY). Spark's VariantType remains a supported atomic type.
 fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
     let field = expr.to_field(schema)?.1;
-    if (field.data_type().is_nested() || !can_cast_types(field.data_type(), &DataType::Utf8))
+    if !can_cast_types(field.data_type(), &DataType::Utf8)
         && !is_variant_storage_field(field.as_ref())
     {
         return Err(PlanError::invalid(format!(
@@ -1189,14 +1172,11 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     .end()?)
 }
 
-/// Parses a `window` duration/start-time argument (interval string
-/// or integer number of microseconds, matching Spark's
-/// `TimeWindow.parseExpression`) into microseconds. Months/years are rejected
-/// (non-constant length).
+// Parses window durations, including Sail's interval literal extension.
 fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
     let Expr::Literal(value, _) = expr else {
         return Err(PlanError::invalid(
-            "The duration and time inputs to window must be an integer, long or string literal",
+            "window durations and start time must be literal strings, day-time intervals, or integers",
         ));
     };
     if let Some(s) = value.try_as_str().flatten() {
@@ -1213,8 +1193,24 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
         // Spark interprets integer literals as microseconds.
         ScalarValue::Int32(Some(v)) => Ok(*v as i64),
         ScalarValue::Int64(Some(v)) => Ok(*v),
+        ScalarValue::DurationMicrosecond(Some(v)) => Ok(*v),
+        ScalarValue::DurationMillisecond(Some(v)) => v
+            .checked_mul(1_000)
+            .ok_or_else(|| PlanError::invalid("window interval overflow")),
+        ScalarValue::DurationSecond(Some(v)) => v
+            .checked_mul(1_000_000)
+            .ok_or_else(|| PlanError::invalid("window interval overflow")),
+        ScalarValue::DurationNanosecond(Some(v)) => Ok(*v / 1_000),
+        ScalarValue::IntervalDayTime(Some(v)) => i64::try_from(
+            i128::from(v.days) * i128::from(MICROS_PER_DAY) + i128::from(v.milliseconds) * 1_000,
+        )
+        .map_err(|_| PlanError::invalid("window interval overflow")),
+        ScalarValue::IntervalMonthDayNano(Some(v)) if v.months == 0 => i64::try_from(
+            i128::from(v.days) * i128::from(MICROS_PER_DAY) + i128::from(v.nanoseconds / 1_000),
+        )
+        .map_err(|_| PlanError::invalid("window interval overflow")),
         _ => Err(PlanError::invalid(
-            "The duration and time inputs to window must be an integer, long or string literal",
+            "window durations and start time must be literal strings, day-time intervals, or integers",
         )),
     }
 }
@@ -1488,7 +1484,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("time_to_seconds", F::unknown("time_to_seconds")),
         (
             "timestamp_micros",
-            F::udf(SparkTimestampFromNumber::new(TimestampNumberMode::Micros)),
+            F::cast(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
         ),
         (
             "timestamp_millis",

@@ -245,6 +245,8 @@ pub(crate) fn add_ltz_interval(
     micros: i64,
     timezone: Tz,
 ) -> Result<i64> {
+    // FIXME: Preserve named-zone calendar arithmetic beyond Chrono's range.
+    // Falling back to elapsed days would give wrong results across DST.
     let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
         .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
         .ok_or_else(|| exec_datafusion_err!("cannot convert timestamp {start}"))?;

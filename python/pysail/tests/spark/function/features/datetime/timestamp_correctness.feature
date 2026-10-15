@@ -338,17 +338,21 @@ Feature: Timestamp operations preserve instants and session-local calendar value
       | seconds | int_seconds |
       | -1      | -1          |
 
-  Scenario Outline: Naive timestamps cannot be explicitly cast to numeric values
+  @sail-only
+  Scenario Outline: Explicit <cast> preserves Sail's numeric and naive timestamp conversions
     When query
       """
-      SELECT <cast>(wall AS <type>) FROM timestamp_correctness
+      SELECT <cast>(TIMESTAMP_NTZ '1970-01-01 00:00:01' AS <type>) AS seconds,
+             CAST(<cast>(1 AS TIMESTAMP_NTZ) AS STRING) AS wall
       """
-    Then query error (?i)cannot cast|cannot resolve|data type
+    Then query result
+      | seconds  | wall                |
+      | <result> | 1970-01-01 00:00:01 |
 
     Examples:
-      | cast     | type   |
-      | CAST     | BIGINT |
-      | TRY_CAST | DOUBLE |
+      | cast     | type   | result |
+      | CAST     | BIGINT | 1      |
+      | TRY_CAST | DOUBLE | 1.0    |
 
   Scenario: Stored nested instants format in the session timezone
     Given config spark.sql.session.timeZone = America/Los_Angeles

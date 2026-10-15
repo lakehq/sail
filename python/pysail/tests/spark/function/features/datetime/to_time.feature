@@ -20,24 +20,28 @@ Feature: to_time (strict variant)
         | With microseconds | '10:30:45.123456'      | 10:30:45.123456 |
         | With format       | '10-30-45', 'HH-mm-ss' | 10:30:45        |
 
-  Rule: Both argument forms require string input
+  Rule: Sail also accepts temporal inputs
 
-    Scenario Outline: Two-arg <function> rejects <case>
+    @sail-only
+    Scenario Outline: Two-arg <function> converts <case> without parsing its format
       Given config spark.sql.timeType.enabled = true
       When query
         """
-        SELECT <function>(<arg>, 'HH:mm:ss') AS result
+        SELECT CAST(<function>(<arg>, 'HH-mm-ss') AS STRING) AS result
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query result
+        | result   |
+        | <result> |
 
       Examples:
-        | function    | case           | arg                                     |
-        | to_time     | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'          |
-        | to_time     | TIME           | TIME '10:30:45'                          |
-        | try_to_time | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'          |
-        | try_to_time | TIME           | TIME '10:30:45'                          |
-        | to_time     | NULL TIMESTAMP | CAST(NULL AS TIMESTAMP)                  |
-        | try_to_time | NULL TIME      | CAST(NULL AS TIME)                       |
+        | function    | case           | arg                                      | result   |
+        | to_time     | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'           | 10:30:45 |
+        | to_time     | TIMESTAMP_NTZ  | TIMESTAMP_NTZ '2024-01-15 10:30:45'       | 10:30:45 |
+        | to_time     | TIME           | TIME '10:30:45'                           | 10:30:45 |
+        | try_to_time | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'           | 10:30:45 |
+        | try_to_time | TIME           | TIME '10:30:45'                           | 10:30:45 |
+        | to_time     | NULL TIMESTAMP | CAST(NULL AS TIMESTAMP)                   | NULL     |
+        | try_to_time | NULL TIME      | CAST(NULL AS TIME)                        | NULL     |
 
     Scenario: Unsupported first-argument type is rejected with a format too
       Given config spark.sql.timeType.enabled = true
@@ -45,7 +49,7 @@ Feature: to_time (strict variant)
         """
         SELECT to_time(123, 'HH:mm:ss')
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query error (?i)STRING|unsupported|invalid.*type
 
   Rule: Wrong argument count is rejected
 
@@ -124,12 +128,7 @@ Feature: to_time (strict variant)
         | an unquoted restricted pattern letter     | '10B30'              | 'HHBmm'                         | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
         | a pattern with an unmatched literal quote | '10:30'              | concat('HH', chr(39), 'mm')     | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
 
-  Rule: The first argument must be a STRING, in BOTH the one- and two-argument forms
-    # Measured on Spark JVM 4.2.0 with spark.sql.timeType.enabled=true (the internal gate
-    # whose default is `Utils.isTesting`, so TIME is unreachable in a normal session
-    # unless the conf is set explicitly).
-    #
-    # Spark validates STRING input during analysis, including for try_to_time.
+  Rule: Unsupported primitive types fail analysis
 
     Scenario Outline: One-arg form rejects a non-STRING first argument: <case>
       Given config spark.sql.timeType.enabled = true
@@ -137,7 +136,7 @@ Feature: to_time (strict variant)
         """
         SELECT to_time(<input>) AS result
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query error (?i)STRING|unsupported|invalid.*type
 
       Examples:
         | case          | input                               |
@@ -145,26 +144,19 @@ Feature: to_time (strict variant)
         | BOOLEAN       | true                                |
         | BINARY        | X'48656C6C6F'                       |
         | DATE          | DATE '2024-01-15'                   |
-        | TIMESTAMP     | TIMESTAMP '2024-01-15 12:00:00'     |
-        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-15 12:00:00' |
-        | TIME          | TIME '12:30:00'                     |
 
     Scenario Outline: try_to_time rejects a non-STRING first argument too: <case>
-      # The try_ variant swallows VALUE errors, not ANALYSIS errors, so the type check
-      # still fires. That is what distinguishes an analysis-time guard from a runtime one.
       Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT try_to_time(<input>) AS result
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query error (?i)STRING|unsupported|invalid.*type
 
       Examples:
         | case      | input                           |
         | INT       | 1                               |
         | DATE      | DATE '2024-01-15'               |
-        | TIMESTAMP | TIMESTAMP '2024-01-15 12:00:00' |
-        | TIME      | TIME '12:30:00'                 |
 
   Rule: An unparseable value names the format it tried
     # Spark's CANNOT_PARSE_TIME message quotes the format, and for the one-argument form

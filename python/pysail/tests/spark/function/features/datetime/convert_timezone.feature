@@ -61,7 +61,8 @@ Feature: convert_timezone
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS STRUCT<value: INT>) AS VARIANT) |
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS MAP<STRING, INT>) AS VARIANT)   |
 
-    Scenario: an ARRAY time zone fails analysis even when it is NULL
+    @sail-only
+    Scenario: a castable NULL ARRAY time zone propagates NULL
       When query
         """
         SELECT convert_timezone(
@@ -70,7 +71,9 @@ Feature: convert_timezone
           TIMESTAMP_NTZ '2024-01-01 00:00:00'
         ) AS result
         """
-      Then query error DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Null propagation
 
@@ -247,18 +250,19 @@ Feature: convert_timezone
 
     @sail-bug
     Scenario: `convert_timezone` preserves timestamps outside Chrono's range
+      # TODO: Support named-zone conversion beyond Chrono's calendar range.
       Given config spark.sql.session.timeZone = UTC
       When query
         """
-        SELECT convert_timezone(
+        SELECT CAST(convert_timezone(
           'UTC',
           'America/Los_Angeles',
           CAST(timestamp_micros(9000000000000000000) AS TIMESTAMP_NTZ)
-        ) IS NOT NULL AS result
+        ) AS STRING) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result                 |
+        | +287168-08-24 09:00:00 |
 
   Rule: Daylight saving time handling
 

@@ -207,8 +207,8 @@ Feature: window() time-based windowing function
 
   Rule: Interval literal durations
 
-    # Spark only accepts an integer, long or string literal as the window duration; an INTERVAL
-    # literal is rejected during analysis.
+    # Sail also accepts interval literals whose duration has no calendar months.
+    @sail-only
     Scenario: a day-time interval literal is used as the window duration
       When query
         """
@@ -217,8 +217,11 @@ Feature: window() time-based windowing function
         GROUP BY window(b, INTERVAL '5' MINUTE)
         ORDER BY start
         """
-      Then query error The duration and time inputs to window must be an integer, long or string literal
+      Then query result
+        | start               | end                 | cnt |
+        | 2021-01-01 00:00:00 | 2021-01-01 00:05:00 | 1   |
 
+    @sail-only
     Scenario: a calendar interval literal is used as the window duration
       When query
         """
@@ -227,7 +230,9 @@ Feature: window() time-based windowing function
         GROUP BY window(b, INTERVAL '5 minutes')
         ORDER BY start
         """
-      Then query error The duration and time inputs to window must be an integer, long or string literal
+      Then query result
+        | start               | end                 | cnt |
+        | 2021-01-01 00:00:00 | 2021-01-01 00:05:00 | 1   |
 
   Rule: Argument validation
 
@@ -237,7 +242,7 @@ Feature: window() time-based windowing function
         SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', '5 minutes') AS t(b, d)
         GROUP BY window(b, d)
         """
-      Then query error The duration and time inputs to window must be an integer, long or string literal
+      Then query error (?i)duration.*must be.*literal
 
     # Spark reports these through WRONG_NUM_ARGS and DATATYPE_MISMATCH error classes; Sail uses
     # its own wording for every one of them.

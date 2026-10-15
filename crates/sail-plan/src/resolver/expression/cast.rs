@@ -151,16 +151,6 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
-            (DataType::Timestamp(_, None), to, _) if to.is_numeric() => {
-                return Err(PlanError::analysis(format!(
-                    "cannot cast TIMESTAMP_NTZ to {to}"
-                )));
-            }
-            (from, DataType::Timestamp(_, None), _) if from.is_numeric() => {
-                return Err(PlanError::analysis(format!(
-                    "cannot cast {from} to TIMESTAMP_NTZ"
-                )));
-            }
             (from, DataType::Timestamp(_, Some(_)), is_try) if from.is_numeric() => {
                 let mode = if is_try {
                     TimestampNumberMode::TryCast

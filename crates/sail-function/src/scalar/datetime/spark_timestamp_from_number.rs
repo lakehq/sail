@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondArray};
-use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int64Type, TimeUnit, i256,
-};
-use datafusion_common::{Result, exec_datafusion_err, exec_err};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, i256};
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility, cast, lit, try_cast, when,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::misc::raise_error::RaiseError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimestampNumberMode {
@@ -21,6 +22,7 @@ pub enum TimestampNumberMode {
     TryCast,
 }
 
+// Planning-only conversion: column inputs must also become native expressions.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestampFromNumber {
     signature: Signature,
@@ -35,102 +37,109 @@ impl SparkTimestampFromNumber {
         }
     }
 
-    fn floating_micros(&self, value: f64) -> Result<Option<i64>> {
-        let micros = value * 1_000_000.0;
-        let checked = matches!(
-            self.mode,
-            TimestampNumberMode::CastAnsi | TimestampNumberMode::TryCast
-        );
-        if !value.is_finite() {
-            return if self.mode == TimestampNumberMode::CastAnsi {
-                exec_err!("{value} cannot be cast to \"TIMESTAMP\" because it is malformed")
-            } else {
-                Ok(None)
-            };
+    fn integer_micros(&self, value: Expr, data_type: &DataType) -> Result<Expr> {
+        let value = cast(value, DataType::Int64);
+        let scaled = value.clone() * lit(1_000_000_i64);
+        if self.mode == TimestampNumberMode::Seconds
+            || matches!(
+                data_type,
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+            )
+        {
+            return Ok(scaled);
         }
-        if checked && !(micros.floor() <= i64::MAX as f64 && micros.ceil() >= i64::MIN as f64) {
-            return if self.mode == TimestampNumberMode::CastAnsi {
-                exec_err!("{micros} cannot be cast to \"BIGINT\" due to an overflow")
-            } else {
-                Ok(None)
-            };
-        }
-        // Java's floating-point-to-long conversion truncates and saturates.
-        Ok(Some(micros as i64))
+        // Java TimeUnit.SECONDS.toMicros saturates instead of overflowing.
+        when(value.clone().gt(lit(i64::MAX / 1_000_000)), lit(i64::MAX))
+            .when(value.lt(lit(i64::MIN / 1_000_000)), lit(i64::MIN))
+            .otherwise(scaled)
     }
 
-    fn decimal_micros(&self, value: i128, scale: i8) -> Result<i64> {
-        let overflow = || {
-            exec_datafusion_err!("timestamp_seconds decimal overflow or sub-microsecond precision")
-        };
-        let value = i256::from_i128(value);
-        let exponent = 6 - i16::from(scale);
-        let factor = i256::from(10)
-            .checked_pow(u32::from(exponent.unsigned_abs()))
-            .ok_or_else(overflow)?;
-        let value = if exponent >= 0 {
-            value.checked_mul(factor).ok_or_else(overflow)?
-        } else {
-            if self.mode == TimestampNumberMode::Seconds && value % factor != i256::ZERO {
-                return Err(overflow());
+    fn floating_micros(&self, value: Expr) -> Result<Expr> {
+        let value = cast(value, DataType::Float64);
+        let scaled = value.clone() * lit(1_000_000_f64);
+        let finite = value
+            .clone()
+            .gt(lit(f64::NEG_INFINITY))
+            .and(value.clone().lt(lit(f64::INFINITY)));
+        let in_range = scaled
+            .clone()
+            .gt_eq(lit(i64::MIN as f64))
+            .and(scaled.clone().lt_eq(lit(i64::MAX as f64)));
+        let bounded = when(scaled.clone().gt_eq(lit(i64::MAX as f64)), lit(i64::MAX))
+            .when(scaled.clone().lt_eq(lit(i64::MIN as f64)), lit(i64::MIN))
+            // An unused CASE arm can be constant-folded before its condition.
+            .otherwise(try_cast(scaled, DataType::Int64))?;
+        match self.mode {
+            TimestampNumberMode::CastAnsi => {
+                let message = when(
+                    finite,
+                    lit("cannot be cast to \"BIGINT\" due to an overflow"),
+                )
+                .otherwise(lit(
+                    "cannot be cast to \"TIMESTAMP\" because it is malformed",
+                ))?;
+                when(value.is_null(), lit(ScalarValue::Int64(None)))
+                    .when(in_range, bounded)
+                    .otherwise(cast(
+                        ScalarUDF::from(RaiseError::new()).call(vec![message]),
+                        DataType::Int64,
+                    ))
             }
-            value / factor
-        };
-        if self.mode == TimestampNumberMode::Seconds {
-            value
-                .to_i128()
-                .and_then(|value| i64::try_from(value).ok())
-                .ok_or_else(overflow)
-        } else {
-            // Spark CAST uses BigDecimal.longValue, including truncation and wrapping.
-            Ok(value.as_i128() as i64)
+            TimestampNumberMode::TryCast => {
+                when(in_range, bounded).otherwise(lit(ScalarValue::Int64(None)))
+            }
+            _ => when(finite, bounded).otherwise(lit(ScalarValue::Int64(None))),
         }
     }
 
-    fn kernel(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let array = &args[0];
-        let values = (0..array.len())
-            .map(|row| {
-                if array.is_null(row) {
-                    return Ok(None);
-                }
-                match array.data_type() {
-                    DataType::Int64 => {
-                        let value = array.as_primitive::<Int64Type>().value(row);
-                        let factor = match self.mode {
-                            TimestampNumberMode::Micros => 1,
-                            TimestampNumberMode::Millis => 1_000,
-                            _ => 1_000_000,
-                        };
-                        let value = if matches!(
-                            self.mode,
-                            TimestampNumberMode::CastAnsi
-                                | TimestampNumberMode::CastLegacy
-                                | TimestampNumberMode::TryCast
-                        ) {
-                            // java.util.concurrent.TimeUnit.SECONDS.toMicros saturates.
-                            value.saturating_mul(factor)
-                        } else {
-                            value
-                                .checked_mul(factor)
-                                .ok_or_else(|| exec_datafusion_err!("timestamp overflow"))?
-                        };
-                        Ok(Some(value))
-                    }
-                    DataType::Float32 => self
-                        .floating_micros(f64::from(array.as_primitive::<Float32Type>().value(row))),
-                    DataType::Float64 => {
-                        self.floating_micros(array.as_primitive::<Float64Type>().value(row))
-                    }
-                    DataType::Decimal128(_, scale) => self
-                        .decimal_micros(array.as_primitive::<Decimal128Type>().value(row), *scale)
-                        .map(Some),
-                    other => exec_err!("invalid numeric timestamp input: {other}"),
-                }
-            })
-            .collect::<Result<TimestampMicrosecondArray>>()?
-            .with_timezone("UTC");
-        Ok(Arc::new(values))
+    fn decimal_micros(&self, value: Expr, precision: u8, scale: i8) -> Result<Expr> {
+        let wide = cast(value, DataType::Decimal256(precision, scale));
+        let scaled = wide * lit(ScalarValue::Decimal256(Some(i256::from(1_000_000)), 7, 0));
+        // Decimal rescaling rounds; remove the fractional part before rescaling.
+        let fraction = scaled.clone() % lit(ScalarValue::Decimal256(Some(i256::from(1)), 1, 0));
+        let integer = cast(scaled.clone() - fraction, DataType::Decimal256(76, 0));
+        if self.mode == TimestampNumberMode::Seconds {
+            let result = cast(scaled.clone(), DataType::Int64);
+            return if scale <= 6 {
+                Ok(result)
+            } else {
+                // Spark's longValueExact rejects fractional microseconds as well as overflow.
+                when(
+                    scaled.clone().is_not_null().and(scaled.not_eq(integer)),
+                    cast(
+                        ScalarUDF::from(RaiseError::new()).call(vec![lit(
+                            "timestamp_seconds decimal overflow or sub-microsecond precision",
+                        )]),
+                        DataType::Int64,
+                    ),
+                )
+                .otherwise(result)
+            };
+        }
+        if i16::from(precision) - i16::from(scale) + 6 <= 18 {
+            return Ok(cast(scaled, DataType::Int64));
+        }
+        // BigDecimal.longValue truncates and wraps modulo 2^64.
+        let modulus = lit(ScalarValue::Decimal256(
+            Some(i256::from_i128(1_i128 << 64)),
+            20,
+            0,
+        ));
+        let wrapped = integer % modulus.clone();
+        Ok(cast(
+            when(
+                wrapped.clone().gt(lit(i64::MAX)),
+                wrapped.clone() - modulus.clone(),
+            )
+            .when(wrapped.clone().lt(lit(i64::MIN)), wrapped.clone() + modulus)
+            .otherwise(wrapped)?,
+            DataType::Int64,
+        ))
     }
 }
 
@@ -145,15 +154,18 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
             TimestampNumberMode::TryCast => "spark_try_cast_number_to_timestamp",
         }
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
             Some("UTC".into()),
         ))
     }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|field| {
             field.is_nullable()
@@ -166,25 +178,40 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
             nullable,
         )))
     }
+
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        let [data_type] = types else {
+        if types.len() != 1 {
             return exec_err!("numeric timestamp conversion requires one argument");
-        };
-        if data_type.is_integer() || data_type.is_null() {
-            return Ok(vec![DataType::Int64]);
         }
-        if !matches!(
-            self.mode,
-            TimestampNumberMode::Millis | TimestampNumberMode::Micros
-        ) && matches!(
-            data_type,
-            DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _)
-        ) {
-            return Ok(types.to_vec());
-        }
-        exec_err!("invalid argument type for {}: {data_type}", self.name())
+        // Preserve Sail's castable constructor inputs and wide decimal extension.
+        Ok(types.to_vec())
     }
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(|arrays| self.kernel(arrays))(&args.args)
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("numeric timestamp conversion must be simplified before execution")
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let value = args.one()?;
+        let data_type = info.get_data_type(&value)?;
+        let micros = match self.mode {
+            TimestampNumberMode::Micros => value,
+            TimestampNumberMode::Millis => cast(value, DataType::Int64) * lit(1_000_i64),
+            _ => match data_type {
+                DataType::Float32 | DataType::Float64 => self.floating_micros(value)?,
+                DataType::Decimal128(precision, scale) => {
+                    self.decimal_micros(value, precision, scale)?
+                }
+                DataType::Decimal256(_, _) => value * lit(1_000_000_i64),
+                _ if data_type.is_integer() || data_type.is_null() => {
+                    self.integer_micros(value, &data_type)?
+                }
+                _ => cast(value, DataType::Int64) * lit(1_000_000_i64),
+            },
+        };
+        let expression = cast(micros, self.return_type(&[])?);
+        Ok(ExprSimplifyResult::Simplified(
+            ExprSimplifier::new(info.clone()).coerce(expression, info.schema())?,
+        ))
     }
 }

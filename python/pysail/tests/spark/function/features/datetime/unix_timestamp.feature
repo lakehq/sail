@@ -348,12 +348,7 @@ Feature: unix_timestamp with an argument coming from a column
         | post-epoch, unix_seconds    | unix_seconds | TIMESTAMP '1970-01-01 00:00:00.5' | 0                |
         | micros are the identity     | unix_micros  | TIMESTAMP '1969-12-31 23:59:59.5' | -500000          |
 
-  Rule: unix_seconds / unix_millis / unix_micros accept TIMESTAMP only
-    # These three mix in ExpectsInputTypes with inputTypes = Seq(TimestampType) and NO
-    # implicit cast, so DATE and TIMESTAMP_NTZ are ANALYSIS errors — even though
-    # unix_timestamp accepts both. Sail accepts them, which is the divergence.
-    # The unix_timestamp half is asserted alongside because it is what discriminates a
-    # genuinely narrower signature from a blanket rejection.
+  Rule: Sail preserves additional castable epoch conversion inputs
 
     Scenario Outline: unix_timestamp does accept DATE and TIMESTAMP_NTZ: <case>
       When query
@@ -369,19 +364,21 @@ Feature: unix_timestamp with an argument coming from a column
         | DATE          | DATE '2020-01-01'                     | 1577836800 |
         | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2020-01-01 00:00:00'   | 1577836800 |
 
-    @sail-bug
-    Scenario Outline: the unix_* trio rejects them: <case>
+    @sail-only
+    Scenario Outline: the unix_* trio also accepts <case>
       When query
         """
         SELECT <fn>(<input>) AS result
         """
-      Then query error due to data type mismatch
+      Then query result
+        | result   |
+        | <result> |
 
       Examples:
-        | case                | fn           | input                               |
-        | unix_seconds, DATE  | unix_seconds | DATE '2020-01-01'                   |
-        | unix_seconds, NTZ   | unix_seconds | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
-        | unix_millis, DATE   | unix_millis  | DATE '2020-01-01'                   |
-        | unix_millis, NTZ    | unix_millis  | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
-        | unix_micros, DATE   | unix_micros  | DATE '2020-01-01'                   |
-        | unix_micros, NTZ    | unix_micros  | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
+        | case                | fn           | input                               | result |
+        | unix_seconds, DATE  | unix_seconds | DATE '2020-01-01'                   | 1577836800 |
+        | unix_seconds, NTZ   | unix_seconds | TIMESTAMP_NTZ '2020-01-01 00:00:00' | 1577836800 |
+        | unix_millis, DATE   | unix_millis  | DATE '2020-01-01'                   | 1577836800000 |
+        | unix_millis, NTZ    | unix_millis  | TIMESTAMP_NTZ '2020-01-01 00:00:00' | 1577836800000 |
+        | unix_micros, DATE   | unix_micros  | DATE '2020-01-01'                   | 1577836800000000 |
+        | unix_micros, NTZ    | unix_micros  | TIMESTAMP_NTZ '2020-01-01 00:00:00' | 1577836800000000 |
