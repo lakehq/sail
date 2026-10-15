@@ -32,6 +32,7 @@ tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
 hyper = { workspace = true }
+http-body-util = { workspace = true }
 hyper-util = { workspace = true }
 hyper-rustls = { workspace = true }
 rustls = { workspace = true }

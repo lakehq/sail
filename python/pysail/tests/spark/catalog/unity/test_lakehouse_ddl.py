@@ -32,10 +32,16 @@ def test_unity_managed_delta_ddl(spark, unity_rest_url):
         version = int(published.stem)
         assert _unity_delta_commit_info(unity_rest_url, table, version)
         published.unlink()
+        assert [tuple(r) for r in spark.sql(f"SHOW TBLPROPERTIES {table} ('delta.enableTypeWidening')").collect()] == [
+            ("delta.enableTypeWidening", "true")
+        ]
         spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('after-unpublished'='true')")
         assert _unity_delta_commit_info(unity_rest_url, table, version + 1)
         info = _unity_table_info(unity_rest_url, table)
         assert info["properties"]["after-unpublished"] == "true"
+        assert [tuple(r) for r in spark.sql(f"SHOW TBLPROPERTIES {table} ('after-unpublished')").collect()] == [
+            ("after-unpublished", "true")
+        ]
         assert spark.table(table).count() == 3  # noqa: PLR2004
         with pytest.raises(Exception, match="coordination properties"):
             spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('io.unitycatalog.tableId')")

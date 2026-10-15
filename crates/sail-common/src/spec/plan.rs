@@ -314,6 +314,10 @@ pub enum CommandNode {
     ListCatalogs {
         pattern: Option<String>,
     },
+    ShowTableProperties {
+        table: ObjectName,
+        property: Option<String>,
+    },
     ShowTables {
         database: Option<ObjectName>,
         pattern: Option<String>,
@@ -483,6 +487,10 @@ pub enum CommandNode {
     SetVariable {
         variable: String,
         value: String,
+    },
+    /// `RESET <variable>`, or `RESET` for all variables when `variable` is `None`.
+    ResetVariable {
+        variable: Option<String>,
     },
     Update {
         table: ObjectName,

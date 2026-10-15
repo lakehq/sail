@@ -1558,7 +1558,8 @@ mod tests {
             }"#,
         )
         .expect("nullable manifest list schema");
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
+        let mut writer =
+            apache_avro::Writer::new(&schema, Vec::new()).expect("nullable manifest list writer");
         writer
             .append_ser(NullableManifestCounts {
                 manifest_path,

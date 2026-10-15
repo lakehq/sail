@@ -2,8 +2,11 @@ use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
+use crate::ast::config::{ConfigValue, config_assignment};
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{BooleanLiteral, Expr, FunctionArgumentList, OrderDirection};
+use crate::ast::expression::{
+    BooleanLiteral, Expr, FunctionArgumentList, IntervalExpr, OrderDirection,
+};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
@@ -12,13 +15,13 @@ use crate::ast::keywords::{
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
     Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
     Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
-    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
-    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
-    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
-    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
-    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
-    When, With, Zone,
+    Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
+    Matched, Merge, Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat,
+    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
+    Replace, Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted,
+    Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
+    Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values,
+    Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -136,6 +139,12 @@ pub enum Statement {
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         purge: Option<Purge>,
+    },
+    ShowTableProperties {
+        show: Show,
+        tblproperties: Tblproperties,
+        name: ObjectName,
+        property: Option<(LeftParenthesis, PropertyKey, RightParenthesis)>,
     },
     ShowTables {
         show: Show,
@@ -303,13 +312,22 @@ pub enum Statement {
         clear: Clear,
         cache: Cache,
     },
-    SetProperty {
-        set: Set,
-        property: Option<PropertyKeyValue>,
-    },
+    // `SET TIME ZONE` must be defined before `SET <property>`, since the latter
+    // would otherwise match `SET TIME` and leave `ZONE` unparsed.
     SetTimeZone {
         set: (Set, Time, Zone),
-        timezone: Either<Local, StringLiteral>,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        timezone: TimeZoneValue,
+    },
+    SetProperty {
+        set: Set,
+        property: Option<SetPropertyKeyValue>,
+    },
+    ResetProperty {
+        reset: Reset,
+        key: Option<PropertyKey>,
+        // Anything after the key is kept only to report the statement as malformed like Spark.
+        rest: Option<ConfigValue>,
     },
     AnalyzeTable {
         analyze: (Analyze, Table),
@@ -378,6 +396,28 @@ pub struct PropertyKeyList {
     pub left: LeftParenthesis,
     pub properties: Sequence<PropertyKey, Comma>,
     pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TimeZoneValue {
+    Local(Local),
+    Literal(StringLiteral),
+    Interval(
+        Interval,
+        #[parser(function = |e, o| boxed(compose(e, o)))] Box<IntervalExpr>,
+    ),
+}
+
+/// The key and the optional value of `SET <key> [= <value>]`.
+/// Unlike a table property, the value is raw text or a backtick-quoted string.
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct SetPropertyKeyValue {
+    pub key: PropertyKey,
+    #[parser(function = |_, o| config_assignment(o).or_not())]
+    pub value: Option<(Equals, ConfigValue)>,
+    // Preserve malformed tails so the analyzer can return Spark's SET syntax error.
+    pub rest: Option<ConfigValue>,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -21,12 +22,15 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
 use url::Url;
 
-use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
+use crate::datasource::partition_defaults::{
+    IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
+};
 use crate::io::StoreContext;
 use crate::physical_plan::file_tasks_exec::COL_IDENTITY_PARTITION_DEFAULTS;
 use crate::physical_plan::manifest_scan_exec::{
@@ -197,15 +201,13 @@ impl ScanByDataFilesState {
             .object_store_registry
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let store_ctx = StoreContext::new(object_store, &self.table_url)?;
+        let store_ctx = StoreContext::new(Arc::clone(&object_store), &self.table_url)?;
 
         // Build PartitionedFile entries using file size from manifest metadata,
         // avoiding a per-file HEAD request to the object store.
-        // `last_modified` is not available from Iceberg manifest metadata, so we
-        // use a placeholder (current time). DataFusion's Parquet reader uses this
-        // field only for cache invalidation (ETag/mtime logic), which is not
-        // exercised in this streaming path. The actual file size from the manifest
-        // is accurate and is the only metadata field that matters for scan planning.
+        // The manifest has no modification time, so use current time as a placeholder.
+        // Retain that timestamp per file through footer preparation and execution for
+        // cache reuse within this scan; rebuilding the scan generates new timestamps.
         let mut partitioned_files = Vec::with_capacity(files.len());
         for file in &files {
             let file_path = store_ctx.resolve_to_absolute_path(&file.path)?;
@@ -246,8 +248,31 @@ impl ScanByDataFilesState {
                 .parquet
                 .clone(),
         );
+        let metadata_cache = self
+            .context
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        let file_groups = load_parquet_scan_metadata(
+            file_groups,
+            &object_store,
+            &metadata_cache,
+            parquet_options.global.metadata_size_hint,
+            self.context
+                .session_config()
+                .options()
+                .execution
+                .meta_fetch_concurrency
+                .into(),
+        )
+        .await?;
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            object_store,
+            metadata_cache,
+        ));
         let mut parquet_source = ParquetSource::new(Arc::clone(&self.file_schema))
-            .with_table_parquet_options(parquet_options);
+            .with_table_parquet_options(parquet_options)
+            .with_parquet_file_reader_factory(reader_factory);
         if let Some(predicate) = &self.predicate {
             parquet_source = parquet_source.with_predicate(predicate.clone());
         }
@@ -265,7 +290,7 @@ impl ScanByDataFilesState {
             ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
 
-        let scan_exec = create_data_scan(file_scan_config)?;
+        let scan_exec = create_data_scan_with_partition_defaults(file_scan_config)?;
         let output_schema = Arc::clone(&self.output_schema);
 
         // Execute all partitions of the scan and flatten into a single stream.
