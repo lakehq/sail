@@ -268,14 +268,6 @@ Feature: DataSketches functions
         | result |
         | 996    |
 
-  Rule: HLL sketches are not byte-identical to Spark
-
-    # The hash (MurmurHash3 seed 9001) matches Spark exactly and sketches are
-    # mutually readable, but Sail's `datasketches` crate serializes the LIST/SET
-    # mode compactly (vs Spark's padded form) and its merged dense HLL estimator
-    # diverges slightly, so the serialized bytes and parallel estimate differ.
-
-    @sail-bug
     Scenario: hll_sketch_agg parallel estimate matches Spark at high cardinality
       When query
         """
@@ -285,6 +277,12 @@ Feature: DataSketches functions
       Then query result
         | result |
         | 990    |
+
+  Rule: HLL sketches are not byte-identical to Spark
+
+    # The hash (MurmurHash3 seed 9001) matches Spark exactly and sketches are
+    # mutually readable, but Sail's `datasketches` crate serializes the LIST/SET
+    # mode compactly (vs Spark's padded form), so the serialized bytes differ.
 
     @sail-bug
     Scenario: hll_sketch_agg serialized size matches Spark at low cardinality
