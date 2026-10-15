@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 use crate::spec::FormatVersion;
+use crate::spec::avro_utils::create_avro_writer;
 mod schema;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
@@ -174,8 +175,6 @@ impl ManifestListWriter {
     }
 
     pub fn to_bytes(&self, version: FormatVersion) -> Result<Vec<u8>, String> {
-        use apache_avro::Writer;
-
         use crate::spec::manifest_list::schema::{
             MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2,
             MANIFEST_LIST_AVRO_SCHEMA_V3,
@@ -186,7 +185,8 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut writer = Writer::new(schema, Vec::new());
+        let mut writer = create_avro_writer(schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         for mf in &self.entries {
             if version >= FormatVersion::V2
