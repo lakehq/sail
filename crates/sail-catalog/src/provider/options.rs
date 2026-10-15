@@ -160,6 +160,8 @@ pub enum AlterTableOptions {
     },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+        #[serde(default)]
+        case_sensitive: bool,
     },
     SetTableProperties {
         properties: Vec<(String, String)>,
@@ -228,11 +230,13 @@ impl From<&AlterTableOptions>
                     )),
                 }
             }
-            AlterTableOptions::AlterColumns { changes } => {
-                LakeSourceAlterTableOperation::AlterColumns {
-                    changes: changes.clone(),
-                }
-            }
+            AlterTableOptions::AlterColumns {
+                changes,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::AlterColumns {
+                changes: changes.clone(),
+                case_sensitive: *case_sensitive,
+            },
             AlterTableOptions::SetTableProperties { properties } => {
                 LakeSourceAlterTableOperation::SetTableProperties {
                     changes: properties

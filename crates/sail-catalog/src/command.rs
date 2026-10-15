@@ -578,6 +578,17 @@ impl CatalogCommand {
                                 )
                                 .await?;
                         }
+                        if !result.removed_properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::UnsetTableProperties {
+                                        keys: result.removed_properties,
+                                        if_exists: true,
+                                    },
+                                )
+                                .await?;
+                        }
                     }
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }

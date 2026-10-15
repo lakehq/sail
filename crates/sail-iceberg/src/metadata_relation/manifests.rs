@@ -223,13 +223,18 @@ fn manifest_partition_type(
         })?;
     let partition_type = metadata
         .current_schema()
-        .and_then(|schema| spec.partition_type(schema).ok())
-        .or_else(|| {
-            metadata
-                .schemas
-                .iter()
-                .find_map(|schema| spec.partition_type(schema).ok())
+        .into_iter()
+        .chain(metadata.schemas.iter())
+        .find(|schema| {
+            spec.fields().iter().all(|field| {
+                field.transform == crate::spec::Transform::Void
+                    || field
+                        .source_id()
+                        .is_ok_and(|id| schema.field_by_id(id).is_some())
+            })
         })
+        .or_else(|| metadata.current_schema())
+        .and_then(|schema| spec.partition_type(schema).ok())
         .ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "Cannot bind Iceberg partition spec {spec_id} to a retained table schema"

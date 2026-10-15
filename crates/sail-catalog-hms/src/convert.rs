@@ -91,7 +91,12 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| field_names(keys))
         .unwrap_or_default();
-    let columns = match columns_from_spark_properties(table.parameters.as_ref())? {
+    let spark_columns = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        columns_from_spark_properties(table.parameters.as_ref())?
+    };
+    let columns = match spark_columns {
         Some(spark_columns) => reorder_spark_columns(spark_columns, &partition_columns)?,
         None => columns_from_hms(storage, table.partition_keys.as_ref())?,
     };
@@ -907,24 +912,30 @@ fn current_time_secs() -> CatalogResult<i32> {
 pub(crate) fn alter_columns(
     table: &mut Table,
     changes: &[sail_catalog::provider::ColumnChange<DataType>],
+    case_sensitive: bool,
 ) -> CatalogResult<()> {
     let partition_names = table
         .partition_keys
         .as_deref()
         .map(field_names)
         .unwrap_or_default();
-    let fields =
-        if let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? {
-            spark_struct_json_to_fields(&schema)?
-        } else {
-            columns_from_hms(table.sd.as_ref(), table.partition_keys.as_ref())?
-                .iter()
-                .map(TableColumnStatus::field)
-                .collect()
-        };
+    let spark_schema = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)?
+    };
+    let fields = if let Some(schema) = spark_schema {
+        spark_struct_json_to_fields(&schema)?
+    } else {
+        columns_from_hms(table.sd.as_ref(), table.partition_keys.as_ref())?
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect()
+    };
     let schema = arrow::datatypes::Schema::new(fields);
-    let updated = sail_common_datafusion::column_change::alter_schema(&schema, changes)
-        .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+    let updated =
+        sail_common_datafusion::column_change::alter_schema(&schema, changes, case_sensitive)
+            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
     let mut partition_names = partition_names;
     for change in changes {
         if let sail_catalog::provider::ColumnChange::Rename { path, name } = change
@@ -981,6 +992,14 @@ fn replace_columns_with_partitions(
         .ok_or_else(|| CatalogError::InvalidArgument("Missing HMS storage descriptor".into()))?;
     storage.cols = Some(columns);
     table.partition_keys = Some(partitions);
+    if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        // Native Iceberg clients maintain sd.cols, not Spark's datasource schema cache.
+        if let Some(parameters) = table.parameters.as_mut() {
+            let prefix = format!("{SPARK_SCHEMA_KEY}.");
+            parameters.retain(|key, _| key != SPARK_SCHEMA_KEY && !key.starts_with(&prefix));
+        }
+        return Ok(());
+    }
     let fields = updated
         .fields()
         .iter()

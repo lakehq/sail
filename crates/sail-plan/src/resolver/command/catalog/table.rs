@@ -525,14 +525,16 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|column| column.try_map_type(|ty| self.resolve_data_type(&ty, state)))
                     .collect::<PlanResult<Vec<_>>>()?;
+                let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
+                self.validate_delta_replacement_generated_columns(&table, &schema, state)
+                    .await?;
                 AlterTableOptions::ReplaceColumns {
-                    fields: sail_common_datafusion::column_change::replacement_schema(&columns)?
-                        .fields()
-                        .clone(),
+                    fields: schema.fields().clone(),
                 }
             }
             spec::AlterTableOperation::AlterColumns { changes } => {
                 AlterTableOptions::AlterColumns {
+                    case_sensitive: self.config.case_sensitive,
                     changes: changes
                         .into_iter()
                         .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))

@@ -614,7 +614,10 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
+    pub(super) async fn resolve_table_info(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<Option<TableInfo>> {
         let status = match self
             .ctx
             .extension::<CatalogManager>()?

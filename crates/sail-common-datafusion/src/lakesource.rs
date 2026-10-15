@@ -73,6 +73,8 @@ pub struct LakeSourceAlterTableResult {
     pub schema: Option<SchemaRef>,
     /// Property changes implied by the alteration, such as renamed statistics columns.
     pub properties: Vec<(String, String)>,
+    /// Properties removed from the previous format metadata by the alteration.
+    pub removed_properties: Vec<String>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.
@@ -108,6 +110,7 @@ pub enum LakeSourceAlterTableOperation {
     },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+        case_sensitive: bool,
     },
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
     ///

@@ -1,3 +1,4 @@
+# ruff: noqa: S608, PLR2004
 import pytest
 
 from pysail.testing.spark.ddl import exercise_iceberg_partition_evolution
@@ -58,8 +59,29 @@ def test_invalid_partition_change_is_atomic(spark, tmp_path, clause):
             f"CREATE TABLE {table} (id INT, part STRING) USING iceberg PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}'"
         )
         before = _find_latest_metadata(tmp_path)
-        with pytest.raises(Exception, match="(?i)duplicate|exist|positive|conflict"):
+        with pytest.raises(Exception, match=r"(?i)duplicate|exist|positive|conflict"):
             spark.sql(f"ALTER TABLE {table} {clause}")
         assert _find_latest_metadata(tmp_path) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_drop_partition_source_keeps_table_writable(spark, tmp_path, version):
+    table = "drop_partition_source"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, part INT) USING iceberg PARTITIONED BY (part) "
+            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('format-version'='{version}')"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1, 10)")
+        spark.sql(f"ALTER TABLE {table} DROP PARTITION FIELD part")
+        spark.sql(f"ALTER TABLE {table} DROP COLUMN part")
+        assert [tuple(row) for row in spark.table(table).collect()] == [(1,)]
+        manifests = spark.table(f"{table}.manifests").collect()
+        assert manifests[0].partition_summaries[0].lower_bound == "10"
+        spark.sql(f"INSERT INTO {table} VALUES (2)")
+        spark.sql(f"UPDATE {table} SET id=3 WHERE id=1")
+        assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(2,), (3,)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

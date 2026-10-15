@@ -5,10 +5,14 @@ use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use sail_common::spec::{ColumnChange, ColumnPosition};
 
 /// Apply changes to a copy, preserving field metadata and collection element identities.
-pub fn alter_schema(schema: &Schema, changes: &[ColumnChange<DataType>]) -> Result<Schema> {
+pub fn alter_schema(
+    schema: &Schema,
+    changes: &[ColumnChange<DataType>],
+    case_sensitive: bool,
+) -> Result<Schema> {
     let mut fields = schema.fields().to_vec();
     for change in changes {
-        alter_fields(&mut fields, change.path(), change)?;
+        alter_fields(&mut fields, change.path(), change, case_sensitive)?;
     }
     if fields.is_empty() {
         return plan_err!("Cannot drop all columns from a table");
@@ -74,17 +78,26 @@ fn validate_type(ty: &DataType) -> Result<()> {
     }
 }
 
-fn index(fields: &[FieldRef], name: &str) -> Option<usize> {
-    fields
-        .iter()
-        .position(|field| field.name().eq_ignore_ascii_case(name))
+fn names_match(left: &str, right: &str, case_sensitive: bool) -> bool {
+    left == right || (!case_sensitive && left.eq_ignore_ascii_case(right))
 }
 
-fn move_field(fields: &mut Vec<FieldRef>, i: usize, position: &ColumnPosition) -> Result<()> {
+fn index(fields: &[FieldRef], name: &str, case_sensitive: bool) -> Option<usize> {
+    fields
+        .iter()
+        .position(|field| names_match(field.name(), name, case_sensitive))
+}
+
+fn move_field(
+    fields: &mut Vec<FieldRef>,
+    i: usize,
+    position: &ColumnPosition,
+    case_sensitive: bool,
+) -> Result<()> {
     let target = match position {
         ColumnPosition::First => 0,
         ColumnPosition::After(name) => {
-            let after = index(fields, name)
+            let after = index(fields, name, case_sensitive)
                 .ok_or_else(|| plan_datafusion_err!("Column '{name}' does not exist"))?;
             if after == i {
                 return plan_err!("Cannot position a column after itself");
@@ -101,11 +114,12 @@ fn alter_fields(
     fields: &mut Vec<FieldRef>,
     path: &[String],
     change: &ColumnChange<DataType>,
+    case_sensitive: bool,
 ) -> Result<()> {
     let Some((name, rest)) = path.split_first() else {
         return plan_err!("Column name must not be empty");
     };
-    let found = index(fields, name);
+    let found = index(fields, name, case_sensitive);
     if found.is_none()
         && matches!(
             change,
@@ -146,14 +160,14 @@ fn alter_fields(
         }
         fields.push(Arc::new(field));
         if let Some(position) = position {
-            move_field(fields, fields.len() - 1, position)?;
+            move_field(fields, fields.len() - 1, position, case_sensitive)?;
         }
         return Ok(());
     }
     let i =
         found.ok_or_else(|| plan_datafusion_err!("Column '{}' does not exist", path.join(".")))?;
     if !rest.is_empty() {
-        let ty = alter_nested(fields[i].data_type(), rest, change)?;
+        let ty = alter_nested(fields[i].data_type(), rest, change, case_sensitive)?;
         fields[i] = Arc::new(fields[i].as_ref().clone().with_data_type(ty));
         return Ok(());
     }
@@ -162,7 +176,7 @@ fn alter_fields(
             fields.remove(i);
         }
         ColumnChange::Rename { name, .. } => {
-            if index(fields, name).is_some_and(|other| other != i) {
+            if index(fields, name, case_sensitive).is_some_and(|other| other != i) {
                 return plan_err!("Column '{name}' already exists");
             }
             fields[i] = Arc::new(fields[i].as_ref().clone().with_name(name));
@@ -179,7 +193,7 @@ fn alter_fields(
             }
             fields[i] = Arc::new(fields[i].as_ref().clone().with_nullable(*nullable));
         }
-        ColumnChange::Position { position, .. } => move_field(fields, i, position)?,
+        ColumnChange::Position { position, .. } => move_field(fields, i, position, case_sensitive)?,
         ColumnChange::Add { .. } => unreachable!(),
     }
     if fields.is_empty() {
@@ -192,30 +206,31 @@ fn alter_nested(
     ty: &DataType,
     path: &[String],
     change: &ColumnChange<DataType>,
+    case_sensitive: bool,
 ) -> Result<DataType> {
     match ty {
         DataType::Struct(fields) => {
             let mut fields = fields.to_vec();
-            alter_fields(&mut fields, path, change)?;
+            alter_fields(&mut fields, path, change, case_sensitive)?;
             Ok(DataType::Struct(fields.into()))
         }
         DataType::List(element) | DataType::LargeList(element)
-            if path[0].eq_ignore_ascii_case("element") =>
+            if names_match(&path[0], "element", case_sensitive) =>
         {
             let is_large = matches!(ty, DataType::LargeList(_));
-            let element = alter_collection_field(element, path, change)?;
+            let element = alter_collection_field(element, path, change, case_sensitive)?;
             Ok(if is_large {
                 DataType::LargeList(element)
             } else {
                 DataType::List(element)
             })
         }
-        DataType::Map(entries, sorted) if path[0].eq_ignore_ascii_case("value") => {
+        DataType::Map(entries, sorted) if names_match(&path[0], "value", case_sensitive) => {
             let DataType::Struct(fields) = entries.data_type() else {
                 return plan_err!("Invalid map entries");
             };
             let mut fields = fields.to_vec();
-            fields[1] = alter_collection_field(&fields[1], path, change)?;
+            fields[1] = alter_collection_field(&fields[1], path, change, case_sensitive)?;
             Ok(DataType::Map(
                 Arc::new(
                     entries
@@ -237,9 +252,10 @@ fn alter_collection_field(
     field: &FieldRef,
     path: &[String],
     change: &ColumnChange<DataType>,
+    case_sensitive: bool,
 ) -> Result<FieldRef> {
     if path.len() > 1 {
-        let ty = alter_nested(field.data_type(), &path[1..], change)?;
+        let ty = alter_nested(field.data_type(), &path[1..], change, case_sensitive)?;
         return Ok(Arc::new(field.as_ref().clone().with_data_type(ty)));
     }
     if !matches!(
@@ -249,6 +265,6 @@ fn alter_collection_field(
         return plan_err!("Cannot add, drop, rename or reorder a collection element");
     }
     let mut fields = vec![Arc::new(field.as_ref().clone().with_name(&path[0]))];
-    alter_fields(&mut fields, path, change)?;
+    alter_fields(&mut fields, path, change, case_sensitive)?;
     Ok(Arc::new(fields[0].as_ref().clone().with_name(field.name())))
 }

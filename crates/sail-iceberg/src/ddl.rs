@@ -131,9 +131,13 @@ fn catalog_alter_options(
                 fields: schema.fields().clone(),
             }]
         }
-        LakeSourceAlterTableOperation::AlterColumns { changes } => {
+        LakeSourceAlterTableOperation::AlterColumns {
+            changes,
+            case_sensitive,
+        } => {
             vec![AlterTableOptions::AlterColumns {
                 changes: changes.clone(),
+                case_sensitive: *case_sensitive,
             }]
         }
         LakeSourceAlterTableOperation::SetTableProperties { changes, .. } => {
@@ -216,7 +220,10 @@ pub(crate) fn apply_operation(
             }
             commit_schema(metadata, schema)
         }
-        LakeSourceAlterTableOperation::AlterColumns { changes } => alter_columns(metadata, changes),
+        LakeSourceAlterTableOperation::AlterColumns {
+            changes,
+            case_sensitive,
+        } => alter_columns(metadata, changes, *case_sensitive),
         LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
             for (key, _) in changes {
                 if (key != "format-version"
@@ -712,13 +719,15 @@ fn alter_identifier_fields(
 fn alter_columns(
     metadata: &mut TableMetadata,
     changes: &[sail_common::spec::ColumnChange<datafusion::arrow::datatypes::DataType>],
+    case_sensitive: bool,
 ) -> Result<()> {
     use crate::datasource::type_converter::iceberg_schema_to_arrow;
     let current = metadata
         .current_schema()
         .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
     let arrow = iceberg_schema_to_arrow(current)?;
-    let updated = sail_common_datafusion::column_change::alter_schema(&arrow, changes)?;
+    let updated =
+        sail_common_datafusion::column_change::alter_schema(&arrow, changes, case_sensitive)?;
     commit_schema(metadata, &updated)
 }
 
@@ -775,6 +784,27 @@ fn commit_schema(
             }
         }
     }
+    let column_property_prefixes = [
+        "write.metadata.metrics.column.",
+        "write.parquet.bloom-filter-enabled.column.",
+        "write.parquet.stats-enabled.column.",
+    ];
+    metadata.properties = metadata
+        .properties
+        .iter()
+        .filter_map(|(key, value)| {
+            for prefix in column_property_prefixes {
+                if let Some(name) = key.strip_prefix(prefix)
+                    && let Some(id) = current.field_id_by_name(name)
+                {
+                    return schema
+                        .name_by_field_id(id)
+                        .map(|name| (format!("{prefix}{name}"), value.clone()));
+                }
+            }
+            Some((key.clone(), value.clone()))
+        })
+        .collect();
     if let Some(mapping) = metadata
         .properties
         .get(crate::spec::DEFAULT_SCHEMA_NAME_MAPPING)

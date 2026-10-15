@@ -39,6 +39,48 @@ def _reference_name(database, table, fmt):
     return f"iceberg.{database}.{table}" if fmt == "iceberg" else f"{database}.{table}"
 
 
+def test_iceberg_schema_follows_reference_changes_after_sail_rename(spark, jvm_spark, hms_s3_database):
+    name = f"{hms_s3_database}.schema_evolution"
+    reference = f"iceberg.{name}"
+    jvm_spark.sql(f"CREATE TABLE {reference} (id INT, value STRING) USING iceberg")
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (1, 'one')")
+    spark.sql(f"ALTER TABLE {name} RENAME COLUMN value TO renamed")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    jvm_spark.sql(f"ALTER TABLE {reference} ADD COLUMNS (fresh INT)")
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (2, 'two', 20)")
+
+    assert [r.col_name for r in spark.sql(f"DESCRIBE TABLE {name}").collect()] == ["id", "renamed", "fresh"]
+    spark.sql(f"ALTER TABLE {name} RENAME COLUMN fresh TO newest")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    expected = [(1, "one", None), (2, "two", 20)]
+    assert [tuple(r) for r in spark.table(name).orderBy("id").collect()] == expected
+    assert [tuple(r) for r in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == expected
+    assert jvm_spark.table(reference).columns == ["id", "renamed", "newest"]
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("alterer", ["sail", "spark"])
+def test_iceberg_dropped_partition_source_remains_writable(spark, jvm_spark, hms_s3_database, version, alterer):
+    name = f"{hms_s3_database}.drop_partition_source"
+    reference = f"iceberg.{name}"
+    jvm_spark.sql(
+        f"CREATE TABLE {reference} (id INT, part INT) USING iceberg "
+        f"PARTITIONED BY (part) TBLPROPERTIES ('format-version'='{version}')"
+    )
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (1, 10)")
+    session, target = (spark, name) if alterer == "sail" else (jvm_spark, reference)
+    session.sql(f"ALTER TABLE {target} DROP PARTITION FIELD part")
+    session.sql(f"ALTER TABLE {target} DROP COLUMN part")
+    session.sql(f"INSERT INTO {target} VALUES (2)")
+    session.sql(f"UPDATE {target} SET id=3 WHERE id=1")
+    jvm_spark.sql(f"REFRESH TABLE {reference}")
+    assert [row.id for row in jvm_spark.sql(f"SELECT * FROM {reference} ORDER BY id").collect()] == [2, 3]
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (4)")
+    assert [row.id for row in spark.table(name).orderBy("id").collect()] == [2, 3, 4]
+    spark.sql(f"INSERT INTO {name} VALUES (5)")
+    assert [row.id for row in spark.table(name).orderBy("id").collect()] == [2, 3, 4, 5]
+
+
 def _s3_client(env):
     return boto3.client(
         "s3",
@@ -201,7 +243,7 @@ def test_iceberg_type_promotion_preserves_defaults(spark, jvm_spark, hms_s3_data
         f"CREATE TABLE {reference} (score FLOAT, amount DECIMAL(9, 2)) "
         "USING iceberg TBLPROPERTIES ('format-version'='3')"
     )
-    iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001
+    iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001  # noqa: SLF001
     iceberg_table = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)  # noqa: SLF001
     # Spark SQL cannot create initial defaults; the reference Iceberg API can.
     iceberg_table.updateSchema().addColumn(
@@ -258,7 +300,7 @@ def test_iceberg_typed_default_interoperability(spark, jvm_spark, hms_s3_databas
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert [tuple(r) for r in jvm_spark.sql(f"SELECT amount, d, ts FROM {reference}").collect()] == [expected]
 
-    iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001
+    iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001  # noqa: SLF001
     iceberg_table = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)  # noqa: SLF001
     # The Iceberg API accepts typed values; Spark SQL resolves and casts its default expressions first.
     update = iceberg_table.updateSchema()
@@ -344,8 +386,8 @@ def test_lakehouse_set_location(spark, jvm_spark, hms_s3_database, fmt):
     jvm_spark.sql(f"INSERT INTO {reference} VALUES (4)")
     assert [r.id for r in spark.table(name).orderBy("id").collect()] == [first, 3, 4]
     if fmt == "iceberg":
-        iceberg = jvm_spark._jvm.org.apache.iceberg
-        loaded = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)
+        iceberg = jvm_spark._jvm.org.apache.iceberg  # noqa: SLF001
+        loaded = iceberg.spark.Spark3Util.loadIcebergTable(jvm_spark._jsparkSession, reference)  # noqa: SLF001
         assert loaded.location().rstrip("/") == new_location.rstrip("/")
     # Verify the same catalog operation in the reference runtime, then write through Sail.
     reference_location = old_location if fmt == "delta" else new_location + "_reference"

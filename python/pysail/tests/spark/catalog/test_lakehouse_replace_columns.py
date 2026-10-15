@@ -1,3 +1,4 @@
+# ruff: noqa: S608, PLR2004
 import json
 
 import pytest
@@ -38,6 +39,38 @@ def test_replace_columns_identity_and_writes(spark, tmp_path, fmt):
         assert [r.id for r in spark.table(table).orderBy("id").collect()] == (
             [1, 2] if fmt == "delta" else [None, None]
         )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    ("expression", "generated_type", "id_type", "valid"),
+    [
+        ("CASE WHEN id > 0 THEN id ELSE 0L END", "BIGINT", "INT", True),
+        ("IF(id > 0, id, 0L)", "BIGINT", "INT", True),
+        ("COALESCE(id, 0L)", "BIGINT", "INT", True),
+        ("CASE WHEN id > 0 THEN 1 ELSE id END", "INT", "BIGINT", False),
+    ],
+)
+def test_delta_replace_columns_analyzes_generated_expression(
+    spark, tmp_path, expression, generated_type, id_type, valid
+):
+    table = "replace_generated_coercion"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, generated {generated_type} GENERATED ALWAYS AS ({expression})) "
+            f"USING delta LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
+        )
+        spark.sql("INSERT INTO replace_generated_coercion (id) VALUES (1)")
+        before = metadata_schema(tmp_path, "delta")
+        statement = f"ALTER TABLE {table} REPLACE COLUMNS (id {id_type}, generated {generated_type})"
+        if valid:
+            spark.sql(statement)
+        else:
+            with pytest.raises(Exception, match="DELTA_GENERATED_COLUMNS_EXPR_TYPE_MISMATCH"):
+                spark.sql(statement)
+            assert metadata_schema(tmp_path, "delta") == before
+        assert tuple(spark.table(table).first()) == (1, 1)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
@@ -89,7 +122,7 @@ def test_replace_partition_dependency_is_atomic(spark, tmp_path, fmt):
 
 
 @pytest.mark.parametrize(
-    "columns, error",
+    ("columns", "error"),
     [
         ("id INT, extra STRING", "Ambiguous"),
         ("id INT NOT NULL, value STRING", "nullability"),
@@ -126,5 +159,30 @@ def test_replace_column_defaults_and_comments(spark, tmp_path, fmt):
         assert column.description == ("kept" if fmt == "delta" else None)
         spark.sql(f"INSERT INTO {table} (id) VALUES (1)")
         assert spark.table(table).first().value == ("old" if fmt == "delta" else None)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("generated_type", ["INT", "BIGINT"])
+def test_delta_replace_columns_validates_generated_expression_type(spark, tmp_path, generated_type):
+    table = "replace_generated_type"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, generated INT GENERATED ALWAYS AS (id + 1)) "
+            f"USING delta LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
+        )
+        spark.sql("INSERT INTO replace_generated_type (id) VALUES (1)")
+        before = metadata_schema(tmp_path, "delta")
+
+        statement = f"ALTER TABLE {table} REPLACE COLUMNS (id BIGINT, generated {generated_type})"
+        if generated_type == "INT":
+            with pytest.raises(Exception, match=r"(?i)generated.*type|type.*generated"):
+                spark.sql(statement)
+            assert metadata_schema(tmp_path, "delta") == before
+        else:
+            spark.sql(statement)
+            spark.sql("INSERT INTO replace_generated_type (id) VALUES (2147483648)")
+            assert tuple(spark.table(table).orderBy("id").collect()[1]) == (2147483648, 2147483649)
+        assert tuple(spark.table(table).orderBy("id").first()) == (1, 2)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

@@ -505,6 +505,7 @@ pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionFiel
 pub fn alter_columns(
     columns: &mut Vec<TableColumnStatus>,
     changes: &[sail_common::spec::ColumnChange<DataType>],
+    case_sensitive: bool,
 ) -> Result<()> {
     let schema = datafusion::arrow::datatypes::Schema::new(
         columns
@@ -512,7 +513,7 @@ pub fn alter_columns(
             .map(TableColumnStatus::field)
             .collect::<Vec<_>>(),
     );
-    let schema = crate::column_change::alter_schema(&schema, changes)?;
+    let schema = crate::column_change::alter_schema(&schema, changes, case_sensitive)?;
     replace_columns(columns, &schema);
     Ok(())
 }

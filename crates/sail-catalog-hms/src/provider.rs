@@ -127,9 +127,10 @@ pub(crate) fn apply_alter_table_options(
         AlterTableOptions::ReplaceColumns { fields } => {
             crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
         }
-        AlterTableOptions::AlterColumns { changes } => {
-            crate::convert::alter_columns(hms_table, &changes)?
-        }
+        AlterTableOptions::AlterColumns {
+            changes,
+            case_sensitive,
+        } => crate::convert::alter_columns(hms_table, &changes, case_sensitive)?,
         AlterTableOptions::SetTableProperties { properties } => {
             reject_spark_properties(&properties)?;
             managed_table::validate_metadata_location_precondition(

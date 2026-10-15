@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
-use crate::spec::{FormatVersion, TableMetadata};
+use crate::spec::{FormatVersion, PrimitiveType, TableMetadata, Type};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
@@ -131,13 +131,12 @@ impl PartitionSpec {
 
         for partition_field in self.fields.iter() {
             let source_id = partition_field.source_id()?;
-            let source_field = schema
-                .field_by_id(source_id)
-                .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
-
-            let result_type = partition_field
-                .transform
-                .result_type(&source_field.field_type)?;
+            let result_type = match schema.field_by_id(source_id) {
+                Some(source_field) => partition_field
+                    .transform
+                    .result_type(&source_field.field_type)?,
+                None => Type::Primitive(PrimitiveType::Unknown),
+            };
 
             let nested_field = NestedField::new(
                 partition_field.field_id,

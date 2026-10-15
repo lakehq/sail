@@ -1,3 +1,4 @@
+# ruff: noqa: S608
 import json
 
 import pytest
@@ -94,7 +95,7 @@ def test_nested_column_evolution(spark, lake_table):
 
 
 @pytest.mark.parametrize(
-    "statement, error",
+    ("statement", "error"),
     [
         ("ADD COLUMNS (fresh INT, id INT)", "already exists"),
         ("RENAME COLUMN value TO id", "already exists"),
@@ -219,4 +220,36 @@ def test_delta_statistics_columns_follow_renames_and_drops(spark, tmp_path):
             (2, 20),
         ]
     finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+@pytest.mark.parametrize(
+    ("definition", "value", "column"),
+    [
+        ("Value INT", "2", "value"),
+        ("Value STRUCT<Leaf: INT, other: INT>", "named_struct('Leaf', 2, 'other', 3)", "Value.leaf"),
+    ],
+)
+def test_drop_column_respects_case_sensitive_resolution(spark, tmp_path, fmt, definition, value, column):
+    table = "case_sensitive_drop"
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, {definition}) USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1, {value})")
+        before = metadata_schema(tmp_path, fmt)
+        rows = spark.table(table).collect()
+        spark.conf.set(key, "true")
+
+        with pytest.raises(Exception, match=r"(?i)not exist|not found|cannot be resolved"):
+            spark.sql(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+        assert metadata_schema(tmp_path, fmt) == before
+        assert spark.table(table).collect() == rows
+    finally:
+        spark.conf.set(key, previous)
         spark.sql(f"DROP TABLE IF EXISTS {table}")

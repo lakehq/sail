@@ -157,7 +157,10 @@ impl MemoryCatalogProvider {
                         }
                         Ok(())
                     }
-                    AlterTableOptions::AlterColumns { changes } => {
+                    AlterTableOptions::AlterColumns {
+                        changes,
+                        case_sensitive,
+                    } => {
                         for change in &changes {
                             if let sail_catalog::provider::ColumnChange::Rename { path, name } =
                                 change
@@ -171,8 +174,12 @@ impl MemoryCatalogProvider {
                             }
                         }
                         if schema.is_none() {
-                            sail_common_datafusion::catalog::alter_columns(columns, &changes)
-                                .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+                            sail_common_datafusion::catalog::alter_columns(
+                                columns,
+                                &changes,
+                                case_sensitive,
+                            )
+                            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
                         }
                         for column in columns.iter_mut() {
                             column.is_partition = partition_by.iter().any(|partition| {

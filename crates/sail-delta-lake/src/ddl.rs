@@ -84,6 +84,19 @@ pub(crate) async fn set_location(
     Ok(
         sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
             schema: Some(Arc::new(target.schema().clone())),
+            properties: target
+                .metadata()
+                .configuration()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            removed_properties: current
+                .metadata()
+                .configuration()
+                .keys()
+                .filter(|key| !target.metadata().configuration().contains_key(*key))
+                .cloned()
+                .collect(),
             ..Default::default()
         },
     )
@@ -207,7 +220,7 @@ pub(crate) async fn replace_columns(
         })
         .collect::<Vec<_>>();
     if let Some(value) = metadata.configuration().get(STATS)
-        && let Some(value) = update_statistics_columns(value, &changes)?
+        && let Some(value) = update_statistics_columns(value, &changes, false)?
     {
         metadata = metadata.add_config_key(STATS.into(), value.clone());
         properties.push((STATS.into(), value));
@@ -254,6 +267,7 @@ pub(crate) async fn replace_columns(
             schema: Some(schema),
             properties,
             partition_by: None,
+            removed_properties: vec![],
         },
     )
 }
@@ -378,6 +392,7 @@ pub(crate) async fn alter_columns(
     path: &str,
     lakehouse: Option<&LakehouseExecutionContext>,
     changes: &[sail_common::spec::ColumnChange<datafusion::arrow::datatypes::DataType>],
+    case_sensitive: bool,
 ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
     use datafusion::arrow::datatypes::Schema;
     use sail_common::spec::ColumnChange;
@@ -431,7 +446,9 @@ pub(crate) async fn alter_columns(
                 );
             }
             if let [name] = change.path()
-                && let Some(index) = partitions.iter().position(|p| p.eq_ignore_ascii_case(name))
+                && let Some(index) = partitions
+                    .iter()
+                    .position(|p| p == name || (!case_sensitive && p.eq_ignore_ascii_case(name)))
             {
                 match change {
                     ColumnChange::Rename { name, .. } => partitions[index] = name.clone(),
@@ -444,7 +461,8 @@ pub(crate) async fn alter_columns(
         }
     }
     let arrow = Schema::try_from(&current)?;
-    let updated = sail_common_datafusion::column_change::alter_schema(&arrow, changes)?;
+    let updated =
+        sail_common_datafusion::column_change::alter_schema(&arrow, changes, case_sensitive)?;
     if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
         validate_unmapped_names(updated.fields())?;
     }
@@ -461,7 +479,7 @@ pub(crate) async fn alter_columns(
     let mut properties = Vec::new();
     const STATS_COLUMNS: &str = "delta.dataSkippingStatsColumns";
     if let Some(value) = metadata.configuration().get(STATS_COLUMNS)
-        && let Some(value) = update_statistics_columns(value, changes)?
+        && let Some(value) = update_statistics_columns(value, changes, case_sensitive)?
     {
         metadata = metadata.add_config_key(STATS_COLUMNS.into(), value.clone());
         properties.push((STATS_COLUMNS.into(), value));
@@ -557,6 +575,7 @@ pub(crate) async fn alter_columns(
             schema: Some(schema),
             properties,
             partition_by: None,
+            removed_properties: vec![],
         },
     )
 }
@@ -564,6 +583,7 @@ pub(crate) async fn alter_columns(
 fn update_statistics_columns(
     value: &str,
     changes: &[sail_common::spec::ColumnChange<datafusion::arrow::datatypes::DataType>],
+    case_sensitive: bool,
 ) -> Result<Option<String>> {
     use sail_common::spec::ColumnChange;
     let mut columns = crate::spec::ColumnName::parse_column_name_list(value)
@@ -579,7 +599,7 @@ fn update_statistics_columns(
                 || !column
                     .iter()
                     .zip(path)
-                    .all(|(a, b)| a.eq_ignore_ascii_case(b))
+                    .all(|(a, b)| a == b || (!case_sensitive && a.eq_ignore_ascii_case(b)))
             {
                 return true;
             }

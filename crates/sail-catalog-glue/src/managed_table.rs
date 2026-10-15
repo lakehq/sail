@@ -39,8 +39,12 @@ pub(crate) fn apply_alter_table_input(
     if let AlterTableOptions::ReplaceColumns { fields } = &options {
         return replace_columns(input, &arrow::datatypes::Schema::new(fields.clone()));
     }
-    if let AlterTableOptions::AlterColumns { changes } = &options {
-        return alter_columns(input, changes);
+    if let AlterTableOptions::AlterColumns {
+        changes,
+        case_sensitive,
+    } = &options
+    {
+        return alter_columns(input, changes, *case_sensitive);
     }
     let name = match &options {
         AlterTableOptions::AlterColumnType { name, .. }
@@ -185,6 +189,7 @@ fn validate_metadata_location_precondition(
 fn alter_columns(
     input: &mut TableInput,
     changes: &[sail_catalog::provider::ColumnChange<arrow::datatypes::DataType>],
+    case_sensitive: bool,
 ) -> CatalogResult<()> {
     use arrow::datatypes::{Field, Schema};
 
@@ -217,9 +222,12 @@ fn alter_columns(
             Ok(field)
         })
         .collect::<CatalogResult<Vec<_>>>()?;
-    let updated =
-        sail_common_datafusion::column_change::alter_schema(&Schema::new(fields), changes)
-            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+    let updated = sail_common_datafusion::column_change::alter_schema(
+        &Schema::new(fields),
+        changes,
+        case_sensitive,
+    )
+    .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
     let mut partition_names = input
         .partition_keys
         .iter()

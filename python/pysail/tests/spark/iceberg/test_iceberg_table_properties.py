@@ -1,8 +1,12 @@
+# ruff: noqa: S608, PLR2004
 import pytest
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
 from pyiceberg.table.sorting import NullOrder, SortDirection, SortField, SortOrder
 from pyiceberg.transforms import BucketTransform, IdentityTransform, TruncateTransform
 from pyiceberg.types import IntegerType, NestedField, StringType, StructType
+
+from pysail.testing.spark.steps.iceberg import _latest_metadata_path
 
 
 @pytest.mark.parametrize("entry", ["path", "catalog"])
@@ -82,3 +86,35 @@ def test_show_properties_ignores_derived_properties_without_schema_or_sort_metad
         assert "identifier-fields" not in properties
     finally:
         sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_column_rename_preserves_disabled_metrics(spark, tmp_path, nested):
+    table = "rename_metrics"
+    column = "payload" if nested else "secret"
+    suffix = ".secret" if nested else ""
+    definition = "payload STRUCT<secret: STRING>" if nested else "secret STRING"
+    values = [f"named_struct('secret', '{value}')" if nested else f"'{value}'" for value in ["before", "after"]]
+    property_prefix = "write.metadata.metrics.column."
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, {definition}) USING iceberg LOCATION '{tmp_path.as_uri()}' "
+            f"TBLPROPERTIES ('{property_prefix}{column}{suffix}'='none')"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1, {values[0]})")
+        spark.sql(f"ALTER TABLE {table} RENAME COLUMN {column} TO renamed")
+        spark.sql(f"INSERT INTO {table} VALUES (2, {values[1]})")
+        reference = StaticTable.from_metadata(str(_latest_metadata_path(tmp_path)))
+        field_id = reference.schema().find_field(f"renamed{suffix}").field_id
+        files = list(reference.scan().plan_files())
+        assert len(files) == 2
+        for task in files:
+            assert field_id not in (task.file.lower_bounds or {})
+            assert field_id not in (task.file.upper_bounds or {})
+        assert reference.properties[f"{property_prefix}renamed{suffix}"] == "none"
+        assert f"{property_prefix}{column}{suffix}" not in reference.properties
+        spark.sql(f"ALTER TABLE {table} DROP COLUMN renamed")
+        reference = StaticTable.from_metadata(str(_latest_metadata_path(tmp_path)))
+        assert f"{property_prefix}renamed{suffix}" not in reference.properties
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

@@ -1,3 +1,4 @@
+# ruff: noqa: S608
 import json
 
 import pytest
@@ -33,7 +34,7 @@ def test_dynamic_overwrite_replaces_only_written_partitions(spark, tmp_path, map
             .option("startingVersion", int(logs[-1].stem))
             .load(str(tmp_path))
         )
-        assert sorted((r.id, r._change_type) for r in changes.collect()) == [
+        assert sorted((r.id, r["_change_type"]) for r in changes.collect()) == [
             (1, "delete"),
             (3, "delete"),
             (4, "delete"),
@@ -53,7 +54,7 @@ def test_dynamic_overwrite_rejects_schema_replacement_and_append_only(spark, tmp
     writer = spark.createDataFrame([(2, "a")], "id INT, part STRING").write.format("delta").mode("overwrite")
     with pytest.raises(Exception, match="overwriteSchema"):
         writer.option("partitionOverwriteMode", "dynamic").option("overwriteSchema", "true").save(str(tmp_path))
-    with pytest.raises(Exception, match="[Aa]ppend.only|appendOnly"):
+    with pytest.raises(Exception, match=r"[Aa]ppend.only|appendOnly"):
         spark.createDataFrame([(2, "a")], "id INT, part STRING").write.format("delta").mode("overwrite").option(
             "partitionOverwriteMode", "dynamic"
         ).save(str(tmp_path))
@@ -89,3 +90,51 @@ def test_dynamic_mode_on_unpartitioned_table_allows_schema_replacement(spark, tm
         "partitionOverwriteMode", "dynamic"
     ).option("overwriteSchema", "true").save(str(tmp_path))
     assert [tuple(r) for r in spark.read.format("delta").load(str(tmp_path)).collect()] == [(2, "new")]
+
+
+@pytest.mark.parametrize(
+    ("partition_type", "first", "second"),
+    [
+        ("DOUBLE", "1.0", "2.0"),
+        ("FLOAT", "1.0", "2.0"),
+        ("TIMESTAMP", "TIMESTAMP '2024-01-01 01:02:03.000100'", "TIMESTAMP '2024-01-02 00:00:00'"),
+        ("TIMESTAMP_NTZ", "TIMESTAMP_NTZ '2024-01-01 01:02:03.000100'", "TIMESTAMP_NTZ '2024-01-02 00:00:00'"),
+    ],
+)
+@pytest.mark.parametrize("mapping", ["none", "name"])
+@pytest.mark.integration
+def test_dynamic_overwrite_matches_spark_partition_values(
+    spark, delta_jvm_spark, tmp_path, partition_type, first, second, mapping
+):
+    delta_jvm_spark.sql(
+        f"SELECT 1 AS id, CAST({first} AS {partition_type}) AS part "
+        f"UNION ALL SELECT 2, CAST({second} AS {partition_type})"
+    ).coalesce(1).write.format("delta").partitionBy("part").option("delta.columnMapping.mode", mapping).save(
+        str(tmp_path)
+    )
+    assert [r.id for r in spark.read.format("delta").load(str(tmp_path)).orderBy("id").collect()] == [1, 2]
+
+    spark.sql(f"SELECT 3 AS id, CAST({first} AS {partition_type}) AS part").write.format("delta").mode(
+        "overwrite"
+    ).option("partitionOverwriteMode", "dynamic").save(str(tmp_path))
+
+    assert [r.id for r in spark.read.format("delta").load(str(tmp_path)).orderBy("id").collect()] == [2, 3]
+    assert [r.id for r in delta_jvm_spark.sql(f"SELECT id FROM delta.`{tmp_path}` ORDER BY id").collect()] == [2, 3]
+
+
+@pytest.mark.parametrize(
+    ("initial_type", "updated_type", "new_value"),
+    [("INT", "BIGINT", 3000000000), ("FLOAT", "DOUBLE", 1.00000001)],
+)
+def test_dynamic_overwrite_uses_widened_partition_type(spark, tmp_path, initial_type, updated_type, new_value):
+    initial_value = 1 if initial_type == "INT" else 1.0
+    spark.createDataFrame([(1, initial_value)], f"id INT, part {initial_type}").write.format("delta").partitionBy(
+        "part"
+    ).option("delta.enableTypeWidening", "true").save(str(tmp_path))
+    spark.createDataFrame([(2, new_value)], f"id INT, part {updated_type}").write.format("delta").mode(
+        "overwrite"
+    ).option("partitionOverwriteMode", "dynamic").option("mergeSchema", "true").save(str(tmp_path))
+
+    result = spark.read.format("delta").load(str(tmp_path))
+    assert result.schema["part"].dataType.simpleString() == updated_type.lower()
+    assert [r.id for r in result.orderBy("id").collect()] == [1, 2]
