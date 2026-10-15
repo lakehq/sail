@@ -122,10 +122,7 @@ datasketches = { version = "0.5.0", features = ["hll", "theta"] }
 sha1 = "0.11.0"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
-# Chumsky 0.13 removes the cache API needed to reuse recursive parsers.
-# `chumsky::cache` needs `unstable`, which `pratt` happens to enable today.
-# Outside chumsky's semver guarantees; the only user is `sail-sql-analyzer`.
-chumsky = { version = "0.12.0", default-features = false, features = ["pratt", "unstable"] }
+chumsky = { version = "0.13.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
