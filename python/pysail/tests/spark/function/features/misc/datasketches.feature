@@ -268,11 +268,20 @@ Feature: DataSketches functions
         | result |
         | 996    |
 
-    Scenario: hll_sketch_agg parallel estimate matches Spark at high cardinality
+    # HIP estimates depend on input and merge order. Build each sketch in one
+    # partition and merge explicitly from left to right for an exact comparison.
+    Scenario: hll sketch estimate matches Spark with fixed input and merge order
       When query
         """
-        SELECT hll_sketch_estimate(hll_sketch_agg(id)) AS result
-        FROM range(0, 1000, 1, 4)
+        WITH
+          p0 AS (SELECT hll_sketch_agg(id) AS sketch FROM range(0, 250, 1, 1)),
+          p1 AS (SELECT hll_sketch_agg(id) AS sketch FROM range(250, 500, 1, 1)),
+          p2 AS (SELECT hll_sketch_agg(id) AS sketch FROM range(500, 750, 1, 1)),
+          p3 AS (SELECT hll_sketch_agg(id) AS sketch FROM range(750, 1000, 1, 1))
+        SELECT hll_sketch_estimate(
+          hll_union(hll_union(hll_union(p0.sketch, p1.sketch), p2.sketch), p3.sketch)
+        ) AS result
+        FROM p0 CROSS JOIN p1 CROSS JOIN p2 CROSS JOIN p3
         """
       Then query result
         | result |
