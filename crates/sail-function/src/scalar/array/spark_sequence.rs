@@ -27,8 +27,9 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use crate::functions_nested_utils::{
     evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
 };
-use crate::scalar::datetime::spark_timestamp_add::{add_ltz_interval, add_ntz_interval};
-use crate::scalar::datetime::utils::is_fixed_zero_offset_timezone;
+use crate::scalar::datetime::utils::{
+    add_ltz_interval, add_ntz_interval, is_fixed_zero_offset_timezone,
+};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
@@ -98,10 +99,6 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
-    }
-
-    fn short_circuits(&self) -> bool {
-        true
     }
 
     fn lambda_parameters(
@@ -222,6 +219,10 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
         }
 
         Err(batch_error)
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 }
 
