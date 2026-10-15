@@ -1,13 +1,18 @@
 use std::sync::{Arc, LazyLock};
 
+use chrono::{DateTime, Offset, Utc};
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -18,6 +23,7 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::cast::cast_timestamp_ntz_to_ltz;
 use crate::resolver::state::PlanResolverState;
 
 static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
@@ -345,8 +351,8 @@ fn timestamp_string_coercion_requires_rewrite(
     }
 }
 
-/// Applies Spark timestamp/string coercion to one predicate before DataFusion's generic
-/// coercion, preserving session-zone parsing and Spark TimestampType's microsecond precision.
+/// Applies Spark timestamp coercion to one predicate before DataFusion's generic coercion,
+/// preserving session-zone conversion and Spark TimestampType's microsecond precision.
 pub(super) fn coerce_timestamp_string_predicate(
     expression: expr::Expr,
     schema: &DFSchemaRef,
@@ -470,6 +476,17 @@ fn coerce_timestamp_pair(
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
 
+    match (&left_type, &right_type) {
+        (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_))) => {
+            return coerce_mixed_timestamp_pair(left, right, schema, config);
+        }
+        (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
+            let (right, left) = coerce_mixed_timestamp_pair(right, left, schema, config)?;
+            return Ok((left, right));
+        }
+        _ => {}
+    }
+
     if !config.ansi_mode
         && config.legacy_type_coercion_datetime_to_string
         && is_ordering_comparison(operator)
@@ -503,6 +520,49 @@ fn coerce_timestamp_pair(
         return Ok((left, right));
     }
     Ok((left, right))
+}
+
+fn coerce_mixed_timestamp_pair(
+    ntz: expr::Expr,
+    ltz: expr::Expr,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> DataFusionResult<(expr::Expr, expr::Expr)> {
+    if ntz.any_column_refs() && !ltz.any_column_refs() && !ltz.is_volatile() {
+        let simplifier = ExprSimplifier::new(
+            SimplifyContextBuilder::default()
+                .with_schema(Arc::clone(schema))
+                .build(),
+        );
+        let bound = simplifier.simplify(simplifier.coerce(ltz.clone(), schema)?)?;
+        if let expr::Expr::Literal(ScalarValue::TimestampMicrosecond(Some(micros), _), metadata) =
+            bound
+            && let Some(instant) = DateTime::<Utc>::from_timestamp_micros(micros)
+        {
+            let timezone = config.session_timezone.parse::<Tz>()?;
+            // Match Spark's UnwrapCastInBinaryComparison, including its DST round-trip guard.
+            if let Some(local) = instant
+                .naive_utc()
+                .checked_add_offset(instant.with_timezone(&timezone).offset().fix())
+                && localize_with_fallback(&timezone, &local)?.timestamp_micros() == micros
+            {
+                return Ok((
+                    ntz,
+                    expr::Expr::Literal(
+                        ScalarValue::TimestampMicrosecond(
+                            Some(local.and_utc().timestamp_micros()),
+                            None,
+                        ),
+                        metadata,
+                    ),
+                ));
+            }
+        }
+    }
+    Ok((
+        cast_timestamp_ntz_to_ltz(ntz, Arc::clone(&config.session_timezone), false)?,
+        ltz,
+    ))
 }
 
 fn coerce_string_to_timestamp(
