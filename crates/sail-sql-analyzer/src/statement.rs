@@ -30,8 +30,8 @@ use sail_sql_parser::tree::TreeText;
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
-    from_ast_object_name,
+    expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
+    from_ast_identifier_list, from_ast_object_name,
 };
 use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
 use crate::literal::utils::Signed;
@@ -110,6 +110,30 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::Query(query) => {
             let plan = from_ast_query(query)?;
             Ok(spec::Plan::Query(plan))
+        }
+        Statement::CallProcedure {
+            call: _,
+            name,
+            arguments,
+        } => {
+            if arguments.duplicate_treatment.is_some() || arguments.null_treatment.is_some() {
+                return Err(SqlError::invalid(
+                    "CALL arguments do not support DISTINCT/ALL or null-treatment modifiers",
+                ));
+            }
+            let arguments = arguments
+                .arguments
+                .map(|arguments| arguments.into_items())
+                .into_iter()
+                .flatten();
+            let (arguments, named_arguments) = from_ast_function_arguments(arguments)?;
+            Ok(spec::Plan::Command(spec::CommandPlan::new(
+                spec::CommandNode::CallProcedure {
+                    procedure: from_ast_object_name(name)?,
+                    arguments,
+                    named_arguments,
+                },
+            )))
         }
         Statement::SetCatalog {
             set: _,

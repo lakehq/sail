@@ -27,6 +27,7 @@ struct MemoryDatabase {
 /// An in-memory catalog provider.
 pub struct MemoryCatalogProvider {
     name: String,
+    default_namespace: Namespace,
     databases: DashMap<Namespace, MemoryDatabase>,
 }
 
@@ -42,7 +43,7 @@ impl MemoryCatalogProvider {
             MemoryDatabase {
                 status: DatabaseStatus {
                     catalog: name.clone(),
-                    database: initial_database.into(),
+                    database: initial_database.clone().into(),
                     comment: initial_database_comment,
                     location: None,
                     properties: vec![],
@@ -51,7 +52,11 @@ impl MemoryCatalogProvider {
                 views: HashMap::new(),
             },
         );
-        Self { name, databases }
+        Self {
+            name,
+            databases,
+            default_namespace: initial_database,
+        }
     }
 
     fn apply_table_alterations(
@@ -189,6 +194,10 @@ fn validate_create_table_options(
 impl CatalogProvider for MemoryCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn default_namespace(&self) -> Namespace {
+        self.default_namespace.clone()
     }
 
     async fn create_database(
