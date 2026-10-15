@@ -54,9 +54,9 @@ impl SparkTimestampFromNumber {
             return Ok(scaled);
         }
         // Java TimeUnit.SECONDS.toMicros saturates instead of overflowing.
+        // Single-branch cases avoid DataFusion's general CASE row-index allocation.
         when(value.clone().gt(lit(i64::MAX / 1_000_000)), lit(i64::MAX))
-            .when(value.lt(lit(i64::MIN / 1_000_000)), lit(i64::MIN))
-            .otherwise(scaled)
+            .otherwise(when(value.lt(lit(i64::MIN / 1_000_000)), lit(i64::MIN)).otherwise(scaled)?)
     }
 
     fn floating_micros(&self, value: Expr) -> Result<Expr> {

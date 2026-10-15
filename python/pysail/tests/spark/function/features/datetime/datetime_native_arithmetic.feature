@@ -52,13 +52,16 @@ Feature: Native timestamp expressions preserve Spark boundary behavior
       | MILLISECOND | -1000    | 1000     |
       | MICROSECOND | -1       | 1        |
 
-  Scenario Outline: Integer timestamp <cast> saturates without losing ordinary microseconds
+  Scenario Outline: Integer timestamp <cast> saturates without losing ordinary microseconds in ANSI <ansi> mode
+    Given config spark.sql.ansi.enabled = <ansi>
     When query
       """
       SELECT id, unix_micros(<cast>(v AS TIMESTAMP_LTZ)) AS micros
       FROM VALUES (0, CAST('-9223372036854775808' AS BIGINT)),
                   (1, -9223372036854L), (2, 9223372036854L),
-                  (3, 9223372036854775807L), (4, CAST(NULL AS BIGINT)) AS t(id, v)
+                  (3, 9223372036854775807L), (4, CAST(NULL AS BIGINT)),
+                  (5, -9223372036855L), (6, 9223372036855L),
+                  (7, -1L), (8, 0L), (9, 1L) AS t(id, v)
       ORDER BY id
       """
     Then query result
@@ -68,11 +71,34 @@ Feature: Native timestamp expressions preserve Spark boundary behavior
       | 2  | 9223372036854000000  |
       | 3  | 9223372036854775807  |
       | 4  | NULL                 |
+      | 5  | -9223372036854775808 |
+      | 6  | 9223372036854775807  |
+      | 7  | -1000000            |
+      | 8  | 0                   |
+      | 9  | 1000000             |
 
     Examples:
-      | cast     |
-      | CAST     |
-      | TRY_CAST |
+      | cast     | ansi  |
+      | CAST     | true  |
+      | CAST     | false |
+      | TRY_CAST | true  |
+      | TRY_CAST | false |
+
+  Scenario Outline: Constant integer timestamp casts saturate in ANSI <ansi> mode
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT unix_micros(CAST(9223372036854775807L AS TIMESTAMP_LTZ)) AS hi,
+             unix_micros(TRY_CAST(CAST('-9223372036854775808' AS BIGINT) AS TIMESTAMP_LTZ)) AS lo
+      """
+    Then query result
+      | hi                  | lo                   |
+      | 9223372036854775807 | -9223372036854775808 |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
 
   Scenario: Decimal timestamp casts truncate and wrap exactly
     When query
