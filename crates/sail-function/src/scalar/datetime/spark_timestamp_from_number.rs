@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, i256};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_common::{DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext, SimplifyContextBuilder};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, cast, lit, try_cast, when,
@@ -35,6 +35,31 @@ impl SparkTimestampFromNumber {
             signature: Signature::user_defined(Volatility::Immutable),
             mode,
         }
+    }
+
+    /// Build the native expression before it can acquire a UDF column name.
+    pub fn expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+        let info = SimplifyContextBuilder::default()
+            .with_schema(Arc::clone(schema))
+            .build();
+        let data_type = info.get_data_type(&value)?;
+        let micros = match self.mode {
+            TimestampNumberMode::Micros => value,
+            TimestampNumberMode::Millis => cast(value, DataType::Int64) * lit(1_000_i64),
+            _ => match data_type {
+                DataType::Float32 | DataType::Float64 => self.floating_micros(value)?,
+                DataType::Decimal128(precision, scale) => {
+                    self.decimal_micros(value, precision, scale)?
+                }
+                DataType::Decimal256(_, _) => value * lit(1_000_000_i64),
+                _ if data_type.is_integer() || data_type.is_null() => {
+                    self.integer_micros(value, &data_type)?
+                }
+                _ => cast(value, DataType::Int64) * lit(1_000_000_i64),
+            },
+        };
+        let expression = cast(micros, self.return_type(&[])?);
+        ExprSimplifier::new(info).coerce(expression, schema)
     }
 
     fn integer_micros(&self, value: Expr, data_type: &DataType) -> Result<Expr> {
@@ -192,26 +217,8 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        let value = args.one()?;
-        let data_type = info.get_data_type(&value)?;
-        let micros = match self.mode {
-            TimestampNumberMode::Micros => value,
-            TimestampNumberMode::Millis => cast(value, DataType::Int64) * lit(1_000_i64),
-            _ => match data_type {
-                DataType::Float32 | DataType::Float64 => self.floating_micros(value)?,
-                DataType::Decimal128(precision, scale) => {
-                    self.decimal_micros(value, precision, scale)?
-                }
-                DataType::Decimal256(_, _) => value * lit(1_000_000_i64),
-                _ if data_type.is_integer() || data_type.is_null() => {
-                    self.integer_micros(value, &data_type)?
-                }
-                _ => cast(value, DataType::Int64) * lit(1_000_000_i64),
-            },
-        };
-        let expression = cast(micros, self.return_type(&[])?);
         Ok(ExprSimplifyResult::Simplified(
-            ExprSimplifier::new(info.clone()).coerce(expression, info.schema())?,
+            self.expression(args.one()?, info.schema())?,
         ))
     }
 }

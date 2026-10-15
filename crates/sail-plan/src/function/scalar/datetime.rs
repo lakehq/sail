@@ -679,7 +679,7 @@ fn datetime_timestamp(
             TimestampNumberMode::CastLegacy
         };
         Ok(cast(
-            ScalarUDF::from(SparkTimestampFromNumber::new(mode)).call(vec![expression]),
+            SparkTimestampFromNumber::new(mode).expression(expression, context.schema)?,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
         ))
     } else if from.is_string()

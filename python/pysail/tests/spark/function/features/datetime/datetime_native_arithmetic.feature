@@ -100,6 +100,32 @@ Feature: Native timestamp expressions preserve Spark boundary behavior
       | true  |
       | false |
 
+  Scenario Outline: Floating timestamp casts retain Spark nullability in ANSI <ansi> mode
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT CAST(v AS TIMESTAMP_LTZ) AS cast_value,
+             TRY_CAST(v AS TIMESTAMP_LTZ) AS try_cast_value,
+             to_timestamp(v) AS timestamp_value,
+             try_to_timestamp(v) AS try_timestamp_value
+      FROM VALUES (CAST(-1 AS <type>)), (CAST(1 AS <type>)) AS t(v)
+      """
+    Then query schema
+      """
+      root
+       |-- cast_value: timestamp (nullable = true)
+       |-- try_cast_value: timestamp (nullable = true)
+       |-- timestamp_value: timestamp (nullable = true)
+       |-- try_timestamp_value: timestamp (nullable = true)
+      """
+
+    Examples:
+      | type   | ansi  |
+      | FLOAT  | true  |
+      | FLOAT  | false |
+      | DOUBLE | true  |
+      | DOUBLE | false |
+
   Scenario: Decimal timestamp casts truncate and wrap exactly
     When query
       """
