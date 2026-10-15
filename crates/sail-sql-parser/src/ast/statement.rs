@@ -2,6 +2,7 @@ use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
+use crate::ast::config::{ConfigValue, config_assignment};
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
@@ -20,7 +21,7 @@ use crate::ast::keywords::{
     Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values,
     Verbose, View, Views, When, With, Zone,
 };
-use crate::ast::literal::{ConfigValue, IntegerLiteral, NumberLiteral, StringLiteral};
+use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
     Ampersand, Asterisk, Caret, Colon, Comma, DoubleEquals, DoubleGreaterThan, DoubleLessThan,
     DoubleVerticalBar, Equals, ExclamationMark, GreaterThan, GreaterThanEquals, LeftParenthesis,
@@ -318,7 +319,7 @@ pub enum Statement {
         reset: Reset,
         key: Option<PropertyKey>,
         // Anything after the key is kept only to report the statement as malformed like Spark.
-        rest: Vec<ConfigValue>,
+        rest: Option<ConfigValue>,
     },
     AnalyzeTable {
         analyze: (Analyze, Table),
@@ -401,21 +402,14 @@ pub enum TimeZoneValue {
 }
 
 /// The key and the optional value of `SET <key> [= <value>]`.
-/// Unlike a table property, the value can be unquoted (e.g. `Asia/Kolkata`).
+/// Unlike a table property, the value is raw text or a backtick-quoted string.
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub struct SetPropertyKeyValue {
     pub key: PropertyKey,
-    pub value: Option<(Option<Equals>, SetPropertyValue)>,
-}
-
-// TODO: An unquoted offset such as `+08:00` or `-8:00` is not parsed. `Property` is tried first and
-//   takes the leading sign and number as `PropertyValue::Number`, and the choice does not go back to
-//   `Unquoted` for the `:00` that is left. Spark takes the whole text after `=`. Trying `Unquoted` first
-//   for a value of several tokens needs a check that the values `SET` sends to DataFusion do not change.
-#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-pub enum SetPropertyValue {
-    Property(PropertyValue),
-    Unquoted(ConfigValue),
+    #[parser(function = |_, o| config_assignment(o).or_not())]
+    pub value: Option<(Equals, ConfigValue)>,
+    // Preserve malformed tails so the analyzer can return Spark's SET syntax error.
+    pub rest: Option<ConfigValue>,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

@@ -7,7 +7,7 @@ use sail_common::utils::datetime::get_system_timezone;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
-use sail_sql_parser::ast::literal::{ConfigValue, IntegerLiteral, NumberLiteral, StringLiteral};
+use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
@@ -20,7 +20,7 @@ use sail_sql_parser::ast::statement::{
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SetPropertyKeyValue, SetPropertyValue, ShowFunctionScope,
+    RowFormatDelimitedClause, SetClause, SetPropertyKeyValue, ShowFunctionScope,
     ShowFunctionsClause, ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList,
     Statement, TableColumnIdentityOption, TableColumnIdentityOptions, TimeZoneValue,
     UpdateTableAlias, ViewColumn, ViewColumnList, ViewUsingClause,
@@ -1160,7 +1160,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             // Spark takes the key as it is written, so a string literal is not a key and the parts of a
             // dotted key are not separated by spaces.
             let key_is_plain = key.as_ref().is_none_or(is_plain_config_key);
-            let malformed = !rest.is_empty() || matches!(key, Some(PropertyKey::Literal(_)));
+            let malformed = rest.is_some() || matches!(key, Some(PropertyKey::Literal(_)));
             let variable = key.map(from_ast_property_key).transpose()?;
             if malformed || (!key_is_plain && variable.as_deref() == Some(SESSION_TIME_ZONE_KEY)) {
                 return Err(SqlError::invalid(INVALID_RESET_COMMAND_FORMAT));
@@ -2204,52 +2204,25 @@ fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<St
 }
 
 fn from_ast_set_property(property: SetPropertyKeyValue) -> SqlResult<(String, Option<String>)> {
-    let SetPropertyKeyValue { key, value } = property;
+    let SetPropertyKeyValue { key, value, rest } = property;
     let key_is_string = matches!(key, PropertyKey::Literal(_));
     let key_is_plain = is_plain_config_key(&key);
     let key = from_ast_property_key(key)?;
-    // Spark takes `SET key=value` with the key written as one word, and the session time zone is the key
-    // this statement acts on. Every other key keeps its previous grammar.
-    let malformed_zone_key = key == SESSION_TIME_ZONE_KEY && !key_is_plain;
-    let value = value
-        .map(|(equals, value)| match value {
-            SetPropertyValue::Property(_) | SetPropertyValue::Unquoted(_) if malformed_zone_key => {
-                Err(SqlError::invalid(INVALID_SET_SYNTAX))
-            }
-            SetPropertyValue::Property(_)
-                if key == SESSION_TIME_ZONE_KEY && (equals.is_none() || key_is_string) =>
-            {
-                Err(SqlError::invalid(INVALID_SET_SYNTAX))
-            }
-            // Spark keeps the quotes of the value (`SparkSqlParser.scala:291`), so a quoted session
-            // time zone is invalid there rather than the zone within the quotes.
-            // TODO: Do this for every key once `SET` on the other keys goes through the Spark
-            //   configuration. They are sent to DataFusion as variables, which need the plain value.
-            SetPropertyValue::Property(PropertyValue::String(x))
-                if key == SESSION_TIME_ZONE_KEY =>
-            {
-                Ok(x.text().trim().to_string())
-            }
-            SetPropertyValue::Property(x) => from_ast_property_value(x),
-            // `SET TIME ZONE` followed by anything that is not a zone is not a property named `time`.
-            SetPropertyValue::Unquoted(ConfigValue { value, span: _ })
-                if equals.is_none()
-                    && key.eq_ignore_ascii_case("time")
-                    && value.eq_ignore_ascii_case("zone") =>
-            {
-                Err(SqlError::invalid(
-                    "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
-                ))
-            }
-            // Spark takes the key as it is written, so only an identifier can be followed by a value
-            // that is not quoted.
-            SetPropertyValue::Unquoted(_) if equals.is_none() || key_is_string => {
-                Err(SqlError::invalid(INVALID_SET_SYNTAX))
-            }
-            SetPropertyValue::Unquoted(ConfigValue { value, span: _ }) => Ok(value),
-        })
-        .transpose()?;
-    Ok((key, value))
+    // A missing time zone is not a property named `time`.
+    if value.is_none()
+        && key.eq_ignore_ascii_case("time")
+        && rest
+            .as_ref()
+            .is_some_and(|rest| rest.value.eq_ignore_ascii_case("zone"))
+    {
+        return Err(SqlError::invalid(
+            "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
+        ));
+    }
+    if rest.is_some() || key_is_string || !key_is_plain {
+        return Err(SqlError::invalid(INVALID_SET_SYNTAX));
+    }
+    Ok((key, value.map(|(_, value)| value.value)))
 }
 
 fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, String)>> {
