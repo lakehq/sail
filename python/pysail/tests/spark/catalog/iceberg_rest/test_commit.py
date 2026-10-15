@@ -356,6 +356,116 @@ def test_insert_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
 
 
+def test_metadata_tables_follow_rest_catalog_pointer(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "metadata_tables_t"
+    table_fqn = f"sail.{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        """
+    )
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")  # noqa: S608
+
+    table = _load_table(iceberg_rest_endpoint, table_name)
+    metadata = table["metadata"]
+    expected_snapshots = sorted(
+        metadata["snapshots"],
+        key=lambda snapshot: (snapshot["timestamp-ms"], snapshot["snapshot-id"]),
+    )
+    snapshots = spark.sql(
+        f"""
+        SELECT snapshot_id, parent_id, operation
+        FROM {table_fqn}.snapshots
+        ORDER BY committed_at, snapshot_id
+        """  # noqa: S608
+    ).collect()
+    assert [(row.snapshot_id, row.parent_id, row.operation) for row in snapshots] == [
+        (
+            snapshot["snapshot-id"],
+            snapshot.get("parent-snapshot-id"),
+            snapshot["summary"]["operation"],
+        )
+        for snapshot in expected_snapshots
+    ]
+
+    references = spark.sql(
+        f"SELECT name, type, snapshot_id FROM {table_fqn}.refs"  # noqa: S608
+    ).collect()
+    main_reference = metadata["refs"]["main"]
+    assert [(row.name, row.type, row.snapshot_id) for row in references] == [
+        ("main", main_reference["type"].upper(), main_reference["snapshot-id"])
+    ]
+
+    metadata_log = spark.sql(
+        f"""
+        SELECT file, latest_snapshot_id
+        FROM {table_fqn}.metadata_log_entries
+        """  # noqa: S608
+    ).collect()
+    expected_metadata_files = {entry["metadata-file"] for entry in metadata["metadata-log"]} | {
+        table["metadata-location"]
+    }
+    assert {row.file for row in metadata_log} == expected_metadata_files
+    current_entry = next(row for row in metadata_log if row.file == table["metadata-location"])
+    assert current_entry.latest_snapshot_id == metadata["current-snapshot-id"]
+
+
+def test_snapshot_procedure_commits_through_rest_catalog(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "snapshot_procedure_t"
+    table_fqn = f"sail.{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1)")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2)")  # noqa: S608
+
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_metadata = before["metadata"]
+    before_location = before["metadata-location"]
+    snapshots = sorted(
+        before_metadata["snapshots"],
+        key=lambda snapshot: (snapshot["timestamp-ms"], snapshot["snapshot-id"]),
+    )
+    target_snapshot_id = snapshots[0]["snapshot-id"]
+    previous_snapshot_id = before_metadata["current-snapshot-id"]
+
+    result = spark.sql(
+        f"""
+        CALL sail.system.rollback_to_snapshot(
+          table => '{table_fqn}',
+          snapshot_id => {target_snapshot_id}
+        )
+        """
+    ).first()
+    assert result.previous_snapshot_id == previous_snapshot_id
+    assert result.current_snapshot_id == target_snapshot_id
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_metadata = after["metadata"]
+    assert after["metadata-location"] != before_location
+    _assert_uuid_metadata_location(after["metadata-location"], 3)
+    assert after_metadata["current-snapshot-id"] == target_snapshot_id
+    assert after_metadata["refs"]["main"]["snapshot-id"] == target_snapshot_id
+    assert after_metadata["metadata-log"][-1]["metadata-file"] == before_location
+    assert {snapshot["snapshot-id"] for snapshot in after_metadata["snapshots"]} == {
+        snapshot["snapshot-id"] for snapshot in snapshots
+    }
+
+    rows = spark.sql(f"SELECT id FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [row.id for row in rows] == [1]
+
+
 def test_rest_catalog_write_honors_absolute_data_path(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
@@ -648,14 +758,16 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     ]
 
 
-def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
+@pytest.mark.parametrize("operation", ["merge", "rewrite"])
+def test_stale_write_catalog_conflict_cleans_only_commit_owned_artifacts(
     spark: SparkSession,
     gated_remote: str,
     commit_gate_proxy: tuple[str, _CommitGate],
     iceberg_rest_endpoint: str,
     seaweedfs_host_endpoint: str,
+    operation: str,
 ) -> None:
-    table_name = "stale_merge_conflict_t"
+    table_name = f"stale_{operation}_conflict_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
     spark.sql(
@@ -686,23 +798,32 @@ def test_stale_merge_catalog_conflict_cleans_only_commit_owned_artifacts(
         ).createOrReplaceTempView("stale_merge_source")
         gate.arm(NAMESPACE, table_name)
 
-        def stale_merge() -> None:
+        def stale_write() -> None:
+            if operation == "rewrite":
+                slow.sql(
+                    f"""
+                    CALL system.rewrite_data_files(
+                      '{table_fqn}',
+                      options => map('rewrite-all', 'true', 'max-concurrent-file-group-rewrites', '1'))
+                    """
+                ).collect()
+                return
             slow.sql(
-                """
-                MERGE INTO iceberg_commit_test.stale_merge_conflict_t AS t
+                f"""
+                MERGE INTO {table_fqn} AS t
                 USING stale_merge_source AS s
                 ON t.id = s.id
                 WHEN NOT MATCHED THEN
                   INSERT (id, name) VALUES (s.id, s.name)
-                """
+                """  # noqa: S608
             ).collect()
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(stale_merge)
+            future = executor.submit(stale_write)
             try:
                 if not gate.arrived.wait(timeout=60):
                     outcome = future.exception(timeout=1) if future.done() else "still running"
-                    pytest.fail(f"MERGE did not reach the catalog commit gate: {outcome}")
+                    pytest.fail(f"{operation} did not reach the catalog commit gate: {outcome}")
 
                 blocked_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
                 slow_created_keys = blocked_keys - before_keys

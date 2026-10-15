@@ -4576,6 +4576,14 @@
               }
             },
             {
+              "name": "Keyword(Call)",
+              "node": {
+                "terminal": {
+                  "keyword": "CALL"
+                }
+              }
+            },
+            {
               "name": "Keyword(Cascade)",
               "node": {
                 "terminal": {
@@ -7593,6 +7601,14 @@
               }
             },
             {
+              "name": "Option(ConfigValue)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ConfigValue"
+                }
+              }
+            },
+            {
               "name": "Option(DataType)",
               "node": {
                 "optional": {
@@ -8273,6 +8289,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Operator(Equals), ConfigValue))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(Equals), ConfigValue)"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Operator(Equals), Expression))",
               "node": {
                 "optional": {
@@ -8349,14 +8373,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Option(Operator(Equals)), PropertyValue)"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(Option(Operator(Equals)), SetPropertyValue))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Option(Operator(Equals)), SetPropertyValue)"
                 }
               }
             },
@@ -9681,28 +9697,10 @@
                     "nonTerminal": "PropertyKey"
                   },
                   {
-                    "nonTerminal": "Option(Tuple(Option(Operator(Equals)), SetPropertyValue))"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "SetPropertyValue",
-              "node": {
-                "choice": [
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "PropertyValue"
-                      }
-                    ]
+                    "nonTerminal": "Option(Tuple(Operator(Equals), ConfigValue))"
                   },
                   {
-                    "sequence": [
-                      {
-                        "nonTerminal": "ConfigValue"
-                      }
-                    ]
+                    "nonTerminal": "Option(ConfigValue)"
                   }
                 ]
               }
@@ -9922,6 +9920,19 @@
                     "sequence": [
                       {
                         "nonTerminal": "Query"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Call)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "FunctionArgumentList"
                       }
                     ]
                   },
@@ -10614,7 +10625,7 @@
                         "nonTerminal": "Option(PropertyKey)"
                       },
                       {
-                        "nonTerminal": "Vector(ConfigValue)"
+                        "nonTerminal": "Option(ConfigValue)"
                       }
                     ]
                   },
@@ -12133,6 +12144,19 @@
               }
             },
             {
+              "name": "Tuple(Operator(Equals), ConfigValue)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(Equals)"
+                  },
+                  {
+                    "nonTerminal": "ConfigValue"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Operator(Equals), Expression)",
               "node": {
                 "sequence": [
@@ -12270,19 +12294,6 @@
                   },
                   {
                     "nonTerminal": "PropertyValue"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(Option(Operator(Equals)), SetPropertyValue)",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Option(Operator(Equals))"
-                  },
-                  {
-                    "nonTerminal": "SetPropertyValue"
                   }
                 ]
               }
@@ -12494,14 +12505,6 @@
               "node": {
                 "zeroOrMore": {
                   "nonTerminal": "ColumnDefinitionOption"
-                }
-              }
-            },
-            {
-              "name": "Vector(ConfigValue)",
-              "node": {
-                "zeroOrMore": {
-                  "nonTerminal": "ConfigValue"
                 }
               }
             },

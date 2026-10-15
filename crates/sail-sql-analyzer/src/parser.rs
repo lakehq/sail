@@ -8,6 +8,7 @@ use chumsky::error::Rich;
 use chumsky::input::{Input, MappedInput};
 use chumsky::span::SimpleSpan;
 use chumsky::{Boxed, Parser, extra};
+use sail_common::spec;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
@@ -23,6 +24,7 @@ use sail_sql_parser::parser::{
 use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
+use crate::expression::from_ast_expression;
 use crate::literal::datetime::{
     DateValue, TimeValue, TimestampValue, create_date_parser, create_time_parser,
     create_timestamp_parser,
@@ -222,6 +224,27 @@ pub fn parse_expression(s: &str) -> SqlResult<Expr> {
     parse!(s, EXPRESSION, ExpressionCache)
 }
 
+/// Ignores SQL comments and decodes string literals for native configuration settings.
+pub fn parse_native_config_value(s: &str) -> SqlResult<String> {
+    let tokens = tokenize(s, &ParserOptions::default())?;
+    let mut value = String::with_capacity(s.len());
+    let mut last = 0;
+    for (token, span) in tokens {
+        if matches!(
+            token,
+            Token::SingleLineComment { .. } | Token::MultiLineComment { .. }
+        ) {
+            value.push_str(&s[last..span.start]);
+            last = span.end;
+        }
+    }
+    value.push_str(&s[last..]);
+    match parse_expression(&value).and_then(from_ast_expression) {
+        Ok(spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })) => Ok(value),
+        _ => Ok(value.trim().to_string()),
+    }
+}
+
 pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
     parse!(s, STATEMENT, StatementCache)
 }
@@ -349,6 +372,23 @@ mod tests {
         assert_eq!(
             parse_one_statement("SELECT U&\"a#2014b#+002014c\"   UESCAPE '#'")?.text(),
             "SELECT U&\"a#2014b#+002014c\" UESCAPE '#' "
+        );
+        assert_eq!(
+            parse_one_statement("SET k=` a;b``c `")?.text(),
+            "SET k = ` a;b``c ` "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_call_procedure() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "CALL sail.system.rollback_to_snapshot(table => 'events', snapshot_id => 42)",
+        )?;
+        assert!(matches!(statement, Statement::CallProcedure { .. }));
+        assert_eq!(
+            statement.text(),
+            "CALL sail . system . rollback_to_snapshot ( table => 'events' , snapshot_id => 42 ) "
         );
         Ok(())
     }

@@ -20,6 +20,7 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
 mod row_level;
 mod show;
 mod table_properties;
@@ -46,6 +47,14 @@ impl PlanResolver<'_> {
             CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,
             CommandNode::WithRelations { root, references } => {
                 self.resolve_command_with_relations(*root, references, state)
+                    .await
+            }
+            CommandNode::CallProcedure {
+                procedure,
+                arguments,
+                named_arguments,
+            } => {
+                self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
                     .await
             }
             CommandNode::CurrentDatabase => {
@@ -290,12 +299,11 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::ResetVariable { .. } => {
-                // The Spark session handles `RESET spark.sql.session.timeZone` before the plan is
-                // resolved. Any other `RESET` ends up here.
-                Err(PlanError::todo(
-                    "RESET other than spark.sql.session.timeZone",
-                ))
+            CommandNode::ResetVariable {
+                variable: Some(variable),
+            } => Ok(self.resolve_command_reset_variable(variable)),
+            CommandNode::ResetVariable { variable: None } => {
+                Err(PlanError::unsupported("RESET requires a Spark session"))
             }
             CommandNode::Update {
                 table,
