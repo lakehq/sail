@@ -474,9 +474,7 @@ impl PlanResolver<'_> {
         if !predicates.is_empty() {
             return Err(PlanError::todo("data source predicates"));
         }
-        let Some(format) = format else {
-            return Err(PlanError::invalid("missing data source format"));
-        };
+        let format = format.unwrap_or_else(|| self.config.default_table_file_format.clone());
         let schema = match schema {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,

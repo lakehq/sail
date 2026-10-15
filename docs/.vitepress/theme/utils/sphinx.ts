@@ -4,10 +4,10 @@ import * as path from "path";
 import glob from "fast-glob";
 import { normalizePath } from "vite";
 
-import type { NodeLike } from "./tree";
+import type { NodeLike } from "./tree.ts";
 
 export const SPHINX_BUILD_OUTPUT = path.join(
-  __dirname,
+  import.meta.dirname,
   "../../../../python/pysail/docs/_build",
 );
 

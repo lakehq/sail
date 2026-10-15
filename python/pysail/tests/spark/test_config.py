@@ -53,7 +53,7 @@ def test_sql_set_quoted_session_timezone_keeps_the_quotes(spark):
     ],
 )
 def test_sql_set_quoted_value_of_other_keys_is_unchanged(spark, statement):
-    # Only the session time zone keeps the quotes of its value; the other keys are unaffected.
+    # Native DataFusion settings still decode quoted SQL literals.
     spark.sql(statement).collect()
 
 
@@ -144,7 +144,7 @@ def test_sql_set_time_zone_result_does_not_set_the_zone_again(spark):
 
 
 # TODO: `SparkRuntimeConfig::set` does not validate the zone, so `spark.conf.set` accepts a zone that Spark rejects
-#   with `INVALID_CONF_VALUE.TIME_ZONE`. Only the SQL statements validate it for now (`plan_executor.rs`).
+#   with `INVALID_CONF_VALUE.TIME_ZONE`. Only the SQL statements validate it for now (`config_manager.rs`).
 #   Move the check into `SparkRuntimeConfig::set` and remove the `xfail`.
 @pytest.mark.xfail(reason="spark.conf.set does not validate the session time zone", strict=True)
 def test_conf_set_rejects_an_invalid_time_zone_and_keeps_the_zone(spark):

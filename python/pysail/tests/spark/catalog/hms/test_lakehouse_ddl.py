@@ -49,6 +49,7 @@ def test_lakehouse_create_alter_drop(spark, jvm_spark, hms_s3_database, fmt, cre
     location = _describe_extended_properties(spark, name)["Location"]
     assert spark.table(name).collect() == []
     assert jvm_spark.table(reference).collect() == []
+    assert [tuple(r) for r in spark.sql(f"SHOW TBLPROPERTIES {name} ('custom')").collect()] == [("custom", "initial")]
     if fmt == "iceberg":
         assert _reference_catalog_table(jvm_spark, hms_s3_database, table).partitionColumnNames().isEmpty()
 
@@ -59,6 +60,7 @@ def test_lakehouse_create_alter_drop(spark, jvm_spark, hms_s3_database, fmt, cre
     spark.sql(f"INSERT INTO {name} (id, part) VALUES (2, 'b')")
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert {r.key: r.value for r in jvm_spark.sql(f"SHOW TBLPROPERTIES {reference}").collect()}["custom"] == "updated"
+    assert {r.key: r.value for r in spark.sql(f"SHOW TBLPROPERTIES {name}").collect()}["custom"] == "updated"
     assert spark.table(name).schema["id"].dataType.simpleString() == "bigint"
     if creator == "sail" or fmt == "iceberg":
         assert (
@@ -70,6 +72,10 @@ def test_lakehouse_create_alter_drop(spark, jvm_spark, hms_s3_database, fmt, cre
         (2, "fallback", "b"),
     ]
     jvm_spark.sql(f"INSERT INTO {reference} (id, part) VALUES (3, 'c')")
+    jvm_spark.sql(f"ALTER TABLE {reference} SET TBLPROPERTIES ('custom'='from-spark')")
+    assert [tuple(r) for r in spark.sql(f"SHOW TBLPROPERTIES {name} ('custom')").collect()] == [
+        ("custom", "from-spark")
+    ]
     assert spark.table(name).where("id = 3").first().value == "fallback"
     spark.sql(f"ALTER TABLE {name} ALTER COLUMN value DROP DEFAULT")
     spark.sql(f"INSERT INTO {name} VALUES (4, DEFAULT, 'd')")
@@ -78,6 +84,7 @@ def test_lakehouse_create_alter_drop(spark, jvm_spark, hms_s3_database, fmt, cre
     spark.sql(f"ALTER TABLE {name} UNSET TBLPROPERTIES IF EXISTS ('absent')")
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert "custom" not in {r.key: r.value for r in jvm_spark.sql(f"SHOW TBLPROPERTIES {reference}").collect()}
+    assert "custom" not in {r.key: r.value for r in spark.sql(f"SHOW TBLPROPERTIES {name}").collect()}
 
     spark.sql(f"DROP TABLE {name}")
     spark.sql(f"DROP TABLE IF EXISTS {name}")

@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::consts::U12;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, Iv, KeyIvInit};
 use aes::{Aes128, Aes192, Aes256};
-use aes_gcm::aead::rand_core::{OsRng, RngCore};
+use aes_gcm::aead::common::Generate;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
-use cbc::cipher::BlockDecryptMut;
 use datafusion::arrow::array::BinaryBuilder;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_binary_array, as_string_array};
@@ -37,16 +36,8 @@ pub fn encryption_name_to_mode(mode: &str, padding: &str) -> Result<EncryptionMo
 pub fn generate_iv(mode: &EncryptionMode) -> Vec<u8> {
     match &mode {
         EncryptionMode::ECB => Vec::new(),
-        EncryptionMode::GCM => {
-            let mut iv = [0u8; 12];
-            OsRng.fill_bytes(&mut iv);
-            iv.to_vec()
-        }
-        EncryptionMode::CBC => {
-            let mut iv = [0u8; 16];
-            OsRng.fill_bytes(&mut iv);
-            iv.to_vec()
-        }
+        EncryptionMode::GCM => Nonce::<U12>::generate().to_vec(),
+        EncryptionMode::CBC => Iv::<cbc::Encryptor<Aes128>>::generate().to_vec(),
     }
 }
 
@@ -199,20 +190,21 @@ fn encrypt_value(
         return exec_err!("Spark `aes_encrypt`: AAD is only supported for GCM mode");
     }
     let ciphertext = match &mode {
-        EncryptionMode::ECB => {
-            match key.len() {
-                16 => Aes128::new_from_slice(key)
-                    .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
-                24 => Aes192::new_from_slice(key)
-                    .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
-                32 => Aes256::new_from_slice(key)
-                    .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
-                _ => return exec_err!("Spark `aes_encrypt`: Invalid AES key length"),
-            }
-            .map_err(|e| exec_datafusion_err!("Spark `aes_encrypt`: ECB Encryption error: {e}"))
+        EncryptionMode::ECB => match key.len() {
+            16 => ecb::Encryptor::<Aes128>::new_from_slice(key)
+                .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
+            24 => ecb::Encryptor::<Aes192>::new_from_slice(key)
+                .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
+            32 => ecb::Encryptor::<Aes256>::new_from_slice(key)
+                .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(expr)),
+            _ => return exec_err!("Spark `aes_encrypt`: Invalid AES key length"),
         }
+        .map_err(|e| exec_datafusion_err!("Spark `aes_encrypt`: ECB Encryption error: {e}")),
         EncryptionMode::GCM => {
-            let nonce = Nonce::from_slice(&iv);
+            let nonce: &Nonce<U12> = iv
+                .as_slice()
+                .try_into()
+                .map_err(|e| exec_datafusion_err!("Spark `aes_encrypt`: Invalid GCM nonce: {e}"))?;
             let result = match key.len() {
                 16 => {
                     let cipher = Aes128Gcm::new_from_slice(key).map_err(|e| {
@@ -276,21 +268,21 @@ fn encrypt_value(
                             "Spark `aes_encrypt`: Error creating AES-128 cipher: {e}"
                         )
                     })
-                    .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    .map(|enc| enc.encrypt_padded_vec::<Pkcs7>(expr)),
                 24 => cbc::Encryptor::<Aes192>::new_from_slices(key, &iv)
                     .map_err(|e| {
                         exec_datafusion_err!(
                             "Spark `aes_encrypt`: Error creating AES-192 cipher: {e}"
                         )
                     })
-                    .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    .map(|enc| enc.encrypt_padded_vec::<Pkcs7>(expr)),
                 32 => cbc::Encryptor::<Aes256>::new_from_slices(key, &iv)
                     .map_err(|e| {
                         exec_datafusion_err!(
                             "Spark `aes_encrypt`: Error creating AES-256 cipher: {e}"
                         )
                     })
-                    .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    .map(|enc| enc.encrypt_padded_vec::<Pkcs7>(expr)),
                 other => exec_err!(
                     "Spark `aes_encrypt`: Key length must be 16, 24, or 32 bytes, got {other}"
                 ),
@@ -327,11 +319,11 @@ fn decrypt_value(
         EncryptionMode::ECB if expr.is_empty() => Ok(Vec::new()),
         EncryptionMode::ECB => {
             let decrypted = match key.len() {
-                16 => Aes128::new_from_slice(key)
+                16 => ecb::Decryptor::<Aes128>::new_from_slice(key)
                     .map(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(expr)),
-                24 => Aes192::new_from_slice(key)
+                24 => ecb::Decryptor::<Aes192>::new_from_slice(key)
                     .map(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(expr)),
-                32 => Aes256::new_from_slice(key)
+                32 => ecb::Decryptor::<Aes256>::new_from_slice(key)
                     .map(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(expr)),
                 other => {
                     return exec_err!(
@@ -351,7 +343,9 @@ fn decrypt_value(
                     expr.len()
                 )
             })?;
-            let nonce = Nonce::from_slice(iv);
+            let nonce: &Nonce<U12> = iv
+                .try_into()
+                .map_err(|e| exec_datafusion_err!("Spark `aes_decrypt`: Invalid GCM nonce: {e}"))?;
             let decrypted = match key.len() {
                 16 => {
                     let cipher = Aes128Gcm::new_from_slice(key).map_err(|e| {
@@ -425,11 +419,9 @@ fn decrypt_value(
                                 "Spark `aes_decrypt`: Error creating AES-128 cipher: {e}"
                             )
                         })?;
-                    let result = decryptor
-                        .decrypt_padded_vec_mut::<Pkcs7>(expr)
-                        .map_err(|e| {
-                            exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
-                        })?;
+                    let result = decryptor.decrypt_padded_vec::<Pkcs7>(expr).map_err(|e| {
+                        exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
+                    })?;
                     Ok(result)
                 }
                 24 => {
@@ -439,11 +431,9 @@ fn decrypt_value(
                                 "Spark `aes_decrypt`: Error creating AES-192 cipher: {e}"
                             )
                         })?;
-                    let result = decryptor
-                        .decrypt_padded_vec_mut::<Pkcs7>(expr)
-                        .map_err(|e| {
-                            exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
-                        })?;
+                    let result = decryptor.decrypt_padded_vec::<Pkcs7>(expr).map_err(|e| {
+                        exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
+                    })?;
                     Ok(result)
                 }
                 32 => {
@@ -453,11 +443,9 @@ fn decrypt_value(
                                 "Spark `aes_decrypt`: Error creating AES-256 cipher: {e}"
                             )
                         })?;
-                    let result = decryptor
-                        .decrypt_padded_vec_mut::<Pkcs7>(expr)
-                        .map_err(|e| {
-                            exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
-                        })?;
+                    let result = decryptor.decrypt_padded_vec::<Pkcs7>(expr).map_err(|e| {
+                        exec_datafusion_err!("Spark `aes_decrypt`: CBC Decryption error: {e}")
+                    })?;
                     Ok(result)
                 }
                 other => exec_err!(

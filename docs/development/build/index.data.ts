@@ -1,5 +1,5 @@
 import { createContentLoader } from "vitepress";
 
 export default createContentLoader([
-  "/development/build/!(index|_*/**|**/_*/**).md",
+  "development/build/!(index|_*/**|**/_*/**).md",
 ]);
