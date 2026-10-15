@@ -2106,7 +2106,7 @@ fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
             }
             if microseconds.unsigned_abs() > MAX_TIME_ZONE_OFFSET_MICROS {
                 return Err(interval_out_of_range(
-                    microseconds.unsigned_abs() / MICROS_PER_HOUR,
+                    microseconds.unsigned_abs() / (MICROS_PER_HOUR as u64),
                 ));
             }
             if microseconds % MICROS_PER_SECOND != 0 {
