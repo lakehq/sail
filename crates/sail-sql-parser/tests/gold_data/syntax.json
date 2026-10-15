@@ -4458,6 +4458,14 @@
               }
             },
             {
+              "name": "Keyword(Call)",
+              "node": {
+                "terminal": {
+                  "keyword": "CALL"
+                }
+              }
+            },
+            {
               "name": "Keyword(Cascade)",
               "node": {
                 "terminal": {
@@ -9738,6 +9746,19 @@
                     "sequence": [
                       {
                         "nonTerminal": "Query"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Call)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "FunctionArgumentList"
                       }
                     ]
                   },

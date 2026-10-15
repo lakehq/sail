@@ -8,6 +8,8 @@ pub mod extension;
 pub mod formatter;
 pub mod input_file;
 mod java_float;
+pub mod lakeprocedure;
+pub mod lakerelation;
 pub mod lakesource;
 pub mod literal;
 pub mod logical_expr;
