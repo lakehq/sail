@@ -8,12 +8,12 @@ use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{
-    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, cast, lit, when,
+    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl, cast, lit, when,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
+use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -58,6 +58,63 @@ fn integer_part(expr: Expr, part: &str) -> Expr {
     )
 }
 
+fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> PlanResult<Expr> {
+    let data_type = expr.get_type(context.schema)?;
+    if data_type.is_string() {
+        return Ok(
+            ScalarUDF::from(SparkDate::new(!context.plan_config.ansi_mode)).call(vec![expr]),
+        );
+    }
+    if !matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) | DataType::Null
+    ) {
+        return Err(PlanError::invalid(format!(
+            "date argument requires DATE, TIMESTAMP or STRING, got {data_type}"
+        )));
+    }
+    let date = cast_temporal(
+        expr,
+        &data_type,
+        DataType::Date32,
+        &context.plan_config.session_timezone,
+        false,
+    )?;
+    // Spark's Cast.forceNullable includes TIMESTAMP_NTZ to DATE.
+    declare_nullable_result(
+        date,
+        matches!(data_type, DataType::Timestamp(_, None)),
+        context.schema,
+    )
+}
+
+fn date_field(input: ScalarFunctionInput, part: &str) -> PlanResult<Expr> {
+    let date = datetime_date(input.arguments.one()?, &input.function_context)?;
+    Ok(integer_part(date, part))
+}
+
+fn date_udf(input: ScalarFunctionInput, udf: impl ScalarUDFImpl + 'static) -> PlanResult<Expr> {
+    let types = input
+        .arguments
+        .iter()
+        .map(|expr| expr.get_type(input.function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    udf.coerce_types(&types)?;
+    let date = datetime_date(input.arguments.one()?, &input.function_context)?;
+    Ok(ScalarUDF::from(udf).call(vec![date]))
+}
+
+fn time_field(input: ScalarFunctionInput, part: &str) -> PlanResult<Expr> {
+    let mut timestamp = input.arguments.one()?;
+    if timestamp
+        .get_type(input.function_context.schema)?
+        .is_string()
+    {
+        timestamp = datetime_timestamp(timestamp, &input.function_context, false, false)?;
+    }
+    Ok(integer_part(timestamp, part))
+}
+
 fn years(arg: Expr) -> Expr {
     integer_part(arg, "YEAR")
 }
@@ -93,7 +150,7 @@ fn trunc_part_conversion(part: Expr) -> Expr {
 
 fn trunc(date: Expr, part: Expr) -> Expr {
     cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), date),
+        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), date]),
         DataType::Date32,
     )
 }
@@ -336,6 +393,8 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
         2 => {
             let [start, end] = <[Expr; 2]>::try_from(args)
                 .map_err(|_| PlanError::invalid("datediff requires 2 or 3 arguments"))?;
+            let start = datetime_date(start, &input.function_context)?;
+            let end = datetime_date(end, &input.function_context)?;
             Ok(date_days_arithmetic(start, end, Operator::Minus))
         }
         3 => {
@@ -577,21 +636,22 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
     time_with_try(input, true)
 }
 
-/// Shared `to_time` / `try_to_time` planner. Routes through `SparkTime`, which
-/// parses strings (with an optional Spark Java datetime pattern) or casts
-/// time/timestamp args.
+/// Shared `to_time` / `try_to_time` planner for string inputs.
 /// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     let udf = ScalarUDF::from(SparkTime::new(is_try));
+    if matches!(input.arguments.len(), 1 | 2) {
+        let data_type = input.arguments[0].get_type(input.function_context.schema)?;
+        if !data_type.is_string() && !data_type.is_null() {
+            return Err(PlanError::invalid(format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] The first parameter requires the \"STRING\" type, but the input has type {data_type}"
+            )));
+        }
+    }
     if input.arguments.len() == 1 {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
-        // Pass `expr` through unchanged so `SparkTime::coerce_types` validates it
-        // and the kernel dispatches by type (strings parse with the format,
-        // TIME/TIMESTAMP cast directly), exactly as in the 1-arg form. Forcing a
-        // cast to Utf8 here would route non-string inputs through string parsing,
-        // bypassing the coercion checks and diverging from the 1-arg behavior.
         let (expr, format) = input.arguments.two()?;
         Ok(udf.call(vec![expr, format]))
     } else {
@@ -748,7 +808,12 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
         expr,
         DataType::Timestamp(TimeUnit::Second, Some(timezone.clone())),
     );
-    Ok(date_format(expr, format, timezone.to_string()))
+    // Spark's FromUnixTime declares a nullable result independently of its inputs.
+    declare_nullable_result(
+        date_format(expr, format, timezone.to_string()),
+        true,
+        input.function_context.schema,
+    )
 }
 
 fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
@@ -793,6 +858,14 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
+fn current_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    input.arguments.zero()?;
+    let timezone = input.function_context.plan_config.session_timezone.clone();
+    let timestamp =
+        ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Microsecond)).call(vec![]);
+    Ok(cast(timestamp, DataType::Date32))
+}
+
 fn convert_tz(
     from_tz: Expr,
     to_tz: Expr,
@@ -821,11 +894,11 @@ fn convert_tz(
 //  it to Utf8 (for example, ARRAY). Spark's VariantType remains a supported atomic type.
 fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
     let field = expr.to_field(schema)?.1;
-    if !can_cast_types(field.data_type(), &DataType::Utf8)
+    if (field.data_type().is_nested() || !can_cast_types(field.data_type(), &DataType::Utf8))
         && !is_variant_storage_field(field.as_ref())
     {
         return Err(PlanError::invalid(format!(
-            "convert_timezone time zone arguments must be castable to string, got {}",
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] convert_timezone time zone arguments must be castable to string, got {}",
             field.data_type()
         )));
     }
@@ -1116,14 +1189,14 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     .end()?)
 }
 
-/// Parses a `window` duration/start-time argument (interval string, day-time
-/// interval, or integer number of microseconds, matching Spark's
+/// Parses a `window` duration/start-time argument (interval string
+/// or integer number of microseconds, matching Spark's
 /// `TimeWindow.parseExpression`) into microseconds. Months/years are rejected
 /// (non-constant length).
 fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
     let Expr::Literal(value, _) = expr else {
         return Err(PlanError::invalid(
-            "window durations and start time must be literal strings, intervals, or integers",
+            "The duration and time inputs to window must be an integer, long or string literal",
         ));
     };
     if let Some(s) = value.try_as_str().flatten() {
@@ -1140,18 +1213,8 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
         // Spark interprets integer literals as microseconds.
         ScalarValue::Int32(Some(v)) => Ok(*v as i64),
         ScalarValue::Int64(Some(v)) => Ok(*v),
-        ScalarValue::DurationMicrosecond(Some(v)) => Ok(*v),
-        ScalarValue::DurationMillisecond(Some(v)) => Ok(*v * 1_000),
-        ScalarValue::DurationSecond(Some(v)) => Ok(*v * 1_000_000),
-        ScalarValue::DurationNanosecond(Some(v)) => Ok(*v / 1_000),
-        ScalarValue::IntervalDayTime(Some(v)) => {
-            Ok(v.days as i64 * MICROS_PER_DAY + v.milliseconds as i64 * 1_000)
-        }
-        ScalarValue::IntervalMonthDayNano(Some(v)) if v.months == 0 => {
-            Ok(v.days as i64 * MICROS_PER_DAY + v.nanoseconds / 1_000)
-        }
         _ => Err(PlanError::invalid(
-            "window durations and start time must be literal strings, day-time intervals, or integers",
+            "The duration and time inputs to window must be an integer, long or string literal",
         )),
     }
 }
@@ -1317,8 +1380,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
         ("convert_timezone", F::custom(convert_timezone)),
-        ("curdate", F::nullary(expr_fn::current_date)),
-        ("current_date", F::nullary(expr_fn::current_date)),
+        ("curdate", F::custom(current_date)),
+        ("current_date", F::custom(current_date)),
         ("current_time", F::nullary(expr_fn::current_time)),
         (
             "current_timestamp",
@@ -1333,10 +1396,12 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 2 => {
                     let timezone = input.function_context.plan_config.session_timezone.clone();
                     let (value, format) = input.arguments.two()?;
-                    let value = if matches!(
-                        value.get_type(input.function_context.schema)?,
-                        DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64
-                    ) {
+                    let data_type = value.get_type(input.function_context.schema)?;
+                    let value = if data_type.is_string()
+                        || matches!(
+                            data_type,
+                            DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64
+                        ) {
                         datetime_timestamp(value, &input.function_context, false, false)?
                     } else {
                         value
@@ -1359,19 +1424,22 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
-        ("day", F::unary(|arg| integer_part(arg, "DAY"))),
+        ("day", F::custom(|input| date_field(input, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
-        ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
+        ("dayofmonth", F::custom(|input| date_field(input, "DAY"))),
         (
             "dayofweek",
-            F::unary(|arg| integer_part(arg, "DOW") + lit(1)),
+            F::custom(|input| Ok(date_field(input, "DOW")? + lit(1))),
         ),
-        ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
+        ("dayofyear", F::custom(|input| date_field(input, "DOY"))),
         ("extract", F::binary(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::custom(from_utc_timestamp)),
-        ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
-        ("last_day", F::udf(SparkLastDay::new())),
+        ("hour", F::custom(|input| time_field(input, "HOUR"))),
+        (
+            "last_day",
+            F::custom(|input| date_udf(input, SparkLastDay::new())),
+        ),
         (
             "localtimestamp",
             F::custom(current_localtimestamp_microseconds),
@@ -1399,8 +1467,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| make_timestamp_ntz(input.arguments, false)),
         ),
         ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
-        ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
-        ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
+        ("minute", F::custom(|input| time_field(input, "MINUTE"))),
+        ("month", F::custom(|input| date_field(input, "MONTH"))),
         (
             "monthname",
             F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
@@ -1408,8 +1476,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("months_between", F::custom(months_between)),
         ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
-        ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
-        ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
+        ("quarter", F::custom(|input| date_field(input, "QUARTER"))),
+        ("second", F::custom(|input| time_field(input, "SECOND"))),
         ("session_window", F::unknown("session_window")),
         ("time_bucket", F::unknown("time_bucket")),
         ("time_from_micros", F::unknown("time_from_micros")),
@@ -1510,14 +1578,17 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| unix_time_unit(input, TimeUnit::Second)),
         ),
         ("unix_timestamp", F::custom(unix_timestamp)),
-        ("weekday", F::unary(|arg| integer_part(arg, "DOW") - lit(1))),
+        (
+            "weekday",
+            F::custom(|input| Ok(date_field(input, "ISODOW")? - lit(1))),
+        ),
         (
             "weekofyear",
             F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
         ),
         ("window", F::custom(window)),
         ("window_time", F::custom(window_time)),
-        ("year", F::udf(SparkYear::new())),
+        ("year", F::custom(|input| date_udf(input, SparkYear::new()))),
         ("years", F::unary(years)),
     ]
 }

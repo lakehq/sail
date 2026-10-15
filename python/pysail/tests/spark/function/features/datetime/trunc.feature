@@ -35,7 +35,6 @@ Feature: trunc with an argument coming from a column
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null date literal yields a date
       When query
         """
@@ -47,7 +46,6 @@ Feature: trunc with an argument coming from a column
          |-- result: date (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null date column yields a date
       When query
         """

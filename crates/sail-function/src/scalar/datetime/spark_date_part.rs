@@ -128,7 +128,7 @@ impl ScalarUDFImpl for SparkDatePart {
                 Ok(Arc::new(Field::new(
                     self.name(),
                     DataType::Decimal128(8, 6),
-                    true,
+                    args.arg_fields.iter().any(|field| field.is_nullable()),
                 )))
             })
             .unwrap_or_else(|| self.inner.return_field_from_args(args))

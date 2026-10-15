@@ -187,6 +187,8 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
   @function(nullability)
   Rule: Output schema
 
+    # TODO: Match MakeTimestamp's ANSI-dependent nullability and invalid-component handling together.
+
     @sail-bug
     Scenario: non-null components yield a timestamp
       When query
@@ -221,3 +223,17 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
         root
          |-- result: timestamp (nullable = true)
         """
+
+  Rule: Invalid components in legacy mode
+
+    @sail-bug
+    Scenario: make_timestamp returns NULL for an invalid date when ANSI is disabled
+      # TODO: MakeTimestamp must honor ANSI mode before its return schema can be narrowed.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT make_timestamp(2024, 2, 30, 0, 0, 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

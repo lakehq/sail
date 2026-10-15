@@ -261,7 +261,6 @@ Feature: unix_timestamp with an argument coming from a column
          |-- result: long (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null string column yields a bigint
       When query
         """

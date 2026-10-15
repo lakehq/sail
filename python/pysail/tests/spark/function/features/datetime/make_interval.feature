@@ -3,6 +3,8 @@ Feature: make_interval output schema
   @function(nullability) @spark-4
   Rule: Output schema
 
+    # TODO: Match MakeInterval's ANSI-dependent nullability without hiding nullable runtime paths.
+
     @sail-bug
     Scenario: a non-null literal input to make_interval yields the schema Spark declares
       When query

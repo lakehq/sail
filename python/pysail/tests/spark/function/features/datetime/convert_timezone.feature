@@ -61,7 +61,6 @@ Feature: convert_timezone
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS STRUCT<value: INT>) AS VARIANT) |
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS MAP<STRING, INT>) AS VARIANT)   |
 
-    @sail-bug
     Scenario: an ARRAY time zone fails analysis even when it is NULL
       When query
         """

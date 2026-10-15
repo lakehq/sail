@@ -3,7 +3,6 @@ Feature: date_part / extract output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: date_part second of a non-null timestamp yields a non-nullable decimal
       When query
         """
@@ -15,7 +14,6 @@ Feature: date_part / extract output schema
          |-- result: decimal(8,6) (nullable = false)
         """
 
-    @sail-bug
     Scenario: extract second of a non-null timestamp yields a non-nullable decimal
       When query
         """

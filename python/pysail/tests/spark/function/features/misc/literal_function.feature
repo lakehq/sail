@@ -18,9 +18,6 @@ Feature: Literal function references
       | user              | current_user      |
       | session_user      | current_user      |
 
-  # TODO: Match Spark's non-nullable datetime function schemas. This also differs
-  # for current_date()/current_timestamp() before literal-name resolution.
-  @sail-bug
   Scenario: datetime literal functions retain non-nullable schemas
     When query
       """
