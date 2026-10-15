@@ -151,8 +151,7 @@ Feature: to_timestamp (strict variant)
         | zero is the epoch             | 0     | 1970-01-01 00:00:00 |
         | negative zero is the epoch    | -0.0  | 1970-01-01 00:00:00 |
 
-    @sail-bug
-    Scenario Outline: Numeric seconds (Sail reads the value as microseconds): <case>
+    Scenario Outline: Integral and fractional numeric seconds: <case>
       When query
         """
         SELECT to_timestamp(<input>) AS result
@@ -198,7 +197,6 @@ Feature: to_timestamp (strict variant)
         | LONG_MAX     | 9223372036854775807  | +294247-01-10 04:00:54.775807 |
         | LONG_MIN     | -9223372036854775808 | -290308-12-21 19:59:05.224192 |
 
-    @sail-bug
     Scenario Outline: DOUBLE overflowing BIGINT raises under ANSI: <case>
       Given config spark.sql.ansi.enabled = true
       When query
@@ -228,7 +226,6 @@ Feature: to_timestamp (strict variant)
         | 1e18 seconds | 1e18  | +294247-01-10 04:00:54.775807 |
         | minus 1e18   | -1e18 | -290308-12-21 19:59:05.224192 |
 
-    @sail-bug
     Scenario Outline: NaN and Infinity raise under ANSI: <case>
       Given config spark.sql.ansi.enabled = true
       When query
@@ -243,7 +240,6 @@ Feature: to_timestamp (strict variant)
         | positive inf   | CAST('Infinity' AS DOUBLE)   |
         | negative inf   | CAST('-Infinity' AS DOUBLE)  |
 
-    @sail-bug
     Scenario Outline: NaN and Infinity are NULL without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -291,7 +287,6 @@ Feature: to_timestamp (strict variant)
     # TIME is cast to TIMESTAMP by adding today's date, so it is not asserted here
     # (the value is not stable); see the TIME rule in to_time.feature.
 
-    @sail-bug
     Scenario Outline: Non-string input without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
       When query

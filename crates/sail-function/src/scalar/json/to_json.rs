@@ -43,17 +43,20 @@ macro_rules! downcast_and_convert {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
+    timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,
     sort_keys: bool,
 }
 
 impl ToJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
+    pub const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     pub const SORT_KEYS_OPTION: &'static str = "sortKeys";
     // Default ISO 8601 format with timezone offset (not Z)
     // Using Java DateTimeFormatter patterns
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX";
+    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
@@ -78,6 +81,12 @@ impl ToJsonOptions {
                     .expect("default date format should be valid")
             });
 
+        let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
+            .as_deref()
+            .map(DateTimeFormat::for_formatting)
+            .transpose()?
+            .unwrap_or_else(|| Self::default().timestamp_ntz_format);
+
         let sort_keys = find_key_value(map, Self::SORT_KEYS_OPTION)
             .as_deref()
             .map(parse_boolean_option)
@@ -86,6 +95,7 @@ impl ToJsonOptions {
 
         Ok(Self {
             timestamp_format,
+            timestamp_ntz_format,
             date_format,
             sort_keys,
         })
@@ -98,6 +108,10 @@ impl Default for ToJsonOptions {
         Self {
             timestamp_format: DateTimeFormat::for_formatting(Self::TIMESTAMP_FORMAT_DEFAULT)
                 .expect("default timestamp format should be valid"),
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             sort_keys: false,
@@ -302,7 +316,11 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let formatted = format_timestamp(
                 value,
                 tz.as_ref().map(|s| s.as_ref()),
-                &options.timestamp_format,
+                if tz.is_some() {
+                    &options.timestamp_format
+                } else {
+                    &options.timestamp_ntz_format
+                },
             );
             Ok(Value::String(formatted))
         }

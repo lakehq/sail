@@ -21,9 +21,9 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
+use crate::function::common::{cast_temporal, cast_timestamp_ntz_to_ltz, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::cast::cast_timestamp_ntz_to_ltz;
 use crate::resolver::state::PlanResolverState;
 
 static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
@@ -135,11 +135,11 @@ fn find_timestamp_string_in_coercion(
         .iter()
         .any(|data_type| matches!(data_type, DataType::Timestamp(_, _)));
     let has_string = non_null_types.iter().any(is_string_type);
-    if !has_timestamp || !has_string {
+    if !has_timestamp {
         return None;
     }
 
-    if !ansi_mode {
+    if has_string && !ansi_mode {
         return data_types
             .iter()
             .all(non_ansi_in_string_promotable)
@@ -193,15 +193,8 @@ fn apply_timestamp_string_in_coercion(
                         .call(vec![expression])
                 }
                 DataType::Null => cast(expression, target_type),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
-                    if timezone.is_some() =>
-                {
-                    let string = ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]);
-                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-                        .call(vec![string])
-                }
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                    cast(expression, target_type)
+                    cast_temporal(expression, data_type, target_type, session_timezone, false)?
                 }
                 _ => expression,
             })
@@ -466,7 +459,7 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
-fn coerce_timestamp_pair(
+pub(in crate::resolver) fn coerce_timestamp_pair(
     left: expr::Expr,
     right: expr::Expr,
     operator: Operator,
@@ -485,6 +478,22 @@ fn coerce_timestamp_pair(
             return Ok((left, right));
         }
         _ => {}
+    }
+
+    if let Some(target) = common_temporal_type(
+        &[left_type.clone(), right_type.clone()],
+        &config.session_timezone,
+    ) {
+        return Ok((
+            cast_temporal(
+                left,
+                &left_type,
+                target.clone(),
+                &config.session_timezone,
+                false,
+            )?,
+            cast_temporal(right, &right_type, target, &config.session_timezone, false)?,
+        ));
     }
 
     if !config.ansi_mode

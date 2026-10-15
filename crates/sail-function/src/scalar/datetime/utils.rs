@@ -4,6 +4,17 @@ use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
+/// Zones whose local microseconds equal UTC, including outside Chrono's date range.
+pub fn is_fixed_zero_offset_timezone(timezone: &str) -> bool {
+    matches!(
+        timezone,
+        "+00" | "-00" | "+0000" | "-0000" | "+00:00" | "-00:00"
+    ) || matches!(
+        timezone.strip_prefix("Etc/").unwrap_or(timezone),
+        "GMT" | "GMT+0" | "GMT-0" | "GMT0" | "Greenwich" | "UCT" | "UTC" | "Universal" | "Zulu"
+    )
+}
+
 pub(crate) fn string_array_iter(
     array: &dyn Array,
 ) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {

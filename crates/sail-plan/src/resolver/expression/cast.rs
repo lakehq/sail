@@ -1,10 +1,8 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use chrono::{Offset, TimeZone};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
@@ -12,12 +10,14 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_from_number::{
+    SparkTimestampFromNumber, TimestampNumberMode,
+};
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -26,7 +26,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::is_spark_compatible_arrow_fixed_offset;
+use crate::function::common::{cast_temporal, common_temporal_type, timestamp_epoch_units};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
@@ -151,11 +151,59 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
-            (
-                DataType::Timestamp(_, None),
-                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
-                is_try,
-            ) => cast_timestamp_ntz_to_ltz(expr, timezone, is_try)?,
+            (DataType::Timestamp(_, None), to, _) if to.is_numeric() => {
+                return Err(PlanError::analysis(format!(
+                    "cannot cast TIMESTAMP_NTZ to {to}"
+                )));
+            }
+            (from, DataType::Timestamp(_, None), _) if from.is_numeric() => {
+                return Err(PlanError::analysis(format!(
+                    "cannot cast {from} to TIMESTAMP_NTZ"
+                )));
+            }
+            (from, DataType::Timestamp(_, Some(_)), is_try) if from.is_numeric() => {
+                let mode = if is_try {
+                    TimestampNumberMode::TryCast
+                } else if self.config.ansi_mode {
+                    TimestampNumberMode::CastAnsi
+                } else {
+                    TimestampNumberMode::CastLegacy
+                };
+                cast(
+                    ScalarUDF::from(SparkTimestampFromNumber::new(mode)).call(vec![expr]),
+                    cast_to_type,
+                )
+            }
+            (DataType::Timestamp(unit, Some(_)), to, is_try) if to.is_integer() => {
+                let seconds = timestamp_epoch_units(expr, time_unit_to_multiplier(&unit))?;
+                if is_try || !self.config.ansi_mode {
+                    try_cast(seconds, to)
+                } else {
+                    cast(seconds, to)
+                }
+            }
+            (from, to, is_try)
+                if matches!(
+                    from,
+                    DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64
+                ) && matches!(
+                    to,
+                    DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64
+                ) =>
+            {
+                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try)?
+            }
+            (from, to, is_try)
+                if from.is_nested()
+                    && to.is_nested()
+                    && common_temporal_type(
+                        &[from.clone(), to.clone()],
+                        &self.config.session_timezone,
+                    )
+                    .is_some() =>
+            {
+                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try)?
+            }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
                 DataType::Utf8,
@@ -285,10 +333,14 @@ impl PlanResolver<'_> {
                         .call(vec![expr]);
                 if renamed_target == to {
                     renamed
-                } else if is_try {
-                    try_cast(renamed, to)
                 } else {
-                    cast(renamed, to)
+                    cast_temporal(
+                        renamed,
+                        &renamed_target,
+                        to,
+                        &self.config.session_timezone,
+                        is_try,
+                    )?
                 }
             }
             (
@@ -332,50 +384,6 @@ impl PlanResolver<'_> {
             None => NamedExpr::new(name, expr),
         })
     }
-}
-
-pub(super) fn cast_timestamp_ntz_to_ltz(
-    expression: expr::Expr,
-    timezone: Arc<str>,
-    is_try: bool,
-) -> DataFusionResult<expr::Expr> {
-    let timestamp_ntz = cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None));
-    // A plain timezone cast can be unwrapped into a numeric comparison by DataFusion,
-    // losing the local-time conversion. Keep the conversion explicit before retagging.
-    let instant = if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
-        let offset = timezone
-            .parse::<Tz>()?
-            .offset_from_utc_datetime(&chrono::DateTime::UNIX_EPOCH.naive_utc())
-            .fix()
-            .local_minus_utc();
-        // Widen before subtracting so the final cast detects i64 overflow instead of wrapping.
-        let micros = cast(
-            cast(timestamp_ntz, DataType::Int64),
-            DataType::Decimal128(20, 0),
-        );
-        let offset = lit(ScalarValue::Decimal128(
-            Some(i128::from(offset) * 1_000_000),
-            20,
-            0,
-        ));
-        if is_try {
-            try_cast(micros - offset, DataType::Int64)
-        } else {
-            cast(micros - offset, DataType::Int64)
-        }
-    } else {
-        // TODO: Support second-resolution fixed offsets rejected by Arrow and ConvertTz.
-        let converted = ScalarUDF::from(ConvertTz::new(false)).call(vec![
-            lit(timezone.to_string()),
-            lit("UTC"),
-            timestamp_ntz,
-        ]);
-        cast(converted, DataType::Int64)
-    };
-    Ok(cast(
-        instant,
-        DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
-    ))
 }
 
 fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {

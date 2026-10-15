@@ -189,11 +189,12 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
         }
-        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf { last_value_wins }) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                last_value_wins,
-            )))
-        }
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
+            last_value_wins,
+            preserve_duplicates,
+        }) => Arc::new(HigherOrderUDF::new_from_impl(
+            SparkTransformKeys::new(last_value_wins).with_preserve_duplicates(preserve_duplicates),
+        )),
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
                 Arc::new(HigherOrderUDF::new_from_impl(

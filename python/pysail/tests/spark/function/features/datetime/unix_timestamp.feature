@@ -296,9 +296,7 @@ Feature: unix_timestamp with an argument coming from a column
     # authoritative. Spark's own test suite never catches this either: it uses
     # `new Timestamp(-1000000)`, an exact second boundary.
     #
-    # The pair below is the whole point. A shared helper makes both functions agree, which
-    # is exactly the bug: Sail floors nothing and truncates both. Asserting only the
-    # unix_timestamp half would look green under either rule.
+    # Keep both cases: unix_timestamp truncates, whereas unix_seconds and unix_millis floor.
     # Measured on Spark JVM 4.2.0, session time zone UTC.
 
     Scenario Outline: unix_timestamp truncates toward zero: <case>
@@ -319,7 +317,6 @@ Feature: unix_timestamp with an argument coming from a column
         | the twin behaves identically            | to_unix_timestamp | TIMESTAMP '1969-12-31 23:59:59.5'         | 0           |
         | twin, deep pre-epoch fraction           | to_unix_timestamp | TIMESTAMP '1900-01-01 00:00:00.000001'    | -2208988799 |
 
-    @sail-bug
     Scenario Outline: unix_seconds and unix_millis floor instead: <case>
       When query
         """

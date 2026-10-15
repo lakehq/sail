@@ -403,7 +403,10 @@ fn parse_timestamp(
         })?;
     let naive_datetime = parsed.datetime;
 
-    let utc_datetime = if let Some(offset) = parsed.offset {
+    let utc_datetime = if timezone.is_none() {
+        // TIMESTAMP_NTZ ignores both the session timezone and the timeZone option.
+        naive_datetime.and_utc()
+    } else if let Some(offset) = parsed.offset {
         // Use explicit offset from the parsed value
         parsed
             .datetime

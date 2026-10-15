@@ -180,6 +180,10 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_add::SparkTimestampAdd;
+use sail_function::scalar::datetime::spark_timestamp_from_number::{
+    SparkTimestampFromNumber, TimestampNumberMode,
+};
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -3433,6 +3437,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
+            "spark_timestamp_add" => Ok(Arc::new(ScalarUDF::from(SparkTimestampAdd::new()))),
+            "spark_timestamp_seconds" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::Seconds),
+            ))),
+            "spark_timestamp_millis" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::Millis),
+            ))),
+            "spark_timestamp_micros" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::Micros),
+            ))),
+            "spark_cast_number_to_timestamp" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::CastAnsi),
+            ))),
+            "spark_cast_number_to_timestamp_legacy" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::CastLegacy),
+            ))),
+            "spark_try_cast_number_to_timestamp" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampFromNumber::new(TimestampNumberMode::TryCast),
+            ))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -3560,6 +3583,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
+            || node_inner.is::<SparkTimestampAdd>()
+            || node_inner.is::<SparkTimestampFromNumber>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()

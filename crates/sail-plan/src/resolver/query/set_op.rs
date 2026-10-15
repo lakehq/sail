@@ -9,10 +9,75 @@ use datafusion_expr::{
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn coerce_set_timestamp_columns(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        if left.schema().fields().len() != right.schema().fields().len() {
+            return Ok((left, right));
+        }
+        let mut changed = false;
+        let mut left_expressions = Vec::new();
+        let mut right_expressions = Vec::new();
+        for (left_column, right_column) in left
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(right.schema().columns())
+        {
+            let left_type = left
+                .schema()
+                .qualified_field_from_column(&left_column)?
+                .1
+                .data_type();
+            let right_type = right
+                .schema()
+                .qualified_field_from_column(&right_column)?
+                .1
+                .data_type();
+            let mut left_expr = Expr::Column(left_column.clone());
+            let mut right_expr = Expr::Column(right_column.clone());
+            if let Some(target) = common_temporal_type(
+                &[left_type.clone(), right_type.clone()],
+                &self.config.session_timezone,
+            ) {
+                changed |= left_type != &target || right_type != &target;
+                left_expr = cast_temporal(
+                    left_expr,
+                    left_type,
+                    target.clone(),
+                    &self.config.session_timezone,
+                    false,
+                )?
+                .alias_qualified(left_column.relation, left_column.name);
+                right_expr = cast_temporal(
+                    right_expr,
+                    right_type,
+                    target,
+                    &self.config.session_timezone,
+                    false,
+                )?
+                .alias_qualified(right_column.relation, right_column.name);
+            }
+            left_expressions.push(left_expr);
+            right_expressions.push(right_expr);
+        }
+        if changed {
+            Ok((
+                project(left, left_expressions)?,
+                project(right, right_expressions)?,
+            ))
+        } else {
+            Ok((left, right))
+        }
+    }
+
     pub(super) async fn resolve_query_set_operation(
         &self,
         op: spec::SetOperation,
@@ -31,7 +96,10 @@ impl PlanResolver<'_> {
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
-            SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+            SetOpType::Intersect => {
+                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
+                Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
+            }
             SetOpType::Union => {
                 let (left, right) = if by_name {
                     let left_names = Self::get_field_names(left.schema(), state)?;
@@ -104,6 +172,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {
@@ -118,6 +187,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
+                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 

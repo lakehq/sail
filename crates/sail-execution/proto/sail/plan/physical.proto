@@ -178,6 +178,7 @@ message SparkTransformValuesUdf {}
 
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;
+  bool preserve_duplicates = 2;
 }
 
 message SparkArrayFilterUdf {

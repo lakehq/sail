@@ -11,7 +11,10 @@ use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
+    coerce_temporal_arguments,
+};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -71,6 +74,14 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(arguments))
 }
 
+fn ifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    coalesce(ScalarFunctionInput {
+        arguments: vec![left, right],
+        function_context: input.function_context,
+    })
+}
+
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -88,7 +99,14 @@ fn coerce_string_temporal_values(
                 arguments
                     .into_iter()
                     .zip(data_types.iter())
-                    .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &temporal_type))
+                    .map(|(arg, data_type)| {
+                        coerce_to_temporal(
+                            arg,
+                            data_type,
+                            &temporal_type,
+                            &function_context.plan_config.session_timezone,
+                        )
+                    })
                     .collect::<PlanResult<Vec<_>>>()?
             } else {
                 arguments
@@ -107,7 +125,7 @@ fn coerce_string_temporal_values(
             arguments
         }
     } else {
-        arguments
+        coerce_temporal_arguments(arguments, function_context)?
     };
     Ok(arguments)
 }
@@ -116,6 +134,7 @@ fn coerce_to_temporal(
     arg: expr::Expr,
     data_type: &DataType,
     target_type: &DataType,
+    timezone: &Arc<str>,
 ) -> PlanResult<expr::Expr> {
     if data_type == target_type {
         return Ok(arg);
@@ -133,10 +152,37 @@ fn coerce_to_temporal(
             _ => Ok(cast(arg, target_type.clone())),
         }
     } else if is_temporal_type(data_type) {
-        Ok(cast(arg, target_type.clone()))
+        Ok(cast_temporal(
+            arg,
+            data_type,
+            target_type.clone(),
+            timezone,
+            false,
+        )?)
     } else {
         Ok(arg)
     }
+}
+
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (condition, then_value, else_value) = input.arguments.three()?;
+    let (then_value, else_value) =
+        coerce_string_temporal_values(vec![then_value, else_value], &input.function_context)?
+            .two()?;
+    Ok(when(condition.is_not_null(), then_value).otherwise(else_value)?)
+}
+
+fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (comparison_left, comparison_right) =
+        coerce_temporal_arguments(vec![left.clone(), right.clone()], &input.function_context)?
+            .two()?;
+    if comparison_left == left && comparison_right == right {
+        return Ok(expr_fn::nullif(left, right));
+    }
+    // The comparison has a common type, but NULLIF returns the original left type.
+    let null = ScalarValue::try_from(left.get_type(input.function_context.schema)?)?;
+    Ok(when(comparison_left.eq(comparison_right), lit(null)).otherwise(left)?)
 }
 
 fn common_temporal_type(data_types: &[DataType], session_timezone: &Arc<str>) -> Option<DataType> {
@@ -182,12 +228,12 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(ifnull)),
         ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl", F::custom(ifnull)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

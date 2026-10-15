@@ -170,6 +170,7 @@ pub(super) fn try_encode_higher_order_udf(
     } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins: transform_keys.is_last_value_wins(),
+            preserve_duplicates: transform_keys.preserves_duplicates(),
         })
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {

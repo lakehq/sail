@@ -13,7 +13,8 @@ use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput, coerce_temporal_arguments};
+use crate::function::scalar::array::coerce_temporal_array_element;
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -32,6 +33,8 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .iter()
         .map(|[key, value]| (key.clone(), value.clone()))
         .unzip();
+    let keys = coerce_temporal_arguments(keys, &input.function_context)?;
+    let values = coerce_temporal_arguments(values, &input.function_context)?;
     let (keys, values) = if input.function_context.plan_config.ansi_mode {
         (
             coerce_ansi_map_strings(keys, schema)?,
@@ -303,10 +306,10 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if input.arguments.is_empty() {
         return Ok(lit(ScalarValue::Null));
     }
+    let arguments = coerce_temporal_arguments(input.arguments, &input.function_context)?;
 
     // Build the result expression
-    let (keys, values) = input
-        .arguments
+    let (keys, values) = arguments
         .iter()
         .map(|map| {
             (
@@ -328,8 +331,7 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // Wrap the result with CASE to handle NULLs:
     // CASE WHEN arg1 IS NULL OR arg2 IS NULL OR ... THEN NULL ELSE result END
     // We already checked that arguments is not empty, so reduce will always return Some
-    match input
-        .arguments
+    match arguments
         .iter()
         .map(|arg| arg.clone().is_null())
         .reduce(|a, b| a.or(b))
@@ -346,8 +348,11 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
-    expr_fn::array_has(expr_fn::map_keys(map), key)
+fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, key) = input.arguments.two()?;
+    let (keys, key) =
+        coerce_temporal_array_element(expr_fn::map_keys(map), key, &input.function_context)?;
+    Ok(expr_fn::array_has(keys, key))
 }
 
 fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -372,7 +377,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("map", F::custom(map)),
         ("map_concat", F::custom(map_concat)),
-        ("map_contains_key", F::binary(map_contains_key)),
+        ("map_contains_key", F::custom(map_contains_key)),
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),
