@@ -59,7 +59,11 @@ impl SparkSequence {
     }
 
     fn parse_session_timezone(&self) -> Result<Tz> {
-        self.session_timezone.parse().map_err(|error| {
+        let timezone = match self.session_timezone.as_ref() {
+            "Z" | "UT" => "UTC",
+            timezone => timezone,
+        };
+        timezone.parse().map_err(|error| {
             exec_datafusion_err!(
                 "Spark `sequence` function: failed to parse timezone {}: {error}",
                 self.session_timezone
@@ -1138,7 +1142,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_zero_offset_timezone_matches_arrow_supported_aliases() {
+    fn fixed_zero_offset_timezone_matches_sequence_supported_aliases() {
         for timezone in ["+00", "-00", "+0000", "-0000", "+00:00", "-00:00"] {
             assert!(timezone.parse::<Tz>().is_ok(), "{timezone}");
             assert!(is_fixed_zero_offset_timezone(timezone), "{timezone}");
@@ -1163,9 +1167,15 @@ mod tests {
             assert!(is_fixed_zero_offset_timezone(&timezone), "{timezone}");
         }
 
+        for timezone in ["Z", "UT"] {
+            let sequence = SparkSequence::new(timezone.into(), true);
+            assert!(sequence.parse_session_timezone().is_ok(), "{timezone}");
+            assert!(is_fixed_zero_offset_timezone(timezone), "{timezone}");
+        }
+
         for timezone in [
-            "Z",
-            "UT",
+            "Etc/Z",
+            "Etc/UT",
             "UTC+00:00",
             "+01:00",
             "Etc/GMT+1",

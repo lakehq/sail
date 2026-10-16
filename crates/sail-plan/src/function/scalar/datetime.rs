@@ -17,6 +17,7 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy, SparkToLocalTime};
@@ -51,11 +52,20 @@ use sail_sql_analyzer::parser::parse_interval;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::formatter::SparkPlanFormatter;
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
     cast_timestamp_ntz_to_ltz, expr_contains_python_udf, expr_contains_spark_cast_to_variant,
     timestamp_epoch_units,
 };
+
+fn wrong_datetime_arity(name: &str, expected: &str, actual: usize) -> PlanError {
+    PlanError::invalid(format!(
+        "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] \
+         The `{name}` requires {expected} parameters \
+         but the actual number is {actual}."
+    ))
+}
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
@@ -590,7 +600,7 @@ fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // Spark parses formatted dates as LTZ timestamps before taking the local date.
             // Reuse temporal-input handling and safe parsing from try_to_timestamp.
             let timezone = Arc::clone(&input.function_context.plan_config.session_timezone);
-            let timestamp = timestamp_with_try(input, false, true)?;
+            let timestamp = timestamp_with_try(input, false, true, "try_to_date")?;
             Ok(cast_temporal(
                 timestamp.clone(),
                 &timestamp.get_type(schema)?,
@@ -721,8 +731,8 @@ fn can_fold_datetime_arguments<'a>(
     Ok(true)
 }
 
-fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
-    timestamp_with_try(input, timestamp_ntz, false)
+fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool, name: &str) -> PlanResult<Expr> {
+    timestamp_with_try(input, timestamp_ntz, false, name)
 }
 
 fn to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -752,7 +762,7 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
 }
 
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
-    timestamp_with_try(input, timestamp_ntz, true)
+    timestamp_with_try(input, timestamp_ntz, true, "try_to_timestamp")
 }
 
 /// Shared `to_timestamp` / `try_to_timestamp` (+ `_ntz`) planner.
@@ -813,6 +823,7 @@ fn timestamp_with_try(
     input: ScalarFunctionInput,
     timestamp_ntz: bool,
     is_try: bool,
+    name: &str,
 ) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
     let ansi_mode = input.function_context.plan_config.ansi_mode;
@@ -876,15 +887,7 @@ fn timestamp_with_try(
             data_type,
         ))
     } else {
-        let name = match (is_try, timestamp_ntz) {
-            (false, false) => "to_timestamp",
-            (true, false) => "try_to_timestamp",
-            (false, true) => "to_timestamp_ntz",
-            (true, true) => "try_to_timestamp_ntz",
-        };
-        Err(PlanError::invalid(format!(
-            "{name} requires 1 or 2 arguments"
-        )))
+        Err(wrong_datetime_arity(name, "[1, 2]", input.arguments.len()))
     }
 }
 
@@ -896,8 +899,10 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } else if input.arguments.len() == 2 {
         input.arguments.two()
     } else {
-        return Err(PlanError::invalid(
-            "from_unixtime requires 1 or 2 arguments",
+        return Err(wrong_datetime_arity(
+            "from_unixtime",
+            "[1, 2]",
+            input.arguments.len(),
         ));
     }?;
 
@@ -1551,7 +1556,8 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
     let Expr::Literal(value, _) = expr else {
         return Err(PlanError::invalid(
-            "window durations and start time must be literal strings, day-time intervals, or integers",
+            "The duration and time inputs to window must be an integer, long or string literal. \
+             Sail additionally accepts day-time interval literals.",
         ));
     };
     if let Some(s) = value.try_as_str().flatten() {
@@ -1560,7 +1566,7 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
         {
             IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
             _ => Err(PlanError::invalid(format!(
-                "window interval must not contain months or years: {s:?}"
+                "Intervals greater than a month is not supported ({s})."
             ))),
         };
     }
@@ -1601,14 +1607,19 @@ struct WindowSpec {
 /// Bound on `ceil(windowDuration / slideDuration)`
 const MAX_OVERLAPPING_WINDOWS: i64 = 1_000_000;
 
+fn invalid_window_duration(name: &str, duration: i64) -> PlanError {
+    PlanError::invalid(format!(
+        "[DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE] \
+         The `{name}` must be between (0, {}] (current value = {duration}L).",
+        i64::MAX
+    ))
+}
+
 /// Parses and validates the `window` durations from the full argument list
 /// (`args[0]` is the time column; `args[1..]` are window/slide/start).
 fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
     if !(2..=4).contains(&args.len()) {
-        return Err(PlanError::invalid(format!(
-            "window requires 2 to 4 arguments, got {}",
-            args.len()
-        )));
+        return Err(wrong_datetime_arity("window", "[2, 3, 4]", args.len()));
     }
     let window_duration = window_interval_micros(&args[1])?;
     let slide_duration = match args.get(2) {
@@ -1620,19 +1631,16 @@ fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
         None => 0,
     };
     if window_duration <= 0 {
-        return Err(PlanError::invalid(
-            "window: the window duration must be greater than 0",
-        ));
+        return Err(invalid_window_duration("window_duration", window_duration));
     }
     if slide_duration <= 0 {
-        return Err(PlanError::invalid(
-            "window: the slide duration must be greater than 0",
-        ));
+        return Err(invalid_window_duration("slide_duration", slide_duration));
     }
     if slide_duration > window_duration {
-        return Err(PlanError::invalid(
-            "window: the slide duration must be less than or equal to the window duration",
-        ));
+        return Err(PlanError::invalid(format!(
+            "[DATATYPE_MISMATCH.PARAMETER_CONSTRAINT_VIOLATION] \
+             The `slide_duration`({slide_duration}L) must be <= the `window_duration`({window_duration}L)."
+        )));
     }
     if start_time >= slide_duration || start_time <= -slide_duration {
         return Err(PlanError::invalid(format!(
@@ -1657,6 +1665,7 @@ fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
 fn window_field_type(
     time_type: &DataType,
     session_tz: &std::sync::Arc<str>,
+    time_name: &str,
 ) -> PlanResult<DataType> {
     Ok(match time_type {
         DataType::Timestamp(_, tz) => DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
@@ -1670,8 +1679,13 @@ fn window_field_type(
             DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone()))
         }
         other => {
+            let input_type = SparkPlanFormatter
+                .data_type_to_simple_string(other)?
+                .to_uppercase();
             return Err(PlanError::invalid(format!(
-                "window requires a timestamp time column, got {other:?}"
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] \
+                 The first parameter requires the \"TIMESTAMP\" or \"TIMESTAMP_NTZ\" type, \
+                 however \"{time_name}\" has the type \"{input_type}\"."
             )));
         }
     })
@@ -1689,7 +1703,16 @@ fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .into_iter()
         .next()
         .ok_or_else(|| PlanError::internal("window missing time column"))?;
-    let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
+    let field_type = window_field_type(
+        &time.get_type(schema)?,
+        &session_tz,
+        input
+            .function_context
+            .argument_display_names
+            .first()
+            .map(String::as_str)
+            .unwrap_or("time column"),
+    )?;
     let time_ts = cast(time, field_type);
     let buckets = ScalarUDF::from(SparkWindowBuckets::new(
         spec.window_duration,
@@ -1782,7 +1805,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                         timezone.to_string(),
                     ))
                 }
-                _ => Err(PlanError::invalid("date_format requires 2 arguments")),
+                actual => Err(wrong_datetime_arity("date_format", "2", actual)),
             }),
         ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
@@ -1902,7 +1925,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                     input.function_context.plan_config.default_timestamp_type,
                     DefaultTimestampType::TimestampNtz
                 );
-                to_timestamp(input, timestamp_ntz)
+                to_timestamp(input, timestamp_ntz, "to_timestamp")
             }),
         ),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
@@ -1911,11 +1934,11 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
         (
             "to_timestamp_ltz",
-            F::custom(|input| to_timestamp(input, false)),
+            F::custom(|input| to_timestamp(input, false, "to_timestamp_ltz")),
         ),
         (
             "to_timestamp_ntz",
-            F::custom(|input| to_timestamp(input, true)),
+            F::custom(|input| to_timestamp(input, true, "to_timestamp_ntz")),
         ),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         (

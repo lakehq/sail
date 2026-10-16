@@ -18,7 +18,7 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 pub fn is_fixed_zero_offset_timezone(timezone: &str) -> bool {
     matches!(
         timezone,
-        "+00" | "-00" | "+0000" | "-0000" | "+00:00" | "-00:00"
+        "Z" | "UT" | "+00" | "-00" | "+0000" | "-0000" | "+00:00" | "-00:00"
     ) || matches!(
         timezone.strip_prefix("Etc/").unwrap_or(timezone),
         "GMT" | "GMT+0" | "GMT-0" | "GMT0" | "Greenwich" | "UCT" | "UTC" | "Universal" | "Zulu"
