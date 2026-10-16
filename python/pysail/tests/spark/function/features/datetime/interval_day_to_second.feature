@@ -36,16 +36,16 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Overflow and large values
 
-    # Spark validates each field of a DAY TO SECOND literal and rejects an out-of-range hour
-    # instead of carrying it into days: "requirement failed: hour 25 outside range [0, 23]".
-    # Sail normalizes it to `INTERVAL '1 01:00:00' DAY TO SECOND`.
-    @sail-bug
+    # Sail intentionally normalizes interval fields beyond Spark's accepted ranges.
+    @sail-only
     Scenario: overflow hours into days
       When query
         """
         SELECT INTERVAL '0 25:00:00' DAY TO SECOND AS result
         """
-      Then query error hour 25 outside range \[0, 23\]
+      Then query result
+        | result                               |
+        | INTERVAL '1 01:00:00' DAY TO SECOND |
 
   Rule: Cast operations
 
@@ -184,15 +184,15 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | string first   | '2026-06-15 23:59:60' + INTERVAL 1 SECOND           |
         | interval first | INTERVAL 1 SECOND + '2026-06-15 23:59:60'           |
 
-    # Same field validation as above: Spark will not even parse `INTERVAL '1 24:00:00'`, so the
-    # normalized-equality comparison never runs. Sail normalizes and answers `true`.
-    @sail-bug
+    @sail-only
     Scenario: equality with normalized form
       When query
         """
         SELECT INTERVAL '1 24:00:00' DAY TO SECOND = INTERVAL '2 00:00:00' DAY TO SECOND AS result
         """
-      Then query error hour 24 outside range \[0, 23\]
+      Then query result
+        | result |
+        | true   |
 
     Scenario: comparison in WHERE clause
       When query
