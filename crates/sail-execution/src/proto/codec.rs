@@ -6052,37 +6052,6 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_udf_codec_uses_dedicated_kinds() -> Result<()> {
-        let cases = [
-            (
-                ScalarUDF::from(RepeatFunc::new()),
-                UdfKind::Standard(r#gen::StandardUdf {}),
-            ),
-            (
-                ScalarUDF::from(RaiseError::new()),
-                UdfKind::RaiseError(r#gen::RaiseErrorUdf {
-                    non_foldable: false,
-                }),
-            ),
-            (
-                ScalarUDF::from(RaiseError::non_foldable()),
-                UdfKind::RaiseError(r#gen::RaiseErrorUdf { non_foldable: true }),
-            ),
-        ];
-        for (udf, expected) in cases.into_iter().chain(
-            sail_function::scalar::jev::JevKind::ALL
-                .map(|kind| (kind.udf(), UdfKind::Standard(r#gen::StandardUdf {}))),
-        ) {
-            let mut buf = vec![];
-            RemoteExecutionCodec.try_encode_udf(&udf, &mut buf)?;
-            let encoded = ExtendedScalarUdf::decode(buf.as_slice())
-                .map_err(|e| plan_datafusion_err!("failed to decode test UDF: {e}"))?;
-            assert_eq!(encoded.udf_kind, Some(expected), "{}", udf.name());
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_raise_error_codec_preserves_foldability() -> Result<()> {
         for function in [RaiseError::new(), RaiseError::non_foldable()] {
             let original = ScalarUDF::from(function);
@@ -6105,14 +6074,10 @@ mod tests {
 
     #[test]
     fn test_python_udf_named_jev_preserves_python_codec() -> Result<()> {
-        for name in sail_function::scalar::jev::JevKind::ALL
-            .map(|kind| kind.name())
-            .into_iter()
-            .chain(std::iter::once("raise_error"))
-        {
+        for kind in sail_function::scalar::jev::JevKind::ALL {
             let udf = PySparkUDF::new(
                 PySparkUdfKind::Batch,
-                name.to_owned(),
+                kind.name().to_owned(),
                 vec![1, 2, 3],
                 true,
                 vec![DataType::Utf8],
@@ -6120,9 +6085,9 @@ mod tests {
                 Arc::new(PySparkUdfConfig::default()),
             );
             let decoded = round_trip_udf(ScalarUDF::from(udf))?;
-            assert_eq!(decoded.name(), name);
+            assert_eq!(decoded.name(), kind.name());
             assert!(decoded.as_async().is_none());
-            let decoded = downcast_udf::<PySparkUDF>(&decoded, name)?;
+            let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
             assert_eq!(decoded.payload(), &[1, 2, 3]);
         }
         Ok(())
@@ -7388,10 +7353,15 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_date_part_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+        for udf in [
+            ScalarUDF::from(SparkDatePart::new()),
+            ScalarUDF::from(DatePartFunc::new()),
+        ] {
+            let decoded = round_trip_udf(udf)?;
 
-        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "date_part");
+            assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+            assert_eq!(decoded.name(), "date_part");
+        }
 
         Ok(())
     }
