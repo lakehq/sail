@@ -84,3 +84,29 @@ def test_nessie_write_honors_absolute_data_path(
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
     finally:
         spark.sql(f"DROP DATABASE IF EXISTS {namespace} CASCADE").collect()
+
+
+def test_nessie_lakehouse_ddl(spark: SparkSession, nessie_iceberg_rest_endpoint: str) -> None:
+    from pyiceberg.catalog.rest import RestCatalog
+
+    namespace = "nessie_ddl"
+    table = f"{namespace}.t"
+    spark.sql(f"CREATE NAMESPACE {namespace}")
+    try:
+        # Nessie 0.107.5 serves Iceberg v2 metadata; defaults require a v3 server.
+        spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg TBLPROPERTIES ('format-version'='2')")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")  # noqa: S608
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN id TYPE BIGINT")
+        spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('custom'='updated')")
+        reference = RestCatalog("reference", uri=nessie_iceberg_rest_endpoint).load_table(table)
+        assert str(reference.schema().find_field("id").field_type) == "long"
+        assert reference.properties["custom"] == "updated"
+        before = reference.metadata_location
+        with pytest.raises(Exception, match="format-version=3"):
+            spark.sql(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT 7")
+        assert reference.refresh().metadata_location == before
+        spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('custom')")
+        assert "custom" not in reference.refresh().properties
+        assert spark.table(table).first().id == 1
+    finally:
+        spark.sql(f"DROP NAMESPACE {namespace} CASCADE")

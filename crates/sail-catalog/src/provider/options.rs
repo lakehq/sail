@@ -157,3 +157,46 @@ pub enum AlterTableOptions {
         expression: String,
     },
 }
+
+impl From<&AlterTableOptions>
+    for sail_common_datafusion::lakesource::LakeSourceAlterTableOperation
+{
+    fn from(options: &AlterTableOptions) -> Self {
+        use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
+        match options {
+            AlterTableOptions::SetTableProperties { properties } => {
+                LakeSourceAlterTableOperation::SetTableProperties {
+                    changes: properties
+                        .iter()
+                        .map(|(key, value)| (key.clone(), Some(value.clone())))
+                        .collect(),
+                    if_exists: false,
+                }
+            }
+            AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                LakeSourceAlterTableOperation::SetTableProperties {
+                    changes: keys.iter().map(|key| (key.clone(), None)).collect(),
+                    if_exists: *if_exists,
+                }
+            }
+            AlterTableOptions::AlterColumnType { name, data_type } => {
+                LakeSourceAlterTableOperation::AlterColumnType {
+                    column_path: name.clone(),
+                    data_type: data_type.clone(),
+                }
+            }
+            AlterTableOptions::AlterColumnDefault { name, default } => {
+                LakeSourceAlterTableOperation::AlterColumnDefault {
+                    column_path: name.clone(),
+                    default: default.clone(),
+                }
+            }
+            AlterTableOptions::AddCheckConstraint { name, expression } => {
+                LakeSourceAlterTableOperation::AddCheckConstraint {
+                    name: name.clone(),
+                    expression: expression.clone(),
+                }
+            }
+        }
+    }
+}

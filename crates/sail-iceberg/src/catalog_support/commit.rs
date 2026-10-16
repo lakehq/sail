@@ -11,7 +11,6 @@ use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableKind, TableStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use url::Url;
 
 use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
@@ -231,24 +230,56 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         new_metadata_location: &str,
     ) -> Result<()> {
         let manager = self.context.extension::<CatalogManager>()?;
-        let metadata_location_key = existing_metadata_location_key(existing_properties)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
-        let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
-        if let Some(previous_metadata_location) = previous_metadata_location {
-            properties.push((
-                PREVIOUS_METADATA_LOCATION_KEY.to_string(),
-                previous_metadata_location.to_string(),
-            ));
-        }
         manager
             .alter_table(
                 self.catalog_table,
-                AlterTableOptions::SetTableProperties { properties },
+                metadata_location_update_options(
+                    existing_properties,
+                    previous_metadata_location,
+                    new_metadata_location,
+                ),
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
+
+    pub(crate) async fn update_metadata_location_with_alter(
+        &self,
+        existing_properties: &[(String, String)],
+        previous_metadata_location: &str,
+        new_metadata_location: &str,
+        changes: Vec<AlterTableOptions>,
+    ) -> Result<()> {
+        let manager = self.context.extension::<CatalogManager>()?;
+        let mut options = vec![metadata_location_update_options(
+            existing_properties,
+            Some(previous_metadata_location),
+            new_metadata_location,
+        )];
+        options.extend(changes);
+        manager
+            .alter_table_atomically(self.catalog_table, options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn metadata_location_update_options(
+    existing_properties: &[(String, String)],
+    previous_metadata_location: Option<&str>,
+    new_metadata_location: &str,
+) -> AlterTableOptions {
+    let metadata_location_key = existing_metadata_location_key(existing_properties)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
+    let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
+    if let Some(previous_metadata_location) = previous_metadata_location {
+        properties.push((
+            PREVIOUS_METADATA_LOCATION_KEY.to_string(),
+            previous_metadata_location.to_string(),
+        ));
+    }
+    AlterTableOptions::SetTableProperties { properties }
 }
 
 pub(crate) fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
@@ -285,16 +316,6 @@ pub(crate) fn catalog_requirements(
             requirements.push(TableRequirement::UuidMatch { uuid });
         }
     requirements
-}
-
-pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if crate::utils::parse_absolute_url(metadata_file).is_some() {
-        return Ok(metadata_file.to_string());
-    }
-    Ok(table_url
-        .join(metadata_file)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .to_string())
 }
 
 #[cfg(test)]

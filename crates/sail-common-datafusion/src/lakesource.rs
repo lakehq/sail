@@ -3,12 +3,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::lakeprocedure::LakeProcedureProvider;
+use crate::lakerelation::LakeRelationProvider;
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -55,6 +58,17 @@ impl LakeSourceCreateTableInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LakeSourceCreateTableResult {
     pub properties: Vec<(String, String)>,
+    /// Authoritative schema and partitioning when registering an existing table.
+    pub schema: Option<SchemaRef>,
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
+}
+
+#[derive(Debug, Default)]
+pub struct LakeSourceAlterTableResult {
+    /// The lake source committed catalog metadata together with the format metadata.
+    pub catalog_updated: bool,
+    /// Committed schema for catalogs that keep a copy of the table's columns.
+    pub schema: Option<SchemaRef>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.
@@ -95,6 +109,14 @@ pub enum LakeSourceAlterTableOperation {
 /// A lakehouse data source with table metadata, DML, and DDL semantics.
 #[async_trait]
 pub trait LakeSource: DataSource {
+    fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
+        None
+    }
+
+    fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
+        None
+    }
+
     /// Infers table metadata for planning without requiring callers to construct a read source.
     async fn infer_metadata(
         &self,
@@ -105,6 +127,15 @@ pub trait LakeSource: DataSource {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
         })
+    }
+
+    /// Returns public table properties from the current storage metadata.
+    async fn table_properties(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(self.infer_metadata(ctx, info).await?.properties)
     }
 
     /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
@@ -145,12 +176,13 @@ pub trait LakeSource: DataSource {
     /// Alters storage metadata for an existing lake source.
     async fn alter_table(
         &self,
-        runtime_env: Arc<RuntimeEnv>,
+        ctx: &TaskContext,
         path: &str,
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
+    ) -> Result<LakeSourceAlterTableResult> {
         let _ = lakehouse_table;
+        let runtime_env = ctx.runtime_env();
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -176,7 +208,8 @@ pub trait LakeSource: DataSource {
                     self.name()
                 )
             }
-        }
+        }?;
+        Ok(LakeSourceAlterTableResult::default())
     }
 
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
