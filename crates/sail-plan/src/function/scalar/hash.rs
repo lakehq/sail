@@ -5,9 +5,9 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{ScalarUDF, expr};
 use datafusion_spark::function::hash::expr_fn as hash_fn;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
-use datafusion_spark::function::math::hex::SparkHex;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_function::scalar::math::spark_hex::SparkHexCast;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -28,7 +28,7 @@ fn sha2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     };
     let hex = expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkHex::new())),
+        func: Arc::new(ScalarUDF::from(SparkHexCast::new(false))),
         args: vec![result],
     });
     Ok(expr_fn::lower(hex))
