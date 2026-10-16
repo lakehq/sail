@@ -102,6 +102,7 @@ dependencies = [
     "pytest>=9.1,<10",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
+    "pytest-xdist>=3.7,<4",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
