@@ -24,7 +24,9 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy, Spar
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
+use sail_function::scalar::datetime::spark_date_trunc::{
+    SparkDateTrunc, SparkStartOfDay, parse_granularity,
+};
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
 use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
@@ -175,9 +177,18 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
+    let literal_part = matches!(&part, Expr::Literal(_, _)) || is_null_literal(&part);
+    let part = trunc_part_conversion(part);
+    let part = if literal_part {
+        fold_datetime_argument(part, input.function_context.schema)?
+    } else {
+        part
+    };
+    let invalid_literal = matches!(&part, Expr::Literal(value, _)
+        if value.is_null() || value.try_as_str().flatten()
+            .is_some_and(|unit| parse_granularity(unit).is_err()));
     let timestamp = datetime_timestamp(timestamp, &input.function_context, false, false)?;
-    let truncated =
-        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
+    let truncated = ScalarUDF::from(SparkDateTrunc::new()).call(vec![part, timestamp]);
     let truncated = match truncated.get_type(input.function_context.schema)? {
         DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
         DataType::Timestamp(_, tz) => {
@@ -187,6 +198,15 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "date_trunc expected a timestamp result, got {other:?}"
         )))?,
     };
+    // Validate types first; only an invalid literal unit can suppress timestamp evaluation.
+    if invalid_literal
+        && can_fold_datetime_arguments([&truncated])?
+        && !has_unsupported_datetime_casts([&truncated], input.function_context.schema)?
+    {
+        return Ok(lit(ScalarValue::try_from(
+            &truncated.get_type(input.function_context.schema)?,
+        )?));
+    }
     Ok(truncated)
 }
 

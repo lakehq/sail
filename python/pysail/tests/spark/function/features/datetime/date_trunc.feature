@@ -509,13 +509,31 @@ Feature: DATE_TRUNC output type
                     ELSE '2024-06-15 12:34:56' END AS TIMESTAMP)) AS result
         FROM range(3)
         """
+      Then query error timestamp-evaluated
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    @sail-bug
+    Scenario: NULL column units skip a throwing timestamp
+      # FIXME: Skip timestamp evaluation for NULL column units before scalar UDF arguments run.
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, date_trunc(
+          CASE WHEN id < 2 THEN CAST(NULL AS STRING) ELSE 'MM' END,
+          CAST(CASE WHEN id < 2 THEN raise_error('timestamp-evaluated')
+                    ELSE '2024-06-15 12:34:56' END AS TIMESTAMP)) AS result
+        FROM range(3)
+        """
       Then query result
         | id | result              |
         | 0  | NULL                |
         | 1  | NULL                |
         | 2  | 2024-06-01 00:00:00 |
 
-    @sail-bug
     Scenario: an invalid literal unit skips a throwing timestamp
       When query
         """
@@ -524,3 +542,19 @@ Feature: DATE_TRUNC output type
       Then query result
         | result |
         | NULL   |
+
+    Scenario: a NULL literal unit skips a throwing timestamp
+      When query
+        """
+        SELECT date_trunc(CAST(NULL AS STRING), CAST(raise_error('timestamp-evaluated') AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: an invalid literal unit does not hide an invalid timestamp argument type
+      When query
+        """
+        SELECT date_trunc('invalid', array(1)) AS result
+        """
+      Then query error (?i)(DATATYPE_MISMATCH|cannot cast|unsupported.*cast|casting.*not supported)

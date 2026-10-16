@@ -39,7 +39,7 @@ use sail_common::utils::datetime::time_unit_to_multiplier;
 
 use crate::scalar::datetime::utils::{is_fixed_zero_offset_timezone, string_array_iter};
 
-fn parse_granularity(value: &str) -> Result<DatePart> {
+pub fn parse_granularity(value: &str) -> Result<DatePart> {
     // DatePart also contains extraction-only fields such as day-of-week, which
     // are not valid truncation granularities.
     match DatePart::from_str(value) {
