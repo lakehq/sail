@@ -180,11 +180,26 @@ Feature: make_interval output schema
 
   Rule: Checked component arithmetic
 
+    @spark-4
     Scenario Outline: Overflow raises when ANSI is enabled: <args>
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT make_interval(<args>) AS result
+        """
+      Then query error ARITHMETIC_OVERFLOW
+
+      Examples:
+        | args               |
+        | 2147483647         |
+        | 0, 0, 2147483647   |
+
+    Scenario Outline: Overflow raises through a string result when ANSI is enabled: <args>
+      # PySpark 3.5 cannot decode calendar intervals during collect(); return a supported type.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(make_interval(<args>) AS STRING) AS result
         """
       Then query error ARITHMETIC_OVERFLOW
 
@@ -200,6 +215,21 @@ Feature: make_interval output schema
         SELECT make_interval(<args>) AS result
         """
       Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | args               |
+        | 2147483647         |
+        | 0, 0, 2147483647   |
+
+    Scenario Outline: Overflow becomes null through a string result when ANSI is disabled: <args>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(make_interval(<args>) AS STRING) AS result
+        """
+      Then query result collected
         | result |
         | NULL   |
 
