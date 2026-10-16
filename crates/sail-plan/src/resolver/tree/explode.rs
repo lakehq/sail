@@ -16,8 +16,10 @@ use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
@@ -78,6 +80,9 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeKind::InlineOuter => (false, NullHandling::PreserveAndExpandEmpty, true),
         };
         let arg = args.one()?;
+        let is_window = matches!(explode.kind(), ExplodeKind::Explode)
+            && matches!(&arg, Expr::ScalarFunction(function)
+                if function.func.inner().is::<SparkWindowBuckets>());
         let arg_type = arg.get_type(self.plan.schema())?;
         let return_type = func.return_type(&[arg_type])?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
@@ -166,6 +171,31 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             columns_to_unnest,
             UnnestOptions::new().with_null_handling(null_handling),
         )?;
+
+        if is_window {
+            // Unnest declares every output nullable; Spark's window struct is never NULL.
+            let window = ScalarUDF::from(StructFunction::new(vec![
+                "start".to_string(),
+                "end".to_string(),
+            ]))
+            .call(vec![ident(&name).field("start"), ident(&name).field("end")])
+            .alias(&name);
+            let projections = self
+                .plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(|column| {
+                    if column.name == name {
+                        window.clone()
+                    } else {
+                        Expr::Column(column)
+                    }
+                })
+                .collect();
+            let plan = mem::replace(&mut self.plan, empty_logical_plan());
+            self.plan = LogicalPlan::Projection(Projection::try_new(projections, Arc::new(plan))?);
+        }
 
         let out = match out.one_or_more()? {
             Either::Left(node) => node,

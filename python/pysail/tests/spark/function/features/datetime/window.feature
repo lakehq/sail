@@ -176,8 +176,6 @@ Feature: window() time-based windowing function
   Background:
       Given config spark.sql.session.timeZone = America/Los_Angeles
 
-    # TODO: Preserve Spark's non-null window structs through generator planning.
-    @sail-bug
     @function(nullability)
     Scenario: a date is cast to a session time zone timestamp, not timestamp_ntz
       When query
@@ -192,6 +190,38 @@ Feature: window() time-based windowing function
          |    |-- start: timestamp (nullable = true)
          |    |-- end: timestamp (nullable = true)
         """
+
+    @function(nullability)
+    Scenario: sliding windows over nullable timestamps have non-null structs
+      When query
+        """
+        SELECT window(b, '10 minutes', '5 minutes') AS w
+        FROM VALUES (TIMESTAMP '2021-01-01 00:03:00'),
+                    (CAST(NULL AS TIMESTAMP)) AS t(b)
+        """
+      Then query schema
+        """
+        root
+         |-- w: struct (nullable = false)
+         |    |-- start: timestamp (nullable = true)
+         |    |-- end: timestamp (nullable = true)
+        """
+
+    Scenario: an outer join can still produce a null window struct
+      When query
+        """
+        SELECT t.id, w.w IS NULL AS missing
+        FROM VALUES (1), (2) AS t(id)
+        LEFT JOIN (
+          SELECT id, window(b, '1 day') AS w
+          FROM VALUES (1, TIMESTAMP '2021-01-01 00:00:00') AS s(id, b)
+        ) AS w ON t.id = w.id
+        ORDER BY t.id
+        """
+      Then query result ordered
+        | id | missing |
+        | 1  | false   |
+        | 2  | true    |
 
     Scenario: date buckets are computed from the session time zone instant
       When query
