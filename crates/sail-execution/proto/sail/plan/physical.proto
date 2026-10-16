@@ -266,6 +266,8 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    RaiseErrorUdf raise_error = 40;
+    JevUdf jev = 41;
   }
 }
 
@@ -298,10 +300,14 @@ message PercentileDiscUdaf {
   bool ansi_mode = 1;
 }
 
-message StandardUdf {
+message StandardUdf {}
+
+message RaiseErrorUdf {
   // Explicit raise_error and assert_true differ from foldable internal value checks.
   bool non_foldable = 1;
 }
+
+message JevUdf {}
 
 message PySparkUdf {
   PySparkUdfKind kind = 1;

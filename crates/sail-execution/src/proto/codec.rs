@@ -3335,13 +3335,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
         match udf_kind {
-            UdfKind::Standard(r#gen::StandardUdf { non_foldable }) => {
-                if name == "raise_error" && non_foldable {
-                    return Ok(Arc::new(ScalarUDF::from(RaiseError::non_foldable())));
-                }
-                if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
-                    return Ok(Arc::new(kind.udf()));
-                }
+            UdfKind::Standard(r#gen::StandardUdf {}) => {}
+            UdfKind::RaiseError(r#gen::RaiseErrorUdf { non_foldable }) => {
+                let udf = if non_foldable {
+                    RaiseError::non_foldable()
+                } else {
+                    RaiseError::new()
+                };
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::Jev(r#gen::JevUdf {}) => {
+                let kind = sail_function::scalar::jev::JevKind::from_name(name)
+                    .ok_or_else(|| plan_datafusion_err!("unknown Jev function: {name}"))?;
+                return Ok(Arc::new(kind.udf()));
             }
             UdfKind::PySpark(r#gen::PySparkUdf {
                 kind,
@@ -3622,7 +3628,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
-            "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
@@ -3820,9 +3825,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if (node.as_async().is_some()
-            && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
-            || node_inner.is::<ArrayElement>()
+        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -3862,7 +3865,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
-            || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -3962,10 +3964,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<JsonObjectKeys>()
             || node_inner.is::<JsonTuple>()
         {
-            UdfKind::Standard(r#gen::StandardUdf {
-                non_foldable: node_inner.is::<RaiseError>()
-                    && node.signature().volatility == Volatility::Volatile,
+            UdfKind::Standard(r#gen::StandardUdf {})
+        } else if node_inner.is::<RaiseError>() {
+            UdfKind::RaiseError(r#gen::RaiseErrorUdf {
+                non_foldable: node.signature().volatility == Volatility::Volatile,
             })
+        } else if node.as_async().is_some()
+            && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some()
+        {
+            UdfKind::Jev(r#gen::JevUdf {})
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),
@@ -6036,6 +6043,46 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_udf_codec_uses_dedicated_kinds() -> Result<()> {
+        let cases = [
+            (
+                ScalarUDF::from(RepeatFunc::new()),
+                UdfKind::Standard(r#gen::StandardUdf {}),
+            ),
+            (
+                ScalarUDF::from(RaiseError::new()),
+                UdfKind::RaiseError(r#gen::RaiseErrorUdf {
+                    non_foldable: false,
+                }),
+            ),
+            (
+                ScalarUDF::from(RaiseError::non_foldable()),
+                UdfKind::RaiseError(r#gen::RaiseErrorUdf { non_foldable: true }),
+            ),
+        ];
+        for (udf, expected) in cases.into_iter().chain(
+            sail_function::scalar::jev::JevKind::ALL
+                .map(|kind| (kind.udf(), UdfKind::Jev(r#gen::JevUdf {}))),
+        ) {
+            let mut buf = vec![];
+            RemoteExecutionCodec.try_encode_udf(&udf, &mut buf)?;
+            let encoded = ExtendedScalarUdf::decode(buf.as_slice())
+                .map_err(|e| plan_datafusion_err!("failed to decode test UDF: {e}"))?;
+            assert_eq!(encoded.udf_kind, Some(expected), "{}", udf.name());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_jev_codec_rejects_unknown_name() {
+        let buf = ExtendedScalarUdf {
+            udf_kind: Some(UdfKind::Jev(r#gen::JevUdf {})),
+        }
+        .encode_to_vec();
+        assert!(RemoteExecutionCodec.try_decode_udf("repeat", &buf).is_err());
+    }
+
+    #[test]
     fn test_raise_error_codec_preserves_foldability() -> Result<()> {
         for function in [RaiseError::new(), RaiseError::non_foldable()] {
             let original = ScalarUDF::from(function);
@@ -6058,10 +6105,14 @@ mod tests {
 
     #[test]
     fn test_python_udf_named_jev_preserves_python_codec() -> Result<()> {
-        for kind in sail_function::scalar::jev::JevKind::ALL {
+        for name in sail_function::scalar::jev::JevKind::ALL
+            .map(|kind| kind.name())
+            .into_iter()
+            .chain(std::iter::once("raise_error"))
+        {
             let udf = PySparkUDF::new(
                 PySparkUdfKind::Batch,
-                kind.name().to_owned(),
+                name.to_owned(),
                 vec![1, 2, 3],
                 true,
                 vec![DataType::Utf8],
@@ -6069,9 +6120,9 @@ mod tests {
                 Arc::new(PySparkUdfConfig::default()),
             );
             let decoded = round_trip_udf(ScalarUDF::from(udf))?;
-            assert_eq!(decoded.name(), kind.name());
+            assert_eq!(decoded.name(), name);
             assert!(decoded.as_async().is_none());
-            let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
+            let decoded = downcast_udf::<PySparkUDF>(&decoded, name)?;
             assert_eq!(decoded.payload(), &[1, 2, 3]);
         }
         Ok(())
