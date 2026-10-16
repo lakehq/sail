@@ -495,12 +495,11 @@ Feature: DATE_TRUNC output type
         | Australia/Lord_Howe | HOUR | 2020-10-04 02:45:00 | 2020-10-04 02:30:00 |
         | America/Sao_Paulo   | DAY  | 2018-11-04 12:00:00 | 2018-11-04 01:00:00 |
 
-  Rule: Invalid units skip timestamp expressions
-    # FIXME: Skip timestamp evaluation for invalid units before evaluating scalar UDF arguments.
+  Rule: Truncation unit evaluation order
 
-    @sail-bug
-    Scenario: invalid and NULL column units skip a throwing timestamp
+    Scenario Outline: an invalid column unit does not suppress timestamp errors with ANSI <ansi>
       Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT id, date_trunc(
