@@ -362,7 +362,7 @@ impl ChangeDataFeedSource {
         })
     }
 
-    fn scan_files(
+    async fn scan_files(
         &self,
         session: &dyn Session,
         change: &ChangeFiles,
@@ -473,11 +473,12 @@ impl ChangeDataFeedSource {
             },
             session,
             file_schema,
-        )?;
+        )
+        .await?;
         align_delta_scan_output(DataSourceExec::from_data_source(scan), output)
     }
 
-    pub(crate) fn scan(
+    pub(crate) async fn scan(
         &self,
         session: &dyn Session,
         projection: Option<&[usize]>,
@@ -501,10 +502,13 @@ impl ChangeDataFeedSource {
                 row_index_column_name: change.exclude.as_ref().map(|_| row_index_column.clone()),
                 ..Default::default()
             };
-            let mut plan = self.scan_files(session, change, &config, &change.files)?;
+            let mut plan = self
+                .scan_files(session, change, &config, &change.files)
+                .await?;
             if let Some(exclude) = &change.exclude {
-                let other =
-                    self.scan_files(session, change, &config, std::slice::from_ref(exclude))?;
+                let other = self
+                    .scan_files(session, change, &config, std::slice::from_ref(exclude))
+                    .await?;
                 let left_key = Arc::new(Column::new(
                     &row_index_column,
                     plan.schema().index_of(&row_index_column)?,

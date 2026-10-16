@@ -71,7 +71,19 @@ message ExtendedPhysicalPlanNode {
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
     IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
+    LakeProcedureExecNode lake_procedure = 59;
+    IcebergProcedureExecNode iceberg_procedure = 60;
+    IcebergMetadataRelationExecNode iceberg_metadata_relation = 61;
+    IcebergFileTasksExecNode iceberg_file_tasks = 62;
+    IcebergRewriteExecNode iceberg_rewrite = 63;
+    InputFileMetadataExecNode input_file_metadata = 64;
   }
+}
+
+message InputFileMetadataExecNode {
+  // A ProjectionExec over the unwrapped file source. Encoding the complete
+  // plan preserves physical expressions, aliases, and schema metadata.
+  bytes projection_plan = 1;
 }
 
 message RemoteCheckpointWriteExecNode {
@@ -79,6 +91,7 @@ message RemoteCheckpointWriteExecNode {
   string object_store_url = 2;
   string prefix = 3;
   bytes storage_schema = 4;
+  LexOrdering input_ordering = 5;
 }
 
 message RemoteCheckpointCommitExecNode {
@@ -154,6 +167,8 @@ message HigherOrderUdf {
     ConvertTzUdf convert_tz_lazy = 8;
     SparkMapFilterUdf map_filter = 9;
     SparkRegexpInstrUdf regexp_instr = 10;
+    SparkTransformValuesUdf transform_values = 11;
+    SparkTransformKeysUdf transform_keys = 12;
   }
 }
 
@@ -170,6 +185,12 @@ message SparkRegexpInstrUdf {
 message SparkArrayForallUdf {}
 
 message SparkMapFilterUdf {}
+
+message SparkTransformValuesUdf {}
+
+message SparkTransformKeysUdf {
+  bool last_value_wins = 1;
+}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -863,6 +884,7 @@ message DeltaScanByAddsExecNode {
   optional bytes statistics = 10;
   string lakehouse_table_json = 11;
   string catalog_managed_commits_json = 12;
+  repeated PhysicalProjectionExpr input_file_projection = 13;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -990,6 +1012,11 @@ message PhysicalProjection {
   repeated uint64 columns = 1;
 }
 
+message PhysicalProjectionExpr {
+  bytes expression = 1;
+  string alias = 2;
+}
+
 enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_GZIP = 0;
   COMPRESSION_TYPE_VARIANT_BZIP2 = 1;
@@ -1039,6 +1066,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
   ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_LEVEL_REWRITE = 5;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_REWRITE_DATA_FILES = 6;
 }
 
 message IcebergCommitExecNode {
@@ -1076,6 +1104,8 @@ message IcebergScanByDataFilesExecNode {
   bool has_projection = 5;
   optional bytes predicate = 6;
   optional uint64 limit = 7;
+  bool preserve_file_groups = 8;
+  repeated PhysicalProjectionExpr input_file_projection = 9;
 }
 
 message IcebergMetadataScanExecNode {
@@ -1089,6 +1119,7 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
+  repeated PhysicalProjectionExpr input_file_projection = 7;
 }
 
 message IcebergRowLineage {
@@ -1194,10 +1225,52 @@ message CatalogCommandExecNode {
   string command = 2;
 }
 
+message LakeProcedureExecNode {
+  // Schema for the procedure output.
+  bytes schema = 1;
+  // JSON-encoded LakeProcedureCall.
+  string call = 2;
+  // Provider-planned procedure implementation.
+  bytes input = 3;
+  // 0 = coordinator, 1 = distributed.
+  uint32 root_placement = 4;
+}
+
+message IcebergProcedureExecNode {
+  // JSON-encoded LakeProcedureCall.
+  string call = 1;
+  // JSON-encoded table state for a worker-side metadata read. Empty for coordinator commits,
+  // which reacquire the table immediately before execution.
+  string planned_table = 2;
+  // Worker-side writer action stream for rewrite_data_files. Empty for leaf procedures.
+  bytes input = 3;
+  // JSON-encoded RewriteDataFilesPlan. Empty for other procedures.
+  string rewrite_data_files = 4;
+}
+
 message BarrierExecNode {
   // Precondition plans to be exhausted before the main plan starts.
   // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+message IcebergMetadataRelationExecNode {
+  bytes schema = 1;
+  string scan = 2;
+}
+
+message IcebergFileTasksExecNode {
+  string groups = 1;
+}
+
+message IcebergRewriteExecNode {
+  bytes input = 1;
+  // Group partition indices assigned to each sequential worker task.
+  repeated IcebergRewriteGroupAssignment assignments = 2;
+}
+
+message IcebergRewriteGroupAssignment {
+  repeated uint64 groups = 1;
 }

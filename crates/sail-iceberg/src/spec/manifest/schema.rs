@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
-    ArraySchema, DecimalSchema, FixedSchema, Name, RecordField as AvroRecordField,
-    RecordFieldOrder, RecordSchema,
+    ArraySchema, DecimalSchema, FixedSchema, InnerDecimalSchema, Name,
+    RecordField as AvroRecordField, RecordSchema,
 };
 use serde_json::{Number, Value as JsonValue};
 
@@ -33,7 +33,7 @@ enum PartitionAvroLayout {
     Encoded,
 }
 
-fn avro_fixed(name: &str, size: usize, logical_type: Option<&str>) -> AvroSchema {
+fn avro_fixed_schema(name: &str, size: usize, logical_type: Option<&str>) -> FixedSchema {
     let mut attributes = BTreeMap::new();
     if let Some(logical_type) = logical_type {
         attributes.insert(
@@ -41,15 +41,18 @@ fn avro_fixed(name: &str, size: usize, logical_type: Option<&str>) -> AvroSchema
             JsonValue::String(logical_type.to_string()),
         );
     }
-    AvroSchema::Fixed(FixedSchema {
+    FixedSchema {
         #[expect(clippy::unwrap_used)]
         name: Name::new(name).unwrap_or_else(|_| Name::new("fixed").unwrap()),
         aliases: None,
         doc: None,
         size,
         attributes,
-        default: None,
-    })
+    }
+}
+
+fn avro_fixed(name: &str, size: usize, logical_type: Option<&str>) -> AvroSchema {
+    AvroSchema::Fixed(avro_fixed_schema(name, size, logical_type))
 }
 
 fn avro_named(name: &str, schema: AvroSchema, defined_names: &mut BTreeSet<String>) -> AvroSchema {
@@ -124,9 +127,7 @@ fn avro_primitive(
                     name: "metadata".to_string(),
                     doc: None,
                     default: None,
-                    aliases: None,
-                    order: RecordFieldOrder::Ignore,
-                    position: 0,
+                    aliases: Vec::new(),
                     schema: AvroSchema::Bytes,
                     custom_attributes: BTreeMap::new(),
                 },
@@ -134,9 +135,7 @@ fn avro_primitive(
                     name: "value".to_string(),
                     doc: None,
                     default: None,
-                    aliases: None,
-                    order: RecordFieldOrder::Ignore,
-                    position: 1,
+                    aliases: Vec::new(),
                     schema: AvroSchema::Bytes,
                     custom_attributes: BTreeMap::new(),
                 },
@@ -162,7 +161,7 @@ fn avro_primitive(
                     AvroSchema::Decimal(DecimalSchema {
                         precision: *precision as usize,
                         scale: *scale as usize,
-                        inner: Box::new(avro_fixed(
+                        inner: InnerDecimalSchema::Fixed(avro_fixed_schema(
                             &name,
                             crate::spec::Type::decimal_required_bytes(*precision).unwrap_or(16)
                                 as usize,
@@ -176,7 +175,7 @@ fn avro_primitive(
                     AvroSchema::Decimal(DecimalSchema {
                         precision: *precision as usize,
                         scale: *scale as usize,
-                        inner: Box::new(avro_fixed(
+                        inner: InnerDecimalSchema::Fixed(avro_fixed_schema(
                             &name,
                             crate::spec::Type::decimal_required_bytes(*precision).unwrap_or(16)
                                 as usize,
@@ -243,9 +242,7 @@ fn struct_to_avro_record(
                     name: map.key_field.name.clone(),
                     doc: None,
                     default: None,
-                    aliases: None,
-                    order: RecordFieldOrder::Ascending,
-                    position: 0,
+                    aliases: Vec::new(),
                     schema: match &*map.key_field.field_type {
                         Type::Primitive(p) => avro_primitive(p, layout, defined_names),
                         _ => AvroSchema::String,
@@ -267,9 +264,7 @@ fn struct_to_avro_record(
                     } else {
                         Some(JsonValue::Null)
                     },
-                    aliases: None,
-                    order: RecordFieldOrder::Ignore,
-                    position: 0,
+                    aliases: Vec::new(),
                     schema: if map.value_field.required {
                         value_schema
                     } else {
@@ -367,9 +362,7 @@ fn int_key_map(
         name: "key".to_string(),
         doc: None,
         default: None,
-        aliases: None,
-        order: RecordFieldOrder::Ascending,
-        position: 0,
+        aliases: Vec::new(),
         schema: AvroSchema::Int,
         custom_attributes: BTreeMap::from([(
             FIELD_ID_ATTR.to_string(),
@@ -380,9 +373,7 @@ fn int_key_map(
         name: "value".to_string(),
         doc: None,
         default: None,
-        aliases: None,
-        order: RecordFieldOrder::Ignore,
-        position: 1,
+        aliases: Vec::new(),
         schema: value_schema,
         custom_attributes: BTreeMap::from([(
             FIELD_ID_ATTR.to_string(),
@@ -472,9 +463,7 @@ fn data_file_schema_v2_with_layout(
             name: "split_offsets".to_string(),
             doc: None,
             default: Some(JsonValue::Null),
-            aliases: None,
-            order: RecordFieldOrder::Ignore,
-            position: 0,
+            aliases: Vec::new(),
             schema: array_of_longs(133, false),
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),
@@ -486,9 +475,7 @@ fn data_file_schema_v2_with_layout(
             name: "equality_ids".to_string(),
             doc: None,
             default: Some(JsonValue::Null),
-            aliases: None,
-            order: RecordFieldOrder::Ignore,
-            position: 0,
+            aliases: Vec::new(),
             schema: array_of_ints(136, false),
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),
@@ -568,9 +555,6 @@ fn data_file_schema_v1_with_layout(
         block_size_index,
         record_field("block_size_in_bytes", AvroSchema::Long, 105, true),
     );
-    for (position, field) in record.fields.iter_mut().enumerate() {
-        field.position = position;
-    }
     record.lookup = record
         .fields
         .iter()
@@ -605,9 +589,7 @@ fn manifest_entry_schema_v1_with_layout(
             name: "data_file".to_string(),
             doc: None,
             default: None,
-            aliases: None,
-            order: RecordFieldOrder::Ignore,
-            position: 2,
+            aliases: Vec::new(),
             schema: data_file_schema_v1_with_layout(partition_type, layout),
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),
@@ -646,9 +628,7 @@ fn manifest_entry_schema_v2_with_layout(
             name: "data_file".to_string(),
             doc: None,
             default: None,
-            aliases: None,
-            order: RecordFieldOrder::Ignore,
-            position: 0,
+            aliases: Vec::new(),
             schema: df_schema,
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),

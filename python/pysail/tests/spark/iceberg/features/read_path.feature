@@ -139,6 +139,22 @@ Feature: Iceberg read path (driver vs metadata-as-data)
         | b    | 20    |
         | c    | 30    |
 
+    Scenario: Input file metadata works on the metadata-as-data path
+      When query
+        """
+        SELECT id,
+               length(input_file_name()) > 0 AS has_file,
+               input_file_block_start() AS block_start,
+               input_file_block_length() > 0 AS has_block
+        FROM iceberg_metadata_rows
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | has_file | block_start | has_block |
+        | 1  | true     | 0           | true      |
+        | 2  | true     | 0           | true      |
+        | 3  | true     | 0           | true      |
+
   Rule: Identity-partition predicates remain correct on metadata-as-data path
     Background:
       Given variable location for temporary directory iceberg_read_metadata_part_filter

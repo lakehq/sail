@@ -4,7 +4,7 @@ import path from "path";
 import yaml from "js-yaml";
 
 export const SYSTEM_CATALOG_DATA_PATH = path.join(
-  __dirname,
+  import.meta.dirname,
   "../../../../crates/sail-system-store/data/databases.yaml",
 );
 

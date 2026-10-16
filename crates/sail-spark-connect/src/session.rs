@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -154,6 +154,26 @@ impl SparkSession {
         state.config.get_all(prefix)
     }
 
+    pub(crate) fn add_native_config_key(&self, key: String) -> SparkResult<()> {
+        self.state.lock()?.native_config_keys.insert(key);
+        Ok(())
+    }
+
+    pub(crate) fn remove_native_config_key(&self, key: &str) -> SparkResult<()> {
+        self.state.lock()?.native_config_keys.remove(key);
+        Ok(())
+    }
+
+    pub(crate) fn native_config_keys(&self) -> SparkResult<Vec<String>> {
+        Ok(self
+            .state
+            .lock()?
+            .native_config_keys
+            .iter()
+            .cloned()
+            .collect())
+    }
+
     pub(crate) fn get_config_warnings(&self, kv: &[ConfigKeyValue]) -> SparkResult<Vec<String>> {
         let state = self.state.lock()?;
         Ok(state.config.get_warnings(kv))
@@ -307,6 +327,7 @@ impl SparkSession {
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
+    native_config_keys: BTreeSet<String>,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
 }
@@ -315,6 +336,7 @@ impl SparkSessionState {
     fn try_new() -> SparkResult<Self> {
         Ok(Self {
             config: SparkRuntimeConfig::try_new()?,
+            native_config_keys: BTreeSet::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         })
