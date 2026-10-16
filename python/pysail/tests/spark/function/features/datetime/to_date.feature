@@ -436,9 +436,6 @@ Feature: to_date with an argument coming from a column
     # DateTimeFormatter. That parser trims leading and trailing whitespace (and ISO control
     # characters) and accepts an ISO `T` separator, so all of these succeed.
     #
-    # The forms Sail ALREADY handles are kept in the first table as the contrasting half:
-    # a parser that simply rejected "unusual" strings would fail those too, so listing only
-    # the broken ones would not discriminate a narrow parser from a correct one.
     # All values measured on Spark JVM 4.2.0, session time zone UTC.
 
     Scenario Outline: Accepted date string: <case>
@@ -461,10 +458,7 @@ Feature: to_date with an argument coming from a column
         | year zero                  | '0000-12-31'                           | 0000-12-31   |
         | five-digit year            | '10000-01-01'                          | +10000-01-01 |
 
-    @sail-bug
-    Scenario Outline: Accepted date string that Sail rejects: <case>
-      # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
-      # NULL. Both are wrong — Spark parses all three.
+    Scenario Outline: Accepted date string with whitespace or an ISO separator: <case>
       When query
         """
         SELECT to_date(<input>) AS result

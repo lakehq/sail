@@ -57,7 +57,6 @@ Feature: datetime edge cases
 
   Rule: Foldable NULL time zones
 
-    @sail-bug
     Scenario: `from_utc_timestamp` skips the timestamp for a foldable NULL zone
       When query
         """

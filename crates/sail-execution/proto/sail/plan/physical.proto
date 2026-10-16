@@ -298,7 +298,10 @@ message PercentileDiscUdaf {
   bool ansi_mode = 1;
 }
 
-message StandardUdf {}
+message StandardUdf {
+  // Explicit raise_error and assert_true differ from foldable internal value checks.
+  bool non_foldable = 1;
+}
 
 message PySparkUdf {
   PySparkUdfKind kind = 1;
@@ -470,6 +473,7 @@ message SparkToCharUdf {
 
 message SparkMakeTimestampNtzUdf {
   bool is_try = 1;
+  bool ansi_mode = 2;
 }
 
 message ConvertTzUdf {

@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
+use chrono::{Datelike, NaiveDate};
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
+use datafusion_common::cast::as_int32_array;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_date;
 
@@ -35,7 +39,18 @@ impl SparkDate {
     }
 
     fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
-        match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
+        // Keep already-supported date strings on the original parser path.
+        match parse_date(value)
+            .or_else(|error| {
+                let prefix = date_string_prefix(value);
+                if prefix.len() == value.len() {
+                    Err(error)
+                } else {
+                    parse_date(prefix)
+                }
+            })
+            .and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?)))
+        {
             Ok(v) => Ok(Some(v)),
             Err(_e) if is_try => Ok(None),
             Err(_) => {
@@ -63,6 +78,24 @@ impl SparkDate {
     }
 }
 
+fn date_string_prefix(value: &str) -> &str {
+    // Spark ignores the suffix after a complete date's `T`; the SQL parser handles spaces.
+    let trimmed = value.trim_matches(|c: char| c <= ' ');
+    match trimmed.split_once('T') {
+        Some((date, _))
+            if date
+                .trim_start_matches(['+', '-'])
+                .bytes()
+                .filter(|c| *c == b'-')
+                .count()
+                == 2 =>
+        {
+            date
+        }
+        _ => trimmed,
+    }
+}
+
 impl ScalarUDFImpl for SparkDate {
     fn name(&self) -> &str {
         "spark_date"
@@ -76,7 +109,32 @@ impl ScalarUDFImpl for SparkDate {
         Ok(DataType::Date32)
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.len() != 3
+            || self.is_try
+            || args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            nullable,
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() == 3 {
+            let make_date = datafusion::functions::datetime::make_date();
+            if !self.is_try {
+                return make_date.invoke_with_args(args);
+            }
+            // Valid batches keep the native path; only invalid calendar values need NULLs.
+            let values = args.args.clone();
+            return match make_date.invoke_with_args(args) {
+                Err(datafusion_common::DataFusionError::Execution(_)) => {
+                    make_date_from_components(values)
+                }
+                result => result,
+            };
+        }
         let ScalarFunctionArgs { args, .. } = args;
         let (arg, format) = match args.len() {
             1 => (args.one()?, None),
@@ -84,7 +142,7 @@ impl ScalarUDFImpl for SparkDate {
                 let (arg, format) = args.two()?;
                 (arg, Some(format))
             }
-            _ => return exec_err!("spark_date requires 1 or 2 arguments"),
+            _ => return exec_err!("spark_date requires 1, 2, or 3 arguments"),
         };
         let is_try = self.is_try;
         match (arg, format) {
@@ -101,6 +159,12 @@ impl ScalarUDFImpl for SparkDate {
                 parse_array_with_format_array(&array, &format_array, is_try)
             }
             (ColumnarValue::Array(array), format) => {
+                if array.null_count() == array.len() {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        &DataType::Date32,
+                        array.len(),
+                    )));
+                }
                 let format = match format {
                     Some(ColumnarValue::Scalar(scalar)) => {
                         match parse_scalar_date_format(&scalar)? {
@@ -132,6 +196,9 @@ impl ScalarUDFImpl for SparkDate {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)));
+                }
                 let format = match format {
                     Some(ColumnarValue::Scalar(scalar)) => {
                         match parse_scalar_date_format(&scalar)? {
@@ -160,6 +227,40 @@ impl ScalarUDFImpl for SparkDate {
             }
         }
     }
+}
+
+fn make_date_from_components(args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
+    if let [
+        ColumnarValue::Scalar(ScalarValue::Int32(year)),
+        ColumnarValue::Scalar(ScalarValue::Int32(month)),
+        ColumnarValue::Scalar(ScalarValue::Int32(day)),
+    ] = args.as_slice()
+    {
+        return Ok(ColumnarValue::Scalar(ScalarValue::Date32(make_date_value(
+            *year, *month, *day,
+        ))));
+    }
+    let arrays = ColumnarValue::values_to_arrays(&args)?;
+    let years = as_int32_array(&arrays[0])?;
+    let months = as_int32_array(&arrays[1])?;
+    let days = as_int32_array(&arrays[2])?;
+    let dates = years
+        .iter()
+        .zip(months)
+        .zip(days)
+        .map(|((year, month), day)| make_date_value(year, month, day))
+        .collect::<Date32Array>();
+    Ok(ColumnarValue::Array(Arc::new(dates)))
+}
+
+fn make_date_value(year: Option<i32>, month: Option<i32>, day: Option<i32>) -> Option<i32> {
+    let date = NaiveDate::from_ymd_opt(
+        year?,
+        u32::try_from(month?).ok()?,
+        u32::try_from(day?).ok()?,
+    )?;
+    // Date32 counts days since 1970-01-01, which is day 719163 in the CE calendar.
+    Some(date.num_days_from_ce() - 719_163)
 }
 
 fn parse_scalar_date_format(format: &ScalarValue) -> Result<Option<DateTimeFormat>> {

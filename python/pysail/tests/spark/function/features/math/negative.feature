@@ -175,6 +175,85 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | negate the maximum DECIMAL(38,0) errors under ANSI on       | true  |
         | negate the maximum DECIMAL(38,0) also errors under ANSI off | false |
 
+  Rule: Signed numeric literals are typed before unary operations
+
+    Scenario Outline: Signed numeric literal: <case>
+      When query
+        """
+        SELECT CAST(<expr> AS STRING) AS value, typeof(<expr>) AS type
+        """
+      Then query result
+        | value    | type   |
+        | <value> | <type> |
+
+      Examples:
+        | case                                  | expr                           | value                | type          |
+        | minimum tinyint                       | -128Y                          | -128                 | tinyint       |
+        | minimum smallint                      | -32768S                        | -32768               | smallint      |
+        | minimum int                           | -2147483648                    | -2147483648          | int           |
+        | below minimum int widens to bigint    | -2147483649                    | -2147483649          | bigint        |
+        | minimum bigint without suffix        | -9223372036854775808           | -9223372036854775808 | bigint        |
+        | minimum bigint with suffix           | -9223372036854775808L          | -9223372036854775808 | bigint        |
+        | below minimum bigint becomes decimal | -9223372036854775809           | -9223372036854775809 | decimal(19,0) |
+        | parenthesized magnitude stays decimal | -(9223372036854775808)         | -9223372036854775808 | decimal(19,0) |
+        | comments between sign and number     | - /* boundary */ 128Y         | -128                 | tinyint       |
+        | unary plus around a negative literal | + -9223372036854775808L        | -9223372036854775808 | bigint        |
+        | two minus operators                  | - -1L                         | 1                    | bigint        |
+        | signed number before postfix cast    | -9223372036854775808L::BIGINT  | -9223372036854775808 | bigint        |
+        | parenthesized number before cast     | (-9223372036854775808L)::BIGINT | -9223372036854775808 | bigint        |
+        | number sign belongs inside the cast  | -1::STRING                    | -1                   | string        |
+        | explicit unary minus stays outside   | -(1::STRING)                  | -1.0                 | double        |
+        | negative double zero                 | -0.0D                         | -0.0                 | double        |
+        | negative float zero                  | -0.0F                         | -0.0                 | float         |
+        | negative exponent literal            | -1.25E+2                      | -125.0               | double        |
+        | negative decimal exponent literal    | -.1234567E+2BD                | -12.34567            | decimal(7,5)  |
+
+    Scenario Outline: Out-of-range signed literal: <expr>
+      When query
+        """
+        SELECT <expr> AS value
+        """
+      Then query error (?i)<type>
+
+      Examples:
+        | expr                    | type     |
+        | 128Y                    | tinyint  |
+        | -129Y                   | tinyint  |
+        | 32768S                  | smallint |
+        | -32769S                 | smallint |
+        | 9223372036854775808L     | bigint   |
+        | -9223372036854775809L    | bigint   |
+        | -(9223372036854775808L) | bigint   |
+
+    Scenario: negating a signed minimum bigint literal overflows under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT -(-9223372036854775808L) AS value
+        """
+      Then query error (?i)overflow
+
+    Scenario: negating a signed minimum bigint literal wraps without ANSI
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT -(-9223372036854775808L) AS value
+        """
+      Then query result
+        | value                |
+        | -9223372036854775808 |
+
+    @sail-only
+    Scenario: a signed wide decimal literal preserves Sail's extra precision
+      When query
+        """
+        SELECT CAST(-12345678901234567890123456789012345678.1BD AS STRING) AS value,
+               typeof(-12345678901234567890123456789012345678.1BD) AS type
+        """
+      Then query result
+        | value                                    | type          |
+        | -12345678901234567890123456789012345678.1 | decimal(39,1) |
+
   @function(nullability)
   Rule: Output schema
 

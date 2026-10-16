@@ -101,8 +101,7 @@ Feature: DATE_TRUNC output type
         | result              |
         | 2015-03-01 00:00:00 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario Outline: Date_trunc: <case>
       When query
         """
@@ -117,6 +116,43 @@ Feature: DATE_TRUNC output type
         | case                                                                   | v1     | v2     | r1                  | r2                  |
         | date_trunc takes argument 1 from a column holding two different values | 'YEAR' | 'MM'   | 2015-01-01 00:00:00 | 2015-03-01 00:00:00 |
         | date_trunc takes argument 1 from a column                              | 'YEAR' | 'YEAR' | 2015-01-01 00:00:00 | 2015-01-01 00:00:00 |
+        | date_trunc handles NULL and invalid column units                      | NULL   | 'bad'  | NULL                | NULL                |
+        | date_trunc accepts mixed-case column units                            | 'dD'   | 'mOn'  | 2015-03-05 00:00:00 | 2015-03-01 00:00:00 |
+
+    @function(columnargs) @sail-bug
+    Scenario: a NULL column unit skips timestamp evaluation
+      # FIXME: Scalar UDF arguments are evaluated before the truncation kernel can skip NULL units.
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, date_trunc(
+          CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE 'DAY' END,
+          CAST(CASE WHEN id = 0 THEN raise_error('timestamp-evaluated')
+                    ELSE '2024-06-15 12:34:56' END AS TIMESTAMP)) AS result
+        FROM range(2)
+        """
+      Then query result
+        | id | result              |
+        | 0  | NULL                |
+        | 1  | 2024-06-15 00:00:00 |
+
+    Scenario: paired truncation units and timestamps retain the session timezone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT date_trunc(unit, ts) AS result FROM VALUES
+          (1, 'DAY', TIMESTAMP '2024-03-10 03:30:00'),
+          (2, 'HOUR', TIMESTAMP '2024-03-10 03:30:00'),
+          (3, 'WEEK', TIMESTAMP '2024-03-10 03:30:00'),
+          (4, 'MONTH', CAST(NULL AS TIMESTAMP)) AS t(id, unit, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result              |
+        | 2024-03-10 00:00:00 |
+        | 2024-03-10 03:00:00 |
+        | 2024-03-04 00:00:00 |
+        | NULL                |
 
   @function(nullability)
   Rule: Output schema

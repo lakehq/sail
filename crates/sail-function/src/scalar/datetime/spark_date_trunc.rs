@@ -1,12 +1,17 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::arrow::array::{UInt64Array, new_null_array};
+use datafusion::arrow::compute::{interleave, take};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_functions::datetime::date_trunc::DateTruncFunc;
+
+use crate::scalar::datetime::utils::string_array_iter;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDateTrunc {
@@ -50,7 +55,68 @@ impl ScalarUDFImpl for SparkDateTrunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
+        let ColumnarValue::Array(units) = &args.args[0] else {
+            return self.inner.invoke_with_args(args);
+        };
+        // Keep constant units on the native fast path. Dynamic units share that kernel
+        // in batches, rather than constructing and invoking a scalar function per row.
+        let mut groups = BTreeMap::<&str, Vec<usize>>::new();
+        for (row, unit) in string_array_iter(units.as_ref())?.enumerate() {
+            let Some(unit) = unit else { continue };
+            if let Some(unit) = [
+                "year",
+                "quarter",
+                "month",
+                "week",
+                "day",
+                "hour",
+                "minute",
+                "second",
+                "millisecond",
+                "microsecond",
+            ]
+            .into_iter()
+            .find(|candidate| unit.eq_ignore_ascii_case(candidate))
+            {
+                groups.entry(unit).or_default().push(row);
+            }
+        }
+        let mut results = vec![new_null_array(args.return_type(), 1)];
+        let mut positions = vec![(0, 0); units.len()];
+        for (unit, rows) in groups {
+            let value = match &args.args[1] {
+                ColumnarValue::Array(array) if rows.len() != units.len() => {
+                    let indices = UInt64Array::from_iter_values(rows.iter().map(|row| *row as u64));
+                    ColumnarValue::Array(take(array, &indices, None)?)
+                }
+                value => value.clone(),
+            };
+            let result = self
+                .inner
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![
+                        ColumnarValue::Scalar(ScalarValue::Utf8(Some(unit.to_owned()))),
+                        value,
+                    ],
+                    arg_fields: args.arg_fields.clone(),
+                    number_rows: rows.len(),
+                    return_field: Arc::clone(&args.return_field),
+                    config_options: Arc::clone(&args.config_options),
+                })?
+                .into_array(rows.len())?;
+            if rows.len() == units.len() {
+                return Ok(ColumnarValue::Array(result));
+            }
+            for (position, row) in rows.into_iter().enumerate() {
+                positions[row] = (results.len(), position);
+            }
+            results.push(result);
+        }
+        let arrays = results
+            .iter()
+            .map(|array| array.as_ref())
+            .collect::<Vec<_>>();
+        Ok(ColumnarValue::Array(interleave(&arrays, &positions)?))
     }
 
     fn aliases(&self) -> &[String] {

@@ -5,15 +5,20 @@ use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
-    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl, cast, lit, when,
+    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl, Volatility,
+    cast, lit, try_cast, when,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -39,6 +44,7 @@ use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
@@ -286,15 +292,42 @@ fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> 
     }
 }
 
-fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
-    match (&year, &month, &day) {
-        (Expr::Literal(ScalarValue::Null, metadata), _, _)
-        | (_, Expr::Literal(ScalarValue::Null, metadata), _)
-        | (_, _, Expr::Literal(ScalarValue::Null, metadata)) => {
-            Expr::Literal(ScalarValue::Null, metadata.clone())
-        }
-        _ => expr_fn::make_date(year, month, day),
+fn make_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (year, month, day) = input.arguments.three()?;
+    if [&year, &month, &day].into_iter().any(is_null_literal)
+        && can_fold_datetime_arguments([&year, &month, &day])?
+        && ([&year, &month, &day]
+            .into_iter()
+            .any(|argument| matches!(argument, Expr::Literal(ScalarValue::Null, _)))
+            || !has_unsupported_datetime_casts(
+                [&year, &month, &day],
+                input.function_context.schema,
+            )?)
+    {
+        return Ok(lit(ScalarValue::Date32(None)));
     }
+    let ansi = input.function_context.plan_config.ansi_mode;
+    let args = [year, month, day]
+        .into_iter()
+        .map(|arg| constructor_cast(arg, DataType::Int32, &input.function_context))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(ScalarUDF::from(SparkDate::new(!ansi)).call(args))
+}
+
+fn constructor_cast(
+    arg: Expr,
+    data_type: DataType,
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<Expr> {
+    let from = arg.get_type(context.schema)?;
+    let nullable = from.is_string()
+        || (data_type == DataType::Int32 && (from.is_floating() || from.is_decimal()));
+    let result = if context.plan_config.ansi_mode {
+        cast(arg, data_type)
+    } else {
+        try_cast(arg, data_type)
+    };
+    declare_nullable_result(result, nullable, context.schema)
 }
 
 fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
@@ -532,6 +565,42 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
+fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    match input.arguments.len() {
+        1 => {
+            let value = input.arguments.one()?;
+            let from = value.get_type(schema)?;
+            if matches!(
+                from,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            ) {
+                return datetime_date(value, &input.function_context);
+            }
+            let value = if from.is_string() || from.is_nested() {
+                value
+            } else {
+                cast(value, DataType::Utf8)
+            };
+            Ok(ScalarUDF::from(SparkDate::new(true)).call(vec![value]))
+        }
+        2 => {
+            // Spark parses formatted dates as LTZ timestamps before taking the local date.
+            // Reuse temporal-input handling and safe parsing from try_to_timestamp.
+            let timezone = Arc::clone(&input.function_context.plan_config.session_timezone);
+            let timestamp = timestamp_with_try(input, false, true)?;
+            Ok(cast_temporal(
+                timestamp.clone(),
+                &timestamp.get_type(schema)?,
+                DataType::Date32,
+                &timezone,
+                false,
+            )?)
+        }
+        _ => Err(PlanError::invalid("try_to_date requires 1 or 2 arguments")),
+    }
+}
+
 fn validate_unix_timestamp_format(format: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
     match format.get_type(schema)? {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => Ok(()),
@@ -623,7 +692,31 @@ fn timestamp_null(input: &ScalarFunctionInput, timestamp_ntz: bool) -> Expr {
 }
 
 fn is_null_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::Literal(value, _) if value.is_null())
+    match expr {
+        Expr::Literal(value, _) => value.is_null(),
+        Expr::Cast(cast) => is_null_literal(&cast.expr),
+        Expr::TryCast(cast) => is_null_literal(&cast.expr),
+        _ => false,
+    }
+}
+
+fn can_fold_datetime_arguments<'a>(
+    arguments: impl IntoIterator<Item = &'a Expr>,
+) -> PlanResult<bool> {
+    // Aggregates and generators are extracted after scalar function resolution.
+    // Removing either here would change the number of output rows.
+    for argument in arguments {
+        if argument.exists(|expr| {
+            Ok(match expr {
+                Expr::AggregateFunction(_) => true,
+                Expr::ScalarFunction(function) => function.func.inner().is::<Explode>(),
+                _ => false,
+            })
+        })? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
@@ -750,7 +843,16 @@ fn timestamp_with_try(
                 input.function_context.schema,
             );
         }
-        if is_null_literal(&value) || is_null_literal(&format) {
+        if (is_null_literal(&value) || is_null_literal(&format))
+            && can_fold_datetime_arguments([&value, &format])?
+            && ([&value, &format]
+                .into_iter()
+                .any(|argument| matches!(argument, Expr::Literal(value, _) if value.is_null()))
+                || !has_unsupported_datetime_casts(
+                    [&value, &format],
+                    input.function_context.schema,
+                )?)
+        {
             return Ok(null);
         }
         let value = if source.is_string() || source.is_nested() {
@@ -888,6 +990,124 @@ fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResu
     Ok(())
 }
 
+fn has_unsupported_datetime_casts<'a>(
+    arguments: impl IntoIterator<Item = &'a Expr>,
+    schema: &DFSchemaRef,
+) -> PlanResult<bool> {
+    for argument in arguments {
+        if argument.exists(|expr| {
+            match expr {
+                Expr::Cast(cast) => {
+                    return Ok(!can_cast_types(
+                        &cast.expr.get_type(schema)?,
+                        cast.field.data_type(),
+                    ));
+                }
+                Expr::TryCast(cast) => {
+                    return Ok(!can_cast_types(
+                        &cast.expr.get_type(schema)?,
+                        cast.field.data_type(),
+                    ));
+                }
+                Expr::ScalarFunction(function)
+                    if function.func.inner().is::<SparkCastToVariant>() =>
+                {
+                    for argument in &function.args {
+                        if SparkCastToVariant::validate_input_type(&argument.get_type(schema)?)
+                            .is_err()
+                        {
+                            return Ok(true);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(false)
+        })? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanResult<bool> {
+    fn has_non_foldable_node(
+        argument: &Expr,
+        allow_stable: bool,
+    ) -> datafusion_common::Result<bool> {
+        let mut found = false;
+        argument.apply(|expr| {
+            if let Expr::HigherOrderFunction(function) = expr
+                && (function.func.inner().as_ref() as &dyn std::any::Any).is::<ConvertTzLazy>()
+            {
+                // These lambdas lower a scalar SQL function, not a SQL higher-order function.
+                for argument in &function.args {
+                    let Expr::Lambda(lambda) = argument else {
+                        found = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    };
+                    if has_non_foldable_node(&lambda.body, allow_stable)? {
+                        found = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                }
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            found = match expr {
+                Expr::ScalarFunction(function) => {
+                    function.func.signature().volatility == Volatility::Volatile
+                        || (!allow_stable
+                            && function.func.signature().volatility != Volatility::Immutable)
+                }
+                Expr::HigherOrderFunction(_)
+                | Expr::ScalarVariable(_, _)
+                | Expr::OuterReferenceColumn(_, _)
+                | Expr::Exists { .. }
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+                | Expr::WindowFunction(_)
+                | Expr::GroupingSet(_)
+                | Expr::Unnest(_)
+                | Expr::Placeholder(_)
+                | Expr::Lambda(_)
+                | Expr::LambdaVariable(_) => true,
+                _ => false,
+            };
+            Ok(if found {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        Ok(found)
+    }
+
+    Ok(!(argument.any_column_refs()
+        || !can_fold_datetime_arguments([argument])?
+        || has_non_foldable_node(argument, allow_stable)?
+        || expr_contains_python_udf(argument)?
+        || expr_contains_spark_cast_to_variant(argument)?))
+}
+
+fn fold_timezone_argument(argument: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    if !is_foldable_timezone_argument(&argument, false)? {
+        return Ok(argument);
+    }
+    // Stable functions such as current_timestamp require the query's execution context.
+    let simplifier = ExprSimplifier::new(
+        SimplifyContextBuilder::default()
+            .with_schema(Arc::clone(schema))
+            .build(),
+    );
+    let argument = simplifier.simplify(simplifier.coerce(argument, schema)?)?;
+    if matches!(argument, Expr::Literal(_, _)) {
+        return Ok(argument);
+    }
+    // Simplification retains runtime errors; evaluate this constant before a later NULL can mask it.
+    Ok(lit(LiteralEvaluator::new().evaluate(&argument)?))
+}
+
 /// A helper function for processing the input NTZ timestamp.
 fn ntz_timestamp_and_unit(
     ts: Expr,
@@ -932,11 +1152,42 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }?;
     validate_convert_timezone_zone(&from_tz, input.function_context.schema)?;
     validate_convert_timezone_zone(&to_tz, input.function_context.schema)?;
-    let (ts, _unit) = ntz_timestamp_and_unit(
+    let (ts, unit) = ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
+    if has_unsupported_datetime_casts([&from_tz, &to_tz, &ts], input.function_context.schema)? {
+        // Preserve native cast validation and errors from reached Variant casts, while
+        // retaining Sail's support for unevaluated CASE/COALESCE branches.
+        return Ok(
+            ScalarUDF::from(ConvertTz::new(true).with_null_short_circuit())
+                .call(vec![from_tz, to_tz, ts]),
+        );
+    }
+    let can_fold = can_fold_datetime_arguments([&from_tz, &to_tz, &ts])?;
+    if can_fold && [&from_tz, &to_tz, &ts].into_iter().any(is_null_literal) {
+        return Ok(lit(ScalarValue::try_from(&DataType::Timestamp(
+            unit, None,
+        ))?));
+    }
+    // Fold in argument order: a later NULL masks row-dependent expressions, but not
+    // an earlier constant error. This must precede Python-UDF extraction.
+    let mut arguments = Vec::with_capacity(3);
+    for argument in [from_tz, to_tz, ts] {
+        let argument = if can_fold {
+            fold_timezone_argument(argument, input.function_context.schema)?
+        } else {
+            argument
+        };
+        if can_fold && is_null_literal(&argument) {
+            return Ok(lit(ScalarValue::try_from(&DataType::Timestamp(
+                unit, None,
+            ))?));
+        }
+        arguments.push(argument);
+    }
+    let (from_tz, to_tz, ts) = arguments.three()?;
     let requires_scalar_evaluation =
         [&from_tz, &to_tz, &ts]
             .into_iter()
@@ -1013,91 +1264,117 @@ fn utc_ntz_timestamp_and_unit(
     Ok((ts, unit))
 }
 
-// TODO: Match Spark's foldability-aware zone eval for `from_utc_timestamp` and `to_utc_timestamp`:
-//  a foldable NULL skips the timestamp, a non-NULL foldable zone is validated eagerly,
-//  and a dynamic zone is skipped for a NULL timestamp.
-fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let session_tz = input.function_context.plan_config.session_timezone.clone();
-    let (ts, to_tz) = input.arguments.two()?;
+fn utc_timestamp(input: ScalarFunctionInput, from_utc: bool) -> PlanResult<Expr> {
+    let session_tz = Arc::clone(&input.function_context.plan_config.session_timezone);
+    let (ts, zone) = input.arguments.two()?;
     let (ts, unit) = utc_ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         &session_tz,
         input.function_context.plan_config.ansi_mode,
     )?;
-    let ts = convert_tz(lit("UTC"), to_tz, ts, false, false)?;
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
-    Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
-}
-
-fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let session_tz = input.function_context.plan_config.session_timezone.clone();
-    let (ts, from_tz) = input.arguments.two()?;
-    let (ts, unit) = utc_ntz_timestamp_and_unit(
-        ts,
-        input.function_context.schema,
-        &session_tz,
-        input.function_context.plan_config.ansi_mode,
-    )?;
-    let ts = convert_tz(from_tz, lit("UTC"), ts, false, false)?;
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
-    Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
-}
-
-fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> PlanResult<Expr> {
-    if args.len() == 2 || args.len() == 6 {
-        let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args);
-        Ok(cast_timestamp_ntz_to_ltz(
-            ntz_ts,
-            Arc::clone(session_tz),
-            is_try,
-        )?)
-    } else if args.len() == 3 || args.len() == 7 {
-        let mut args = args;
-        let Some(from_tz) = args.pop() else {
-            unreachable!()
-        };
-        let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args);
-        let instant = convert_tz(from_tz, lit("UTC"), ntz_ts, false, false)?;
-        Ok(cast(
-            cast(instant, DataType::Int64),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_tz))),
-        ))
+    let can_fold = can_fold_datetime_arguments([&ts, &zone])?
+        && !has_unsupported_datetime_casts([&ts, &zone], input.function_context.schema)?;
+    let constant_zone = is_foldable_timezone_argument(&zone, true)?;
+    let zone = if can_fold {
+        fold_timezone_argument(zone, input.function_context.schema)?
     } else {
-        Err(PlanError::invalid(format!(
-            "{}make_timestamp_ltz requires 2, 3, 6 or 7 arguments, got {:?}",
-            if is_try { "try_" } else { "" },
-            args
-        )))
+        zone
+    };
+    let output_type = DataType::Timestamp(unit, Some(session_tz));
+    if can_fold && is_null_literal(&zone) {
+        return Ok(lit(ScalarValue::try_from(&output_type)?));
     }
-}
-
-fn make_timestamp_ntz(args: Vec<Expr>, is_try: bool) -> PlanResult<Expr> {
-    if args.len() == 2 || args.len() == 6 {
-        Ok(ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args))
+    // Spark validates constant zones eagerly, but skips dynamic zones on NULL rows.
+    let func = if constant_zone {
+        ConvertTz::new(false)
     } else {
-        Err(PlanError::invalid(format!(
-            "{}make_timestamp_ntz requires 2 or 6 arguments, got {:?}",
-            if is_try { "try_" } else { "" },
-            args
-        )))
-    }
+        ConvertTz::new(false).with_null_short_circuit()
+    };
+    let (from, to) = if from_utc {
+        (lit("UTC"), zone)
+    } else {
+        (zone, lit("UTC"))
+    };
+    let ts = ScalarUDF::from(func).call(vec![from, to, ts]);
+    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
+    Ok(cast(ts, output_type))
 }
 
-fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
-    let session_tz = &input.function_context.plan_config.session_timezone;
+fn make_timestamp(
+    input: ScalarFunctionInput,
+    explicit_ntz: Option<bool>,
+    is_try: bool,
+) -> PlanResult<Expr> {
+    let config = input.function_context.plan_config;
+    let ntz = explicit_ntz.unwrap_or(matches!(
+        config.default_timestamp_type,
+        DefaultTimestampType::TimestampNtz
+    ));
     let mut args = input.arguments;
-    if args.len() == 1 {
+    if explicit_ntz.is_none() && args.len() == 1 {
         args.push(lit(ScalarValue::Time64Microsecond(Some(0))));
     }
-    match input.function_context.plan_config.default_timestamp_type {
-        DefaultTimestampType::TimestampLtz => make_timestamp_ltz(args, session_tz, is_try),
-        DefaultTimestampType::TimestampNtz => {
-            if args.len() == 3 || args.len() == 7 {
-                args.pop();
+    let zone = if explicit_ntz != Some(true) && matches!(args.len(), 3 | 7) {
+        args.pop()
+    } else {
+        None
+    };
+    if !matches!(args.len(), 2 | 6) {
+        let (name, arities) = if ntz {
+            ("make_timestamp_ntz", "2 or 6")
+        } else {
+            ("make_timestamp_ltz", "2, 3, 6 or 7")
+        };
+        return Err(PlanError::invalid(format!(
+            "{}{name} requires {arities} arguments, got {args:?}",
+            if is_try { "try_" } else { "" },
+        )));
+    }
+    let safe = is_try || !config.ansi_mode;
+    let udf = SparkMakeTimestampNtz::new(safe, config.ansi_mode);
+    let types = args
+        .iter()
+        .map(|arg| arg.get_type(input.function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let coerced_types = udf.coerce_types(&types)?;
+    let args = args
+        .into_iter()
+        .zip(types)
+        .zip(coerced_types)
+        .map(|((arg, from), to)| {
+            if from == to {
+                Ok(arg)
+            } else if is_try
+                && to == DataType::UInt32
+                && matches!(from, DataType::Int8 | DataType::Int16 | DataType::Int32)
+            {
+                // Only negative components can fail this cast; preserve overflow errors
+                // when converting wider inputs.
+                Ok(try_cast(arg, to))
+            } else {
+                constructor_cast(arg, to, &input.function_context)
             }
-            make_timestamp_ntz(args, is_try)
-        }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    let timestamp = ScalarUDF::from(udf).call(args);
+    if ntz {
+        Ok(timestamp)
+    } else if let Some(zone) = zone {
+        let instant = convert_tz(zone, lit("UTC"), timestamp, false, false)?;
+        Ok(cast(
+            cast(instant, DataType::Int64),
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::clone(&config.session_timezone)),
+            ),
+        ))
+    } else {
+        Ok(cast_timestamp_ntz_to_ltz(
+            timestamp,
+            Arc::clone(&config.session_timezone),
+            safe,
+        )?)
     }
 }
 
@@ -1430,7 +1707,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("dayofyear", F::custom(|input| date_field(input, "DOY"))),
         ("extract", F::binary(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
-        ("from_utc_timestamp", F::custom(from_utc_timestamp)),
+        (
+            "from_utc_timestamp",
+            F::custom(|input| utc_timestamp(input, true)),
+        ),
         ("hour", F::custom(|input| time_field(input, "HOUR"))),
         (
             "last_day",
@@ -1440,27 +1720,21 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "localtimestamp",
             F::custom(current_localtimestamp_microseconds),
         ),
-        ("make_date", F::ternary(make_date)),
+        ("make_date", F::custom(make_date)),
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
         ("make_interval", F::udf(SparkMakeInterval::new())),
         ("make_time", F::udf(SparkMakeTime::new())),
         (
             "make_timestamp",
-            F::custom(|input| make_timestamp(input, false)),
+            F::custom(|input| make_timestamp(input, None, false)),
         ),
         (
             "make_timestamp_ltz",
-            F::custom(|input| {
-                make_timestamp_ltz(
-                    input.arguments,
-                    &input.function_context.plan_config.session_timezone,
-                    false,
-                )
-            }),
+            F::custom(|input| make_timestamp(input, Some(false), false)),
         ),
         (
             "make_timestamp_ntz",
-            F::custom(|input| make_timestamp_ntz(input.arguments, false)),
+            F::custom(|input| make_timestamp(input, Some(true), false)),
         ),
         ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
         ("minute", F::custom(|input| time_field(input, "MINUTE"))),
@@ -1502,6 +1776,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("timestampdiff", F::custom(datediff)),
         ("timestamp_diff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
+        ("try_to_date", F::custom(try_to_date)),
         ("to_time", F::custom(to_time)),
         ("try_to_time", F::custom(try_to_time)),
         (
@@ -1527,26 +1802,23 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| to_timestamp(input, true)),
         ),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
-        ("to_utc_timestamp", F::custom(to_utc_timestamp)),
+        (
+            "to_utc_timestamp",
+            F::custom(|input| utc_timestamp(input, false)),
+        ),
         ("trunc", F::binary(trunc)),
         ("try_make_interval", F::unknown("try_make_interval")),
         (
             "try_make_timestamp",
-            F::custom(|input| make_timestamp(input, true)),
+            F::custom(|input| make_timestamp(input, None, true)),
         ),
         (
             "try_make_timestamp_ltz",
-            F::custom(|input| {
-                make_timestamp_ltz(
-                    input.arguments,
-                    &input.function_context.plan_config.session_timezone,
-                    true,
-                )
-            }),
+            F::custom(|input| make_timestamp(input, Some(false), true)),
         ),
         (
             "try_make_timestamp_ntz",
-            F::custom(|input| make_timestamp_ntz(input.arguments, true)),
+            F::custom(|input| make_timestamp(input, Some(true), true)),
         ),
         (
             "try_to_timestamp",

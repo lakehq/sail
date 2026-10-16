@@ -30,6 +30,13 @@ impl RaiseError {
             ),
         }
     }
+
+    /// Spark's explicit raise_error is non-foldable; internal value checks remain foldable.
+    pub fn non_foldable() -> Self {
+        let mut function = Self::new();
+        function.signature.volatility = Volatility::Volatile;
+        function
+    }
 }
 
 fn raise_from_strings<'a>(

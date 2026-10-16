@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
-use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
+use datafusion::arrow::array::{Array, new_null_array};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -527,6 +527,12 @@ impl ScalarUDFImpl for SparkTimestamp {
                 self.parse_array_with_format_array(&array, &format_array, safe)
             }
             (ColumnarValue::Array(array), format) => {
+                if array.null_count() == array.len() {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
+                        array.len(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 let array: PrimitiveArray<TimestampMicrosecondType> =
                     string_array_iter(array.as_ref())?
@@ -549,6 +555,12 @@ impl ScalarUDFImpl for SparkTimestamp {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                        None,
+                        self.timezone.clone(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 if matches!(format, ScalarFormat::Null) {
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(

@@ -433,16 +433,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let literal_zero = is_zero_literal(&divisor);
+    if literal_zero && !ansi_mode {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
+    // An ANSI error belongs to evaluation: an enclosing NULL or unused CASE branch
+    // may suppress it. Preserve the previous literal-zero diagnostic below.
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -452,7 +449,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        if literal_zero {
+            "divide by zero"
+        } else {
+            "Division by zero"
+        },
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {

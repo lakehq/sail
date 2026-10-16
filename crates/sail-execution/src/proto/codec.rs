@@ -38,7 +38,7 @@ use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf,
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
-    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, Volatility, WindowUDF,
 };
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
@@ -3332,7 +3332,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
         match udf_kind {
-            UdfKind::Standard(r#gen::StandardUdf {}) => {
+            UdfKind::Standard(r#gen::StandardUdf { non_foldable }) => {
+                if name == "raise_error" && non_foldable {
+                    return Ok(Arc::new(ScalarUDF::from(RaiseError::non_foldable())));
+                }
                 if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
                     return Ok(Arc::new(kind.udf()));
                 }
@@ -3547,9 +3550,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
-            UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try }) => {
+            UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf {
+                is_try,
+                ansi_mode,
+            }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
-                    is_try,
+                    is_try, ansi_mode,
                 ))));
             }
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
@@ -3954,7 +3960,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_len"
             || node.name() == "json_length"
         {
-            UdfKind::Standard(r#gen::StandardUdf {})
+            UdfKind::Standard(r#gen::StandardUdf {
+                non_foldable: node_inner.is::<RaiseError>()
+                    && node.signature().volatility == Volatility::Volatile,
+            })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),
@@ -4124,7 +4133,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkFloor(r#gen::SparkFloorUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
-            UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try })
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try, ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
             let null_short_circuit = func.null_short_circuit();
@@ -6021,6 +6031,16 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_raise_error_codec_preserves_foldability() -> Result<()> {
+        for function in [RaiseError::new(), RaiseError::non_foldable()] {
+            let original = ScalarUDF::from(function);
+            let decoded = round_trip_udf(original.clone())?;
+            assert_eq!(original.signature(), decoded.signature());
+        }
+        Ok(())
     }
 
     #[test]

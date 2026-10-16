@@ -263,7 +263,6 @@ Feature: to_timestamp (strict variant)
     # a valid input with the same bad pattern DOES raise, so asserting only that case
     # would not tell an eager validator from a lazy one.
 
-    @sail-bug
     Scenario: a valid value with an unrecognized pattern raises
       When query
         """
@@ -271,7 +270,6 @@ Feature: to_timestamp (strict variant)
         """
       Then query error Unrecognized datetime pattern
 
-    @sail-bug
     Scenario: a NULL value with an unrecognized pattern is NULL, not an error
       When query
         """

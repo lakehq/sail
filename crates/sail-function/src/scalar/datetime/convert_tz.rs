@@ -307,10 +307,21 @@ fn convert_tz_inner(
         convert_tz_non_classic
     };
 
-    let from_to_utc_timestamp_func =
+    let mut singular_timezones = [None, None];
+    let mut parse_row_zone = |index: usize, name: &str| {
+        if args[index].len() == 1 {
+            if singular_timezones[index].is_none() {
+                singular_timezones[index] = parse_tz(Some(name))?;
+            }
+            Ok(singular_timezones[index])
+        } else {
+            parse_tz(Some(name))
+        }
+    };
+    let mut from_to_utc_timestamp_func =
         |inputs: (Option<i64>, Option<&str>, Option<&str>)| match inputs {
             (Some(ts_micros), Some(from_tz), Some(to_tz)) => {
-                match (parse_tz(Some(from_tz))?, parse_tz(Some(to_tz))?) {
+                match (parse_row_zone(0, from_tz)?, parse_row_zone(1, to_tz)?) {
                     (Some(from_tz), Some(to_tz)) => Ok(convert(ts_micros, &from_tz, &to_tz)),
                     _ => Ok(None),
                 }

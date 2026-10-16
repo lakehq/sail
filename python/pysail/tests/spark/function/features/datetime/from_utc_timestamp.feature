@@ -40,7 +40,42 @@ Feature: from_utc_timestamp
         """
       Then query error INVALID_TIMEZONE
 
-    @sail-bug
+    Scenario: `from_utc_timestamp` validates a query-time constant zone for a null timestamp
+      When query
+        """
+        SELECT from_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          concat('Not/AZone', substring(CAST(current_timestamp() AS STRING), 1, 0))
+        ) AS result FROM range(1)
+        """
+      Then query error INVALID_TIMEZONE
+
+    Scenario: `from_utc_timestamp` validates a constant zone containing convert_timezone
+      When query
+        """
+        SELECT from_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          concat('Not/AZone', substring(
+            CAST(convert_timezone('UTC', 'UTC', TIMESTAMP_NTZ '2024-01-01') AS STRING),
+            1, 0
+          ))
+        ) AS result FROM range(1)
+        """
+      Then query error INVALID_TIMEZONE
+
+    Scenario: `from_utc_timestamp` skips a higher-order zone for a null timestamp
+      # Spark treats higher-order expressions as non-foldable, even with constant inputs.
+      When query
+        """
+        SELECT from_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          element_at(transform(array('Not/AZone'), x -> x), 1)
+        ) AS result FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
     Scenario: `from_utc_timestamp` skips a dynamic zone for a null timestamp
       When query
         """
@@ -52,6 +87,37 @@ Feature: from_utc_timestamp
       Then query result
         | result |
         | NULL   |
+
+    Scenario: dynamic zones are validated only for non-NULL timestamps in a batch
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT i, from_utc_timestamp(source_ts, target_tz) AS result
+        FROM VALUES
+          (1, CAST(NULL AS TIMESTAMP), 'Not/AZone'),
+          (2, TIMESTAMP '2024-06-15 12:30:00', 'America/Los_Angeles'),
+          (3, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRING)),
+          (4, TIMESTAMP '2024-06-15 12:30:00', CAST(NULL AS STRING))
+          AS t(i, source_ts, target_tz)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result              |
+        | 1 | NULL                |
+        | 2 | 2024-06-15 05:30:00 |
+        | 3 | NULL                |
+        | 4 | NULL                |
+
+    Scenario: a dynamic invalid zone still raises on a non-NULL timestamp
+      When query
+        """
+        SELECT from_utc_timestamp(source_ts, target_tz) AS result
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP), 'Not/AZone'),
+          (TIMESTAMP '2024-01-01 00:00:00', 'Not/AZone')
+          AS t(source_ts, target_tz)
+        """
+      Then query error INVALID_TIMEZONE
 
   Rule: Daylight saving time handling
 

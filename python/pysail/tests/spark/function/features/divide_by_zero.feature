@@ -40,6 +40,21 @@ Feature: Division by zero behavior
         | Modulo by literal zero throws error in ANSI mode                 | 10 % 0                                                  | (?i)remainder.*zero  |
         | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)division by zero |
 
+    Scenario Outline: an unused literal-zero division does not raise: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                 | expr                                                                | result |
+        | unused THEN branch   | CASE WHEN false THEN 1 / 0 ELSE 7 END                                | 7.0    |
+        | NULL selected branch | CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE 1 / 0 END               | NULL   |
+
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>
       Given config spark.sql.ansi.enabled = true

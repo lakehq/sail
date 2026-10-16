@@ -236,14 +236,6 @@ Feature: window() time-based windowing function
 
   Rule: Argument validation
 
-    Scenario: window duration must be a literal
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', '5 minutes') AS t(b, d)
-        GROUP BY window(b, d)
-        """
-      Then query error (?i)duration.*must be.*literal
-
     # Spark reports these through WRONG_NUM_ARGS and DATATYPE_MISMATCH error classes; Sail uses
     # its own wording for every one of them.
     @sail-bug
@@ -258,6 +250,7 @@ Feature: window() time-based windowing function
       Examples:
         | case                                                             | values                                       | cols | args                         | error                                                                |
         | window rejects a single argument                                 | TIMESTAMP '2021-01-01 00:00:00'              | b    | b                            | WRONG_NUM_ARGS.*window. requires .2, 3, 4. parameters but the actual number is 1 |
+        | window rejects a non-literal duration                            | TIMESTAMP '2021-01-01 00:00:00', '5 minutes' | b, d | b, d                         | The duration and time inputs to window must be an integer, long or string literal            |
         | window rejects a zero window duration                            | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '0 seconds'               | DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*window_duration. must be between            |
         | window rejects a zero slide duration                             | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '10 minutes', '0 seconds' | DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*slide_duration. must be between             |
         | window rejects a slide duration greater than the window duration | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '5 minutes', '10 minutes' | DATATYPE_MISMATCH.PARAMETER_CONSTRAINT_VIOLATION.*must be <= the                       |

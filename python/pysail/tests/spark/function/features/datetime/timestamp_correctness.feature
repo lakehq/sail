@@ -338,6 +338,40 @@ Feature: Timestamp operations preserve instants and session-local calendar value
       | seconds | int_seconds |
       | -1      | -1          |
 
+  Scenario Outline: Minimum integer seconds keep their numeric type with ANSI <ansi>
+    Given config spark.sql.session.timeZone = UTC
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT unix_micros(to_timestamp(-9223372036854775808)) AS integer_micros,
+             unix_micros(to_timestamp(-9223372036854775808L)) AS suffixed_micros,
+             unix_micros(to_timestamp(CAST(-9223372036854775808 AS DECIMAL(19, 0)))) AS decimal_micros
+      """
+    Then query result
+      | integer_micros       | suffixed_micros      | decimal_micros |
+      | -9223372036854775808 | -9223372036854775808 | 0             |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario: Timestamp parsing saturates integer columns at both bounds
+    Given config spark.sql.session.timeZone = UTC
+    When query
+      """
+      SELECT id, unix_micros(to_timestamp(seconds)) AS micros
+      FROM VALUES
+        (0, -9223372036854775808),
+        (1, 9223372036854775807),
+        (2, CAST(NULL AS BIGINT)) AS t(id, seconds)
+      """
+    Then query result
+      | id | micros               |
+      | 0  | -9223372036854775808 |
+      | 1  | 9223372036854775807  |
+      | 2  | NULL                 |
+
   @sail-only
   Scenario Outline: Explicit <cast> preserves Sail's numeric and naive timestamp conversions
     When query
@@ -693,3 +727,87 @@ Feature: Timestamp operations preserve instants and session-local calendar value
     Then query result
       | value                            |
       | [{ts -> {2020-03-08 03:30:00}}] |
+
+  Scenario Outline: NULL datetime arguments preserve aggregation for <case>
+    When query
+      """
+      SELECT <expression> AS result FROM range(3)
+      """
+    Then query result
+      | result |
+      | NULL   |
+    When query
+      """
+      SELECT <expression> AS result FROM range(0)
+      """
+    Then query result
+      | result |
+      | NULL   |
+
+    Examples:
+      | case                      | expression                                                                                                      |
+      | convert_timezone direct   | convert_timezone(CAST(NULL AS STRING), max('UTC'), TIMESTAMP_NTZ '2024-01-01 00:00:00')                           |
+      | convert_timezone foldable | convert_timezone(max('UTC'), concat(CAST(NULL AS STRING), 'UTC'), TIMESTAMP_NTZ '2024-01-01 00:00:00')            |
+      | make_date                 | make_date(CAST(NULL AS INT), 1, CAST(max(id) AS INT))                                                             |
+      | to_timestamp value        | to_timestamp(CAST(NULL AS STRING), max('yyyy'))                                                                   |
+      | to_timestamp format       | to_timestamp(max('2024'), CAST(NULL AS STRING))                                                                   |
+      | to_timestamp_ntz          | to_timestamp_ntz(CAST(NULL AS STRING), max('yyyy'))                                                               |
+      | try_to_timestamp          | try_to_timestamp(CAST(NULL AS STRING), max('yyyy'))                                                               |
+      | try_to_date               | try_to_date(CAST(NULL AS STRING), max('yyyy'))                                                                    |
+      | from_utc_timestamp        | from_utc_timestamp(max(TIMESTAMP '2024-01-01'), CAST(NULL AS STRING))                                              |
+      | to_utc_timestamp          | to_utc_timestamp(max(TIMESTAMP '2024-01-01'), CAST(NULL AS STRING))                                                |
+
+  @sail-only
+  Scenario Outline: NULL datetime arguments preserve nested generators for <case>
+    # Sail supports nested generators; NULL folding must preserve their output rows.
+    When query
+      """
+      SELECT count(*) AS rows, count(result) AS non_nulls
+      FROM (SELECT <expression> AS result FROM range(3))
+      """
+    Then query result
+      | rows | non_nulls |
+      | 6    | 0         |
+    When query
+      """
+      SELECT count(*) AS rows, count(result) AS non_nulls
+      FROM (SELECT <expression> AS result FROM range(0))
+      """
+    Then query result
+      | rows | non_nulls |
+      | 0    | 0         |
+
+    Examples:
+      | case               | expression                                                                                                                    |
+      | convert_timezone   | convert_timezone(CAST(NULL AS STRING), explode(array('UTC', 'UTC')), TIMESTAMP_NTZ '2024-01-01 00:00:00')                       |
+      | make_date          | make_date(CAST(NULL AS INT), 1, explode(array(1, 2)))                                                                           |
+      | from_utc_timestamp | from_utc_timestamp(explode(array(TIMESTAMP '2024-01-01', TIMESTAMP '2024-01-02')), CAST(NULL AS STRING))                         |
+
+  Scenario Outline: Typed NULL datetime arguments retain unsupported cast validation for <case>
+    When query
+      """
+      SELECT <expression> AS result
+      """
+    Then query error (DATATYPE_MISMATCH|Unsupported (TRY_)?CAST)
+
+    Examples:
+      | case                          | expression                                                                                                               |
+      | convert_timezone cast         | convert_timezone(CAST(NULL AS STRING), 'UTC', CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP_NTZ))                             |
+      | convert_timezone try cast     | convert_timezone(CAST(NULL AS STRING), 'UTC', TRY_CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP_NTZ))                         |
+      | make_date other component     | make_date(CAST(NULL AS INT), CAST(CAST(NULL AS ARRAY<INT>) AS INT), 1)                                                      |
+      | make_date null component      | make_date(CAST(CAST(NULL AS ARRAY<INT>) AS INT), 1, 1)                                                                     |
+      | to_timestamp value            | to_timestamp(CAST(CAST(NULL AS ARRAY<INT>) AS INT), CAST(NULL AS STRING))                                                  |
+      | to_timestamp format           | to_timestamp(CAST(NULL AS STRING), CAST(CAST(NULL AS ARRAY<INT>) AS INT))                                                  |
+      | from_utc_timestamp timestamp   | from_utc_timestamp(CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP), CAST(NULL AS STRING))                                      |
+      | to_utc_timestamp timestamp     | to_utc_timestamp(CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP), CAST(NULL AS STRING))                                        |
+
+  @sail-only
+  Scenario: Existing bare NULL datetime shortcuts skip unevaluated unsupported casts
+    When query
+      """
+      SELECT make_date(NULL, CAST(CAST(NULL AS ARRAY<INT>) AS INT), 1) AS null_date,
+             to_timestamp(NULL, CAST(CAST(NULL AS ARRAY<INT>) AS INT)) AS null_timestamp
+      """
+    Then query result
+      | null_date | null_timestamp |
+      | NULL      | NULL           |

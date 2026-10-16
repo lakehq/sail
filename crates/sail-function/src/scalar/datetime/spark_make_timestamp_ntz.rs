@@ -1,33 +1,52 @@
 use std::sync::Arc;
 
 use chrono::{Duration, NaiveDate};
-use datafusion::arrow::array::{Array, PrimitiveArray, PrimitiveBuilder};
-use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
+use datafusion::arrow::array::{Array, ArrayRef, Float64Array, PrimitiveArray, PrimitiveBuilder};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{
     as_date32_array, as_float64_array, as_int32_array, as_time64_microsecond_array, as_uint32_array,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
-use crate::scalar::datetime::utils::make_timestamp_from_date_time;
+use crate::scalar::datetime::utils::{make_timestamp_from_date_time, string_array_iter};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeTimestampNtz {
     signature: Signature,
     is_try: bool,
+    ansi_mode: bool,
 }
 
 impl SparkMakeTimestampNtz {
-    pub fn new(is_try: bool) -> Self {
+    pub fn new(is_try: bool, ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
             is_try,
+            ansi_mode,
         }
     }
 
     pub fn is_try(&self) -> bool {
         self.is_try
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
+    }
+
+    fn parse_string_seconds(&self, value: &str) -> Result<Option<f64>> {
+        if let Some(micros) = parse_seconds_micros(value) {
+            return Ok(Some(micros as f64 / 1_000_000.0));
+        }
+        // Preserve Sail's safe handling of Float64 strings such as NaN and Infinity.
+        if !self.ansi_mode || (self.is_try && value.trim().parse::<f64>().is_ok()) {
+            return Ok(None);
+        }
+        exec_err!("[CAST_INVALID_INPUT] cannot cast '{value}' to DECIMAL(16,6)")
     }
 }
 
@@ -42,6 +61,37 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Match Spark's implicit seconds cast to DECIMAL(16, 6), preserving numeric inputs.
+        let nullable_seconds =
+            args.arg_fields
+                .get(5)
+                .is_some_and(|field| match field.data_type() {
+                    DataType::Float16
+                    | DataType::Float32
+                    | DataType::Float64
+                    | DataType::Int64
+                    | DataType::UInt64 => true,
+                    DataType::Decimal32(precision, scale)
+                    | DataType::Decimal64(precision, scale)
+                    | DataType::Decimal128(precision, scale)
+                    | DataType::Decimal256(precision, scale) => {
+                        let integer_digits = i16::from(*precision) - i16::from(*scale);
+                        integer_digits > 10 || (integer_digits == 10 && *scale > 6)
+                    }
+                    data_type => data_type.is_string(),
+                });
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&[])?,
+            // Spark's date/time NTZ overload declares a nullable result independently of its inputs.
+            args.arg_fields.len() == 2
+                || self.is_try
+                || nullable_seconds
+                || args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -101,7 +151,29 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
             let days = days.to_array(number_rows)?;
             let hours = hours.to_array(number_rows)?;
             let minutes = minutes.to_array(number_rows)?;
-            let seconds = seconds.to_array(number_rows)?;
+            let float_seconds = seconds.data_type().is_floating();
+            let seconds: ArrayRef = if seconds.data_type().is_string() {
+                let values = seconds.to_array(number_rows)?;
+                let seconds: Float64Array = string_array_iter(values.as_ref())?
+                    .enumerate()
+                    .map(|(i, value)| {
+                        if years.is_null(i)
+                            || months.is_null(i)
+                            || days.is_null(i)
+                            || hours.is_null(i)
+                            || minutes.is_null(i)
+                        {
+                            return Ok(None);
+                        }
+                        value.map_or(Ok(None), |value| self.parse_string_seconds(value))
+                    })
+                    .collect::<Result<_>>()?;
+                Arc::new(seconds)
+            } else {
+                seconds
+                    .cast_to(&DataType::Float64, None)?
+                    .to_array(number_rows)?
+            };
 
             let years = as_int32_array(&years)?;
             let months = as_uint32_array(&months)?;
@@ -129,6 +201,11 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 let hour = hours.value(i);
                 let minute = minutes.value(i);
                 let second = seconds.value(i);
+                // Spark's implicit Float -> Decimal conversion makes non-finite seconds NULL.
+                if float_seconds && !second.is_finite() {
+                    builder.append_null();
+                    continue;
+                }
                 match make_timestamp_ntz(year, month, day, hour, minute, second) {
                     Some(micros) => builder.append_value(micros),
                     None => {
@@ -166,6 +243,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
         }
 
         if let [years, months, days, hours, mins, secs] = arg_types {
+            let seconds_type = secs.clone();
             let years: NativeType = years.into();
             let months: NativeType = months.into();
             let days: NativeType = days.into();
@@ -197,7 +275,11 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                     DataType::UInt32,
                     DataType::UInt32,
                     DataType::UInt32,
-                    DataType::Float64,
+                    if secs.is_numeric() || matches!(secs, NativeType::String) {
+                        seconds_type
+                    } else {
+                        DataType::Float64
+                    },
                 ]);
             } else {
                 return plan_err!(
@@ -213,6 +295,67 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
     }
 }
 
+// Round a DECIMAL(16,6) seconds string without losing half-microsecond precision through f64.
+fn parse_seconds_micros(value: &str) -> Option<i64> {
+    let value = value.trim();
+    let negative = value.starts_with('-');
+    let value = value.strip_prefix(['-', '+']).unwrap_or(value);
+    let (mantissa, exponent) = if let Some((mantissa, exponent)) = value.split_once(['e', 'E']) {
+        let negative = exponent.starts_with('-');
+        let digits = exponent.strip_prefix(['-', '+']).unwrap_or(exponent);
+        if digits.is_empty() || !digits.bytes().all(|digit| digit.is_ascii_digit()) {
+            return None;
+        }
+        // Large negative exponents underflow to zero without allocating their zero padding.
+        let exponent = digits.bytes().fold(0i64, |value, digit| {
+            value
+                .saturating_mul(10)
+                .saturating_add(i64::from(digit - b'0'))
+        });
+        (mantissa, if negative { -exponent } else { exponent })
+    } else {
+        (value, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if whole.is_empty() && fraction.is_empty()
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|digit| digit.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut digits = whole
+        .bytes()
+        .chain(fraction.bytes())
+        .skip_while(|digit| *digit == b'0');
+    let significant_digits = digits.clone().count();
+    if significant_digits == 0 {
+        return Some(0);
+    }
+    let scaled_digits = (significant_digits as i64)
+        .saturating_sub(fraction.len() as i64)
+        .saturating_add(exponent)
+        .saturating_add(6);
+    if scaled_digits < 0 {
+        return Some(0);
+    }
+    if scaled_digits > 16 {
+        return None;
+    }
+    let mut micros = 0i64;
+    for _ in 0..scaled_digits {
+        micros = micros * 10 + i64::from(digits.next().unwrap_or(b'0') - b'0');
+    }
+    if digits.next().is_some_and(|digit| digit >= b'5') {
+        micros += 1;
+    }
+    if micros >= 10_000_000_000_000_000 {
+        return None;
+    }
+    Some(if negative { -micros } else { micros })
+}
+
 fn contains_scalar_null(args: &[ColumnarValue]) -> bool {
     args.iter().any(|arg| {
         if let ColumnarValue::Scalar(scalar) = arg {
@@ -226,7 +369,6 @@ fn contains_scalar_null(args: &[ColumnarValue]) -> bool {
 /// Helper function to create timestamp from date/time components
 ///
 /// Matches Spark's `MakeTimestamp` semantics:
-///   - year: 1 to 9999
 ///   - month: 1 to 12
 ///   - day: 1 to 31 (validated by chrono for the given month/year)
 ///   - hour: 0 to 23
@@ -246,29 +388,22 @@ fn make_timestamp_ntz(
     min: u32,
     sec: f64,
 ) -> Option<i64> {
-    // Spark restricts year to 1-9999 (chrono accepts wider range)
-    if !(1..=9999).contains(&year) {
-        return None;
-    }
-    // Second must be in [0, 60] range
-    if !(0.0..=60.0).contains(&sec) || sec.is_nan() {
-        return None;
-    }
-
     // Convert sec (f64) to integer seconds + microseconds, matching Spark's Decimal(16,6) approach.
     // Spark does: unscaledSecFrac = decimal.toUnscaledLong (with 6 decimal places)
     //   seconds = floorDiv(unscaledSecFrac, 1_000_000)
     //   nanos = floorMod(unscaledSecFrac, 1_000_000) * 1000
-    let micros_total = (sec * 1_000_000.0).round() as i64;
+    // FIXME: Numeric inputs such as 0.5000005 can lose half-microsecond precision in f64.
+    let micros_total = (sec * 1_000_000.0).round();
+    // Validate after decimal rounding, including values that round to zero or exactly 60 seconds.
+    if !(0.0..=60_000_000.0).contains(&micros_total) {
+        return None;
+    }
+    let micros_total = micros_total as i64;
     let seconds = micros_total / 1_000_000;
     let micro_frac = (micros_total % 1_000_000) as u32;
 
     if seconds == 60 {
         // Spark: sec=60 with zero fractional part → add 1 minute
-        // Spark: sec=60 with non-zero fractional part → error (NULL in non-ANSI mode)
-        if micro_frac != 0 {
-            return None;
-        }
         let naive_date = NaiveDate::from_ymd_opt(year, month, day)?;
         let base_time = naive_date.and_hms_micro_opt(hour, min, 0, 0)?;
         return base_time
