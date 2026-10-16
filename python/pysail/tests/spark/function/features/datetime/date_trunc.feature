@@ -417,10 +417,7 @@ Feature: DATE_TRUNC output type
 
   Rule: Named-zone truncation respects historical and daylight saving boundaries
 
-    @sail-bug
     Scenario: a historical minute is aligned in local time for scalar input
-      # FIXME: The integer MINUTE path ignores historical second-resolution zone offsets.
-      # A transition-aware replacement must preserve batch performance and the timestamp range.
       Given config spark.sql.session.timeZone = Asia/Kathmandu
       When query
         """
@@ -431,9 +428,7 @@ Feature: DATE_TRUNC output type
         | result              | micros            |
         | 1900-01-01 05:41:00 | -2208988816000000 |
 
-    @sail-bug
     Scenario: historical minute columns include second-resolution zone offsets
-      # FIXME: MINUTE retains the same pre-existing UTC-aligned boundary for timestamp columns.
       Given config spark.sql.session.timeZone = Asia/Kathmandu
       When query
         """
@@ -446,6 +441,22 @@ Feature: DATE_TRUNC output type
         | result            |
         | -2208988816000000 |
         | -2208988756000000 |
+
+    Scenario: minute truncation resolves a historical offset transition
+      Given config spark.sql.session.timeZone = Africa/Monrovia
+      When query
+        """
+        SELECT id, date_trunc('MINUTE', ts) = expected AS matches
+        FROM VALUES
+          (1, TIMESTAMP '1972-01-07 00:44:20Z', TIMESTAMP '1972-01-07 00:43:30Z'),
+          (2, TIMESTAMP '1972-01-07 00:44:40Z', TIMESTAMP '1972-01-07 01:28:30Z')
+          AS t(id, ts, expected)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | matches |
+        | 1  | true    |
+        | 2  | true    |
 
     Scenario: month starts choose the earliest repeated midnight while DAY retains the input offset
       Given config spark.sql.session.timeZone = America/Havana

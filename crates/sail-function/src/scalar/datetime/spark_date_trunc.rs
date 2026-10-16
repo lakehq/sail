@@ -21,7 +21,7 @@ use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{Field, FieldRef};
 use chrono::{
-    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
+    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, TimeZone, Timelike,
 };
 use chrono_tz::GapInfo;
 use datafusion_common::cast::as_primitive_array;
@@ -35,6 +35,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use sail_common::utils::datetime::time_unit_to_multiplier;
 
 use crate::scalar::datetime::utils::{is_fixed_zero_offset_timezone, string_array_iter};
 
@@ -75,18 +76,19 @@ trait DateTruncGranularityExt {
 
 impl DateTruncGranularityExt for DatePart {
     /// Returns true if this granularity can be handled with simple arithmetic
-    /// (fine granularity: second, minute, millisecond, microsecond)
+    /// (fine granularity: second, millisecond, microsecond)
     fn is_fine_granularity(&self) -> bool {
         matches!(
             self,
-            DatePart::Second | DatePart::Minute | DatePart::Millisecond | DatePart::Microsecond
+            DatePart::Second | DatePart::Millisecond | DatePart::Microsecond
         )
     }
 
     /// Returns true if this granularity can be handled with simple arithmetic in UTC
-    /// (hour and day in addition to fine granularities)
+    /// (minute, hour and day in addition to fine granularities)
     fn is_fine_granularity_utc(&self) -> bool {
-        self.is_fine_granularity() || matches!(self, DatePart::Hour | DatePart::Day)
+        self.is_fine_granularity()
+            || matches!(self, DatePart::Minute | DatePart::Hour | DatePart::Day)
     }
 
     /// Returns true if this granularity is valid for Time types
@@ -625,6 +627,15 @@ fn _date_trunc_coarse_with_tz(
                         .end
                         .map(|end| end.with_timezone(&value.timezone()));
                 }
+                if granularity == DatePart::Minute {
+                    // Spark shifts a boundary in a gap forward by the gap's exact duration.
+                    let named = value.timezone().to_string().parse::<chrono_tz::Tz>().ok()?;
+                    let before = GapInfo::new(&truncated, &named)?.begin?.1.fix();
+                    return truncated
+                        .and_local_timezone(before)
+                        .single()
+                        .map(|datetime| datetime.with_timezone(&value.timezone()));
+                }
                 // This can happen if the date_trunc operation moves the time into
                 // an hour that doesn't exist due to daylight savings. On known example where
                 // this can happen is with historic dates in the America/Sao_Paulo time zone.
@@ -639,7 +650,7 @@ fn _date_trunc_coarse_with_tz(
             }
             LocalResult::Single(datetime) => Some(datetime),
             LocalResult::Ambiguous(datetime1, datetime2) => {
-                // Calendar boundaries choose the earliest instant; HOUR and DAY
+                // Calendar boundaries choose the earliest instant; MINUTE, HOUR and DAY
                 // retain the original offset when the local time repeats.
                 if calendar || datetime1.offset().fix() == value.offset().fix() {
                     Some(datetime1)
@@ -799,7 +810,7 @@ fn date_trunc_coarse(
 ///
 /// This function is timezone-agnostic and should only be used when:
 /// - No timezone is specified in the input, OR
-/// - The granularity is less than hour as hour can be affected by DST transitions in some cases
+/// - The granularity is less than minute, since offsets can include seconds
 fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     tu: TimeUnit,
     array: &PrimitiveArray<T>,
@@ -839,10 +850,7 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 /// Whether truncating to `granularity` is plain arithmetic in the input's own
 /// time unit: rounding down to a multiple of [`fine_granularity_unit`].
 ///
-/// For modern timezones, it's correct to truncate "minute" in this way.
-/// Both datafusion and arrow are ignoring historical timezone's non-minute granularity
-/// bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
-/// In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+/// In UTC, minute, hour and day also have uniform, UTC-aligned boundaries.
 fn truncates_in_input_unit(granularity: DatePart, tz: Option<&Tz>) -> bool {
     granularity.is_fine_granularity() || (tz.is_none() && granularity.is_fine_granularity_utc())
 }
@@ -897,6 +905,35 @@ fn general_date_trunc(
             Some(unit) => truncate_to_unit(value, unit.get(), granularity),
             None => Ok(value),
         };
+    }
+    if granularity == DatePart::Minute
+        && let Some(tz) = tz
+    {
+        // Match Spark's truncToUnitFast: round in local time, then verify the offset.
+        let units_per_second = time_unit_to_multiplier(&tu);
+        let unit = 60 * units_per_second;
+        let offset_at = |value: i64| {
+            let seconds = value.div_euclid(units_per_second);
+            // Chrono-tz's first and last offset periods extend beyond Chrono's range.
+            let utc = DateTime::from_timestamp(seconds, 0)
+                .map(|datetime| datetime.naive_utc())
+                .unwrap_or(if seconds < 0 {
+                    NaiveDateTime::MIN
+                } else {
+                    NaiveDateTime::MAX
+                });
+            i64::from(tz.offset_from_utc_datetime(&utc).fix().local_minus_utc())
+        };
+        let offset = offset_at(value);
+        // Reduce before adding so a valid timestamp near i64's bounds cannot overflow.
+        let remainder =
+            (value.rem_euclid(unit) + offset.rem_euclid(60) * units_per_second).rem_euclid(unit);
+        if let Some(candidate) = value.checked_sub(remainder)
+            && offset_at(candidate) == offset
+        {
+            return Ok(candidate);
+        }
+        // A transition (or arithmetic overflow) needs Spark's local-time resolution.
     }
     date_trunc_coarse(granularity, value, tz, tu, start_of_day)
 }
