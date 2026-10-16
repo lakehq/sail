@@ -79,8 +79,6 @@ use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
-use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
@@ -172,17 +170,19 @@ use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, SparkToLocalTime};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
+use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
     SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -3560,6 +3560,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
+            UdfKind::SparkMakeDtInterval(r#gen::SparkMakeDtIntervalUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    SparkMakeDtInterval::new().with_ansi_mode(ansi_mode),
+                )));
+            }
+            UdfKind::SparkMakeInterval(r#gen::SparkMakeIntervalUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    SparkMakeInterval::new().with_ansi_mode(ansi_mode),
+                )));
+            }
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf {
                 is_try,
                 ansi_mode,
@@ -3723,25 +3733,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
-            "spark_date_part" | "date_part" | "datepart" | "extract" => {
-                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
+            "spark_date_part" => Ok(Arc::new(ScalarUDF::from(SparkDatePart::new()))),
+            "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(DatePartFunc::new())))
             }
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
-            "spark_make_dt_interval" | "make_dt_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
-            }
-            "spark_make_interval" | "make_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
-            }
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
-            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
+            "to_local_time" => Ok(Arc::new(ScalarUDF::from(SparkToLocalTime::default()))),
+            "spark_date_trunc" | "date_trunc" | "datetrunc" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new())))
+            }
+            "spark_start_of_day" => Ok(Arc::new(ScalarUDF::from(SparkStartOfDay::new()))),
             "spark_timestamp_add" => Ok(Arc::new(ScalarUDF::from(SparkTimestampAdd::new()))),
             "spark_timestamp_seconds" => Ok(Arc::new(ScalarUDF::from(
                 SparkTimestampFromNumber::new(TimestampNumberMode::Seconds),
@@ -3886,7 +3895,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<DatePartFunc>()
+            || node_inner.is::<SparkToLocalTime>()
             || node_inner.is::<SparkDateTrunc>()
+            || node_inner.is::<SparkStartOfDay>()
             || node_inner.is::<SparkTimestampAdd>()
             || node_inner.is::<SparkTimestampFromNumber>()
             || node_inner.is::<SparkDayTimeInterval>()
@@ -3905,8 +3916,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkYear>()
             || node_inner.is::<SparkLuhnCheck>()
-            || node_inner.is::<SparkMakeDtInterval>()
-            || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTime>()
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
@@ -4139,6 +4148,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkFloor>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkFloor(r#gen::SparkFloorUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMakeDtInterval>() {
+            UdfKind::SparkMakeDtInterval(r#gen::SparkMakeDtIntervalUdf {
+                ansi_mode: func.ansi_mode(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMakeInterval>() {
+            UdfKind::SparkMakeInterval(r#gen::SparkMakeIntervalUdf {
+                ansi_mode: func.ansi_mode(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             let ansi_mode = func.ansi_mode();
@@ -7355,10 +7372,16 @@ mod tests {
             ScalarUDF::from(SparkDatePart::new()),
             ScalarUDF::from(DatePartFunc::new()),
         ] {
-            let decoded = round_trip_udf(udf)?;
-
-            assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-            assert_eq!(decoded.name(), "date_part");
+            let decoded = round_trip_udf(udf.clone())?;
+            assert_eq!(decoded.name(), udf.name());
+            assert_eq!(
+                decoded.inner().is::<SparkDatePart>(),
+                udf.inner().is::<SparkDatePart>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DatePartFunc>(),
+                udf.inner().is::<DatePartFunc>()
+            );
         }
 
         Ok(())
@@ -8755,6 +8778,46 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_make_interval_preserves_ansi_mode() -> Result<()> {
+        for ansi_mode in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(
+                SparkMakeDtInterval::new().with_ansi_mode(ansi_mode),
+            ))?;
+            let decoded = downcast_udf::<SparkMakeDtInterval>(&decoded, "SparkMakeDtInterval")?;
+            assert_eq!(decoded.ansi_mode(), ansi_mode);
+            let decoded = round_trip_udf(ScalarUDF::from(
+                SparkMakeInterval::new().with_ansi_mode(ansi_mode),
+            ))?;
+            let decoded = downcast_udf::<SparkMakeInterval>(&decoded, "SparkMakeInterval")?;
+            assert_eq!(decoded.ansi_mode(), ansi_mode);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_to_local_time_preserves_nullability() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToLocalTime::default()))?;
+        for nullable in [false, true] {
+            let field = Arc::new(Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("America/Los_Angeles".into())),
+                nullable,
+            ));
+            let result =
+                decoded.return_field_from_args(datafusion::logical_expr::ReturnFieldArgs {
+                    arg_fields: &[field],
+                    scalar_arguments: &[None],
+                })?;
+            assert_eq!(result.is_nullable(), nullable);
+            assert_eq!(
+                result.data_type(),
+                &DataType::Timestamp(TimeUnit::Microsecond, None)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_convert_tz_preserves_null_short_circuit() -> Result<()> {
         let udf = ConvertTz::new(true).with_null_short_circuit();
         let decoded = round_trip_udf(ScalarUDF::from(udf))?;
@@ -8838,7 +8901,7 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
 
         assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "date_part");
+        assert_eq!(decoded.name(), "spark_date_part");
 
         Ok(())
     }

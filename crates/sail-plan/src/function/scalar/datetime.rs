@@ -15,18 +15,18 @@ use datafusion_expr::{
     cast, lit, try_cast, when,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
-use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy, SparkToLocalTime};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
+use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -354,7 +354,8 @@ fn timestamp_micros(expr: Expr) -> Expr {
 }
 
 fn timestamp_time_micros(expr: Expr) -> Expr {
-    timestamp_micros(expr.clone()) - timestamp_micros(expr_fn::date_trunc(lit("DAY"), expr))
+    let remainder = timestamp_micros(expr) % lit(MICROS_PER_DAY);
+    (remainder + lit(MICROS_PER_DAY)) % lit(MICROS_PER_DAY)
 }
 
 fn timestamp_months(expr: Expr) -> Expr {
@@ -386,8 +387,7 @@ fn timestamp_month_diff(start: Expr, end: Expr) -> PlanResult<Expr> {
         .and(timestamp_day_time_is_before(start, end));
     Ok(when(incomplete_positive_month, months.clone() - lit(1_i64))
         .when(incomplete_negative_month, months.clone() + lit(1_i64))
-        .when(lit(true), months)
-        .end()?)
+        .otherwise(months)?)
 }
 
 fn timestampdiff_calendar_unit(unit: &str, start: Expr, end: Expr) -> PlanResult<Expr> {
@@ -539,7 +539,9 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         )?;
         let expr_type = expr.get_type(input.function_context.schema);
         let date = match &expr_type {
-            Ok(DataType::Timestamp(_, _)) => Some(expr_fn::to_local_time(vec![expr.clone()])),
+            Ok(DataType::Timestamp(_, _)) => {
+                Some(ScalarUDF::from(SparkToLocalTime::default()).call(vec![expr.clone()]))
+            }
             Ok(DataType::Date32 | DataType::Date64) => Some(expr.clone()),
             _ => None,
         };
@@ -942,7 +944,7 @@ fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr
 
 fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let expr = current_timestamp_microseconds(input)?;
-    Ok(expr_fn::to_local_time(vec![expr]))
+    Ok(ScalarUDF::from(SparkToLocalTime::default()).call(vec![expr]))
 }
 
 fn current_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1115,7 +1117,10 @@ fn ntz_timestamp_and_unit(
     ansi_mode: bool,
 ) -> PlanResult<(Expr, TimeUnit)> {
     match ts.get_type(schema)? {
-        DataType::Timestamp(unit, Some(_)) => Ok((expr_fn::to_local_time(vec![ts]), unit)),
+        DataType::Timestamp(unit, Some(_)) => Ok((
+            ScalarUDF::from(SparkToLocalTime::default()).call(vec![ts]),
+            unit,
+        )),
         DataType::Timestamp(unit, None) => Ok((ts, unit)),
         DataType::Null => {
             let unit = TimeUnit::Microsecond;
@@ -1378,8 +1383,95 @@ fn make_timestamp(
     }
 }
 
-fn date_part(part: Expr, date: Expr) -> Expr {
-    ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
+fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (part, mut source) = input.arguments.two()?;
+    let context = input.function_context;
+    let part_type = part.get_type(context.schema)?;
+    if !part_type.is_string() && part_type != DataType::Null {
+        return Err(PlanError::invalid(
+            "date_part requires a foldable string field",
+        ));
+    }
+    let part = fold_timezone_argument(part, context.schema)?;
+    let Expr::Literal(value, _) = &part else {
+        return Err(PlanError::invalid(
+            "date_part requires a foldable string field",
+        ));
+    };
+    if value.is_null() {
+        let source = ExprSimplifier::new(
+            SimplifyContextBuilder::default()
+                .with_schema(Arc::clone(context.schema))
+                .build(),
+        )
+        .coerce(source, context.schema)?;
+        // Spark's Extract replacement discards the source, including aggregates,
+        // after type checking, without evaluating its values.
+        if has_unsupported_datetime_casts([&source], context.schema)? {
+            return Ok(ScalarUDF::from(SparkDatePart::new())
+                .call(vec![lit(ScalarValue::Utf8(None)), source]));
+        }
+        return Ok(lit(ScalarValue::Float64(None)));
+    }
+    let name = value
+        .try_as_str()
+        .flatten()
+        .ok_or_else(|| PlanError::invalid("date_part requires a foldable string field"))?
+        .to_ascii_uppercase();
+    let (part, date_field, sunday_one) = match name.as_str() {
+        "YEAR" | "Y" | "YEARS" | "YR" | "YRS" => ("year", true, false),
+        "YEAROFWEEK" | "ISOYEAR" => ("isoyear", true, false),
+        "QUARTER" | "QTR" => ("quarter", true, false),
+        "MONTH" | "MON" | "MONS" | "MONTHS" => ("month", true, false),
+        "WEEK" | "W" | "WEEKS" => ("week", true, false),
+        "DAY" | "D" | "DAYS" => ("day", true, false),
+        "DAYOFWEEK" | "DOW" => ("dow", true, true),
+        "DAYOFWEEK_ISO" | "DOW_ISO" | "ISODOW" => ("isodow", true, false),
+        "DOY" => ("doy", true, false),
+        "HOUR" | "H" | "HOURS" | "HR" | "HRS" => ("hour", false, false),
+        "MINUTE" | "M" | "MIN" | "MINS" | "MINUTES" => ("minute", false, false),
+        "SECOND" | "S" | "SEC" | "SECONDS" | "SECS" => ("second", false, false),
+        // Keep the native aliases and additional parts accepted by Sail.
+        _ => (name.as_str(), false, false),
+    };
+    let source_type = source.get_type(context.schema)?;
+    if source_type.is_string() || source_type == DataType::Null {
+        source = if date_field {
+            datetime_date(source, &context)?
+        } else {
+            datetime_timestamp(source, &context, false, false)?
+        };
+    } else if let DataType::Timestamp(unit, Some(_)) = &source_type {
+        // Native extraction already reads calendar fields; only the session-zone
+        // metadata needs changing, without an extra timestamp-to-date buffer pass.
+        source = cast(
+            source,
+            DataType::Timestamp(
+                *unit,
+                Some(Arc::clone(&context.plan_config.session_timezone)),
+            ),
+        );
+    }
+    let result = if part == "second"
+        || matches!(source_type, DataType::Interval(_) | DataType::Duration(_))
+    {
+        ScalarUDF::from(SparkDatePart::new()).call(vec![lit(part), source])
+    } else {
+        expr_fn::date_part(lit(part), source)
+    };
+    let result = if sunday_one {
+        result + lit(1i32)
+    } else {
+        result
+    };
+    // Spark's NTZ-to-date cast and TIME StaticInvoke expressions are nullable.
+    declare_nullable_result(
+        result,
+        (date_field && matches!(source_type, DataType::Timestamp(_, None)))
+            || (matches!(source_type, DataType::Time32(_) | DataType::Time64(_))
+                && matches!(part, "hour" | "minute" | "second")),
+        context.schema,
+    )
 }
 
 fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1411,7 +1503,10 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let seconds_in_day = |dt: Expr, tu: TimeUnit| {
         (cast(dt.clone(), DataType::Int64)
-            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
+            - cast(
+                ScalarUDF::from(SparkStartOfDay::new()).call(vec![dt]),
+                DataType::Int64,
+            ))
             / lit(time_unit_to_multiplier(&tu))
     };
 
@@ -1438,15 +1533,18 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
             .or(is_last_day(date1).and(is_last_day(date2))),
         month_diff.clone(),
     )
-    .when(lit(true), month_diff + seconds_diff / seconds_in_month)
-    .end()?;
+    .otherwise(month_diff + seconds_diff / seconds_in_month)?;
 
-    Ok(when(
-        round_off,
+    let result = when(
+        round_off.clone(),
         expr_fn::round(vec![months_between.clone(), lit(8)]),
     )
-    .when(lit(true), months_between)
-    .end()?)
+    .otherwise(months_between)?;
+    if round_off.nullable(function_context.schema)? {
+        Ok(when(round_off.is_null(), lit(ScalarValue::Float64(None))).otherwise(result)?)
+    } else {
+        Ok(result)
+    }
 }
 
 // Parses window durations, including Sail's interval literal extension.
@@ -1688,7 +1786,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
-        ("date_part", F::binary(date_part)),
+        ("date_part", F::custom(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
@@ -1696,7 +1794,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("date_trunc", F::custom(date_trunc)),
         ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
-        ("datepart", F::binary(date_part)),
+        ("datepart", F::custom(date_part)),
         ("day", F::custom(|input| date_field(input, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
         ("dayofmonth", F::custom(|input| date_field(input, "DAY"))),
@@ -1705,7 +1803,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| Ok(date_field(input, "DOW")? + lit(1))),
         ),
         ("dayofyear", F::custom(|input| date_field(input, "DOY"))),
-        ("extract", F::binary(date_part)),
+        ("extract", F::custom(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         (
             "from_utc_timestamp",
@@ -1721,8 +1819,26 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(current_localtimestamp_microseconds),
         ),
         ("make_date", F::custom(make_date)),
-        ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
-        ("make_interval", F::udf(SparkMakeInterval::new())),
+        (
+            "make_dt_interval",
+            F::custom(|input| {
+                Ok(ScalarUDF::from(
+                    SparkMakeDtInterval::new()
+                        .with_ansi_mode(input.function_context.plan_config.ansi_mode),
+                )
+                .call(input.arguments))
+            }),
+        ),
+        (
+            "make_interval",
+            F::custom(|input| {
+                Ok(ScalarUDF::from(
+                    SparkMakeInterval::new()
+                        .with_ansi_mode(input.function_context.plan_config.ansi_mode),
+                )
+                .call(input.arguments))
+            }),
+        ),
         ("make_time", F::udf(SparkMakeTime::new())),
         (
             "make_timestamp",

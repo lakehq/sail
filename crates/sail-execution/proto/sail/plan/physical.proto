@@ -267,6 +267,8 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     RaiseErrorUdf raise_error = 40;
+    SparkMakeIntervalUdf spark_make_interval = 41;
+    SparkMakeDtIntervalUdf spark_make_dt_interval = 42;
   }
 }
 
@@ -471,6 +473,14 @@ message SparkToNumberUdf {
 }
 
 message SparkToCharUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkMakeDtIntervalUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkMakeIntervalUdf {
   bool ansi_mode = 1;
 }
 

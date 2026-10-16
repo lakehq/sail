@@ -96,3 +96,51 @@ Feature: trunc with an argument coming from a column
         root
          |-- result: date (nullable = true)
         """
+
+  Rule: Date truncation does not require nanosecond timestamps
+
+    Scenario Outline: trunc accepts an ordinary date outside nanosecond range: <input>
+      When query
+        """
+        SELECT trunc(<input>, 'YEAR') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | input              | result     |
+        | DATE '1000-06-15' | 1000-01-01 |
+        | '1000-06-15'      | 1000-01-01 |
+        | DATE '9999-06-15' | 9999-01-01 |
+
+    Scenario: date columns preserve wide years, pre-epoch weeks, and NULL
+      When query
+        """
+        SELECT trunc(value, unit) AS result
+        FROM VALUES (1, DATE '1000-06-15', 'QUARTER'),
+                    (2, DATE '9999-06-15', 'YEAR'),
+                    (3, DATE '1969-12-31', 'WEEK'),
+                    (4, CAST(NULL AS DATE), 'YEAR') AS t(id, value, unit)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result     |
+        | 1000-04-01 |
+        | 9999-01-01 |
+        | 1969-12-29 |
+        | NULL       |
+
+    Scenario Outline: invalid scalar date truncation units return NULL: <unit>
+      When query
+        """
+        SELECT trunc(DATE '2024-06-15', <unit>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | unit                 |
+        | 'bad'                |
+        | CAST(NULL AS STRING) |

@@ -15,9 +15,40 @@ use datafusion_expr::{
     ScalarUDFImpl, ValueOrLambda, Volatility,
 };
 use datafusion_expr_common::signature::Signature;
+use datafusion_functions::datetime::to_local_time::ToLocalTimeFunc;
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+
+// Preserve timestamp nullability while using the native timezone conversion kernel.
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+pub struct SparkToLocalTime {
+    inner: ToLocalTimeFunc,
+}
+
+impl ScalarUDFImpl for SparkToLocalTime {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields[0].is_nullable();
+        let field = self.inner.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_nullable(nullable)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
+    }
+}
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone

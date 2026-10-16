@@ -7,6 +7,8 @@ pub mod spark_date_part;
 pub mod spark_date_trunc;
 pub mod spark_interval;
 pub mod spark_last_day;
+pub mod spark_make_dt_interval;
+pub mod spark_make_interval;
 pub mod spark_make_time;
 pub mod spark_make_timestamp_ntz;
 pub mod spark_make_ym_interval;

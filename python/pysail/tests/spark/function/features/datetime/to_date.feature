@@ -472,3 +472,49 @@ Feature: to_date with an argument coming from a column
         | ISO T separator        | '2024-01-15T12:00:00' |
         | leading whitespace     | ' 2024-01-15'         |
         | surrounding whitespace | '  2024-01-15  '      |
+
+  Rule: Formatted timestamp inputs preserve temporal conversion metadata
+
+    Scenario Outline: Formatted timestamp dates are nullable according to ANSI mode <ansi>
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_date(TIMESTAMP '1000-06-15 00:30:00Z', 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result     |
+        | 1000-06-14 |
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = <nullable>)
+        """
+
+      Examples:
+        | ansi  | nullable |
+        | true  | false    |
+        | false | true     |
+
+    Scenario: A nullable formatted timestamp column remains nullable across a repeated hour
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(ts, 'yyyy-MM-dd') AS result
+        FROM VALUES
+          (1, TIMESTAMP '2024-11-03 08:30:00Z'),
+          (2, TIMESTAMP '2024-11-03 09:30:00Z'),
+          (3, CAST(NULL AS TIMESTAMP)) AS t(id, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result     |
+        | 2024-11-03 |
+        | 2024-11-03 |
+        | NULL       |
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """

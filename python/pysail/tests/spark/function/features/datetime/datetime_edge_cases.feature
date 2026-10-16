@@ -290,3 +290,27 @@ Feature: datetime edge cases
         | case                                           | in                         | result                     |
         | `to_timestamp` parses without optional section | 2026-06-15 14:30:45        | 2026-06-15 14:30:45        |
         | `to_timestamp` parses with optional section    | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+
+  Rule: Local current timestamps preserve their non-nullable schema
+
+    Scenario: localtimestamp has a non-nullable timestamp_ntz schema
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT localtimestamp() AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = false)
+        """
+
+    Scenario: localtimestamp agrees with the local representation of current_timestamp
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT localtimestamp() = CAST(current_timestamp() AS TIMESTAMP_NTZ) AS result
+        """
+      Then query result
+        | result |
+        | true   |

@@ -189,3 +189,297 @@ Feature: DATE_TRUNC output type
         root
          |-- result: timestamp (nullable = true)
         """
+
+  Rule: Scalar and column truncation share timestamp boundaries
+
+    @sail-only
+    Scenario Outline: native truncation alias <unit> works for scalar and column units
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT date_trunc('<unit>', ts) AS scalar_result, date_trunc(unit, ts) AS column_result
+        FROM VALUES (1, '<unit>', TIMESTAMP '2024-06-15 12:34:56'),
+                    (2, 'DAY', TIMESTAMP '2024-06-15 12:34:56') AS t(id, unit, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | scalar_result | column_result       |
+        | <result>      | <result>            |
+        | <result>      | 2024-06-15 00:00:00 |
+
+      Examples:
+        | unit | result              |
+        | mins | 2024-06-15 12:34:00 |
+        | qtr  | 2024-04-01 00:00:00 |
+        | yrs  | 2024-01-01 00:00:00 |
+
+    @sail-only
+    Scenario: scalar units preserve native Unicode case folding
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT date_trunc('weeK', TIMESTAMP '2024-02-29 12:34:56') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-02-26 00:00:00 |
+
+    Scenario Outline: an invalid scalar unit returns NULL: <unit>
+      When query
+        """
+        SELECT date_trunc(<unit>, TIMESTAMP '2024-02-29 12:34:56') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | unit                 |
+        | 'bad'                |
+        | CAST(NULL AS STRING) |
+
+    Scenario Outline: scalar pre-epoch truncation floors to <unit>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc('<unit>', timestamp_micros(-1L))) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | unit        | result       |
+        | MICROSECOND | -1           |
+        | MILLISECOND | -1000        |
+        | SECOND      | -1000000     |
+        | MINUTE      | -60000000    |
+        | HOUR        | -3600000000  |
+        | DAY         | -86400000000 |
+
+    Scenario: millisecond truncation floors timestamp columns and preserves NULL
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT v, unix_micros(date_trunc('MILLISECOND', timestamp_micros(v))) AS result
+        FROM VALUES (-1001L), (-1L), (1L), (CAST(NULL AS BIGINT)) AS t(v)
+        ORDER BY v
+        """
+      Then query result ordered
+        | v     | result |
+        | NULL  | NULL   |
+        | -1001 | -2000  |
+        | -1    | -1000  |
+        | 1     | 0      |
+
+    Scenario: dynamic units floor negative timestamps independently
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc(unit, timestamp_micros(value))) AS result
+        FROM VALUES (1, 'MILLISECOND', -1L), (2, 'SECOND', -1L),
+                    (3, 'MINUTE', -1L), (4, CAST(NULL AS STRING), -1L)
+             AS t(id, unit, value)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result    |
+        | -1000     |
+        | -1000000  |
+        | -60000000 |
+        | NULL      |
+
+    Scenario Outline: scalar <unit> truncation preserves representable timestamp boundaries
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc('<unit>', timestamp_micros(CAST('<low_input>' AS BIGINT)))) AS lo,
+               unix_micros(date_trunc('<unit>', timestamp_micros(9223372036854775807L))) AS hi
+        """
+      Then query result
+        | lo           | hi            |
+        | <low_result> | <high_result> |
+
+      Examples:
+        | unit        | low_input            | low_result           | high_result         |
+        | MICROSECOND | -9223372036854775808 | -9223372036854775808 | 9223372036854775807 |
+        | MILLISECOND | -9223372036854774999 | -9223372036854775000 | 9223372036854775000 |
+        | SECOND      | -9223372036853999999 | -9223372036854000000 | 9223372036854000000 |
+        | MINUTE      | -9223372036799999999 | -9223372036800000000 | 9223372036800000000 |
+
+    Scenario Outline: column <unit> truncation preserves representable timestamp boundaries and NULL
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc('<unit>', timestamp_micros(v))) AS result
+        FROM VALUES (1, CAST('<low_input>' AS BIGINT)), (2, 9223372036854775807L),
+                    (3, CAST(NULL AS BIGINT)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result        |
+        | <low_result>  |
+        | <high_result> |
+        | NULL          |
+
+      Examples:
+        | unit        | low_input            | low_result           | high_result         |
+        | MICROSECOND | -9223372036854775808 | -9223372036854775808 | 9223372036854775807 |
+        | MILLISECOND | -9223372036854774999 | -9223372036854775000 | 9223372036854775000 |
+        | SECOND      | -9223372036853999999 | -9223372036854000000 | 9223372036854000000 |
+        | MINUTE      | -9223372036799999999 | -9223372036800000000 | 9223372036800000000 |
+
+    Scenario Outline: <unit> truncation rejects timestamp underflow for a <shape>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc('<unit>', timestamp_micros(<value>))) AS result
+        <source>
+        """
+      Then query error (?i)(overflow|out of range)
+
+      Examples:
+        | unit        | shape  | value                                   | source                                                                            |
+        | MILLISECOND | scalar | CAST('-9223372036854775808' AS BIGINT) |                                                                                   |
+        | SECOND      | scalar | CAST('-9223372036854775808' AS BIGINT) |                                                                                   |
+        | MINUTE      | scalar | CAST('-9223372036854775808' AS BIGINT) |                                                                                   |
+        | MILLISECOND | column | v                                       | FROM VALUES (CAST('-9223372036854775808' AS BIGINT)), (0L) AS t(v) |
+        | SECOND      | column | v                                       | FROM VALUES (CAST('-9223372036854775808' AS BIGINT)), (0L) AS t(v) |
+        | MINUTE      | column | v                                       | FROM VALUES (CAST('-9223372036854775808' AS BIGINT)), (0L) AS t(v) |
+
+  Rule: Microsecond timestamps retain the ordinary date range
+
+    Scenario Outline: scalar calendar truncation accepts year <year>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT CAST(date_trunc('YEAR', TIMESTAMP '<year>-06-15 12:34:56') AS STRING) AS result
+        """
+      Then query result
+        | result                 |
+        | <year>-01-01 00:00:00 |
+
+      Examples:
+        | year |
+        | 1000 |
+        | 9999 |
+
+    Scenario Outline: microsecond truncation preserves a scalar year <year>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT unix_micros(date_trunc('MICROSECOND', TIMESTAMP '<year>-06-15 12:34:56.123456'))
+             = unix_micros(TIMESTAMP '<year>-06-15 12:34:56.123456') AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | year |
+        | 1000 |
+        | 9999 |
+
+    Scenario: wide timestamp columns share the scalar calendar kernel
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT CAST(date_trunc('YEAR', ts) AS STRING) AS year_start,
+               unix_micros(date_trunc('MICROSECOND', ts)) = unix_micros(ts) AS unchanged
+        FROM VALUES (1, TIMESTAMP '1000-06-15 12:34:56.123456'),
+                    (2, TIMESTAMP '9999-06-15 12:34:56.123456'),
+                    (3, CAST(NULL AS TIMESTAMP)) AS t(id, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | year_start          | unchanged |
+        | 1000-01-01 00:00:00 | true      |
+        | 9999-01-01 00:00:00 | true      |
+        | NULL                | NULL      |
+
+  Rule: Minute truncation retains the integer timestamp range
+
+    Scenario: minute truncation preserves named-zone timestamp columns beyond the calendar range
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT v, unix_micros(date_trunc('MINUTE', timestamp_micros(v))) AS result
+        FROM VALUES (9000000000000000000L), (9000000000001000000L),
+                    (-1L), (CAST(NULL AS BIGINT)) AS t(v)
+        ORDER BY v
+        """
+      Then query result ordered
+        | v                    | result               |
+        | NULL                 | NULL                 |
+        | -1                  | -60000000           |
+        | 9000000000000000000  | 9000000000000000000  |
+        | 9000000000001000000  | 9000000000000000000  |
+
+  Rule: Named-zone truncation respects historical and daylight saving boundaries
+
+    @sail-bug
+    Scenario: a historical minute is aligned in local time for scalar input
+      # FIXME: The integer MINUTE path ignores historical second-resolution zone offsets.
+      # A transition-aware replacement must preserve batch performance and the timestamp range.
+      Given config spark.sql.session.timeZone = Asia/Kathmandu
+      When query
+        """
+        SELECT CAST(date_trunc('MINUTE', TIMESTAMP '1900-01-01 00:00:35Z') AS STRING) AS result,
+               unix_micros(date_trunc('MINUTE', TIMESTAMP '1900-01-01 00:00:35Z')) AS micros
+        """
+      Then query result
+        | result              | micros            |
+        | 1900-01-01 05:41:00 | -2208988816000000 |
+
+    @sail-bug
+    Scenario: historical minute columns include second-resolution zone offsets
+      # FIXME: MINUTE retains the same pre-existing UTC-aligned boundary for timestamp columns.
+      Given config spark.sql.session.timeZone = Asia/Kathmandu
+      When query
+        """
+        SELECT unix_micros(date_trunc('MINUTE', ts)) AS result
+        FROM VALUES (TIMESTAMP '1900-01-01 00:00:35Z'),
+                    (TIMESTAMP '1900-01-01 00:01:35Z') AS t(ts)
+        ORDER BY ts
+        """
+      Then query result ordered
+        | result            |
+        | -2208988816000000 |
+        | -2208988756000000 |
+
+    Scenario: month starts choose the earliest repeated midnight while DAY retains the input offset
+      Given config spark.sql.session.timeZone = America/Havana
+      When query
+        """
+        SELECT unix_micros(date_trunc('MONTH', TIMESTAMP '2015-11-15 12:00:00')) AS month_start,
+               unix_micros(date_trunc('DAY', TIMESTAMP '2015-11-01 06:30:00Z')) AS day_start
+        """
+      Then query result
+        | month_start     | day_start       |
+        | 1446350400000000 | 1446354000000000 |
+
+    Scenario: calendar units use the first valid time when midnight lies inside a gap
+      Given config spark.sql.session.timeZone = America/Toronto
+      When query
+        """
+        SELECT CAST(date_trunc('WEEK', TIMESTAMP '1919-03-31 12:00:00') AS STRING) AS week_start,
+               CAST(date_trunc('DAY', TIMESTAMP '1919-03-31 12:00:00') AS STRING) AS day_start
+        """
+      Then query result
+        | week_start          | day_start           |
+        | 1919-03-31 00:30:00 | 1919-03-31 01:00:00 |
+
+    Scenario Outline: truncation resolves a timezone gap: <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT CAST(date_trunc('<unit>', TIMESTAMP '<input>') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone                | unit | input               | result              |
+        | Australia/Lord_Howe | HOUR | 2020-10-04 02:45:00 | 2020-10-04 02:30:00 |
+        | America/Sao_Paulo   | DAY  | 2018-11-04 12:00:00 | 2018-11-04 01:00:00 |
