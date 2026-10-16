@@ -402,6 +402,14 @@ fn parse_timestamp(
             DataFusionError::Execution(format!("Failed to parse timestamp '{value}': {e}"))
         })?;
     let naive_datetime = parsed.datetime;
+    // Preserve option validation even when NTZ ignores the timezone's value.
+    let option_timezone = match (parsed.offset, options.timezone.as_deref()) {
+        (None, Some(tz)) => Some(
+            tz.parse::<Tz>()
+                .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz}': {e}")))?,
+        ),
+        _ => None,
+    };
 
     let utc_datetime = if timezone.is_none() {
         // TIMESTAMP_NTZ ignores both the session timezone and the timeZone option.
@@ -414,11 +422,8 @@ fn parse_timestamp(
             .single()
             .map(|x| x.to_utc())
             .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
-    } else if let Some(ref tz_str) = options.timezone {
+    } else if let Some(tz) = option_timezone {
         // Use user-provided timezone from options
-        let tz: Tz = tz_str
-            .parse()
-            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}")))?;
         localize_with_fallback(&tz, &naive_datetime)?
     } else if let Some(tz) = timezone.as_ref() {
         // Use timezone from the schema (session timezone)

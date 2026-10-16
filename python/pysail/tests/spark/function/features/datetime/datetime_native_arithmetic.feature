@@ -302,11 +302,7 @@ Feature: Native timestamp expressions preserve Spark boundary behavior
       | result              |
       | 8280000000000000000 |
 
-  @sail-bug
   Scenario: Named-zone calendar days preserve timestamps beyond Chrono's range
-    # Accepted extreme-range regression: year 287168 exceeds Chrono's calendar range.
-    # The former elapsed-day arithmetic handled this value but was wrong across DST.
-    # Retain DST correctness for ordinary dates and defer broader timezone range support.
     Given config spark.sql.session.timeZone = America/Los_Angeles
     When query
       """

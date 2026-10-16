@@ -2,6 +2,8 @@ import pandas as pd
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 @pytest.mark.parametrize("session_timezone", ["UTC", "Asia/Kathmandu"], indirect=True)
 def test_grouped_pandas_sliding_time_window_keys(spark, session_timezone):  # noqa: ARG001
@@ -37,11 +39,12 @@ def test_grouped_pandas_sliding_time_window_keys(spark, session_timezone):  # no
     assert [row.ids for row in actual] == [[0], [0, 1], [1, 2], [2]]
 
 
-def test_grouped_pandas_reuses_window_struct_in_data_and_key(spark):
+@pytest.mark.parametrize("slide", ["5 seconds", "10 seconds"])
+def test_grouped_pandas_reuses_window_struct_in_data_and_key(spark, slide):
     df = (
         spark.createDataFrame([(0, "1970-01-01 00:00:00"), (1, "1970-01-01 00:00:05")], "id long, ts string")
         .withColumn("ts", F.to_timestamp("ts"))
-        .withColumn("w", F.window("ts", "10 seconds", "5 seconds"))
+        .withColumn("w", F.window("ts", "10 seconds", slide))
     )
 
     def identity(key, pdf):
@@ -51,8 +54,33 @@ def test_grouped_pandas_reuses_window_struct_in_data_and_key(spark):
 
     result = df.groupBy("w").applyInPandas(identity, df.schema)
     assert result.schema == df.schema
+    # Spark 4 caches the supplied schema; a projection also checks the server's schema.
+    assert result.select("*").schema == df.schema
     # Keep pre-epoch values in the UDF, but avoid the client local-datetime conversion.
     columns = ["id", "CAST(ts AS STRING) AS ts", "CAST(w.start AS STRING) AS start", "CAST(w.end AS STRING) AS end"]
     actual = result.selectExpr(*columns).orderBy("id", "start").collect()
     expected = df.selectExpr(*columns).orderBy("id", "start").collect()
     assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        pytest.param(
+            ("a", "a"),
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects duplicate grouped-Pandas output fields"),
+        ),
+        ("a.b", "c"),
+    ],
+)
+def test_grouped_pandas_preserves_output_field_names_and_nullability(spark, names):
+    from pyspark.sql.types import LongType, StructField, StructType
+
+    schema = StructType([StructField(names[0], LongType(), False), StructField(names[1], LongType(), True)])
+
+    def values(pdf):  # noqa: ARG001
+        return pd.DataFrame([[1, 2], [3, None]])
+
+    result = spark.range(1).groupBy().applyInPandas(values, schema)
+    assert result.select("*").schema == schema
+    assert sorted(tuple(row) for row in result.collect()) == [(1, 2), (3, None)]

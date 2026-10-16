@@ -80,9 +80,10 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeKind::InlineOuter => (false, NullHandling::PreserveAndExpandEmpty, true),
         };
         let arg = args.one()?;
-        let is_window = matches!(explode.kind(), ExplodeKind::Explode)
+        let is_tumbling_window = matches!(explode.kind(), ExplodeKind::Explode)
             && matches!(&arg, Expr::ScalarFunction(function)
-                if function.func.inner().is::<SparkWindowBuckets>());
+                if function.func.inner().downcast_ref::<SparkWindowBuckets>()
+                    .is_some_and(|window| window.window_duration() == window.slide_duration()));
         let arg_type = arg.get_type(self.plan.schema())?;
         let return_type = func.return_type(&[arg_type])?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
@@ -172,8 +173,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             UnnestOptions::new().with_null_handling(null_handling),
         )?;
 
-        if is_window {
-            // Unnest declares every output nullable; Spark's window struct is never NULL.
+        if is_tumbling_window {
+            // Spark's tumbling window projection is non-nullable; sliding Expand outputs are nullable.
             let window = ScalarUDF::from(StructFunction::new(vec![
                 "start".to_string(),
                 "end".to_string(),

@@ -7,11 +7,9 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType,
 };
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-    cast, lit,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use sail_common::utils::datetime::MICROS_PER_DAY;
 
@@ -71,74 +69,6 @@ impl ScalarUDFImpl for SparkTimestampAdd {
         make_scalar_function(timestamp_add)(&args.args)
     }
 
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        let data_type = info.get_data_type(&args[0])?;
-        let DataType::Timestamp(_, timezone) = &data_type else {
-            return Ok(ExprSimplifyResult::Original(args));
-        };
-        let utc_or_ntz = timezone
-            .as_deref()
-            .is_none_or(is_fixed_zero_offset_timezone);
-        let timestamp = args[0].clone();
-        let quantity = args[1].clone();
-        let elapsed = |micros| {
-            ExprSimplifyResult::Simplified(cast(
-                cast(timestamp.clone(), DataType::Int64) + micros,
-                data_type.clone(),
-            ))
-        };
-        if args.len() == 3 {
-            let Expr::Literal(ScalarValue::Utf8(Some(unit)), _) = &args[2] else {
-                return Ok(ExprSimplifyResult::Original(args));
-            };
-            let factor = match unit.as_str() {
-                "HOUR" => Some(3_600_000_000_i64),
-                "MINUTE" => Some(60_000_000),
-                "SECOND" => Some(1_000_000),
-                "MILLISECOND" => Some(1_000),
-                "MICROSECOND" => Some(1),
-                _ => None,
-            };
-            if let Some(factor) = factor {
-                return Ok(elapsed(cast(quantity, DataType::Int64) * lit(factor)));
-            }
-            // Larger day counts can cancel the starting timestamp; keep the wide kernel.
-            if utc_or_ntz
-                && let Expr::Literal(ScalarValue::Int64(Some(quantity)), _) = &quantity
-                && let Ok((0, days, micros)) = interval_for_unit(unit, *quantity)
-                && let Some(micros) = i64::from(days)
-                    .checked_mul(MICROS_PER_DAY)
-                    .and_then(|days| days.checked_add(micros))
-            {
-                return Ok(elapsed(lit(micros)));
-            }
-        } else if args.len() == 2 {
-            if utc_or_ntz && matches!(info.get_data_type(&quantity)?, DataType::Duration(_)) {
-                return Ok(elapsed(cast(quantity, DataType::Int64)));
-            }
-            // Calendar arithmetic needs Spark's DST resolution and full timestamp range.
-            let micros = match &quantity {
-                Expr::Literal(ScalarValue::DurationMicrosecond(Some(value)), _)
-                    if *value > -MICROS_PER_DAY && *value < MICROS_PER_DAY =>
-                {
-                    Some(*value)
-                }
-                Expr::Literal(ScalarValue::IntervalDayTime(Some(value)), _) if value.days == 0 => {
-                    Some(i64::from(value.milliseconds) * 1_000)
-                }
-                Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(value)), _)
-                    if value.months == 0 && value.days == 0 =>
-                {
-                    Some(value.nanoseconds / 1_000)
-                }
-                _ => None,
-            };
-            if let Some(micros) = micros {
-                return Ok(elapsed(lit(micros)));
-            }
-        }
-        Ok(ExprSimplifyResult::Original(args))
-    }
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         match types {
             [DataType::Timestamp(_, timezone), interval]
@@ -169,7 +99,6 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Timestamp(_, timezone) => timezone.clone(),
         _ => return exec_err!("expected timestamp"),
     };
-    let tz = timezone.as_deref().unwrap_or("UTC").parse::<Tz>()?;
     let utc_or_ntz = timezone
         .as_deref()
         .is_none_or(is_fixed_zero_offset_timezone);
@@ -228,6 +157,7 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
             } else if utc_or_ntz {
                 add_ntz_interval(start, months, days, micros)?
             } else {
+                let tz = timezone.as_deref().unwrap_or("UTC").parse::<Tz>()?;
                 add_ltz_interval(start, months, days, micros, tz)?
             };
             Ok(Some(value))

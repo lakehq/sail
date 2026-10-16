@@ -139,3 +139,19 @@ Feature: from_csv column display name matches Spark
         | from_csv doctest #3 (result) | '42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')                                           | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
         | from_csv doctest #4 (result) | '42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss') | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
         | from_csv doctest #5 (result) | '26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')                                                                  | {2015-08-26 00:00:00}           | struct<time:timestamp>                          |
+
+  Rule: Timestamp timezone option validation
+
+    Scenario Outline: <type> rejects an invalid timezone option
+      When query
+        """
+        SELECT from_csv(concat('2020-03-08 02:30:0', CAST(id AS STRING)),
+                        't <type>', map('timeZone', 'Not_A_Zone')) AS result
+        FROM range(3)
+        """
+      Then query error Not_A_Zone
+
+      Examples:
+        | type          |
+        | TIMESTAMP     |
+        | TIMESTAMP_NTZ |

@@ -1,6 +1,5 @@
 use chrono::{
-    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta,
-    TimeZone, Utc,
+    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
 };
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::types::{
@@ -220,8 +219,26 @@ pub(crate) fn add_ltz_interval(
     micros: i64,
     timezone: Tz,
 ) -> Result<i64> {
-    // FIXME: Preserve named-zone calendar arithmetic beyond Chrono's range.
-    // Falling back to elapsed days would give wrong results across DST.
+    if months == 0 {
+        let utc = as_datetime::<TimestampMicrosecondType>(start);
+        let boundary = if start < 0 {
+            NaiveDateTime::MIN
+        } else {
+            NaiveDateTime::MAX
+        };
+        let offset = timezone
+            .offset_from_utc_datetime(&utc.unwrap_or(boundary))
+            .fix();
+        if utc
+            .and_then(|value| value.checked_add_offset(offset))
+            .and_then(|value| checked_add_days(value, days))
+            .is_none()
+        {
+            // Preserve the existing elapsed-day behavior outside Chrono's calendar range.
+            // FIXME: Recurring far-future DST rules remain outside chrono-tz's supported domain.
+            return add_ntz_interval(start, 0, days, micros);
+        }
+    }
     let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
         .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
         .ok_or_else(|| exec_datafusion_err!("cannot convert timestamp {start}"))?;
@@ -253,9 +270,8 @@ pub(crate) fn add_ltz_interval(
     }
 
     datetime
-        .with_timezone(&Utc)
-        .checked_add_signed(TimeDelta::microseconds(micros))
-        .map(|value| value.timestamp_micros())
+        .timestamp_micros()
+        .checked_add(micros)
         .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))
 }
 

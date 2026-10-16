@@ -82,6 +82,8 @@ impl ToJsonOptions {
             });
 
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
+            // Preserve Sail's explicit timestampFormat override for naive timestamps.
+            .or_else(|| find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION))
             .as_deref()
             .map(DateTimeFormat::for_formatting)
             .transpose()?

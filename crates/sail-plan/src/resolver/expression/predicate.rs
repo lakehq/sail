@@ -15,6 +15,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::update_struct_field::UpdateStructField;
@@ -537,7 +538,15 @@ fn coerce_mixed_timestamp_pair(
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
-    if ntz.any_column_refs() && !ltz.any_column_refs() && !ltz.is_volatile() {
+    // Query-clock functions need the execution start time, which is not available here.
+    if ntz.any_column_refs()
+        && !ltz.any_column_refs()
+        && !ltz.is_volatile()
+        && !ltz.exists(|expr| {
+            Ok(matches!(expr, expr::Expr::ScalarFunction(function)
+                if function.func.inner().is::<TimestampNow>()))
+        })?
+    {
         let simplifier = ExprSimplifier::new(
             SimplifyContextBuilder::default()
                 .with_schema(Arc::clone(schema))

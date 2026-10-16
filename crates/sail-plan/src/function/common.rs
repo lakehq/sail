@@ -233,6 +233,7 @@ pub(crate) fn common_temporal_type(
                                 comparison_coercion(&previous, current)
                             })?
                     } else {
+                        // TODO: Preserve temporal conversion when sibling fields need null/string coercion.
                         return None;
                     };
                 Some(Arc::new(

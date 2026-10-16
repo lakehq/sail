@@ -192,7 +192,7 @@ Feature: window() time-based windowing function
         """
 
     @function(nullability)
-    Scenario: sliding windows over nullable timestamps have non-null structs
+    Scenario: sliding windows retain Spark's nullable struct schema
       When query
         """
         SELECT window(b, '10 minutes', '5 minutes') AS w
@@ -202,7 +202,7 @@ Feature: window() time-based windowing function
       Then query schema
         """
         root
-         |-- w: struct (nullable = false)
+         |-- w: struct (nullable = true)
          |    |-- start: timestamp (nullable = true)
          |    |-- end: timestamp (nullable = true)
         """

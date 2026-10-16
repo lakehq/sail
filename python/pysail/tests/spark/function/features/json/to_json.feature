@@ -234,6 +234,30 @@ Feature: to_json
         | default_result                   | false_result                     |
         | {"zeta":1,"alpha":2,"mid":3} | {"zeta":1,"alpha":2,"mid":3} |
 
+  Rule: Timestamp formatting
+
+    @sail-only
+    Scenario: Explicit timestampFormat continues to format naive timestamps
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT to_json(named_struct('timestamps', array(TIMESTAMP_NTZ '2020-03-08 02:30:00')),
+                       map('timestampFormat', 'yyyy/MM/dd HH:mm:ss')) AS result
+        """
+      Then query result
+        | result                                         |
+        | {"timestamps":["2020/03/08 02:30:00"]} |
+
+    Scenario: Explicit timestampNTZFormat takes precedence for naive timestamps
+      When query
+        """
+        SELECT to_json(named_struct('ts', TIMESTAMP_NTZ '2020-03-08 02:30:00'),
+                       map('timestampFormat', 'yyyy', 'timestampNTZFormat', 'yyyy/MM/dd')) AS result
+        """
+      Then query result
+        | result                |
+        | {"ts":"2020/03/08"} |
+
   Rule: Sorted JSON object keys
 
     # The sortKeys JSON writer option was added in Spark 4.2.

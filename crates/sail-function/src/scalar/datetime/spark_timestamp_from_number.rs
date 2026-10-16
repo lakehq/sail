@@ -43,6 +43,7 @@ impl SparkTimestampFromNumber {
             .with_schema(Arc::clone(schema))
             .build();
         let data_type = info.get_data_type(&value)?;
+        // FIXME: Integer timestamp_seconds/millis must reject scaling overflow, as Spark does.
         let micros = match self.mode {
             TimestampNumberMode::Micros => value,
             TimestampNumberMode::Millis => cast(value, DataType::Int64) * lit(1_000_i64),
