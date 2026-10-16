@@ -25,6 +25,7 @@ it catches (and clears) different cases than the SQL sweep.
 
 from decimal import Decimal
 
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
@@ -155,3 +156,47 @@ def test_round_of_non_null_decimal_stays_nullable(spark):
     # Spark keeps round(decimal) nullable (overflow); Sail says non-nullable.
     out = _decimal_frame(spark).select(F.round("nn", 1).alias("result"))
     assert _nullable(out, "result") is True
+
+
+# --- abs: the schema of the DATA must agree with the analyzed schema ---
+# `Abs.nullable` is the child's. The analyzed schema (`df.schema`) is not enough: an optimizer
+# rewrite can change the field the executed plan produces, which only the written file shows.
+
+ABS_INPUTS = [
+    pytest.param(T.DoubleType(), -1.5, id="double"),
+    pytest.param(T.FloatType(), -1.5, id="float"),
+    pytest.param(T.DecimalType(10, 2), Decimal("-1.50"), id="decimal(10,2)"),
+    pytest.param(T.DecimalType(38, 10), Decimal("-1.5"), id="decimal(38,10)"),
+    pytest.param(T.IntegerType(), -1, id="int"),
+    pytest.param(T.LongType(), -1, id="bigint"),
+]
+
+
+def _abs_frame(spark, data_type, value):
+    schema = T.StructType(
+        [
+            T.StructField("nn", data_type, nullable=False),
+            T.StructField("nl", data_type, nullable=True),
+        ]
+    )
+    return spark.createDataFrame([(value, value)], schema)
+
+
+def _written_nullable(df, path, column):
+    df.write.parquet(str(path))
+    parquet_file = next(path.glob("*.parquet"))
+    return pq.read_schema(parquet_file).field(column).nullable
+
+
+@pytest.mark.parametrize(("data_type", "value"), ABS_INPUTS)
+def test_abs_of_non_null_input_is_non_nullable_in_schema_and_data(spark, tmp_path, data_type, value):
+    out = _abs_frame(spark, data_type, value).select(F.abs("nn").alias("result"))
+    assert _nullable(out, "result") is False
+    assert _written_nullable(out, tmp_path / "out", "result") is False
+
+
+@pytest.mark.parametrize(("data_type", "value"), ABS_INPUTS)
+def test_abs_of_nullable_input_is_nullable_in_schema_and_data(spark, tmp_path, data_type, value):
+    out = _abs_frame(spark, data_type, value).select(F.abs("nl").alias("result"))
+    assert _nullable(out, "result") is True
+    assert _written_nullable(out, tmp_path / "out", "result") is True
