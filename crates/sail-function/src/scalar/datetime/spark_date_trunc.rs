@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use arrow::array::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_timezone,

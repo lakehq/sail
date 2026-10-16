@@ -199,7 +199,8 @@ fn make_interval_dt_nano(day: i32, hour: i32, min: i32, seconds_micros: i128) ->
         .and_then(|v| v.checked_mul(MINS_PER_HOUR))
         .and_then(|v| v.checked_add(min));
 
-    // Preserve Sail's original component cancellation, including seconds outside i64 micros.
+    // Check the range after combining components:
+    // individually oversized values can cancel into a representable interval
     let total_us = total_mins.and_then(|minutes| {
         i64::try_from(
             seconds_micros.checked_add(i128::from(minutes) * i128::from(MICROS_PER_MINUTE))?,
