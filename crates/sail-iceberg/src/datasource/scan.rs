@@ -487,7 +487,19 @@ impl IcebergScan {
             .into_iter()
             .map(|(file, _)| file)
             .collect::<Vec<_>>();
-        let df_schema = self.arrow_schema.clone().to_dfschema()?;
+        // Each file is probed with a single planning-only row that carries the file's
+        // identity-partition values and NULL for every other column. The probe schema
+        // keeps the table's names and types but lets every column hold that NULL, since
+        // a required column would otherwise reject the probe row.
+        let probe_schema = Arc::new(ArrowSchema::new_with_metadata(
+            self.arrow_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone().with_nullable(true))
+                .collect::<Vec<_>>(),
+            self.arrow_schema.metadata().clone(),
+        ));
+        let df_schema = probe_schema.clone().to_dfschema()?;
         let predicate = session.create_physical_expr(condition.clone(), &df_schema)?;
         let mut paths = Vec::new();
         for file in files {
@@ -499,8 +511,7 @@ impl IcebergScan {
                         .to_string(),
                 ));
             }
-            let columns = self
-                .arrow_schema
+            let columns = probe_schema
                 .fields()
                 .iter()
                 .map(|arrow_field| {
@@ -519,7 +530,7 @@ impl IcebergScan {
                     scalar?.to_array_of_size(1)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let batch = RecordBatch::try_new(self.arrow_schema.clone(), columns)?;
+            let batch = RecordBatch::try_new(probe_schema.clone(), columns)?;
             let result = predicate.evaluate(&batch)?.into_array(1)?;
             let result = result
                 .as_any()
@@ -1694,6 +1705,70 @@ mod tests {
         Ok((read_scan, file))
     }
 
+    /// Serves the scan's table from an in-memory store whose single snapshot holds `files`,
+    /// and returns the store so that a test can remove the metadata again.
+    #[expect(clippy::expect_used)]
+    async fn commit_data_files(
+        scan: &mut IcebergScan,
+        context: &datafusion::prelude::SessionContext,
+        spec: PartitionSpec,
+        files: Vec<DataFile>,
+    ) -> Result<StoreContext> {
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+
+        use crate::spec::manifest::{ManifestMetadata, ManifestWriterBuilder};
+        use crate::spec::manifest_list::ManifestListWriter;
+        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
+        use crate::spec::{FormatVersion, ManifestContentType};
+
+        let table_url = Url::parse(scan.table_uri()).expect("table URL");
+        let store = Arc::new(object_store::memory::InMemory::new());
+        context.register_object_store(&table_url, store.clone());
+        let store_context = StoreContext::new(store, &table_url)?;
+        let mut writer = ManifestWriterBuilder::new(
+            Some(1),
+            None,
+            ManifestMetadata::new(
+                Arc::new(scan.schema.clone()),
+                0,
+                spec,
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            ),
+        )
+        .build();
+        for file in files {
+            writer.add(file);
+        }
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        store_context
+            .prefixed
+            .put(&Path::from("manifest.avro"), bytes.into())
+            .await?;
+        let mut list = ManifestListWriter::new();
+        list.append(
+            writer
+                .into_manifest_file("manifest.avro".into(), 1, 1)
+                .expect("manifest file"),
+        );
+        let bytes = list.to_bytes(FormatVersion::V2).expect("manifest list");
+        store_context
+            .prefixed
+            .put(&Path::from("list.avro"), bytes.into())
+            .await?;
+        scan.snapshot = Some(
+            SnapshotBuilder::new()
+                .with_snapshot_id(1)
+                .with_sequence_number(1)
+                .with_manifest_list("list.avro")
+                .with_summary(Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot"),
+        );
+        Ok(store_context)
+    }
+
     #[test]
     fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
         let (read_scan, mut file) = statistics_fixture()?;
@@ -1866,17 +1941,9 @@ mod tests {
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
-        use crate::spec::manifest::{ManifestMetadata, ManifestWriterBuilder};
-        use crate::spec::manifest_list::ManifestListWriter;
-        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
-        use crate::spec::{FormatVersion, ManifestContentType};
 
         let (mut read_scan, mut file) = statistics_fixture()?;
         let context = SessionContext::new();
-        let table_url = Url::parse(read_scan.table_uri()).expect("table URL");
-        let store = Arc::new(object_store::memory::InMemory::new());
-        context.register_object_store(&table_url, store.clone());
-        let store_context = StoreContext::new(store, &table_url)?;
         let batch = RecordBatch::try_new(
             Arc::clone(&read_scan.arrow_schema),
             vec![
@@ -1888,48 +1955,15 @@ mod tests {
         writer.write(&batch)?;
         let bytes = writer.into_inner()?;
         file.file_size_in_bytes = bytes.len() as u64;
-        store_context
-            .prefixed
-            .put(&Path::from(file.file_path.as_str()), bytes.into())
-            .await?;
-        let mut writer = ManifestWriterBuilder::new(
-            Some(1),
-            None,
-            ManifestMetadata::new(
-                Arc::new(read_scan.schema.clone()),
-                0,
-                PartitionSpec::unpartitioned_spec(),
-                FormatVersion::V2,
-                ManifestContentType::Data,
-            ),
+        let file_path = Path::from(file.file_path.as_str());
+        let store_context = commit_data_files(
+            &mut read_scan,
+            &context,
+            PartitionSpec::unpartitioned_spec(),
+            vec![file],
         )
-        .build();
-        writer.add(file);
-        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
-        store_context
-            .prefixed
-            .put(&Path::from("manifest.avro"), bytes.into())
-            .await?;
-        let mut list = ManifestListWriter::new();
-        list.append(
-            writer
-                .into_manifest_file("manifest.avro".into(), 1, 1)
-                .expect("manifest file"),
-        );
-        let bytes = list.to_bytes(FormatVersion::V2).expect("manifest list");
-        store_context
-            .prefixed
-            .put(&Path::from("list.avro"), bytes.into())
-            .await?;
-        read_scan.snapshot = Some(
-            SnapshotBuilder::new()
-                .with_snapshot_id(1)
-                .with_sequence_number(1)
-                .with_manifest_list("list.avro")
-                .with_summary(Summary::new(Operation::Append))
-                .build()
-                .expect("snapshot"),
-        );
+        .await?;
+        store_context.prefixed.put(&file_path, bytes.into()).await?;
         let read_scan = Arc::new(read_scan);
         let source = Arc::new(IcebergTableSource::new(Arc::clone(&read_scan)));
         let state = context.state();
@@ -2018,6 +2052,59 @@ mod tests {
                 )
                 .await?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn predicate_overwrite_selects_files_of_a_table_with_a_required_column() -> Result<()> {
+        use datafusion::prelude::{SessionContext, col, lit};
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields([
+                Arc::new(NestedField::required(
+                    1,
+                    "n",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "k",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(2, 1000, "k", Transform::Identity)
+            .build();
+        let mut read_scan = IcebergScan::new_empty(
+            "file:///tmp/predicate-overwrite/",
+            schema,
+            vec![spec.clone()],
+            0,
+        )?;
+        let mut files = vec![];
+        for key in ["a", "b"] {
+            let mut file: DataFile = serde_json::from_value(serde_json::json!({
+                "content": "DATA", "file_path": format!("k={key}/data.parquet"),
+                "file_format": "PARQUET", "partition": [], "record_count": 1,
+                "file_size_in_bytes": 100, "partition_spec_id": 0
+            }))
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+            file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+                key.to_string(),
+            )))];
+            files.push(file);
+        }
+        let context = SessionContext::new();
+        commit_data_files(&mut read_scan, &context, spec, files).await?;
+
+        let paths = read_scan
+            .predicate_overwrite_paths(&context.state(), &col("k").eq(lit("a")))
+            .await?;
+        assert_eq!(paths, vec!["k=a/data.parquet".to_string()]);
         Ok(())
     }
 }
