@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, BooleanArray, RecordBatch};
-use datafusion::arrow::compute::filter_record_batch;
+use datafusion::arrow::array::{Array, BooleanArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use datafusion::arrow::compute::{filter, filter_record_batch, take_record_batch};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -23,14 +23,16 @@ use sail_common_datafusion::streaming::event::schema::{
 };
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
 
-use super::state::{Row, RowMultiset, row_at, rows_to_batch};
+use super::accumulator::{AccumulatorFactory, StreamAccumulator, checked_count};
+use super::state::{Row, RowMultiset, rows_to_batch};
 
 /// Maintains a grouped dynamic table and emits -old/+new aggregate rows.
-/// Live inputs are retained so arbitrary deletions also work for DISTINCT and extrema.
+/// Each group holds retractable accumulators rather than its live input rows.
 #[derive(Debug)]
 pub struct StreamAggregateExec {
     input: Arc<dyn ExecutionPlan>,
     aggregate: Arc<AggregateExec>,
+    accumulators: Arc<Vec<AccumulatorFactory>>,
     properties: Arc<PlanProperties>,
 }
 
@@ -45,11 +47,15 @@ impl StreamAggregateExec {
                 "stream aggregate requires a single grouping set and single-stage expressions"
             );
         }
+        let mut accumulators = Vec::new();
         for expr in aggregate.aggr_expr() {
             if !expr.order_bys().is_empty() {
                 return plan_err!("ordered streaming aggregates are not supported");
             }
-            expr.create_accumulator()?;
+            accumulators.push(AccumulatorFactory::try_new(
+                expr,
+                aggregate.input().schema(),
+            )?);
         }
         let boundedness = match input.boundedness() {
             Boundedness::Bounded => Boundedness::Bounded,
@@ -66,6 +72,7 @@ impl StreamAggregateExec {
         Ok(Self {
             input,
             aggregate,
+            accumulators: Arc::new(accumulators),
             properties,
         })
     }
@@ -141,6 +148,7 @@ impl ExecutionPlan for StreamAggregateExec {
         let stream = DecodedFlowEventStream::try_new(self.input.execute(0, context.clone())?)?;
         let mut state = AggregateState {
             aggregate: self.aggregate.clone(),
+            accumulators: self.accumulators.clone(),
             groups: HashMap::new(),
             memory: MemoryConsumer::new("StreamAggregateExec").register(context.memory_pool()),
         };
@@ -160,14 +168,35 @@ impl ExecutionPlan for StreamAggregateExec {
     }
 }
 
-#[derive(Default)]
 struct GroupState {
-    rows: RowMultiset,
+    count: usize,
+    accumulators: Vec<StreamAccumulator>,
     output: Option<Row>,
+}
+
+impl GroupState {
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self
+                .accumulators
+                .iter()
+                .map(StreamAccumulator::size)
+                .sum::<usize>()
+            + self.output.as_ref().map_or(0, RowMultiset::row_size)
+    }
+
+    fn evaluate(&mut self, key: &Row) -> Result<Row> {
+        let mut output = key.clone();
+        for accumulator in &mut self.accumulators {
+            output.push(accumulator.evaluate()?);
+        }
+        Ok(output)
+    }
 }
 
 struct AggregateState {
     aggregate: Arc<AggregateExec>,
+    accumulators: Arc<Vec<AccumulatorFactory>>,
     groups: HashMap<Row, GroupState>,
     memory: MemoryReservation,
 }
@@ -185,59 +214,135 @@ impl AggregateState {
             .map(|(expr, _)| expr.evaluate(&batch)?.into_array(batch.num_rows()))
             .collect::<Result<Vec<_>>>()?;
         let global = keys.is_empty();
-        let mut touched = HashSet::new();
+        // Only this incoming batch is partitioned into groups. No input rows survive it.
+        let mut touched: HashMap<Row, Vec<u64>> = HashMap::new();
         if global && self.groups.is_empty() {
-            self.memory.try_grow(RowMultiset::row_size(&vec![]))?;
-            self.groups.insert(vec![], GroupState::default());
-            touched.insert(vec![]);
+            touched.insert(vec![], vec![]);
         }
         for i in 0..batch.num_rows() {
             let key = keys
                 .iter()
                 .map(|array| datafusion_common::ScalarValue::try_from_array(array, i))
                 .collect::<Result<Row>>()?;
-            if !self.groups.contains_key(&key) {
-                self.memory.try_grow(RowMultiset::row_size(&key))?;
-                self.groups.insert(key.clone(), GroupState::default());
-            }
-            let group = self.groups.get_mut(&key).ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!("missing streaming group")
-            })?;
-            group
-                .rows
-                .apply(row_at(&batch, i)?, retracted.value(i), &mut self.memory)?;
-            touched.insert(key);
+            touched.entry(key).or_default().push(i as u64);
         }
         let mut rows = Vec::new();
         let mut flags = Vec::new();
-        for key in touched {
-            let group = self.groups.get_mut(&key).ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!("missing streaming group")
-            })?;
-            let next = if global || !group.rows.is_empty() {
-                Some(evaluate_group(&self.aggregate, &key, &group.rows)?)
+        for (key, indices) in touched {
+            let key = key
+                .into_iter()
+                .map(datafusion_common::ScalarValue::compacted)
+                .collect::<Row>();
+            let group = match self.groups.entry(key.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let group = GroupState {
+                        count: 0,
+                        accumulators: self
+                            .accumulators
+                            .iter()
+                            .map(AccumulatorFactory::create)
+                            .collect::<Result<_>>()?,
+                        output: None,
+                    };
+                    self.memory
+                        .try_grow(RowMultiset::row_size(entry.key()) + group.size())?;
+                    entry.insert(group)
+                }
+            };
+            let group_flags = BooleanArray::from(
+                indices
+                    .iter()
+                    .map(|i| retracted.value(*i as usize))
+                    .collect::<Vec<_>>(),
+            );
+            for retracted in group_flags.values() {
+                group.count = checked_count(group.count, retracted)?;
+            }
+            // COUNT(*) can prune every input column while retaining the row count.
+            let input = if batch.num_columns() == 0 {
+                RecordBatch::try_new_with_options(
+                    batch.schema(),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+                )?
+            } else {
+                take_record_batch(&batch, &UInt64Array::from(indices))?
+            };
+            for ((expr, predicate), accumulator) in self
+                .aggregate
+                .aggr_expr()
+                .iter()
+                .zip(self.aggregate.filter_expr())
+                .zip(&mut group.accumulators)
+            {
+                let (input, retracted) = if let Some(predicate) = predicate {
+                    let values = predicate.evaluate(&input)?.into_array(input.num_rows())?;
+                    let predicate =
+                        values
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .ok_or_else(|| {
+                                datafusion_common::exec_datafusion_err!(
+                                    "aggregate filter must be boolean"
+                                )
+                            })?;
+                    let flags = filter(&group_flags, predicate)?;
+                    let flags = flags
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or_else(|| {
+                            datafusion_common::internal_datafusion_err!(
+                                "invalid aggregate retraction flags"
+                            )
+                        })?;
+                    (filter_record_batch(&input, predicate)?, flags.clone())
+                } else {
+                    (input.clone(), group_flags.clone())
+                };
+                if input.num_rows() == 0 {
+                    continue;
+                }
+                let values = expr
+                    .expressions()
+                    .iter()
+                    .map(|arg| arg.evaluate(&input)?.into_array(input.num_rows()))
+                    .collect::<Result<Vec<_>>>()?;
+                for i in 0..input.num_rows() {
+                    let old_size = accumulator.size();
+                    accumulator.apply(&values, i, retracted.value(i))?;
+                    self.memory
+                        .try_resize(self.memory.size() - old_size + accumulator.size())?;
+                }
+            }
+            let old_size = group.size();
+            let next = if global || group.count > 0 {
+                Some(group.evaluate(&key)?)
             } else {
                 None
             };
             if next != group.output {
                 if let Some(old) = group.output.take() {
-                    self.memory.shrink(RowMultiset::row_size(&old));
                     rows.push(old);
                     flags.push(true);
                 }
                 if let Some(new) = &next {
-                    self.memory.try_grow(RowMultiset::row_size(new))?;
                     rows.push(new.clone());
                     flags.push(false);
                 }
                 group.output = next;
             }
-            if !global && group.rows.is_empty() {
-                self.groups.remove(&key);
+            self.memory
+                .try_resize(self.memory.size() - old_size + group.size())?;
+            if !global && group.count == 0 {
+                let (stored_key, group) = self.groups.remove_entry(&key).ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!("missing streaming group")
+                })?;
+                self.memory
+                    .shrink(RowMultiset::row_size(&stored_key) + group.size());
                 if self.groups.is_empty() || self.groups.len() < self.groups.capacity() / 4 {
                     self.groups.shrink_to_fit();
                 }
-                self.memory.shrink(RowMultiset::row_size(&key));
             }
         }
         let mut events = Vec::new();
@@ -251,55 +356,118 @@ impl AggregateState {
     }
 }
 
-fn evaluate_group(aggregate: &AggregateExec, key: &Row, rows: &RowMultiset) -> Result<Row> {
-    let mut accumulators = aggregate
-        .aggr_expr()
-        .iter()
-        .map(|expr| expr.create_accumulator())
-        .collect::<Result<Vec<_>>>()?;
-    let mut input = rows.rows();
-    loop {
-        let chunk = input.by_ref().take(1024).cloned().collect::<Vec<_>>();
-        if chunk.is_empty() {
-            break;
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+    use datafusion::functions_aggregate::{average, count, min_max, sum};
+    use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    use super::*;
+
+    fn state(distinct: bool, extrema: bool, budget: usize) -> Result<AggregateState> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Float64, true),
+            Field::new("payload", DataType::Utf8, false),
+        ]));
+        let mut functions = vec![count::count_udaf(), sum::sum_udaf(), average::avg_udaf()];
+        if extrema {
+            functions.extend([min_max::min_udaf(), min_max::max_udaf()]);
         }
-        let batch = rows_to_batch(aggregate.input().schema(), &chunk)?;
-        for ((expr, filter), accumulator) in aggregate
-            .aggr_expr()
+        let expressions = functions
+            .into_iter()
+            .map(|function| {
+                let name = function.name().to_string();
+                AggregateExprBuilder::new(function, vec![Arc::new(Column::new("v", 1))])
+                    .schema(schema.clone())
+                    .alias(name)
+                    .with_distinct(distinct)
+                    .build()
+                    .map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let factories = expressions
             .iter()
-            .zip(aggregate.filter_expr())
-            .zip(&mut accumulators)
-        {
-            let filtered = match filter {
-                Some(filter) => {
-                    let values = filter.evaluate(&batch)?.into_array(batch.num_rows())?;
-                    let predicate =
-                        values
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| {
-                                datafusion_common::exec_datafusion_err!(
-                                    "aggregate filter must be boolean"
-                                )
-                            })?;
-                    filter_record_batch(&batch, predicate)?
-                }
-                None => batch.clone(),
-            };
-            if filtered.num_rows() == 0 {
-                continue;
-            }
-            let values = expr
-                .expressions()
-                .iter()
-                .map(|arg| arg.evaluate(&filtered)?.into_array(filtered.num_rows()))
-                .collect::<Result<Vec<_>>>()?;
-            accumulator.update_batch(&values)?;
-        }
+            .map(|expr| AccumulatorFactory::try_new(expr, schema.clone()))
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(Arc::new(Column::new("g", 0)), "g".into())]),
+            expressions.clone(),
+            vec![None; expressions.len()],
+            Arc::new(EmptyExec::new(schema.clone())),
+            schema,
+        )?;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(budget));
+        Ok(AggregateState {
+            aggregate: Arc::new(aggregate),
+            accumulators: Arc::new(factories),
+            groups: HashMap::new(),
+            memory: MemoryConsumer::new("test").register(&pool),
+        })
     }
-    let mut output = key.clone();
-    for accumulator in &mut accumulators {
-        output.push(accumulator.evaluate()?);
+
+    fn apply(state: &mut AggregateState, values: Vec<f64>, retracted: bool) -> Result<()> {
+        let len = values.len();
+        let batch = RecordBatch::try_new(
+            state.aggregate.input().schema(),
+            vec![
+                Arc::new(Int64Array::from(vec![0; len])),
+                Arc::new(Float64Array::from(values)),
+                // Unused, distinct payloads must never become retained aggregate state.
+                Arc::new(StringArray::from_iter_values(
+                    (0..len).map(|i| format!("{i:04096}")),
+                )),
+            ],
+        )?;
+        state.apply(FlowEvent::Data {
+            batch,
+            retracted: BooleanArray::from(vec![retracted; len]),
+        })?;
+        Ok(())
     }
-    Ok(output)
+
+    #[test]
+    fn arithmetic_state_is_constant_size_and_groups_release_memory() -> Result<()> {
+        let mut state = state(false, false, 16 * 1024)?;
+        apply(&mut state, vec![1.0], false)?;
+        let bytes = state.memory.size();
+        apply(&mut state, (2..1002).map(f64::from).collect(), false)?;
+        assert_eq!(state.memory.size(), bytes);
+        assert_eq!(state.groups.len(), 1);
+        apply(&mut state, (1..1002).rev().map(f64::from).collect(), true)?;
+        assert!(state.groups.is_empty());
+        assert_eq!(state.memory.size(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_and_extrema_state_tracks_values_not_occurrences() -> Result<()> {
+        let mut state = state(true, true, 16 * 1024)?;
+        apply(&mut state, vec![1.0], false)?;
+        let bytes = state.memory.size();
+        apply(&mut state, vec![1.0; 1000], false)?;
+        assert_eq!(state.memory.size(), bytes);
+        apply(&mut state, vec![1.0; 1000], true)?;
+        assert_eq!(state.memory.size(), bytes);
+        apply(&mut state, vec![1.0], true)?;
+        assert!(state.groups.is_empty());
+        assert_eq!(state.memory.size(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_values_respect_memory_budget() -> Result<()> {
+        let mut state = state(true, true, 16 * 1024)?;
+        assert!(matches!(
+            apply(&mut state, (0..1000).map(f64::from).collect(), false),
+            Err(datafusion_common::DataFusionError::ResourcesExhausted(_))
+        ));
+        Ok(())
+    }
 }

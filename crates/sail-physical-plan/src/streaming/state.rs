@@ -70,10 +70,12 @@ impl RowMultiset {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
+    #[cfg(test)]
     pub fn rows(&self) -> impl Iterator<Item = &Row> {
         self.rows
             .iter()

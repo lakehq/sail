@@ -33,6 +33,9 @@ def _aggregate(df, *, grouped=True):
         sf.min("v").alias("min"),
         sf.max("v").alias("max"),
         sf.count_distinct("v").alias("distinct"),
+        sf.sum_distinct("v").alias("distinct_sum"),
+        sf.expr("avg(DISTINCT v)").alias("distinct_avg"),
+        sf.count_distinct("g", "v").alias("distinct_pairs"),
     )
 
 
@@ -116,6 +119,92 @@ def test_delta_streaming_empty_and_duplicate_rows(spark, tmp_path):
     assert _stream(spark, path, end=2).count() == 0
 
 
+@pytest.mark.parametrize("value_type", ["BIGINT", "DOUBLE", "DECIMAL(12, 2)"])
+def test_delta_streaming_incremental_retractions(spark, tmp_path, value_type):
+    path = tmp_path / "retractions"
+    (
+        spark.createDataFrame(
+            [(1, "a", 20), (2, "a", 10), (3, "a", 10), (4, "a", 30), (5, "a", None), (6, None, 7)],
+            "id LONG, g STRING, v LONG",
+        )
+        .selectExpr("id", "g", f"CAST(v AS {value_type}) AS v")
+        .write.format("delta")
+        .option("delta.enableChangeDataFeed", "true")
+        .save(str(path))
+    )
+    target = f"delta.`{path}`"
+    statements = [
+        # An arbitrary deletion leaves another occurrence of the minimum/distinct value.
+        f"DELETE FROM {target} WHERE id = 2",
+        # Retract the last minimum and move its replacement to a different group.
+        f"UPDATE {target} SET g = 'b', v = 40 WHERE id = 3",
+        f"UPDATE {target} SET v = NULL WHERE id = 4",
+        # The group still exists, but has no non-NULL aggregate contributions.
+        f"UPDATE {target} SET v = NULL WHERE id = 1",
+        f"UPDATE {target} SET v = 12 WHERE id = 5",
+        f"DELETE FROM {target}",
+        # Empty global accumulators must start afresh, with duplicate values counted once.
+        None,
+    ]
+    for version, statement in enumerate(statements, start=1):
+        if statement is None:
+            (
+                spark.createDataFrame([(7, "a", 8), (8, "a", 8), (9, "a", None)], "id LONG, g STRING, v LONG")
+                .selectExpr("id", "g", f"CAST(v AS {value_type}) AS v")
+                .write.format("delta")
+                .mode("append")
+                .save(str(path))
+            )
+        else:
+            spark.sql(statement)
+        _assert_snapshot(spark, path, version)
+        _assert_snapshot(spark, path, version, grouped=False)
+        actual = _stream(spark, path, end=version)
+        expected = spark.read.format("delta").option("versionAsOf", version).load(str(path))
+        assert Counter(map(tuple, actual.select("g", "v").distinct().collect())) == Counter(
+            map(tuple, expected.select("g", "v").distinct().collect())
+        )
+        expressions = [
+            sf.expr("count(DISTINCT v) FILTER (WHERE id > 2)"),
+            sf.expr("sum(DISTINCT v) FILTER (WHERE id > 2)"),
+            sf.expr("avg(DISTINCT v) FILTER (WHERE id > 2)"),
+            sf.expr("min(v) FILTER (WHERE id > 2)"),
+            sf.expr("max(v) FILTER (WHERE id > 2)"),
+        ]
+        assert Counter(map(tuple, actual.groupBy("g").agg(*expressions).collect())) == Counter(
+            map(tuple, expected.groupBy("g").agg(*expressions).collect())
+        )
+
+
+def test_delta_streaming_retracts_non_finite_values(spark, tmp_path):
+    path = tmp_path / "non_finite"
+    spark.createDataFrame(
+        [(1, "a", 4.0), (2, "a", float("nan")), (3, "a", float("inf")), (4, "a", float("-inf"))],
+        "id LONG, g STRING, v DOUBLE",
+    ).write.format("delta").option("delta.enableChangeDataFeed", "true").save(str(path))
+    for version, row_id in enumerate([2, 3, 4], start=1):
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE id = {row_id}")
+        # String conversion gives NaN a stable equality representation.
+        actual = _aggregate(_stream(spark, path, end=version)).drop("g")
+        expected = _aggregate(spark.read.format("delta").load(str(path))).drop("g")
+        casts = [f"CAST(`{column}` AS STRING)" for column in actual.columns]
+        assert actual.selectExpr(*casts).collect() == expected.selectExpr(*casts).collect()
+
+
+def test_delta_streaming_retracts_string_extrema(spark, tmp_path):
+    path = tmp_path / "strings"
+    spark.createDataFrame([(1, "m"), (2, "a"), (3, "z"), (4, "a"), (5, None)], "id LONG, v STRING").write.format(
+        "delta"
+    ).option("delta.enableChangeDataFeed", "true").save(str(path))
+    expressions = [sf.min("v"), sf.max("v"), sf.count_distinct("v")]
+    for version, row_id in enumerate([2, 3, 4, 1], start=1):
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE id = {row_id}")
+        actual = _stream(spark, path, end=version).agg(*expressions)
+        expected = spark.read.format("delta").load(str(path)).agg(*expressions)
+        assert actual.schema == expected.schema
+        assert actual.collect() == expected.collect()
+
+
 def test_delta_streaming_cdf_events_remain_append_only(spark, tmp_path):
     path = tmp_path / "events"
     spark.range(3).write.format("delta").option("delta.enableChangeDataFeed", "true").save(str(path))
@@ -140,6 +229,8 @@ def test_delta_streaming_rejects_unsafe_operations(spark, tmp_path):
         _stream(spark, path, end=0).limit(1).collect()
     with pytest.raises(Exception, match="volatile projections"):
         _stream(spark, path, end=0).select(sf.rand()).collect()
+    with pytest.raises(Exception, match="does not support arbitrary retractions"):
+        _stream(spark, path, end=0).agg(sf.collect_list("id")).collect()
     with pytest.raises(Exception, match="version boundaries"):
         spark.readStream.format("delta").option("readChangeFeed", "true").option(
             "startingTimestamp", "2026-01-01"

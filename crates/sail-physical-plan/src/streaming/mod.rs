@@ -1,3 +1,4 @@
+mod accumulator;
 pub mod aggregate;
 pub mod collector;
 pub mod filter;
