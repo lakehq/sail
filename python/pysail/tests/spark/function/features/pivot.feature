@@ -42,6 +42,27 @@ Feature: PIVOT rotates rows into columns
         | 2012 | 10000  | NULL  | NULL  |
         | 2013 | NULL   | 30000 | NULL  |
 
+    Scenario Outline: constant <case> count filter preserves implicit grouping columns
+      When query
+        """
+        SELECT * FROM (
+          SELECT g, k, v FROM VALUES
+            (1, 'x', 10),
+            (1, 'x', 20)
+          AS t(g, k, v)
+        ) PIVOT (
+          count(v) FILTER (WHERE <filter>) FOR (k) IN ('x')
+        )
+        """
+      Then query result
+        | g | x |
+        | 1 | 0 |
+
+      Examples:
+        | case  | filter                |
+        | false | false                 |
+        | null  | CAST(NULL AS BOOLEAN) |
+
   Rule: Multiple aggregates name columns value_aggName
 
     Scenario: pivot with sum and avg aggregates

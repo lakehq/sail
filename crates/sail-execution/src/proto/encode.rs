@@ -4,10 +4,13 @@ use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, plan_err};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
+use datafusion::physical_expr::{HigherOrderFunctionExpr, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
-use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use datafusion_proto::physical_plan::to_proto::serialize_partitioning;
+use datafusion_proto::physical_plan::{
+    PhysicalExtensionCodec, PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
+};
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -18,6 +21,10 @@ use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -31,6 +38,8 @@ pub fn encode_remote_physical_plan(
     let plan = plan
         .transform(|node| {
             if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
+                // TODO: Add SQL planner support and distributed SQL tests for
+                // DataFusion's `file_row_index()`.
                 let node =
                     Arc::new(RemoteDataSourceExec::new(data_source)) as Arc<dyn ExecutionPlan>;
                 Ok(Transformed::yes(node))
@@ -39,6 +48,9 @@ pub fn encode_remote_physical_plan(
             }
         })
         .data()?;
+    // TODO(distributed-execution): Route dynamic-filter updates and completion from each producer
+    // to every consumer with the same expression ID across stage boundaries, including
+    // attempt-scoped recreation on retry and route cleanup on cancellation.
     try_encode_physical_plan(codec, plan)
 }
 
@@ -47,6 +59,15 @@ pub fn encode_remote_physical_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<Vec<u8>> {
     try_encode_physical_expr(codec, expr)
+}
+
+pub fn encode_remote_partitioning(
+    codec: &dyn PhysicalExtensionCodec,
+    partitioning: &Partitioning,
+) -> Result<Vec<u8>> {
+    let converter = RemotePhysicalProtoConverter::default();
+    let partitioning = serialize_partitioning(partitioning, codec, &converter)?;
+    try_encode_message(partitioning)
 }
 
 pub(super) fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
@@ -71,15 +92,32 @@ pub(super) fn try_encode_physical_plan(
     try_encode_message(physical_plan_to_proto(codec, plan)?)
 }
 
+pub(super) fn try_encode_physical_plan_with_converter(
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<u8>> {
+    try_encode_message(physical_plan_to_proto_with_converter(
+        codec,
+        proto_converter,
+        plan,
+    )?)
+}
+
 pub(super) fn physical_plan_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<PhysicalPlanNode> {
-    PhysicalPlanNode::try_from_physical_plan_with_converter(
-        plan,
-        codec,
-        &RemotePhysicalProtoConverter {},
-    )
+    let converter = RemotePhysicalProtoConverter::default();
+    physical_plan_to_proto_with_converter(codec, &converter, plan)
+}
+
+pub(super) fn physical_plan_to_proto_with_converter(
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<PhysicalPlanNode> {
+    PhysicalPlanNode::try_from_physical_plan_with_converter(plan, codec, proto_converter)
 }
 
 pub(super) fn try_encode_physical_expr(
@@ -89,12 +127,32 @@ pub(super) fn try_encode_physical_expr(
     try_encode_message(physical_expr_to_proto(codec, expr)?)
 }
 
+pub(super) fn try_encode_physical_expr_with_converter(
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<Vec<u8>> {
+    try_encode_message(physical_expr_to_proto_with_converter(
+        codec,
+        proto_converter,
+        expr,
+    )?)
+}
+
 pub(super) fn physical_expr_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
-    let converter = RemotePhysicalProtoConverter;
-    converter.physical_expr_to_proto(expr, codec)
+    let converter = RemotePhysicalProtoConverter::default();
+    physical_expr_to_proto_with_converter(codec, &converter, expr)
+}
+
+pub(super) fn physical_expr_to_proto_with_converter(
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<PhysicalExprNode> {
+    proto_converter.physical_expr_to_proto(expr, codec)
 }
 
 pub(super) fn try_encode_higher_order_udf(
@@ -104,6 +162,14 @@ pub(super) fn try_encode_higher_order_udf(
     let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
+        })
+    } else if udf_inner.is::<SparkMapFilter>() {
+        HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})
+    } else if udf_inner.is::<SparkTransformValues>() {
+        HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {})
+    } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
+            last_value_wins: transform_keys.is_last_value_wins(),
         })
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
@@ -130,6 +196,10 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic: convert_tz.classic(),
             null_short_circuit: convert_tz.null_short_circuit(),
+        })
+    } else if let Some(regexp_instr) = udf_inner.downcast_ref::<SparkRegexpInstr>() {
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {
+            ansi_mode: regexp_instr.ansi_mode(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());

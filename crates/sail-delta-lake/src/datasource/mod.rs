@@ -20,10 +20,8 @@
 
 use std::collections::HashSet;
 
-use datafusion::arrow::array::BooleanArray;
-use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::stats::Statistics;
+use datafusion::common::stats::{ColumnStatistics, Statistics};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
@@ -31,12 +29,13 @@ use url::Url;
 
 use crate::options::DeltaLogReplayStrategy;
 use crate::snapshot::SnapshotPruningStats;
-use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
+pub(crate) mod deletion_vector;
 pub mod expressions;
 pub mod pruning;
 pub mod scan;
@@ -46,9 +45,9 @@ pub mod schema;
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
     PredicateProperties, collect_physical_columns, get_pushdown_filters,
+    physical_predicate_uses_struct_value, predicate_uses_struct_value,
     rewrite_predicate_for_column_mapping, simplify_expr,
 };
-pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 
@@ -59,20 +58,28 @@ pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStore
 }
 
 impl DeltaSnapshot {
-    pub(crate) fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+    pub(crate) fn datafusion_table_statistics_for_adds(&self, adds: &[Add]) -> Option<Statistics> {
         if !self.load_config().require_files {
             return None;
         }
-        if let Some(mask) = mask {
-            let files = self.files_batch().ok()?;
-            let boolean_array = BooleanArray::from(mask.to_vec());
-            let pruned_files = filter_record_batch(files, &boolean_array).ok()?;
-            SnapshotPruningStats::try_new(&pruned_files, self)
+        let mut statistics = if adds == self.adds() {
+            self.pruning_stats().ok()?.statistics()
+        } else {
+            let files = self.build_files_batch_from_adds(adds).ok()?;
+            SnapshotPruningStats::try_new(&files, self)
                 .ok()?
                 .statistics()
-        } else {
-            self.pruning_stats().ok()?.statistics()
-        }
+        }?;
+        // ProjectionExec propagates extrema and null counts through casts without proving that
+        // the cast is total or order preserving. Delta's typed logical resolver consumes the exact
+        // evidence; physical statistics remain estimates so the generic aggregate rule cannot
+        // turn an unsafe projected cast into a literal.
+        statistics.column_statistics = statistics
+            .column_statistics
+            .into_iter()
+            .map(ColumnStatistics::to_inexact)
+            .collect();
+        Some(statistics)
     }
 }
 
@@ -233,12 +240,14 @@ impl DeltaScanConfigBuilder {
         Ok(DeltaScanConfig {
             file_column_name,
             row_index_column_name: None,
+            hash_partition_files: false,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
+            metadata_aggregate: None,
         })
     }
 }
@@ -250,6 +259,8 @@ pub struct DeltaScanConfig {
     pub file_column_name: Option<String>,
     /// Include the file-local row index for each record.
     pub row_index_column_name: Option<String>,
+    /// Require file metadata to be hash partitioned by its decoded path before scanning.
+    pub hash_partition_files: bool,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
@@ -263,4 +274,11 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Emit file-level group values and row-count weights for metadata aggregation.
+    pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaMetadataAggregateConfig {
+    pub group_columns: Vec<String>,
 }

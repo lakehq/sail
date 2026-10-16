@@ -176,37 +176,106 @@ impl ColumnName {
     }
 
     pub fn parse_column_name_list(names: impl AsRef<str>) -> DeltaResult<Vec<ColumnName>> {
-        let mut result = Vec::new();
-        let raw = names.as_ref().trim();
-        if raw.is_empty() {
-            return Ok(result);
-        }
+        let mut chars = names.as_ref().chars().peekable();
+        drop_column_name_whitespace(&mut chars);
+        let mut ending = if chars.peek().is_some() {
+            ColumnNameEnding::NextColumn
+        } else {
+            ColumnNameEnding::InputExhausted
+        };
 
-        for column in raw.split(',') {
-            let column = column.trim();
-            if column.is_empty() {
-                continue;
-            }
-            let path = column
-                .split('.')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|segment| {
-                    segment
-                        .trim_matches('`')
-                        .replace("``", "`")
-                        .trim()
-                        .to_string()
-                })
-                .collect::<Vec<_>>();
-            if path.is_empty() {
+        let mut columns = Vec::new();
+        while ending == ColumnNameEnding::NextColumn {
+            let (column, next_ending) = parse_column_name(&mut chars)?;
+            columns.push(column);
+            ending = next_ending;
+        }
+        Ok(columns)
+    }
+}
+
+type ColumnNameChars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColumnNameEnding {
+    InputExhausted,
+    NextField,
+    NextColumn,
+}
+
+const COLUMN_NAME_ESCAPE: char = '`';
+const COLUMN_NAME_FIELD_SEPARATOR: char = '.';
+const COLUMN_NAME_SEPARATOR: char = ',';
+
+fn drop_column_name_whitespace(chars: &mut ColumnNameChars<'_>) {
+    while chars.next_if(|c| c.is_whitespace()).is_some() {}
+}
+
+fn parse_column_name(
+    chars: &mut ColumnNameChars<'_>,
+) -> DeltaResult<(ColumnName, ColumnNameEnding)> {
+    drop_column_name_whitespace(chars);
+    let mut ending = if chars.peek().is_none() {
+        ColumnNameEnding::InputExhausted
+    } else if chars.next_if_eq(&COLUMN_NAME_SEPARATOR).is_some() {
+        ColumnNameEnding::NextColumn
+    } else {
+        ColumnNameEnding::NextField
+    };
+
+    let mut path = Vec::new();
+    while ending == ColumnNameEnding::NextField {
+        drop_column_name_whitespace(chars);
+        let field = if chars.next_if_eq(&COLUMN_NAME_ESCAPE).is_some() {
+            parse_escaped_column_name_field(chars)?
+        } else {
+            parse_simple_column_name_field(chars)?
+        };
+
+        ending = match chars.find(|c| !c.is_whitespace()) {
+            None => ColumnNameEnding::InputExhausted,
+            Some(COLUMN_NAME_FIELD_SEPARATOR) => ColumnNameEnding::NextField,
+            Some(COLUMN_NAME_SEPARATOR) => ColumnNameEnding::NextColumn,
+            Some(other) => {
                 return Err(DeltaTableError::generic(format!(
-                    "invalid column name list: {raw}"
+                    "invalid character {other:?} after column field {field:?}"
                 )));
             }
-            result.push(Self { path });
+        };
+        path.push(field);
+    }
+    Ok((ColumnName::new(path), ending))
+}
+
+fn parse_simple_column_name_field(chars: &mut ColumnNameChars<'_>) -> DeltaResult<String> {
+    let mut field = String::new();
+    let mut first = true;
+    while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+        if first && c.is_ascii_digit() {
+            return Err(DeltaTableError::generic(format!(
+                "unescaped column field cannot start with a digit {c:?}"
+            )));
         }
-        Ok(result)
+        field.push(c);
+        first = false;
+    }
+    Ok(field)
+}
+
+fn parse_escaped_column_name_field(chars: &mut ColumnNameChars<'_>) -> DeltaResult<String> {
+    let mut field = String::new();
+    loop {
+        match chars.next() {
+            Some(COLUMN_NAME_ESCAPE) if chars.next_if_eq(&COLUMN_NAME_ESCAPE).is_none() => {
+                return Ok(field);
+            }
+            Some(c) => field.push(c),
+            None => {
+                return Err(DeltaTableError::generic(format!(
+                    "no closing {COLUMN_NAME_ESCAPE:?} after column field {field:?}"
+                )));
+            }
+        }
     }
 }
 
@@ -857,5 +926,36 @@ impl FromStr for ColumnMappingMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use super::ColumnName;
+
+    #[test]
+    fn column_name_list_preserves_escaped_separators() {
+        let columns = ColumnName::parse_column_name_list(
+            "a.b, `c.d`, `e,`, `escaped``backtick`, nested.`dot,comma`",
+        )
+        .unwrap();
+
+        assert_eq!(
+            columns,
+            vec![
+                ColumnName::new(["a", "b"]),
+                ColumnName::new(["c.d"]),
+                ColumnName::new(["e,"]),
+                ColumnName::new(["escaped`backtick"]),
+                ColumnName::new(["nested", "dot,comma"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn column_name_list_rejects_unterminated_escape() {
+        assert!(ColumnName::parse_column_name_list("a, `unterminated").is_err());
     }
 }

@@ -1,5 +1,8 @@
 Feature: Unity Catalog schema (database) operations
 
+  Background:
+    Given variable storage for temporary directory unity_external
+
   Scenario: Create a schema with metadata
     Given statement
       """
@@ -186,11 +189,11 @@ Feature: Unity Catalog schema (database) operations
       """
       DROP SCHEMA IF EXISTS cascade_drop_unity CASCADE
       """
-    Given statement
+    Given statement template
       """
       CREATE TABLE cascade_drop_unity.t1 (id INT)
       USING delta
-      LOCATION 's3://deltadata/cascade_test'
+      LOCATION '{{ storage.file_uri }}/cascade_test'
       """
     Given statement
       """
@@ -237,11 +240,11 @@ Feature: Unity Catalog schema (database) operations
       """
       DROP SCHEMA IF EXISTS no_cascade_drop_unity CASCADE
       """
-    Given statement
+    Given statement template
       """
       CREATE TABLE no_cascade_drop_unity.t1 (id INT)
       USING delta
-      LOCATION 's3://deltadata/no_cascade_test'
+      LOCATION '{{ storage.file_uri }}/no_cascade_test'
       """
     Given statement with error .*
       """

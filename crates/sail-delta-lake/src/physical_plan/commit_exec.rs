@@ -27,8 +27,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
@@ -443,7 +444,7 @@ impl DeltaCommitExec {
             .await
     }
 
-    async fn publish_staged_commit(
+    pub(crate) async fn publish_staged_commit(
         log_store: &LogStoreRef,
         staged: &CatalogManagedStagedCommit,
     ) -> Result<()> {
@@ -472,7 +473,7 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn latest_published_backfilled_version(
+    pub(crate) async fn latest_published_backfilled_version(
         log_store: &LogStoreRef,
         end_version: i64,
     ) -> Result<Option<i64>> {
@@ -517,6 +518,22 @@ impl ExecutionPlan for DeltaCommitExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -591,7 +608,7 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Arrow-native action rows + optional CommitMeta row only.
+                // A batch may coalesce action rows from multiple writer partitions.
                 if batch.column_by_name(COL_ACTION).is_some() {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
@@ -612,11 +629,11 @@ impl ExecutionPlan for DeltaCommitExec {
                             _ => actions.push(ca),
                         }
                     }
-                    if let Some(ExecCommitMeta {
+                    for ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
-                    }) = decoded_meta
+                    } in decoded_meta
                     {
                         total_rows = total_rows.saturating_add(row_count);
                         if operation.is_none() {
@@ -938,15 +955,22 @@ impl ExecutionPlan for DeltaCommitExec {
                         table,
                     )
                     .await?;
-                    let reference = Self::refresh_catalog_managed_reference(
-                        &context,
-                        lakehouse_context,
-                        &table_url,
-                        &log_store,
-                        reference,
-                        latest_catalog_version,
-                    )
-                    .await?;
+                    let reference = if crate::transaction::CommitData::is_blind_append(
+                        &final_actions,
+                        &operation,
+                    ) {
+                        Self::refresh_catalog_managed_reference(
+                            &context,
+                            lakehouse_context,
+                            &table_url,
+                            &log_store,
+                            reference,
+                            latest_catalog_version,
+                        )
+                        .await?
+                    } else {
+                        reference
+                    };
                     let pre_commit = CommitBuilder::from(
                         CommitProperties::default()
                             .with_operation_metrics(operation_metrics)

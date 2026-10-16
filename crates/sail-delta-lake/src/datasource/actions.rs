@@ -76,6 +76,7 @@ pub fn partitioned_file_from_action(
         ordering: None,
         metadata_size_hint: None,
         table_reference: None,
+        arrow_schema: None,
     })
 }
 

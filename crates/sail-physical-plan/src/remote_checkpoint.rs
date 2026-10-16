@@ -7,6 +7,7 @@ use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::{ConfigOptions, TableParquetOptions};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
@@ -16,7 +17,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use datafusion::physical_plan::filter_pushdown::FilterPushdownPropagation;
@@ -88,6 +90,13 @@ impl DataSource for CheckpointDataSource {
 
     fn output_partitioning(&self) -> Partitioning {
         self.output_partitioning.clone()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.source.apply_expressions(f)
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
@@ -307,6 +316,22 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -382,6 +407,7 @@ pub struct RemoteCheckpointWriteExec {
     object_store_url: ObjectStoreUrl,
     prefix: Path,
     storage_schema: SchemaRef,
+    input_ordering: Option<LexOrdering>,
     properties: Arc<PlanProperties>,
 }
 
@@ -391,6 +417,7 @@ impl RemoteCheckpointWriteExec {
         object_store_url: ObjectStoreUrl,
         prefix: Path,
         storage_schema: SchemaRef,
+        input_ordering: Option<LexOrdering>,
     ) -> Result<Self> {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
             return Err(DataFusionError::NotImplemented(
@@ -420,6 +447,7 @@ impl RemoteCheckpointWriteExec {
             object_store_url,
             prefix,
             storage_schema,
+            input_ordering,
             properties,
         })
     }
@@ -438,6 +466,10 @@ impl RemoteCheckpointWriteExec {
 
     pub fn storage_schema(&self) -> &SchemaRef {
         &self.storage_schema
+    }
+
+    pub fn input_ordering(&self) -> Option<&LexOrdering> {
+        self.input_ordering.as_ref()
     }
 }
 
@@ -460,12 +492,33 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
         &self.properties
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        // The checkpoint descriptor promises this ordering for the saved rows.
+        vec![self.input_ordering.clone().map(Into::into)]
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -482,6 +535,7 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
             self.object_store_url.clone(),
             self.prefix.clone(),
             Arc::clone(&self.storage_schema),
+            self.input_ordering.clone(),
         )?))
     }
 
@@ -755,6 +809,10 @@ fn checkpoint_partitioning_with_count(
             Partitioning::Hash(expressions, partition_count)
         }
         Partitioning::Hash(_, _) => Partitioning::UnknownPartitioning(partition_count),
+        Partitioning::Range(range) if range.partition_count() == partition_count => {
+            Partitioning::Range(range)
+        }
+        Partitioning::Range(_) => Partitioning::UnknownPartitioning(partition_count),
         Partitioning::UnknownPartitioning(_) => Partitioning::UnknownPartitioning(partition_count),
     }
 }
@@ -854,6 +912,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             storage_schema,
+            None,
         )?;
         let context = SessionContext::new();
         context
@@ -901,6 +960,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             schema,
+            None,
         )?;
         let context = SessionContext::new();
         context
@@ -950,6 +1010,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&schema),
+            None,
         )?);
         let checkpoint = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),
@@ -1008,6 +1069,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&storage_schema),
+            None,
         )?);
         let commit = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),

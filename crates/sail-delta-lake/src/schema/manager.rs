@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use icu_casemap::CaseMapper;
+use icu_casemap::{CaseMapper, CaseMapperBorrowed};
 use indexmap::IndexSet;
 use regex::Regex;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
@@ -208,7 +208,11 @@ static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
 });
 
-fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &str) -> bool {
+fn spark_case_insensitive_name_eq(
+    case_mapper: &CaseMapperBorrowed<'_>,
+    left: &str,
+    right: &str,
+) -> bool {
     let mut left_chars = left.chars();
     let mut right_chars = right.chars();
 
@@ -221,7 +225,7 @@ fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &
     }
 }
 
-fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -> bool {
+fn java_char_eq_ignore_case(case_mapper: &CaseMapperBorrowed<'_>, left: char, right: char) -> bool {
     if left == right {
         return true;
     }
@@ -408,6 +412,9 @@ pub fn protocol_for_create(
     let mut reader_features = IndexSet::new();
     let mut writer_features = IndexSet::new();
     let has_check_constraints = configuration_has_check_constraints(configuration);
+    let enable_change_data_feed = configuration
+        .get("delta.enableChangeDataFeed")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
     let table_properties = TableProperties::from(configuration.iter());
     let explicit_features = explicit_table_features(configuration)?;
 
@@ -512,10 +519,19 @@ pub fn protocol_for_create(
     }
 
     if reader_features.is_empty() && writer_features.is_empty() {
-        let min_writer_version = if has_check_constraints { 3 } else { 2 };
+        let min_writer_version = if enable_change_data_feed {
+            4
+        } else if has_check_constraints {
+            3
+        } else {
+            2
+        };
         return Ok(Protocol::new(1, min_writer_version, None, None));
     }
 
+    if enable_change_data_feed {
+        writer_features.insert(TableFeature::ChangeDataFeed);
+    }
     enable_legacy_writer_features(&mut writer_features);
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
@@ -983,6 +999,7 @@ mod tests {
                 .with_metadata([(ColumnMetadataKey::GenerationExpression.as_ref(), "id + 1")]),
         ])?;
         let mut configuration = HashMap::new();
+        configuration.insert("delta.enableChangeDataFeed".to_string(), "true".to_string());
         configuration.insert("delta.columnMapping.mode".to_string(), "name".to_string());
         configuration.insert(
             "delta.enableInCommitTimestamps".to_string(),
@@ -1003,10 +1020,36 @@ mod tests {
         assert!(protocol.has_reader_feature(&TableFeature::TimestampWithoutTimezone));
         assert!(protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone));
         assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::ChangeDataFeed));
+        assert!(!protocol.has_reader_feature(&TableFeature::ChangeDataFeed));
         assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
         assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
+    fn change_data_feed_uses_legacy_writer_protocol_when_no_other_features_are_needed()
+    -> DeltaResult<()> {
+        for (value, version) in [("true", 4), ("false", 2)] {
+            let configuration =
+                HashMap::from([("delta.enableChangeDataFeed".to_string(), value.to_string())]);
+            let protocol = protocol_for_create(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &configuration,
+            )?;
+            assert_eq!(protocol.min_reader_version(), 1);
+            assert_eq!(protocol.min_writer_version(), version);
+            assert!(protocol.reader_features().is_none());
+            assert!(protocol.writer_features().is_none());
+        }
         Ok(())
     }
 

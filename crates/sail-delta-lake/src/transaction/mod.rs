@@ -364,6 +364,24 @@ impl OperationMetrics {
                     self.num_deletion_vectors_removed = self.num_deletion_vectors_updated;
                 }
             }
+            DeltaOperation::Update { .. } => {
+                if self.num_copied_rows.is_none() {
+                    self.num_copied_rows = self.num_output_rows;
+                }
+                if self.num_updated_rows.is_none()
+                    && let (Some(touched), Some(copied)) =
+                        (self.num_touched_rows, self.num_copied_rows)
+                {
+                    self.num_updated_rows = Some(touched.saturating_sub(copied));
+                }
+                if let (Some(updated), Some(copied)) = (self.num_updated_rows, self.num_copied_rows)
+                {
+                    self.num_touched_rows = Some(updated.saturating_add(copied));
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
             DeltaOperation::Merge { .. } => {
                 if self.num_target_files_added.is_none() {
                     self.num_target_files_added = self.num_added_files;
@@ -434,8 +452,6 @@ impl OperationMetrics {
             | DeltaOperation::AddConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
                                                        //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
@@ -657,7 +673,7 @@ impl CommitData {
         self.commit_info().and_then(|info| info.in_commit_timestamp)
     }
 
-    fn is_blind_append(actions: &[CommitAction], operation: &DeltaOperation) -> bool {
+    pub(crate) fn is_blind_append(actions: &[CommitAction], operation: &DeltaOperation) -> bool {
         match operation {
             DeltaOperation::Write { predicate, .. } if predicate.is_none() => {
                 actions.iter().all(|action| {
@@ -944,14 +960,24 @@ fn validate_effective_commit_target(
     }
     validate_deletion_vector_add_stats(&actions_as_actions)?;
 
-    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
-    // write support is implemented, reject all writes to tables with CDF enabled, regardless of
-    // whether the protocol support is legacy (writer v4-6) or explicit (writer v7+ feature).
-    // Previously this guard only rejected v7+ tables, relying on `can_write_to_protocol` to reject
-    // legacy tables via implied-feature expansion. Now that legacy versions no longer expand
-    // implied features (matching delta-spark), this guard must cover legacy tables too.
     if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
-        return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
+        if !protocol_supports_legacy_change_data_feed(&protocol)
+            && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
+        {
+            return Err(
+                TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into(),
+            );
+        }
+        crate::change_data_feed::validate_schema(&metadata.parse_schema_arrow()?)
+            .map_err(|error| DeltaError::generic(error.to_string()))?;
+    }
+    if actions_as_actions
+        .iter()
+        .any(|action| matches!(action, Action::Cdc(cdc) if cdc.data_change))
+    {
+        return Err(DeltaError::generic(
+            "CDC actions must have dataChange=false",
+        ));
     }
 
     if table_property_enabled(&metadata, "delta.enableDeletionVectors")
@@ -2350,6 +2376,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn update_metrics_use_logical_touched_rows() {
+        let operation = DeltaOperation::Update { predicate: None };
+        for (physical_touched, updated, copied, expected_touched) in [
+            (Some(3), Some(1), Some(1), Some(2)),
+            (None, Some(2), Some(1), Some(3)),
+        ] {
+            let mut metrics = OperationMetrics {
+                num_touched_rows: physical_touched,
+                num_updated_rows: updated,
+                num_copied_rows: copied,
+                ..Default::default()
+            };
+            metrics.finalize_for(&operation);
+            assert_eq!(metrics.num_touched_rows, expected_touched);
+        }
+    }
+
     fn assert_effective_commit_validation(
         case: &str,
         read_snapshot: Option<&Arc<DeltaSnapshot>>,
@@ -2802,7 +2846,13 @@ mod tests {
                 "missing numRecords",
                 Some(r#"{"tightBounds":true}"#),
                 1,
-                Some("invalid stats.numRecords"),
+                Some("requires stats.numRecords"),
+            ),
+            (
+                "null numRecords",
+                Some(r#"{"numRecords":null}"#),
+                1,
+                Some("requires stats.numRecords"),
             ),
             (
                 "negative numRecords",

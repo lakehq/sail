@@ -297,6 +297,11 @@ pub enum CommandNode {
         root: Box<CommandPlan>,
         references: Vec<QueryPlan>,
     },
+    CallProcedure {
+        procedure: ObjectName,
+        arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -308,6 +313,10 @@ pub enum CommandNode {
     },
     ListCatalogs {
         pattern: Option<String>,
+    },
+    ShowTableProperties {
+        table: ObjectName,
+        property: Option<String>,
     },
     ShowTables {
         database: Option<ObjectName>,
@@ -479,11 +488,15 @@ pub enum CommandNode {
         variable: String,
         value: String,
     },
+    /// `RESET <variable>`, or `RESET` for all variables when `variable` is `None`.
+    ResetVariable {
+        variable: Option<String>,
+    },
     Update {
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
-        condition: Option<Expr>,
+        condition: Option<ExprWithSource>,
     },
     Delete {
         table: ObjectName,

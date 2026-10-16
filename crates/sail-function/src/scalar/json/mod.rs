@@ -2,7 +2,7 @@ pub mod from_json;
 mod json_as_text;
 mod json_length;
 mod json_object_keys;
-mod schema_of_json;
+pub(crate) mod schema_of_json;
 mod to_json;
 
 mod common;

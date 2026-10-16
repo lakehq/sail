@@ -5,8 +5,9 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -124,6 +125,22 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -222,6 +239,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                         ArrowParquetWriter::try_new(
                             delete_spec.arrow_schema.as_ref(),
                             WriterProperties::default(),
+                            Vec::new(),
                         )
                         .map_err(DataFusionError::Execution)?,
                     ),
@@ -249,6 +267,8 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
+                removed_data_file_paths: vec![],
+                skip_empty_commit: false,
                 requirements,
                 table_properties: writer_config.table_properties().to_vec(),
                 lakehouse_table,
@@ -328,9 +348,9 @@ fn equality_delete_fields(
     iceberg_schema: &crate::spec::Schema,
     input_schema: &SchemaRef,
 ) -> Result<Vec<EqualityDeleteField>> {
+    validate_equality_delete_schema(iceberg_schema)?;
     let mut fields = Vec::with_capacity(iceberg_schema.fields().len());
     for field in iceberg_schema.fields() {
-        validate_equality_delete_type(&field.name, &field.field_type)?;
         let arrow_field = Arc::new(iceberg_field_to_arrow(field)?);
         let input_field = input_schema.field_with_name(&field.name).map_err(|_| {
             DataFusionError::Plan(format!(
@@ -353,6 +373,13 @@ fn equality_delete_fields(
         });
     }
     Ok(fields)
+}
+
+pub(crate) fn validate_equality_delete_schema(iceberg_schema: &crate::spec::Schema) -> Result<()> {
+    for field in iceberg_schema.fields() {
+        validate_equality_delete_type(&field.name, &field.field_type)?;
+    }
+    Ok(())
 }
 
 fn validate_equality_delete_type(name: &str, ty: &Type) -> Result<()> {

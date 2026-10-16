@@ -40,7 +40,7 @@ pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
 /// Used as a literal owner name when no authenticated principal is available.
 pub(crate) const DEFAULT_OWNER: &str = "user.name";
 
-pub(crate) struct GenericTableFormat<'a> {
+pub(crate) struct GenericDataSourceFormat<'a> {
     pub logical_format: &'a str,
     pub storage: &'a HiveStorageFormat,
 }
@@ -99,7 +99,7 @@ pub(crate) fn table_to_status(
     let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
         ICEBERG_TABLE_TYPE_VALUE.to_string()
     } else {
-        resolve_table_format(table.parameters.as_ref(), storage)
+        resolve_data_source_format(table.parameters.as_ref(), storage)
     };
     let partition_by = table
         .partition_keys
@@ -192,7 +192,7 @@ pub(crate) fn build_generic_table(
     columns: Vec<CreateTableColumnOptions>,
     partition_columns: Vec<String>,
     location: Option<String>,
-    format: GenericTableFormat<'_>,
+    format: GenericDataSourceFormat<'_>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
 ) -> CatalogResult<Table> {
@@ -336,9 +336,51 @@ pub(crate) fn alter_spark_column_default(
     column_path: &[String],
     default: Option<String>,
 ) -> CatalogResult<()> {
+    alter_spark_schema_field(table, column_path, |field| {
+        let metadata = field
+            .as_object_mut()
+            .ok_or_else(|| {
+                CatalogError::External("Spark schema field must be an object".to_string())
+            })?
+            .entry("metadata")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| {
+                CatalogError::External("Spark schema field metadata must be an object".to_string())
+            })?;
+        let key = ColumnFeatureKey::CurrentDefault.as_str();
+        match default {
+            Some(default) => {
+                metadata.insert(key.to_string(), serde_json::Value::String(default));
+            }
+            None => {
+                metadata.remove(key);
+            }
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn alter_spark_column_type(
+    table: &mut Table,
+    column_path: &[String],
+    data_type: &DataType,
+) -> CatalogResult<()> {
+    let schema = spark_struct_json_from_fields(&[Field::new("column", data_type.clone(), true)])?;
+    alter_spark_schema_field(table, column_path, |field| {
+        field["type"] = schema["fields"][0]["type"].clone();
+        Ok(())
+    })
+}
+
+fn alter_spark_schema_field(
+    table: &mut Table,
+    column_path: &[String],
+    update: impl FnOnce(&mut serde_json::Value) -> CatalogResult<()>,
+) -> CatalogResult<()> {
     let [column_name] = column_path else {
         return Err(CatalogError::NotSupported(
-            "Hive Metastore catalog does not support altering nested column defaults".to_string(),
+            "Hive Metastore catalog does not support altering nested columns".to_string(),
         ));
     };
     let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? else {
@@ -359,28 +401,15 @@ pub(crate) fn alter_spark_column_default(
             .and_then(serde_json::Value::as_str)
             .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
     }) else {
+        // Delta may omit its schema from HMS; its transaction log owns these columns.
+        if table_provider_format(table.parameters.as_ref()).as_deref() == Some("delta") {
+            return Ok(());
+        }
         return Err(CatalogError::InvalidArgument(format!(
             "Column '{column_name}' does not exist"
         )));
     };
-    let metadata = field
-        .as_object_mut()
-        .ok_or_else(|| CatalogError::External("Spark schema field must be an object".to_string()))?
-        .entry("metadata")
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| {
-            CatalogError::External("Spark schema field metadata must be an object".to_string())
-        })?;
-    let key = ColumnFeatureKey::CurrentDefault.as_str();
-    match default {
-        Some(default) => {
-            metadata.insert(key.to_string(), serde_json::Value::String(default));
-        }
-        None => {
-            metadata.remove(key);
-        }
-    }
+    update(field)?;
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
@@ -708,7 +737,7 @@ fn reorder_spark_columns(
 /// 2. Only tables without a datasource marker are classified from their Hive
 ///    SerDe/InputFormat/OutputFormat metadata.
 /// 3. If neither is present or detectable, the format is `unknown`.
-fn resolve_table_format(
+fn resolve_data_source_format(
     parameters: Option<&AHashMap<FastStr, FastStr>>,
     storage: Option<&StorageDescriptor>,
 ) -> String {
@@ -888,10 +917,10 @@ mod tests {
     use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
-        COMMENT_KEY, GenericTableFormat, SPARK_DATASOURCE_PATH_KEY, SPARK_DATASOURCE_PROVIDER_KEY,
-        SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE, build_generic_table, build_view,
-        columns_from_spark_properties, database_to_status, inject_spark_metadata, is_view_table,
-        map_to_vec, validate_namespace,
+        COMMENT_KEY, GenericDataSourceFormat, SPARK_DATASOURCE_PATH_KEY,
+        SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE, build_generic_table,
+        build_view, columns_from_spark_properties, database_to_status, inject_spark_metadata,
+        is_view_table, map_to_vec, validate_namespace,
     };
 
     #[test]
@@ -932,7 +961,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -982,7 +1011,7 @@ mod tests {
                 }],
                 vec![],
                 Some(format!("s3://warehouse/{logical_format}_items")),
-                GenericTableFormat {
+                GenericDataSourceFormat {
                     logical_format,
                     storage: &storage,
                 },
@@ -1032,7 +1061,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1091,7 +1120,7 @@ mod tests {
             }],
             vec!["missing_partition".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1124,7 +1153,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1159,7 +1188,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1205,7 +1234,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1256,7 +1285,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1324,7 +1353,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1399,7 +1428,7 @@ mod tests {
             columns.clone(),
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1480,7 +1509,7 @@ mod tests {
             columns.clone(),
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1583,7 +1612,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2080,7 +2109,7 @@ mod tests {
             vec![],
             vec![],
             Some("s3://warehouse/empty_cols".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2192,7 +2221,7 @@ mod tests {
             ],
             vec!["category".to_string(), "event_date".to_string()],
             Some("s3://warehouse/mixed_events".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2560,7 +2589,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2591,7 +2620,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },

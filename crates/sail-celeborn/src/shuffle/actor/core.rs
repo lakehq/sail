@@ -3,7 +3,6 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::{ShuffleClientActor, ShuffleClientOptions};
 
-#[tonic::async_trait]
 impl Actor for ShuffleClientActor {
     type Message = ShuffleClientMessage;
     type Options = ShuffleClientOptions;
@@ -23,7 +22,11 @@ impl Actor for ShuffleClientActor {
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             ShuffleClientMessage::GetShuffleId {
                 job_id,

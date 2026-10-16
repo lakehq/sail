@@ -65,6 +65,16 @@
     will be raised if a query attempts to spill to disk.
   experimental: true
 
+- key: runtime.temporary_files.compression
+  type: string
+  default: "uncompressed"
+  description: |
+    The compression codec for temporary spill files, which use the Arrow IPC stream format.
+    Valid values are `uncompressed`, `lz4_frame`, and `zstd`.
+    `lz4_frame` offers faster compression and decompression with larger spill files.
+    `zstd` produces smaller spill files at the cost of slower compression and decompression.
+  experimental: true
+
 - key: cluster.enable_tls
   type: boolean
   default: "false"
@@ -171,6 +181,50 @@
   default: "120"
   description: The timeout in seconds for launching a worker.
 
+- key: cluster.worker_launch_retry_strategy.type
+  type: string
+  default: "exponential_backoff"
+  description: |
+    The retry strategy for failed worker launches.
+    Valid values are `fixed` and `exponential_backoff`.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.fixed.max_count
+  type: number
+  default: "3"
+  description: The maximum number of worker launch retries using a fixed delay.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.fixed.delay_secs
+  type: number
+  default: "5"
+  description: The delay in seconds between worker launch retries using a fixed delay.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.max_count
+  type: number
+  default: "5"
+  description: The maximum number of worker launch retries using exponential backoff.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.initial_delay_secs
+  type: number
+  default: "1"
+  description: The initial delay in seconds before retrying a worker launch.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.max_delay_secs
+  type: number
+  default: "30"
+  description: The maximum delay in seconds before retrying a worker launch.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.factor
+  type: number
+  default: "2"
+  description: The factor by which the worker launch retry delay increases.
+  experimental: true
+
 - key: cluster.worker_task_slots
   type: number
   default: "8"
@@ -266,6 +320,41 @@
     before running dependent stages.
   experimental: true
 
+- key: cluster.shuffle_backend.flight.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for Arrow Flight shuffle streams. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.connection_count
+  type: number
+  default: "1"
+  description: |
+    The number of HTTP/2 connections that each Flight shuffle client can open to a
+    peer. Must be greater than zero. Shuffle requests are distributed across these
+    connections in round-robin order, and connections are opened as needed.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.initial_stream_window_size
+  type: number
+  default: "0"
+  description: |
+    The initial HTTP/2 receive window size in bytes for each stream in the Flight
+    shuffle client. Set to `0` to use the transport default. The
+    maximum value is `2147483647`.
+  experimental: true
+
+- key: cluster.shuffle_backend.flight.initial_connection_window_size
+  type: number
+  default: "0"
+  description: |
+    The initial HTTP/2 receive window size in bytes shared by all streams on each
+    connection in the Flight shuffle client. Set to `0` to use the transport default. The
+    maximum value is `2147483647`.
+  experimental: true
+
 - key: cluster.shuffle_backend.storage.path
   type: string
   default: ""
@@ -290,16 +379,12 @@
     `lz4`, and `zstd`.
   experimental: true
 
-- key: cluster.shuffle_backend.celeborn.master_host
-  type: string
-  default: ""
-  description: The hostname of the Celeborn master.
-  experimental: true
-
-- key: cluster.shuffle_backend.celeborn.master_port
-  type: number
-  default: "0"
-  description: The port of the Celeborn master.
+- key: cluster.shuffle_backend.celeborn.master_endpoints
+  type: array
+  default: "[]"
+  description: |
+    The endpoints of Celeborn masters. Each entry is a `host:port` string.
+    Multiple entries enable master high availability.
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.compression
@@ -321,8 +406,8 @@
   default: "[]"
   description: |
     Optional endpoint mappings for Celeborn workers advertised from an
-    isolated network. Each entry maps `internal_host` and `internal_port` to
-    `external_host` and `external_port`.
+    isolated network. Each entry is an object with `internal` and `external`
+    `host:port` strings.
     This option is intended for use in tests only.
   experimental: true
   hidden: true
@@ -874,6 +959,17 @@
     Hash join is generally faster but can require substantially more memory.
   experimental: true
 
+- key: optimizer.enable_window_topn
+  type: boolean
+  default: "false"
+  description: |
+    Whether to optimize partitioned `ROW_NUMBER` and `RANK` windows with an upper-bound
+    filter using a per-partition top-k operator instead of sorting all input rows.
+    This can improve performance when the partition keys have low cardinality.
+    High-cardinality partition keys, large limits, or large rank tie groups can increase
+    memory usage and runtime. The top-k operator does not support spilling to disk.
+  experimental: true
+
 - key: optimizer.expand_views_at_output
   type: boolean
   default: "true"
@@ -907,6 +1003,18 @@
   description: |
     The timeout in seconds for idle Flight SQL sessions.
     Sessions that have been inactive for longer than this duration will be cleaned up.
+  experimental: true
+
+- key: catalog.system.store
+  type: string
+  default: "memory"
+  description: The system catalog store backend. Valid values are `memory` and `disk`.
+  experimental: true
+
+- key: catalog.system.disk.path
+  type: string
+  default: ""
+  description: The existing directory used by the disk-backed system catalog store.
   experimental: true
 
 - key: telemetry.export_traces
@@ -947,6 +1055,12 @@
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.
+  experimental: true
+
+- key: telemetry.exporter.system.enabled
+  type: boolean
+  default: "false"
+  description: Whether metrics are written to the system catalog store.
   experimental: true
 
 - key: telemetry.traces_export_interval_secs

@@ -3,6 +3,8 @@ use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, lit, whe
 pub use sail_common_datafusion::datasource::{DeltaCheckConstraintExpr, DeltaConstraintViolation};
 use sail_function::scalar::misc::raise_error::RaiseError;
 
+const CONSTRAINT_VALID: i8 = 1;
+
 pub fn apply_delta_check_constraint_filter(
     plan: LogicalPlan,
     constraints: &[DeltaCheckConstraintExpr],
@@ -12,15 +14,20 @@ pub fn apply_delta_check_constraint_filter(
         return Ok(plan);
     }
 
-    let mut predicate = build_delta_check_constraint_expr(constraints)?;
+    let mut validation = build_delta_check_constraint_validation(constraints)?;
     if let Some(should_validate) = should_validate {
-        predicate = when(should_validate, predicate).otherwise(lit(true))?;
+        validation = when(should_validate, validation).otherwise(lit(CONSTRAINT_VALID))?;
     }
+    let predicate = validation.eq(lit(CONSTRAINT_VALID));
     LogicalPlanBuilder::from(plan).filter(predicate)?.build()
 }
 
-fn build_delta_check_constraint_expr(constraints: &[DeltaCheckConstraintExpr]) -> Result<Expr> {
-    let mut predicate = lit(true);
+fn build_delta_check_constraint_validation(
+    constraints: &[DeltaCheckConstraintExpr],
+) -> Result<Expr> {
+    // Keep the short-circuiting CASE non-Boolean so an error branch cannot be
+    // expanded into eagerly evaluated AND/OR predicates by expression simplification.
+    let mut validation = lit(CONSTRAINT_VALID);
     for constraint in constraints.iter().rev() {
         let message = match &constraint.violation {
             DeltaConstraintViolation::Check => format!(
@@ -36,8 +43,8 @@ fn build_delta_check_constraint_expr(constraints: &[DeltaCheckConstraintExpr]) -
             ),
         };
         let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(message)]);
-        predicate =
-            when(Expr::IsTrue(Box::new(constraint.expr.clone())), predicate).otherwise(raise)?;
+        validation =
+            when(Expr::IsTrue(Box::new(constraint.expr.clone())), validation).otherwise(raise)?;
     }
-    Ok(predicate)
+    Ok(validation)
 }

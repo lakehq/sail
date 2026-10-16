@@ -5,7 +5,6 @@ use crate::lifecycle::actor::{ApplicationRegistration, LifecycleManagerActor};
 use crate::lifecycle::{LifecycleManagerMessage, LifecycleManagerOptions};
 use crate::master::MasterClient;
 
-#[tonic::async_trait]
 impl Actor for LifecycleManagerActor {
     type Message = LifecycleManagerMessage;
     type Options = LifecycleManagerOptions;
@@ -58,7 +57,11 @@ impl Actor for LifecycleManagerActor {
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             LifecycleManagerMessage::GetShuffleId {
                 job_id,

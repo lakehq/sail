@@ -94,7 +94,7 @@ runs:
 
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
-    # We always use caches of the default branch for pull request events. The cache is still useful
+    # Pull request and scheduled runs restore caches saved on the default branch. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
     - uses: actions/cache/restore@v6
       if: ${{ github.event_name != 'push' }}
@@ -105,7 +105,7 @@ runs:
           ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
 
     - name: Restore mtime
-      # We only restore mtime for pull request events.
+      # Restore mtime for non-push events, including pull requests and scheduled runs.
       # For push events, we build all workspace crates for correctness,
       # in case restoring mtime causes unexpected issues.
       if: ${{ github.event_name != 'push' }}
@@ -119,7 +119,7 @@ runs:
     # So we turn it off to speed up the build and reduce the cache size.
     # This step is skipped for Claude Code setup.
     - name: Turn off incremental compilation
-      if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+      if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' }}
       run: |
         echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
       shell: bash

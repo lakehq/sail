@@ -8,6 +8,7 @@ mod hms;
 mod iceberg;
 mod provider;
 mod status;
+mod unity;
 
 create_exception!(_catalog, DatabaseNotFoundError, PyKeyError);
 create_exception!(_catalog, TableNotFoundError, PyKeyError);
@@ -34,6 +35,7 @@ pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     glue::register_module(&module)?;
     hms::register_module(&module)?;
     iceberg::register_module(&module)?;
+    unity::register_module(&module)?;
     parent.add_submodule(&module)?;
     Ok(())
 }

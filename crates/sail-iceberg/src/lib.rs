@@ -12,23 +12,30 @@
 
 pub(crate) mod catalog_support;
 pub mod datasource;
+pub mod ddl;
+mod equality_schema;
 pub mod error;
 pub mod io;
+pub mod lake_source;
 pub mod logical;
+pub(crate) mod metadata_relation;
 pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
+mod procedure;
 pub(crate) mod properties;
 pub(crate) mod row_level_metadata;
+mod row_lineage;
+mod schema_defaults;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;
-pub mod table_format;
 pub mod utils;
 
 pub use datasource::type_converter::*;
 pub use datasource::*;
+pub use lake_source::*;
 pub use logical::IcebergTableSource;
 pub use operations::Transaction;
 pub use operations::action::*;
@@ -44,4 +51,3 @@ pub use physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use physical_plan::{IcebergBaseWriteContext, IcebergWriteContext, IcebergWriterExecOptions};
 pub use schema_evolution::*;
 pub use spec::*;
-pub use table_format::*;

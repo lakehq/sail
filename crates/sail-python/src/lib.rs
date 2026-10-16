@@ -11,6 +11,10 @@ mod spark;
 
 use pyo3::prelude::*;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: sail_mimalloc::MiMalloc = sail_mimalloc::MiMalloc;
+
 /// Creates the `_native` Python module.
 /// Registers the version constant, the `main` function,
 /// and various submodules.

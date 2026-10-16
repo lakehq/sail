@@ -1,6 +1,24 @@
 import pytest
 
 
+@pytest.mark.parametrize("alias", ["", " AS t"], ids=["anonymous", "named"])
+def test_union_alias_preserves_nondeterministic_projection(spark, alias):
+    rows_per_branch = 64
+    rows = spark.sql(
+        f"""
+        SELECT r, r AS r_copy
+        FROM (
+          SELECT rand() AS r FROM range({rows_per_branch})
+          UNION ALL
+          SELECT rand() AS r FROM range({rows_per_branch})
+        ){alias}
+        """  # noqa: S608
+    ).collect()
+    assert len(rows) == 2 * rows_per_branch
+    # Check outside SQL so the optimizer cannot simplify a self-comparison.
+    assert all(row.r == row.r_copy and 0 <= row.r < 1 for row in rows)
+
+
 def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
 
@@ -12,6 +30,42 @@ def test_sql_positional_parameters(spark):
         (1,),
     ]
     assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
+
+
+def test_sql_timestamp_string_parameters(spark):
+    timestamp = "2024-05-01 12:00:00.123456789"
+    result = spark.sql(
+        """
+        SELECT
+          TIMESTAMP '2024-05-01 12:00:00.123456' = ? AS comparison,
+          TIMESTAMP '2024-05-01 12:00:00.123456' IN (?) AS in_list,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            BETWEEN ? AND ? AS bounded,
+          TIMESTAMP '2024-05-01 12:00:00.123456'
+            IS NOT DISTINCT FROM ? AS distinctness
+        """,
+        args=[timestamp] * 5,
+    ).collect()
+    assert result == [(True, True, True, True)]
+
+    assert spark.sql(
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456' = :candidate
+        """,
+        args={"candidate": timestamp},
+    ).collect() == [(True,)]
+
+
+@pytest.mark.parametrize(
+    ("query", "args"),
+    [
+        ("SELECT round(:p, 1) AS r", {"p": "1.25"}),
+        ("SELECT round(?, 1) AS r", ["1.25"]),
+    ],
+    ids=["named", "positional"],
+)
+def test_round_of_string_parameter(spark, query, args):
+    assert spark.sql(query, args=args).collect() == [(1.3,)]
 
 
 def test_keyword_as_explicit_column_alias(spark):

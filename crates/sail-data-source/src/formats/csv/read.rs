@@ -16,7 +16,9 @@ use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 use super::decoder::decode_utf8_lossy_stream;
 use super::source::CsvSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{
+    NanosecondTimestamps, infer_listing_compression, try_merge_normalized,
+};
 use crate::options::r#gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
@@ -97,7 +99,7 @@ impl ReadFormat for CsvReadFormat {
             }
         }
 
-        let mut schema = Schema::try_merge(schemas)?;
+        let mut schema = try_merge_normalized(schemas, NanosecondTimestamps::WidenToMicrosecond)?;
         if !self.options.infer_schema {
             schema = super::convert_string_columns(schema);
         }
@@ -136,7 +138,7 @@ impl ReadFormat for CsvReadFormat {
             .with_output_ordering(input.output_ordering)
             .with_file_compression_type(FileCompressionType::from(options.compression))
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

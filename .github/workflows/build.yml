@@ -1,6 +1,8 @@
 name: Build
 
 on:
+  schedule:
+    - cron: "30 23 * * *"
   push:
     branches: [main]
   pull_request:
@@ -16,9 +18,9 @@ jobs:
     name: Setup
     runs-on: ubuntu-slim
     outputs:
-      build_package: ${{ github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
+      build_package: ${{ github.event_name == 'schedule' || github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
-      run_catalog_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_catalog_tests == 'true' || steps.label.outputs.run_catalog_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
+      run_catalog_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_catalog_tests == 'true' || steps.label.outputs.run_catalog_tests == 'true')) || github.event_name == 'schedule') && 'true' || 'false' }}
       run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       run_ibis_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_ibis_tests == 'true' || steps.label.outputs.run_ibis_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -81,12 +83,10 @@ jobs:
 
   rust-tests:
     name: Rust Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/rust-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    with:
-      run_catalog_tests: ${{ needs.setup.outputs.run_catalog_tests }}
     needs:
       - setup
 
@@ -101,7 +101,7 @@ jobs:
 
   spark-tests:
     name: Spark Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_spark_tests == 'true' }}
+    if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_spark_tests == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -117,7 +117,7 @@ jobs:
 
   ibis-tests:
     name: Ibis Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_ibis_tests == 'true' }}
+    if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_ibis_tests == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -127,7 +127,7 @@ jobs:
 
   python-tests:
     name: Python Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -175,7 +175,7 @@ jobs:
   docs-build:
     name: Docs Build
     # We must specify an explicit condition so that the job still runs when the build is skipped.
-    if: ${{ !failure() && !cancelled() }}
+    if: ${{ !failure() && !cancelled() && github.event_name != 'schedule' }}
     uses: ./.github/workflows/docs-build.yml
     needs:
       - setup

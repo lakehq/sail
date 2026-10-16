@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -54,7 +54,7 @@ impl JobGraph {
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale => 1,
+                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
                         InputMode::Merge | InputMode::Broadcast => {
                             x.plan.output_partitioning().partition_count()
                         }
@@ -156,10 +156,10 @@ pub enum InputMode {
     /// For each partition in the current stage, execute a single partition to fetch the input
     /// which reads all channels from all partitions in the input stage.
     Broadcast,
-    /// For each partition in the current stage, execute a contiguous subset of input partitions
-    /// (determined by evenly dividing input partitions among output partitions) and read all
-    /// channels from each.
-    Rescale,
+    /// For each partition of this stage input, execute a contiguous subset of producer
+    /// partitions and read all channels from each. The target partition count belongs to
+    /// this input, which may differ from the containing stage (e.g. under a union).
+    Rescale { partitions: usize },
 }
 
 impl fmt::Display for InputMode {
@@ -169,7 +169,7 @@ impl fmt::Display for InputMode {
             InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
             InputMode::Broadcast => write!(f, "Broadcast"),
-            InputMode::Rescale => write!(f, "Rescale"),
+            InputMode::Rescale { partitions } => write!(f, "Rescale(partitions={partitions})"),
         }
     }
 }
@@ -195,6 +195,9 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
+    Range {
+        partitioning: RangePartitioning,
+    },
     RoundRobinBatch {
         channels: usize,
     },
@@ -210,6 +213,7 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
+            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
             OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
@@ -223,6 +227,7 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
+            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
             OutputDistribution::RoundRobinBatch { channels } => {
                 write!(f, "RoundRobinBatch(channels={})", channels)
             }

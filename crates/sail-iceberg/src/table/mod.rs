@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod files;
 pub mod metadata_loader;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -18,7 +19,7 @@ use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
 use url::Url;
 
-use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::scan::IcebergScan;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
 use crate::options::r#gen::IcebergReadOptions;
@@ -29,18 +30,19 @@ use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 pub struct Table {
     table_url: Url,
     store_ctx: StoreContext,
+    metadata_location: String,
     metadata: TableMetadata,
 }
 
 impl Table {
     /// Load table metadata and IO context using the provided execution session.
     pub async fn load(ctx: &dyn Session, table_url: Url) -> Result<Self> {
-        Self::load_with_metadata_location(ctx, table_url, None).await
+        Self::load_with_metadata_location(ctx.runtime_env().as_ref(), table_url, None).await
     }
 
     /// Load table metadata from an explicit metadata location when one is provided.
     pub async fn load_with_metadata_location(
-        ctx: &dyn Session,
+        runtime: &datafusion::execution::runtime_env::RuntimeEnv,
         table_url: Url,
         metadata_location: Option<String>,
     ) -> Result<Self> {
@@ -49,19 +51,33 @@ impl Table {
             table_url,
             metadata_location,
         );
-        let object_store = ctx
-            .runtime_env()
+        let object_store = runtime
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
-        let metadata_location = match metadata_location {
-            Some(location) => metadata_loader::metadata_location_to_object_path_string(&location)?,
-            None => metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?,
+        let (metadata_file, metadata_location) = match metadata_location {
+            Some(location) => {
+                let metadata_file =
+                    metadata_loader::metadata_location_to_object_path_string(&location)?;
+                let metadata_location = if crate::utils::parse_absolute_url(&location).is_some() {
+                    location
+                } else {
+                    metadata_loader::table_metadata_location(&table_url, &metadata_file)?
+                };
+                (metadata_file, metadata_location)
+            }
+            None => {
+                let metadata_file =
+                    metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?;
+                let metadata_location =
+                    metadata_loader::table_metadata_location(&table_url, &metadata_file)?;
+                (metadata_file, metadata_location)
+            }
         };
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
         let metadata_data =
-            metadata_loader::load_metadata_file_bytes(&object_store, &metadata_location).await?;
+            metadata_loader::load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
             log::trace!("Failed to parse table metadata: {:?}", e);
             DataFusionError::External(Box::new(e))
@@ -70,6 +86,7 @@ impl Table {
         Ok(Self {
             table_url,
             store_ctx,
+            metadata_location,
             metadata,
         })
     }
@@ -89,6 +106,11 @@ impl Table {
         &self.metadata
     }
 
+    /// Return the metadata file used to load this table.
+    pub fn metadata_location(&self) -> &str {
+        &self.metadata_location
+    }
+
     /// Prepare scan components (schema, snapshot, partition specs) for the given options.
     pub fn scan_state(
         &self,
@@ -98,8 +120,8 @@ impl Table {
         Ok((schema, snapshot, self.metadata.partition_specs.clone()))
     }
 
-    /// Build an Iceberg table provider that reflects the requested snapshot options.
-    pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
+    /// Build an Iceberg table scan that reflects the requested snapshot options.
+    pub fn new_scan(&self, options: &IcebergReadOptions) -> Result<IcebergScan> {
         if self.metadata.current_snapshot().is_none()
             && options.snapshot_id.is_none()
             && options.use_ref.is_none()
@@ -108,23 +130,25 @@ impl Table {
             let schema = self.metadata.current_schema().cloned().ok_or_else(|| {
                 DataFusionError::Plan("No current schema found in table metadata".to_string())
             })?;
-            let provider = IcebergTableProvider::new_empty(
+            let mut read_scan = IcebergScan::new_empty(
                 self.table_url.to_string(),
                 schema,
                 self.metadata.partition_specs.clone(),
                 self.metadata.default_spec_id,
             )?;
-            return Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read));
+            read_scan.set_table_metadata(&self.metadata)?;
+            return Ok(read_scan.with_metadata_as_data_read(options.metadata_as_data_read));
         }
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
-        let provider = IcebergTableProvider::new(
+        let mut read_scan = IcebergScan::new(
             self.table_url.to_string(),
             schema,
             snapshot,
             partition_specs,
             self.metadata.default_spec_id,
         )?;
-        Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read))
+        read_scan.set_table_metadata(&self.metadata)?;
+        Ok(read_scan.with_metadata_as_data_read(options.metadata_as_data_read))
     }
 
     /// Create a Transaction anchored at the current snapshot, if one exists.

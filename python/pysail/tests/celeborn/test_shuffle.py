@@ -144,8 +144,7 @@ def lifecycle_manager(
 ) -> Generator[LifecycleManager, None, None]:
     assert celeborn_workers["celeborn-worker-1"].push_port > 0
     with LifecycleManager(
-        celeborn_master.host,
-        celeborn_master.port,
+        [f"{celeborn_master.host}:{celeborn_master.port}"],
         "sail-celeborn-shuffle-integration",
         endpoint_resolver=celeborn_endpoint_resolver,
     ) as manager:
@@ -206,8 +205,7 @@ def test_shuffle_client_replicates_data(
     assert celeborn_workers["celeborn-worker-2"].replicate_port > 0
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-replication-integration",
             endpoint_resolver=celeborn_endpoint_resolver,
         ) as manager,
@@ -223,7 +221,7 @@ def test_shuffle_client_replicates_data(
 
 def test_shuffle_client_returns_registration_failure() -> None:
     with (
-        LifecycleManager("127.0.0.1", 0, "sail-celeborn-unavailable") as manager,
+        LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,
         ShuffleClient(manager) as client,
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
@@ -256,8 +254,7 @@ def test_shuffle_client_handles_a_partition_split(
     """A partition split preserves batches and moves future writes to a new epoch."""
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             f"sail-celeborn-split-{split_mode}",
             endpoint_resolver=celeborn_push_endpoint_resolver,
             partition_split_threshold=4,
@@ -298,8 +295,7 @@ def test_shuffle_client_revives_a_dropped_push_connection(
     """A failed first push is retried on the other already-running worker."""
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-first-push",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
@@ -338,8 +334,7 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
     after_revive = b"epoch one"
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-multi-epoch",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
@@ -375,8 +370,7 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
     """A second revive must not route data back to the worker that failed first."""
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-worker-exclusion",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
@@ -416,8 +410,7 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
     after_revive = b"epoch one"
     with (
         LifecycleManager(
-            celeborn_master.host,
-            celeborn_master.port,
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-reader-location-update",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,

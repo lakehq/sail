@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -15,10 +15,13 @@ use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
-use crate::driver::output::JobOutputItem;
+use crate::driver::output::{JobOutputItem, JobOutputOutcome};
+use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
+use crate::id::{
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -38,10 +41,27 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
-        info!("activating driver {}", self.options.driver_id);
-        for _ in 0..self.options.worker_initial_count {
-            self.worker_pool.start_worker(ctx);
+    pub(super) fn handle_activate(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<ExecutionResult<()>>,
+    ) -> ActorAction {
+        let output = if self.activated {
+            Ok(())
+        } else {
+            info!("activating driver {}", self.options.driver_id);
+            let count = self
+                .task_assigner
+                .request_initial_workers(self.options.worker_initial_count);
+            self.worker_scaler
+                .request_initial_workers(count)
+                .and_then(|requests| self.start_worker_launch(ctx, requests))
+                .inspect(|_| {
+                    self.activated = true;
+                })
+        };
+        if result.send(output).is_err() {
+            warn!("failed to send driver activation result");
         }
         ActorAction::Continue
     }
@@ -57,8 +77,10 @@ impl DriverActor {
         info!("worker {worker_id} is available at {host}:{port}");
         let out = self.worker_pool.register_worker(ctx, worker_id, host, port);
         if out.is_ok() {
+            self.worker_scaler.worker_registered(worker_id);
             self.task_assigner.activate_worker(worker_id);
             self.run_tasks(ctx);
+            self.reconcile_worker_demands(ctx);
         }
         if result.send(out).is_err() {
             warn!("failed to send worker registration result");
@@ -91,9 +113,34 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        if self.worker_pool.fail_worker_if_pending(worker_id) {
-            self.task_assigner.track_worker_failed_to_start();
-            self.scale_up_workers(ctx);
+        self.fail_worker_launch_if_pending(
+            ctx,
+            worker_id,
+            "worker registration timeout".to_string(),
+        );
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_worker_failed_to_start(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        message: String,
+    ) -> ActorAction {
+        self.fail_worker_launch_if_pending(ctx, worker_id, message);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_retry_worker_demand(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        request: WorkerRetryRequest,
+    ) -> ActorAction {
+        if let Some(request) = self.worker_scaler.retry(request)
+            && let Err(e) = self.start_worker_launch(ctx, vec![request])
+        {
+            error!("failed to retry worker launch: {e}");
+            ctx.send(DriverMessage::Shutdown { result: None });
         }
         ActorAction::Continue
     }
@@ -153,7 +200,7 @@ impl DriverActor {
             for job_id in job_ids {
                 self.refresh_job(ctx, job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
         }
         ActorAction::Continue
@@ -170,7 +217,7 @@ impl DriverActor {
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
-            self.scale_up_workers(ctx);
+            self.reconcile_worker_demands(ctx);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
         ActorAction::Continue
@@ -180,8 +227,11 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
+        outcome: JobOutputOutcome,
     ) -> ActorAction {
-        self.clean_up_job(ctx, job_id);
+        self.clean_up_job(ctx, job_id, outcome);
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
         ActorAction::Continue
     }
 
@@ -215,20 +265,20 @@ impl DriverActor {
             TaskStatus::Succeeded => {
                 self.job_scheduler
                     .update_task(&key, TaskState::Succeeded, message, cause);
-                self.task_assigner.unassign_task(&key);
+                self.unassign_task(ctx, &key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
             TaskStatus::Failed => {
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
                 self.job_scheduler
                     .update_task(&key, TaskState::Failed, message, cause);
-                self.task_assigner.unassign_task(&key);
+                self.unassign_task(ctx, &key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
             TaskStatus::Canceled => {
                 // The task attempt state should already be "canceled" but we update it
@@ -257,16 +307,16 @@ impl DriverActor {
             // once one registers (`handle_register_worker` runs pending tasks),
             // so reschedule the probe instead of failing. This keeps long,
             // many-stage jobs alive while the worker pool scales between stages.
-            // It cannot loop forever: a pending worker that never registers is
-            // failed at `worker_launch_timeout`, after which there are no pending
-            // workers and the task fails below.
+            // It cannot loop forever: each worker launch has a finite retry
+            // schedule. A worker demand remains pending while waiting for its
+            // retry so the replacement capacity is not requested twice.
             //
             // Re-probe at `worker_launch_timeout` (capped by `task_launch_timeout`)
             // rather than a full `task_launch_timeout`: that is the window a
             // pending worker takes to register or be failed, so once the last
             // pending worker resolves the task fails promptly instead of waiting
             // another full launch window.
-            if self.worker_pool.has_pending_workers() {
+            if self.worker_scaler.has_pending_worker_demands() {
                 let delay = self
                     .options
                     .worker_launch_timeout
@@ -344,8 +394,13 @@ impl DriverActor {
         }
     }
 
-    fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.clean_up_job(job_id) {
+    fn clean_up_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        outcome: JobOutputOutcome,
+    ) {
+        for action in self.job_scheduler.clean_up_job(job_id, outcome) {
             self.run_job_action(ctx, action);
         }
     }
@@ -354,6 +409,20 @@ impl DriverActor {
         debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { region } => {
+                if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
+                    // Failing one task fails the entire region. Report this as a
+                    // separate message so that the current job actions finish first.
+                    if let Some(key) = region.tasks.iter().flat_map(|(_, set)| set.tasks()).next() {
+                        ctx.send(DriverMessage::UpdateTask {
+                            key: key.clone(),
+                            status: TaskStatus::Failed,
+                            message: Some(e.to_string()),
+                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            sequence: None,
+                        });
+                    }
+                    return;
+                }
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
@@ -364,11 +433,10 @@ impl DriverActor {
                         );
                     }
                 }
-                self.task_assigner.enqueue_tasks(region);
             }
             JobAction::CancelTask { key } => {
                 self.task_assigner.exclude_task(&key);
-                if let Some(assignment) = self.task_assigner.unassign_task(&key) {
+                if let Some(assignment) = self.unassign_task(ctx, &key) {
                     match assignment {
                         TaskAssignment::Driver => {
                             if let Some(task_runner) = self.task_runner.clone() {
@@ -452,6 +520,20 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                // Job closure is a lifecycle operation, independent of shuffle ownership.
+                // Keep a closed-job record even on workers whose streams were cleaned earlier.
+                if stage.is_none() {
+                    if let Some(task_runner) = self.task_runner.clone() {
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::CloseJob { job_id })
+                                .await;
+                        });
+                    }
+                    for worker_id in self.task_assigner.active_worker_ids() {
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, None);
+                    }
+                }
                 if self.task_assigner.untrack_storage_streams(job_id, stage)
                     && let Some(task_runner) = self.task_runner.clone()
                 {
@@ -473,8 +555,10 @@ impl DriverActor {
                                 .await;
                         });
                     }
-                    for worker_id in self.task_assigner.active_worker_ids() {
-                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                    if stage.is_some() {
+                        for worker_id in self.task_assigner.active_worker_ids() {
+                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                        }
                     }
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
@@ -492,7 +576,9 @@ impl DriverActor {
                             }
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
-                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage)
+                            if stage.is_some() {
+                                self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                            }
                         }
                     }
                 }
@@ -500,70 +586,195 @@ impl DriverActor {
         }
     }
 
-    /// Assigns pending tasks to available workers and dispatches them for execution.
-    ///
-    /// Gets task assignments from the task assigner, builds task definitions from the job
-    /// scheduler, and dispatches each task to either the driver or a remote worker via gRPC.
-    /// Tasks that fail to build a definition are reported as failed.
+    fn unassign_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: &TaskKey,
+    ) -> Option<TaskAssignment> {
+        let assignment = self.task_assigner.unassign_task(key)?;
+        if let TaskAssignment::Worker { worker_id, .. } = &assignment
+            && self.task_assigner.is_worker_idle(*worker_id)
+        {
+            // A long-running task may outlive every previously scheduled idle probe.
+            // Start a fresh idle window when its worker has no remaining work or streams.
+            self.worker_pool.mark_worker_idle(ctx, *worker_id);
+        }
+        Some(assignment)
+    }
+
+    /// Reserve complete regions before resolving any routing. Definitions are scoped to this
+    /// scheduling snapshot; batches additionally preserve region and worker boundaries.
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
         self.task_assigner.track_streams(&assignments);
+        let mut batches = indexmap::IndexMap::<_, Vec<TaskKey>>::new();
         for assignment in assignments {
+            let worker_id = match assignment.assignment {
+                TaskAssignment::Driver => None,
+                TaskAssignment::Worker { worker_id, .. } => Some(worker_id),
+            };
             for entry in assignment.set.entries {
-                let (definition, context) = match self
+                let Some(region) = self.job_scheduler.task_region(&entry.key) else {
+                    ctx.send(DriverMessage::UpdateTask {
+                        key: entry.key,
+                        status: TaskStatus::Failed,
+                        message: Some("task region not found".into()),
+                        cause: None,
+                        sequence: None,
+                    });
+                    continue;
+                };
+                batches
+                    .entry((entry.key.job_id, region, entry.key.stage, worker_id))
+                    .or_default()
+                    .push(entry.key);
+            }
+        }
+        let mut definitions = std::collections::HashMap::new();
+        for ((job_id, _, stage, worker_id), keys) in batches {
+            let Some(first) = keys.first() else { continue };
+            let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
+                let started = Instant::now();
+                let result = self
                     .job_scheduler
-                    .get_task_definition(&entry.key, &self.task_assigner)
-                {
-                    Ok(x) => x,
-                    Err(e) => {
-                        // The task failure will be handled as a separate message
-                        // after processing the current assignments.
+                    .get_task_definition(first, &self.task_assigner)
+                    .map(|(definition, context)| (Arc::new(definition), context))
+                    .map_err(|error| {
+                        (
+                            error.to_string(),
+                            CommonErrorCause::new::<PyErrExtractor>(&error),
+                        )
+                    });
+                debug!(
+                    "job {job_id} stage {stage} definition construction {:?}",
+                    started.elapsed()
+                );
+                result
+            });
+            let (definition, context) = match definition {
+                Ok((definition, context)) => (definition.clone(), context.clone()),
+                Err((message, cause)) => {
+                    for key in keys {
                         ctx.send(DriverMessage::UpdateTask {
-                            key: entry.key,
+                            key,
                             status: TaskStatus::Failed,
-                            message: Some(e.to_string()),
-                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            message: Some(message.clone()),
+                            cause: Some(cause.clone()),
                             sequence: None,
                         });
-                        continue;
                     }
-                };
+                    continue;
+                }
+            };
+            for key in &keys {
                 self.job_scheduler
-                    .update_task(&entry.key, TaskState::Scheduled, None, None);
-                match assignment.assignment {
-                    TaskAssignment::Driver => {
-                        let Some(task_runner) = self.task_runner.clone() else {
-                            ctx.send(DriverMessage::UpdateTask {
-                                key: entry.key,
-                                status: TaskStatus::Failed,
-                                message: Some("task runner is not started".to_string()),
-                                cause: None,
-                                sequence: None,
-                            });
-                            continue;
-                        };
-                        ctx.spawn(async move {
-                            let _ = task_runner
-                                .send(TaskRunnerMessage::RunTask {
-                                    key: entry.key,
-                                    definition,
-                                    context,
-                                    peers: vec![],
+                    .update_task(key, TaskState::Scheduled, None, None);
+            }
+            let tasks = keys
+                .into_iter()
+                .map(|key| TaskAttempt {
+                    partition: key.partition,
+                    attempt: key.attempt,
+                })
+                .collect::<Vec<_>>();
+            if let Some(worker_id) = worker_id {
+                self.worker_pool
+                    .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
+            } else {
+                let task_runner = self.task_runner.clone();
+                let driver = ctx.handle().clone();
+                ctx.spawn(async move {
+                    let output = async {
+                        let task_runner = task_runner.ok_or_else(|| {
+                            ExecutionError::InternalError("task runner is not started".into())
+                        })?;
+                        let (result, rx) = oneshot::channel();
+                        task_runner
+                            .send(TaskRunnerMessage::RunTaskBatch {
+                                job_id,
+                                stage,
+                                tasks: tasks.clone(),
+                                definition,
+                                context,
+                                peers: vec![],
+                                result,
+                            })
+                            .await
+                            .map_err(ExecutionError::from)?;
+                        rx.await.map_err(|_| {
+                            ExecutionError::InternalError(
+                                "task runner stopped before admission".into(),
+                            )
+                        })?
+                    }
+                    .await;
+                    if let Err(error) = output {
+                        for task in tasks {
+                            let _ = driver
+                                .send(DriverMessage::UpdateTask {
+                                    key: task.task_key(job_id, stage),
+                                    status: TaskStatus::Failed,
+                                    message: Some(error.to_string()),
+                                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                                    sequence: None,
                                 })
                                 .await;
-                        });
+                        }
                     }
-                    TaskAssignment::Worker { worker_id, slot: _ } => self
-                        .worker_pool
-                        .run_task(ctx, worker_id, entry.key, definition),
-                }
+                });
             }
         }
     }
 
-    fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
-        for _ in 0..self.task_assigner.request_workers() {
-            self.worker_pool.start_worker(ctx);
+    fn reconcile_worker_demands(&mut self, ctx: &mut ActorContext<Self>) {
+        let output = self
+            .worker_scaler
+            .reconcile(self.task_assigner.count_worker_demands())
+            .and_then(|requests| self.start_worker_launch(ctx, requests));
+        if let Err(e) = output {
+            error!("failed to request workers: {e}");
+            ctx.send(DriverMessage::Shutdown { result: None });
         }
+    }
+
+    fn start_worker_launch(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        requests: Vec<WorkerLaunchRequest>,
+    ) -> ExecutionResult<()> {
+        for request in requests {
+            let demand_id = request.demand_id;
+            debug!(
+                "launching worker demand {} attempt {}",
+                demand_id, request.attempt
+            );
+            let worker_id = self.worker_pool.start_worker(ctx)?;
+            if !self.worker_scaler.bind_worker(request, worker_id) {
+                return Err(ExecutionError::InternalError(format!(
+                    "failed to bind worker {worker_id} to demand {}",
+                    demand_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn fail_worker_launch_if_pending(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        message: String,
+    ) {
+        if !self.worker_pool.fail_worker_if_pending(worker_id, message) {
+            return;
+        }
+        if let Some(request) = self.worker_scaler.worker_failed(worker_id) {
+            warn!(
+                "scheduling worker demand {} launch retry {} in {:?}",
+                request.demand_id, request.attempt, request.delay,
+            );
+            ctx.send_with_delay(DriverMessage::RetryWorkerDemand { request }, request.delay);
+        }
+        self.reconcile_worker_demands(ctx);
     }
 }

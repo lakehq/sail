@@ -42,6 +42,7 @@ pub enum TaskRunnerPlacement {
 }
 
 pub struct TaskRunnerComponents {
+    pub session_id: String,
     pub extensions: TaskRunnerExtensions,
     pub placement: TaskRunnerPlacement,
 }

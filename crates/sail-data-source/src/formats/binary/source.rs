@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_plan::apply_expression_roots;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
@@ -84,6 +87,13 @@ impl FileSource for BinarySource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots(self.projection.source.iter(), f)
     }
 
     fn file_type(&self) -> &str {

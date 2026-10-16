@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::arrow::array::ArrayData;
@@ -8,7 +9,6 @@ use pyo3::{Bound, BoundObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python}
 use sail_common_datafusion::array::record_batch::{
     cast_array_recursively, cast_record_batch_positionally,
 };
-use sail_pyarrow::{FromPyArrow, ToPyArrow};
 
 fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> FieldRef {
     Arc::new(

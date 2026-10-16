@@ -4,3 +4,6 @@ pub(crate) use actor::{TaskRunnerActor, TaskRunnerMessage};
 mod monitor;
 
 pub use actor::{TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement};
+
+mod preparation;
+mod registry;

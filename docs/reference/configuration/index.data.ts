@@ -1,7 +1,7 @@
 import {
   buildConfigGroups,
   loadConfigItems,
-} from "../../.vitepress/theme/utils/config";
+} from "../../.vitepress/theme/utils/config.ts";
 
 export default {
   async load() {

@@ -1,5 +1,57 @@
 Feature: Iceberg Query Optimization
 
+  Rule: Verify procedure planning
+    Background:
+      Given variable location for temporary directory iceberg_explain_procedure
+      Given statement template
+        """
+        CREATE TABLE procedure_plan_table (id INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS procedure_plan_table
+        """
+
+    Scenario: EXPLAIN shows provider-planned procedure boundary
+      When query
+        """
+        EXPLAIN EXTENDED CALL sail.system.ancestors_of(table => 'procedure_plan_table')
+        """
+      Then query plan matches snapshot
+
+    Scenario: Metadata files use a projected manifest scan
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN SELECT file_path, record_count FROM procedure_plan_table.files
+        """
+      Then query plan matches snapshot
+
+    Scenario: Rewrite uses planned file groups
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO procedure_plan_table VALUES (2)
+        """
+      When query
+        """
+        EXPLAIN CALL system.rewrite_data_files(
+          table => 'procedure_plan_table', options => map('rewrite-all', 'true'))
+        """
+      Then query plan matches snapshot
+
   Rule: Verify EXPLAIN output for partition pruning
     Background:
       Given variable location for temporary directory iceberg_explain_prune
@@ -126,6 +178,35 @@ Feature: Iceberg Query Optimization
         EXPLAIN SELECT category, COUNT(*) as cnt 
         FROM agg_table 
         GROUP BY category
+        """
+      Then query plan matches snapshot
+
+    Scenario: Exact and residual aggregates share Iceberg file selection
+      Given statement template
+        """
+        CREATE TABLE agg_table (id INT, value INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO agg_table VALUES (1, 10), (2, NULL), (3, 30)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(value) AS total FROM agg_table
+        """
+      Then query result
+        | rows | minimum | total |
+        | 3    | 1       | 40    |
+      When query
+        """
+        EXPLAIN SELECT COUNT(*), COUNT(value), MIN(id), MAX(CAST(id AS BIGINT)) FROM agg_table
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(value) AS total FROM agg_table
         """
       Then query plan matches snapshot
 

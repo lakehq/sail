@@ -532,6 +532,77 @@ Feature: Iceberg Partition Transforms
         | id | event_date | category | value |
         | 3  | 2024-01-10 | A        | 30.0  |
 
+  Rule: Copy-on-write preserves historical partition values
+    Background:
+      Given variable location for temporary directory iceberg_historical_partitions
+      Given final statement
+        """
+        DROP TABLE IF EXISTS historical_partitions
+        """
+
+    Scenario Outline: COW handles dates before the Unix epoch
+      Given statement template
+        """
+        CREATE TABLE historical_partitions (id INT, d DATE, value INT)
+        USING iceberg PARTITIONED BY (<transform>(d)) LOCATION {{ location.uri }}
+        TBLPROPERTIES ('format-version' = '<version>')
+        """
+      Given statement
+        """
+        INSERT INTO historical_partitions VALUES
+          (1, DATE '1960-01-02', 10), (2, DATE '1960-01-03', 20),
+          (3, DATE '1969-12-31', 30), (4, DATE '1970-01-01', 40)
+        """
+      Given statement
+        """
+        UPDATE historical_partitions SET value = value + 1 WHERE id IN (1, 3)
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, CAST(d AS STRING) AS d, value FROM historical_partitions ORDER BY id
+        """
+      Then query result ordered
+        | id | d          | value |
+        | 1  | 1960-01-02 | 11    |
+        | 2  | 1960-01-03 | 20    |
+        | 3  | 1969-12-31 | 31    |
+        | 4  | 1970-01-01 | 40    |
+
+      Examples:
+        | transform | version |
+        | years     | 2       |
+        | years     | 3       |
+        | months    | 2       |
+        | months    | 3       |
+
+    Scenario: COW truncates binary partitions by bytes
+      Given statement template
+        """
+        CREATE TABLE historical_partitions (id INT, key BINARY, value INT)
+        USING iceberg PARTITIONED BY (truncate(2, key)) LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO historical_partitions VALUES
+          (1, X'010203', 10), (2, X'010204', 20), (3, X'FF', 30), (4, X'', 40)
+        """
+      Given statement
+        """
+        UPDATE historical_partitions SET value = value + 1 WHERE id = 1
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, hex(key) AS key, value FROM historical_partitions
+        WHERE key >= X'0102' ORDER BY id
+        """
+      Then query result ordered
+        | id | key    | value |
+        | 1  | 010203 | 11    |
+        | 2  | 010204 | 20    |
+        | 3  | FF     | 30    |
+
   Rule: Partition evolution changes transform strategy
     Background:
       Given variable location for temporary directory iceberg_partition_evolution

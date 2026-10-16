@@ -96,7 +96,7 @@ impl AttributeName {
 }
 
 fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
-    let path = "src/metrics/data/registry.yaml";
+    let path = "data/metrics/registry.yaml";
     println!("cargo:rerun-if-changed={path}");
 
     let content = std::fs::read_to_string(path)?;
@@ -289,7 +289,7 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_metric_attributes() -> Result<(), Box<dyn std::error::Error>> {
-    let path = "src/metrics/data/attributes.yaml";
+    let path = "data/metrics/attributes.yaml";
     println!("cargo:rerun-if-changed={path}");
 
     let content = std::fs::read_to_string(path)?;
