@@ -4496,6 +4496,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<RowNumber>()
         {
             UdwfKind::Standard(r#gen::StandardUdwf {})
+        } else if matches!(
+            // Keep name matching as a fallback if upstream splits these into separate implementations.
+            node.name(),
+            "cume_dist"
+                | "dense_rank"
+                | "first"
+                | "first_value"
+                | "lag"
+                | "last"
+                | "last_value"
+                | "lead"
+                | "nth_value"
+                | "rank"
+                | "row_number"
+                | "percent_rank"
+        ) {
+            UdwfKind::Standard(r#gen::StandardUdwf {})
         } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
             UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
                 first: matches!(func.kind(), SparkFirstLastValueKind::First),
