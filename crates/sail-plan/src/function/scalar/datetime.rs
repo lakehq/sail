@@ -1745,9 +1745,25 @@ fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
         {
             fields[1].data_type().clone()
         }
-        other => {
+        other @ DataType::Struct(_) => {
             return Err(PlanError::invalid(format!(
                 "window_time requires a window column (struct with start and end timestamps), got {other:?}"
+            )));
+        }
+        other => {
+            let input_type = SparkPlanFormatter
+                .data_type_to_simple_string(&other)?
+                .to_uppercase();
+            let input_name = input
+                .function_context
+                .argument_display_names
+                .first()
+                .map(String::as_str)
+                .unwrap_or("argument");
+            return Err(PlanError::invalid(format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] \
+                 The first parameter requires the \"STRUCT\" type, \
+                 however \"{input_name}\" has the type \"{input_type}\"."
             )));
         }
     };

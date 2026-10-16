@@ -69,7 +69,7 @@ Feature: to_time (strict variant)
         """
         SELECT to_time(<arg>)
         """
-      Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
+      Then query error CANNOT_PARSE_TIME|UNSUPPORTED_OPERATION|Unsupported|data type
 
       Examples:
         | case                           | arg          |
@@ -159,19 +159,15 @@ Feature: to_time (strict variant)
         | DATE      | DATE '2024-01-15'               |
 
   Rule: An unparseable value names the format it tried
-    # Spark's CANNOT_PARSE_TIME message quotes the format, and for the one-argument form
-    # that format is the literal 'HH:mm:ss.SSSSSS'. Asserting that substring is what
-    # distinguishes Spark's message from Sail's own wording ("cannot parse '...' as time
-    # with default formats"), which a `.*` assertion would let through.
+    # Spark reports the quoted default format 'HH:mm:ss.SSSSSS' for the one-argument form.
 
-    @sail-bug
     Scenario Outline: Unparseable input: <case>
       Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT to_time(<input>) AS result
         """
-      Then query error cannot be parsed to a TIME value because it does not match to the datetime format
+      Then query error \[CANNOT_PARSE_TIME\].*cannot be parsed to a TIME value because it does not match to the datetime format 'HH:mm:ss\.SSSSSS'\.
 
       Examples:
         | case             | input           |

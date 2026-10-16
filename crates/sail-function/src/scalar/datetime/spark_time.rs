@@ -68,7 +68,9 @@ impl SparkTime {
             Ok(None)
         } else {
             Err(exec_datafusion_err!(
-                "cannot parse '{value}' as time with default formats"
+                "[CANNOT_PARSE_TIME] The input string '{}' cannot be parsed to a TIME value \
+                 because it does not match to the datetime format 'HH:mm:ss.SSSSSS'.",
+                value.replace('\\', "\\\\").replace('\'', "\\'")
             ))
         }
     }
