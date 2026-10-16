@@ -61,6 +61,7 @@ impl SparkSequence {
     fn parse_session_timezone(&self) -> Result<Tz> {
         let timezone = match self.session_timezone.as_ref() {
             "Z" | "UT" => "UTC",
+            "PST" => "America/Los_Angeles",
             timezone => timezone,
         };
         timezone.parse().map_err(|error| {
