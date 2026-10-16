@@ -127,3 +127,100 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
          |-- result: array (nullable = false)
          |    |-- element: string (containsNull = true)
         """
+
+  Rule: group index validated only on a match (Spark parity)
+
+    # Spark validates the group index PER MATCH: a zero-match row returns [] even
+    # for an invalid idx; an invalid idx only errors when there is at least one match.
+    @sail-bug
+    Scenario: regexp_extract_all negative idx with no match returns empty
+      When query
+      """
+      SELECT regexp_extract_all('abc', r'(\d+)', -1) AS result
+      """
+      Then query result
+      | result |
+      | []     |
+
+    Scenario: regexp_extract_all out-of-range idx with no match returns empty
+      When query
+      """
+      SELECT regexp_extract_all('abc', r'(\d+)', 5) AS result
+      """
+      Then query result
+      | result |
+      | []     |
+
+    Scenario: regexp_extract_all negative idx with a match errors
+      When query
+      """
+      SELECT regexp_extract_all('1a2b', r'(\d+)', -1) AS result
+      """
+      Then query error (?i).*group index.*
+
+    Scenario: regexp_extract_all out-of-range idx with a match errors
+      When query
+      """
+      SELECT regexp_extract_all('1a2b', r'(\d+)', 5) AS result
+      """
+      Then query error (?i).*group index.*
+
+  Rule: java.util.regex vs Rust `regex` divergences (@sail-bug)
+
+    # Sail uses Rust's `regex` crate; Spark uses `java.util.regex`. These are the
+    # known differences (verified vs Spark JVM). They affect ALL Sail regex funcs.
+
+    # Rust `regex` does not support backreferences (Sail errors, Spark matches).
+    @sail-bug
+    Scenario: regexp_extract_all backreference
+      When query
+      """
+      SELECT regexp_extract_all('abcabc', r'(abc)\1', 0) AS result
+      """
+      Then query result
+      | result   |
+      | [abcabc] |
+
+    # Rust `regex` does not support lookaround (Sail errors, Spark matches).
+    @sail-bug
+    Scenario: regexp_extract_all lookahead
+      When query
+      """
+      SELECT regexp_extract_all('foobar', r'foo(?=bar)', 0) AS result
+      """
+      Then query result
+      | result |
+      | [foo]  |
+
+    # Rust `\w` is Unicode-aware; Java `\w` is ASCII-only — 'é' matches in Sail, not Spark.
+    @sail-bug
+    Scenario: regexp_extract_all word class is ASCII in Spark, Unicode in Sail
+      When query
+      """
+      SELECT regexp_extract_all('café', r'(\w+)', 1) AS result
+      """
+      Then query result
+      | result |
+      | [caf]  |
+
+    # Rust `regex` supports POSIX classes; Java treats `[[:digit:]]` literally.
+    @sail-bug
+    Scenario: regexp_extract_all POSIX character class
+      When query
+      """
+      SELECT regexp_extract_all('a1b2', r'[[:digit:]]', 0) AS result
+      """
+      Then query result
+      | result |
+      | []     |
+
+    # Zero-width matches: Java emits a trailing empty at end-of-input, Rust does not.
+    @sail-bug
+    Scenario: regexp_extract_all zero-width match count
+      When query
+      """
+      SELECT to_json(regexp_extract_all('abc', r'a*', 0)) AS result
+      """
+      Then query result
+      | result            |
+      | ["a","","",""]    |

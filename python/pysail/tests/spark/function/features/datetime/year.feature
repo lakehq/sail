@@ -346,3 +346,85 @@ Feature: year
         root
          |-- result: integer (nullable = true)
         """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DATE
+      When query
+        """
+        SELECT year('2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+  @function(nullability)
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: year without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT year(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | DATE  |
+
+    Scenario Outline: year through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT year(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+      Examples:
+        | case           | input |
+        | STRING -> DATE |       |
+
+  Rule: The year is read in the session time zone
+
+    # Spark 4.2.0 Year takes a DATE; a TIMESTAMP is cast to DATE in the session zone, so the same
+    # instant falls in a different year east and west of the date line.
+
+    Scenario: year of the epoch in a -12:00 session zone
+      Given config spark.sql.session.timeZone = -12:00
+      When query
+        """
+        SELECT year(TIMESTAMP '1970-01-01 00:00:00Z') AS result
+        """
+      Then query result
+        | result |
+        | 1969   |
+
+    @sail-bug
+    Scenario: year of an instant built with timestamp_micros in Kiritimati
+      Given config spark.sql.session.timeZone = Pacific/Kiritimati
+      When query
+        """
+        SELECT year(timestamp_micros(1735646400000000)) AS result
+        """
+      Then query result
+        | result |
+        | 2025   |
+
+    Scenario: year of a timestamp shifted past year 9999
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT year(from_utc_timestamp(TIMESTAMP '9999-12-31 23:00:00', 'Pacific/Kiritimati')) AS result
+        """
+      Then query result
+        | result |
+        | 10000  |

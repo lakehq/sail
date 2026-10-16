@@ -331,3 +331,105 @@ Feature: convert_timezone
         root
          |-- result: timestamp_ntz (nullable = true)
         """
+
+  Rule: Time zone ids follow Spark's getZoneId
+
+    # Spark 4.2.0 DateTimeUtils.convertTimestampNtzToAnotherTz calls SparkDateTimeUtils.getZoneId
+    # for both zones: ZoneId.of(id, ZoneId.SHORT_IDS), so offsets are valid, and an invalid id
+    # raises INVALID_TIMEZONE whatever the ANSI mode.
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    @sail-bug
+    Scenario Outline: `convert_timezone` accepts fixed-offset time zone ids: <case>
+      When query
+        """
+        SELECT convert_timezone('<source>', '<target>', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | source | target | result              |
+        | from +14:00 to -12:00             | +14:00 | -12:00 | 2023-12-31 10:00:00 |
+        | to a single-digit hour offset     | UTC    | +8:00  | 2024-01-01 20:00:00 |
+        | between prefixed offsets          | GMT+8  | Z      | 2024-01-01 04:00:00 |
+
+    @sail-bug
+    Scenario: `convert_timezone` resolves a fixed-offset source zone per row
+      When query
+        """
+        SELECT id, convert_timezone(s, 'UTC', TIMESTAMP_NTZ '2024-06-01 12:00:00') AS result
+        FROM VALUES (1, 'Asia/Tokyo'), (2, '+05:45'), (3, 'Z'), (4, 'GMT+8') AS t(id, s)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 1  | 2024-06-01 03:00:00 |
+        | 2  | 2024-06-01 06:15:00 |
+        | 3  | 2024-06-01 12:00:00 |
+        | 4  | 2024-06-01 04:00:00 |
+
+    Scenario Outline: `convert_timezone` rejects an invalid time zone id under ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT convert_timezone('<source>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS result
+        """
+      Then query error INVALID_TIMEZONE
+
+      Examples:
+        | case                   | ansi  | source    |
+        | unknown region         | false | Not/AZone |
+        | UTC in lowercase       | true  | utc       |
+
+  Rule: Results may leave the 0001-9999 range
+
+    # java.time's LocalDateTime range is much wider than 0001-9999, and historical instants use
+    # the zone's local mean time (Pacific/Kiritimati is -10:29:20 in year 1).
+
+    Scenario: `convert_timezone` crosses both ends of the 0001-9999 range
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          convert_timezone('Etc/GMT+12', 'Pacific/Kiritimati', TIMESTAMP_NTZ '9999-12-31 12:00:00') AS past_max,
+          convert_timezone('Pacific/Kiritimati', 'Etc/GMT+12', TIMESTAMP_NTZ '0001-01-01 12:00:00') AS near_min
+        """
+      Then query result
+        | past_max              | near_min            |
+        | +10000-01-01 14:00:00 | 0001-01-01 10:29:20 |
+
+    Scenario: `convert_timezone` of distinct boundary rows from a column
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, convert_timezone('Asia/Tokyo', 'America/New_York', ts) AS result
+        FROM VALUES
+          (1, TIMESTAMP_NTZ '0001-01-01 12:00:00'),
+          (2, TIMESTAMP_NTZ '9999-12-31 12:00:00'),
+          (3, TIMESTAMP_NTZ '1582-10-15 05:00:00')
+          AS t(id, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 1  | 0000-12-31 21:44:59 |
+        | 2  | 9999-12-30 22:00:00 |
+        | 3  | 1582-10-14 14:44:59 |
+
+  Rule: A local time in the fall-back overlap takes the earlier offset
+
+    Scenario: `convert_timezone` from a zone whose local time happens twice
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          convert_timezone('America/Los_Angeles', 'UTC', TIMESTAMP_NTZ '2024-11-03 01:30:00') AS overlap,
+          convert_timezone('America/Los_Angeles', 'UTC', TIMESTAMP_NTZ '2024-03-10 02:30:00') AS gap
+        """
+      Then query result
+        | overlap             | gap                 |
+        | 2024-11-03 08:30:00 | 2024-03-10 10:30:00 |

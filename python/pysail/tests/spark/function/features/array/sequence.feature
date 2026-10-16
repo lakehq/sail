@@ -452,3 +452,872 @@ Feature: sequence output schema
       Then query result
         | result               |
         | [[1, 2, 3], [2, 3]] |
+
+  Rule: Integer sequences
+
+    Scenario: Basic ascending integer sequence with default step
+      When query
+        """
+        SELECT sequence(1, 5) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: Ascending integer sequence with explicit step
+      When query
+        """
+        SELECT sequence(1, 10, 2) AS result
+        """
+      Then query result
+        | result              |
+        | [1, 3, 5, 7, 9] |
+
+    Scenario: Descending integer sequence with negative step
+      When query
+        """
+        SELECT sequence(10, 1, -2) AS result
+        """
+      Then query result
+        | result               |
+        | [10, 8, 6, 4, 2] |
+
+    Scenario: Descending integer sequence with default step
+      When query
+        """
+        SELECT sequence(5, 1) AS result
+        """
+      Then query result
+        | result          |
+        | [5, 4, 3, 2, 1] |
+
+    Scenario: Single element when start equals stop
+      When query
+        """
+        SELECT sequence(3, 3) AS result
+        """
+      Then query result
+        | result |
+        | [3]    |
+
+    Scenario: Single element when start equals stop with explicit step
+      When query
+        """
+        SELECT sequence(1, 1, 1) AS result
+        """
+      Then query result
+        | result |
+        | [1]    |
+
+    Scenario: Negative integer sequence ascending
+      When query
+        """
+        SELECT sequence(-5, -1) AS result
+        """
+      Then query result
+        | result                  |
+        | [-5, -4, -3, -2, -1] |
+
+    Scenario: Negative to positive integer sequence
+      When query
+        """
+        SELECT sequence(-3, 3) AS result
+        """
+      Then query result
+        | result                         |
+        | [-3, -2, -1, 0, 1, 2, 3] |
+
+    Scenario: Negative integer sequence descending with default step
+      When query
+        """
+        SELECT sequence(-1, -5) AS result
+        """
+      Then query result
+        | result                  |
+        | [-1, -2, -3, -4, -5] |
+
+    Scenario: Step overshoots the end value
+      When query
+        """
+        SELECT sequence(1, 5, 10) AS result
+        """
+      Then query result
+        | result |
+        | [1]    |
+
+    Scenario: Negative range with explicit step
+      When query
+        """
+        SELECT sequence(-10, -1, 3) AS result
+        """
+      Then query result
+        | result                  |
+        | [-10, -7, -4, -1] |
+
+    Scenario: Negative descending with explicit step
+      When query
+        """
+        SELECT sequence(-1, -10, -3) AS result
+        """
+      Then query result
+        | result              |
+        | [-1, -4, -7, -10] |
+
+    Scenario: Zero start ascending
+      When query
+        """
+        SELECT sequence(0, 5) AS result
+        """
+      Then query result
+        | result                |
+        | [0, 1, 2, 3, 4, 5] |
+
+    Scenario: Zero to zero returns single element
+      When query
+        """
+        SELECT sequence(0, 0) AS result
+        """
+      Then query result
+        | result |
+        | [0]    |
+
+    Scenario: Step exactly reaches end value
+      When query
+        """
+        SELECT sequence(0, 10, 5) AS result
+        """
+      Then query result
+        | result          |
+        | [0, 5, 10] |
+
+    Scenario: Step does not evenly divide range
+      When query
+        """
+        SELECT sequence(1, 10, 3) AS result
+        """
+      Then query result
+        | result           |
+        | [1, 4, 7, 10] |
+
+    Scenario: Large range returns correct size
+      When query
+        """
+        SELECT size(sequence(1, 10000)) AS result
+        """
+      Then query result
+        | result |
+        | 10000  |
+
+  Rule: Integer boundary values
+
+    Scenario: INT_MAX boundary
+      When query
+        """
+        SELECT sequence(2147483645, 2147483647) AS result
+        """
+      Then query result
+        | result                                    |
+        | [2147483645, 2147483646, 2147483647] |
+
+    Scenario: INT_MIN boundary
+      When query
+        """
+        SELECT sequence(-2147483648, -2147483646) AS result
+        """
+      Then query result
+        | result                                          |
+        | [-2147483648, -2147483647, -2147483646] |
+
+    Scenario: Near INT_MAX with two elements
+      When query
+        """
+        SELECT sequence(2147483646, 2147483647) AS result
+        """
+      Then query result
+        | result                          |
+        | [2147483646, 2147483647] |
+
+    Scenario: BIGINT large values
+      When query
+        """
+        SELECT sequence(CAST(9223372036854775805 AS BIGINT), CAST(9223372036854775807 AS BIGINT)) AS result
+        """
+      Then query result
+        | result                                                                    |
+        | [9223372036854775805, 9223372036854775806, 9223372036854775807] |
+
+    Scenario: BIGINT with large step
+      When query
+        """
+        SELECT sequence(CAST(0 AS BIGINT), CAST(100 AS BIGINT), CAST(25 AS BIGINT)) AS result
+        """
+      Then query result
+        | result                  |
+        | [0, 25, 50, 75, 100] |
+
+  Rule: Integer type coercion
+
+    Scenario: BIGINT sequence
+      When query
+        """
+        SELECT sequence(CAST(1 AS BIGINT), CAST(5 AS BIGINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: TINYINT sequence
+      When query
+        """
+        SELECT sequence(CAST(1 AS TINYINT), CAST(5 AS TINYINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: SMALLINT step with INT start and end
+      When query
+        """
+        SELECT sequence(1, 10, CAST(3 AS SMALLINT)) AS result
+        """
+      Then query result
+        | result           |
+        | [1, 4, 7, 10] |
+
+    Scenario: TINYINT step with INT start and end
+      When query
+        """
+        SELECT sequence(1, 10, CAST(3 AS TINYINT)) AS result
+        """
+      Then query result
+        | result           |
+        | [1, 4, 7, 10] |
+
+    Scenario: BIGINT sequence with explicit step
+      When query
+        """
+        SELECT sequence(CAST(1 AS BIGINT), CAST(5 AS BIGINT), CAST(2 AS BIGINT)) AS result
+        """
+      Then query result
+        | result      |
+        | [1, 3, 5] |
+
+    Scenario: SMALLINT sequence
+      When query
+        """
+        SELECT sequence(CAST(1 AS SMALLINT), CAST(5 AS SMALLINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: Mixed TINYINT start BIGINT end INT step
+      When query
+        """
+        SELECT sequence(CAST(1 AS TINYINT), CAST(10 AS BIGINT), CAST(2 AS INT)) AS result
+        """
+      Then query result
+        | result              |
+        | [1, 3, 5, 7, 9] |
+
+    Scenario: INT start with BIGINT end coerces to BIGINT
+      When query
+        """
+        SELECT sequence(1, CAST(5 AS BIGINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: BIGINT start with INT end coerces to BIGINT
+      When query
+        """
+        SELECT sequence(CAST(1 AS BIGINT), 5) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+  Rule: NULL handling
+
+    Scenario: NULL start returns NULL
+      When query
+        """
+        SELECT sequence(NULL, 5) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: NULL end returns NULL
+      When query
+        """
+        SELECT sequence(1, NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: NULL step returns NULL
+      When query
+        """
+        SELECT sequence(1, 5, NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Typed NULL start and end returns NULL
+      When query
+        """
+        SELECT sequence(CAST(NULL AS INT), CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: NULL date start returns NULL
+      When query
+        """
+        SELECT sequence(CAST(NULL AS DATE), DATE'2024-01-05') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Date sequences
+
+    Scenario: Date sequence with default step of 1 day
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-01-05') AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2024-01-01, 2024-01-02, 2024-01-03, 2024-01-04, 2024-01-05] |
+
+    Scenario: Date sequence with explicit day interval
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-01-10', interval 2 day) AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2024-01-01, 2024-01-03, 2024-01-05, 2024-01-07, 2024-01-09] |
+
+    Scenario: Date sequence with month interval
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-06-01', interval 1 month) AS result
+        """
+      Then query result
+        | result                                                                                  |
+        | [2024-01-01, 2024-02-01, 2024-03-01, 2024-04-01, 2024-05-01, 2024-06-01] |
+
+    Scenario: Date sequence with 2-month interval
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-12-01', interval '2' month) AS result
+        """
+      Then query result
+        | result                                                                                                      |
+        | [2024-01-01, 2024-03-01, 2024-05-01, 2024-07-01, 2024-09-01, 2024-11-01] |
+
+    Scenario: Date sequence descending with default step
+      When query
+        """
+        SELECT sequence(DATE'2024-01-05', DATE'2024-01-01') AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2024-01-05, 2024-01-04, 2024-01-03, 2024-01-02, 2024-01-01] |
+
+    Scenario: Date sequence descending with negative day interval
+      When query
+        """
+        SELECT sequence(DATE'2024-01-05', DATE'2024-01-01', interval -1 day) AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2024-01-05, 2024-01-04, 2024-01-03, 2024-01-02, 2024-01-01] |
+
+    Scenario: Date sequence descending with negative month interval
+      When query
+        """
+        SELECT sequence(DATE'2024-06-01', DATE'2024-01-01', interval '-1' month) AS result
+        """
+      Then query result
+        | result                                                                                  |
+        | [2024-06-01, 2024-05-01, 2024-04-01, 2024-03-01, 2024-02-01, 2024-01-01] |
+
+    Scenario: Date sequence where step overshoots end
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-01-03', interval 1 month) AS result
+        """
+      Then query result
+        | result       |
+        | [2024-01-01] |
+
+    Scenario: Date sequence with year interval
+      When query
+        """
+        SELECT sequence(DATE'2020-01-01', DATE'2024-01-01', interval 1 year) AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2020-01-01, 2021-01-01, 2022-01-01, 2023-01-01, 2024-01-01] |
+
+    Scenario: Date sequence with year interval descending
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2020-01-01', interval -1 year) AS result
+        """
+      Then query result
+        | result                                                          |
+        | [2024-01-01, 2023-01-01, 2022-01-01, 2021-01-01, 2020-01-01] |
+
+    Scenario: Date month interval with leap year end-of-month clamping
+      When query
+        """
+        SELECT sequence(DATE'2024-01-31', DATE'2024-04-30', interval 1 month) AS result
+        """
+      Then query result
+        | result                                              |
+        | [2024-01-31, 2024-02-29, 2024-03-31, 2024-04-30] |
+
+    Scenario: Date month interval with non-leap year end-of-month clamping
+      When query
+        """
+        SELECT sequence(DATE'2023-01-31', DATE'2023-04-30', interval 1 month) AS result
+        """
+      Then query result
+        | result                                              |
+        | [2023-01-31, 2023-02-28, 2023-03-31, 2023-04-30] |
+
+    Scenario: Date sequence with 3-month interval
+      When query
+        """
+        SELECT sequence(DATE'2024-01-15', DATE'2024-07-15', interval 3 month) AS result
+        """
+      Then query result
+        | result                                    |
+        | [2024-01-15, 2024-04-15, 2024-07-15] |
+
+    Scenario: Date same start and end returns single element
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-01-01') AS result
+        """
+      Then query result
+        | result       |
+        | [2024-01-01] |
+
+    Scenario: Date same start and end with explicit step
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-01-01', interval 1 day) AS result
+        """
+      Then query result
+        | result       |
+        | [2024-01-01] |
+
+    Scenario: Date spanning multiple months with default step
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-03-01') AS result
+        """
+      Then query result
+        | result                                                                                                                                                                                                                                                                                                                                                                                                                |
+        | [2024-01-01, 2024-01-02, 2024-01-03, 2024-01-04, 2024-01-05, 2024-01-06, 2024-01-07, 2024-01-08, 2024-01-09, 2024-01-10, 2024-01-11, 2024-01-12, 2024-01-13, 2024-01-14, 2024-01-15, 2024-01-16, 2024-01-17, 2024-01-18, 2024-01-19, 2024-01-20, 2024-01-21, 2024-01-22, 2024-01-23, 2024-01-24, 2024-01-25, 2024-01-26, 2024-01-27, 2024-01-28, 2024-01-29, 2024-01-30, 2024-01-31, 2024-02-01, 2024-02-02, 2024-02-03, 2024-02-04, 2024-02-05, 2024-02-06, 2024-02-07, 2024-02-08, 2024-02-09, 2024-02-10, 2024-02-11, 2024-02-12, 2024-02-13, 2024-02-14, 2024-02-15, 2024-02-16, 2024-02-17, 2024-02-18, 2024-02-19, 2024-02-20, 2024-02-21, 2024-02-22, 2024-02-23, 2024-02-24, 2024-02-25, 2024-02-26, 2024-02-27, 2024-02-28, 2024-02-29, 2024-03-01] |
+
+    Scenario: Date sequence with year-month interval across years
+      When query
+        """
+        SELECT sequence(DATE'2024-01-01', DATE'2024-12-01', interval '1' month) AS result
+        """
+      Then query result
+        | result                                                                                                                                                    |
+        | [2024-01-01, 2024-02-01, 2024-03-01, 2024-04-01, 2024-05-01, 2024-06-01, 2024-07-01, 2024-08-01, 2024-09-01, 2024-10-01, 2024-11-01, 2024-12-01] |
+
+  Rule: Timestamp sequences
+
+    Scenario: Timestamp sequence with hourly interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-01 05:00:00', interval 1 hour) AS result
+        """
+      Then query result
+        | result                                                                                                                                        |
+        | [2024-01-01 00:00:00, 2024-01-01 01:00:00, 2024-01-01 02:00:00, 2024-01-01 03:00:00, 2024-01-01 04:00:00, 2024-01-01 05:00:00] |
+
+    Scenario: Timestamp sequence with minute interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-01 00:05:00', interval 1 minute) AS result
+        """
+      Then query result
+        | result                                                                                                                                        |
+        | [2024-01-01 00:00:00, 2024-01-01 00:01:00, 2024-01-01 00:02:00, 2024-01-01 00:03:00, 2024-01-01 00:04:00, 2024-01-01 00:05:00] |
+
+    Scenario: Timestamp sequence with 30-minute interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-01 02:00:00', interval 30 minute) AS result
+        """
+      Then query result
+        | result                                                                                                                            |
+        | [2024-01-01 00:00:00, 2024-01-01 00:30:00, 2024-01-01 01:00:00, 2024-01-01 01:30:00, 2024-01-01 02:00:00] |
+
+    Scenario: Timestamp sequence with second interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-01 00:00:10', interval 3 second) AS result
+        """
+      Then query result
+        | result                                                                                                        |
+        | [2024-01-01 00:00:00, 2024-01-01 00:00:03, 2024-01-01 00:00:06, 2024-01-01 00:00:09] |
+
+    Scenario: Timestamp sequence with default step spans days
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-03 00:00:00') AS result
+        """
+      Then query result
+        | result                                                                        |
+        | [2024-01-01 00:00:00, 2024-01-02 00:00:00, 2024-01-03 00:00:00] |
+
+    Scenario: Timestamp sequence descending with default step
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-03 00:00:00', TIMESTAMP'2024-01-01 00:00:00') AS result
+        """
+      Then query result
+        | result                                                                        |
+        | [2024-01-03 00:00:00, 2024-01-02 00:00:00, 2024-01-01 00:00:00] |
+
+    Scenario: Timestamp sequence with year-month interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01', TIMESTAMP'2024-06-01', interval 1 month) AS result
+        """
+      Then query result
+        | result                                                                                                                            |
+        | [2024-01-01 00:00:00, 2024-02-01 00:00:00, 2024-03-01 00:00:00, 2024-04-01 00:00:00, 2024-05-01 00:00:00, 2024-06-01 00:00:00] |
+
+    Scenario: Timestamp sequence with day interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01', TIMESTAMP'2024-01-03', interval 1 day) AS result
+        """
+      Then query result
+        | result                                                                        |
+        | [2024-01-01 00:00:00, 2024-01-02 00:00:00, 2024-01-03 00:00:00] |
+
+    Scenario: Timestamp descending with negative hour interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 05:00:00', TIMESTAMP'2024-01-01 00:00:00', interval -1 hour) AS result
+        """
+      Then query result
+        | result                                                                                                                                        |
+        | [2024-01-01 05:00:00, 2024-01-01 04:00:00, 2024-01-01 03:00:00, 2024-01-01 02:00:00, 2024-01-01 01:00:00, 2024-01-01 00:00:00] |
+
+    Scenario: Timestamp descending with negative month interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-06-01', TIMESTAMP'2024-01-01', interval -1 month) AS result
+        """
+      Then query result
+        | result                                                                                                                            |
+        | [2024-06-01 00:00:00, 2024-05-01 00:00:00, 2024-04-01 00:00:00, 2024-03-01 00:00:00, 2024-02-01 00:00:00, 2024-01-01 00:00:00] |
+
+    Scenario: Timestamp default step within same day returns only start
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-01 05:00:00') AS result
+        """
+      Then query result
+        | result                  |
+        | [2024-01-01 00:00:00] |
+
+    Scenario: Timestamp descending default step within same day returns only start
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01 05:00:00', TIMESTAMP'2024-01-01 00:00:00') AS result
+        """
+      Then query result
+        | result                  |
+        | [2024-01-01 05:00:00] |
+
+    Scenario: Timestamp same start and end returns single element
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01', TIMESTAMP'2024-01-01') AS result
+        """
+      Then query result
+        | result                  |
+        | [2024-01-01 00:00:00] |
+
+    Scenario: Timestamp same start and end with explicit step
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01', TIMESTAMP'2024-01-01', interval 1 hour) AS result
+        """
+      Then query result
+        | result                  |
+        | [2024-01-01 00:00:00] |
+
+    Scenario: sequence timestamp with day interval
+      When query
+        """
+        SELECT sequence(TIMESTAMP'2024-01-01', TIMESTAMP'2024-01-05', INTERVAL 1 DAY) AS result
+        """
+      Then query result
+        | result                                                                                            |
+        | [2024-01-01 00:00:00, 2024-01-02 00:00:00, 2024-01-03 00:00:00, 2024-01-04 00:00:00, 2024-01-05 00:00:00] |
+
+  Rule: Argument count validation
+
+    Scenario: sequence zero arguments errors
+      When query
+        """
+        SELECT sequence() AS result
+        """
+      Then query error .*
+
+    Scenario: sequence one argument errors
+      When query
+        """
+        SELECT sequence(1) AS result
+        """
+      Then query error .*
+
+  Rule: NULL combinatorial
+
+    Scenario: sequence NULL start
+      When query
+        """
+        SELECT sequence(CAST(NULL AS INT), 5) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: sequence NULL stop
+      When query
+        """
+        SELECT sequence(1, CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: sequence NULL step
+      When query
+        """
+        SELECT sequence(1, 5, CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: sequence all NULL
+      When query
+        """
+        SELECT sequence(CAST(NULL AS INT), CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Basic integer sequences
+
+    Scenario: sequence ascending
+      When query
+        """
+        SELECT sequence(1, 5) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: sequence descending
+      When query
+        """
+        SELECT sequence(5, 1) AS result
+        """
+      Then query result
+        | result          |
+        | [5, 4, 3, 2, 1] |
+
+    Scenario: sequence equal start and stop
+      When query
+        """
+        SELECT sequence(3, 3) AS result
+        """
+      Then query result
+        | result |
+        | [3]    |
+
+    Scenario: sequence zero to zero
+      When query
+        """
+        SELECT sequence(0, 0) AS result
+        """
+      Then query result
+        | result |
+        | [0]    |
+
+  Rule: With explicit step
+
+    Scenario: sequence with positive step
+      When query
+        """
+        SELECT sequence(1, 10, 2) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 3, 5, 7, 9] |
+
+    Scenario: sequence with negative step
+      When query
+        """
+        SELECT sequence(10, 1, -2) AS result
+        """
+      Then query result
+        | result           |
+        | [10, 8, 6, 4, 2] |
+
+    Scenario: sequence step of one
+      When query
+        """
+        SELECT sequence(1, 5, 1) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: sequence step larger than range
+      When query
+        """
+        SELECT sequence(1, 5, 10) AS result
+        """
+      Then query result
+        | result |
+        | [1]    |
+
+    Scenario: sequence negative step larger than range
+      When query
+        """
+        SELECT sequence(5, 1, -10) AS result
+        """
+      Then query result
+        | result |
+        | [5]    |
+
+  Rule: Negative ranges
+
+    Scenario: sequence negative ascending
+      When query
+        """
+        SELECT sequence(-5, -1) AS result
+        """
+      Then query result
+        | result               |
+        | [-5, -4, -3, -2, -1] |
+
+    Scenario: sequence negative descending
+      When query
+        """
+        SELECT sequence(-1, -5) AS result
+        """
+      Then query result
+        | result               |
+        | [-1, -2, -3, -4, -5] |
+
+  Rule: Type coercion
+
+    Scenario: sequence BIGINT
+      When query
+        """
+        SELECT sequence(CAST(1 AS BIGINT), CAST(5 AS BIGINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: sequence BIGINT descending
+      When query
+        """
+        SELECT sequence(CAST(5 AS BIGINT), CAST(1 AS BIGINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [5, 4, 3, 2, 1] |
+
+    Scenario: sequence TINYINT
+      When query
+        """
+        SELECT sequence(CAST(1 AS TINYINT), CAST(5 AS TINYINT)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+  Rule: Multi-row
+
+    Scenario: sequence multi-row
+      When query
+        """
+        SELECT sequence(a, b) AS result FROM VALUES (1, 3), (5, 5), (3, 1) AS t(a, b)
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+        | [5]       |
+        | [3, 2, 1] |
+
+  Rule: Error conditions
+
+    Scenario: sequence step zero errors
+      When query
+        """
+        SELECT sequence(1, 5, 0) AS result
+        """
+      Then query error .*
+
+    Scenario: sequence step wrong direction errors
+      When query
+        """
+        SELECT sequence(1, 5, -1) AS result
+        """
+      Then query error .*
+
+    Scenario: sequence string input errors
+      When query
+        """
+        SELECT sequence('a', 'z') AS result
+        """
+      Then query error .*
+
+  @function(nullability)
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    Scenario Outline: sequence loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT sequence(<input>, 5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = <nullable>)
+         |    |-- element: <element> (containsNull = false)
+        """
+
+      Examples:
+        | case             | input | nullable | element |
+        | no cast          | 1     | false    | integer |
+        | STRING -> BIGINT | '1'   | true     | long    |

@@ -164,3 +164,44 @@ Feature: try_to_time
       And query result
         | fraction_too_wide | unsupported_pattern | invalid_pattern | null_input |
         | NULL              | NULL                | NULL            | NULL       |
+
+  # Every expected value below was measured on Spark 4.2.0 (JVM, UTC). `try_to_time` wraps
+  # `ToTime` (Spark 4.2.0 `timeExpressions.scala`, `TryToTimeExpressionBuilder`), so it parses
+  # exactly like `to_time` and only turns a parse failure into NULL.
+  Rule: Spark's lenient default parsing and argument checks
+
+    @sail-bug
+    Scenario Outline: try_to_time without a format accepts <case> (ANSI <ansi>)
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT try_to_time(<value>) AS r
+        """
+      Then query result
+        | r        |
+        | 10:30:45 |
+
+      Examples:
+        | case               | ansi  | value        |
+        | surrounding spaces | true  | ' 10:30:45 ' |
+        | surrounding spaces | false | ' 10:30:45 ' |
+        | a leading T        | true  | 'T10:30:45'  |
+
+    @sail-bug
+    Scenario: try_to_time rejects a TIME first argument
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT try_to_time(TIME '10:30:45') AS r
+        """
+      Then query error UNEXPECTED_INPUT_TYPE
+
+    @sail-bug
+    Scenario: try_to_time rejects three arguments
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT try_to_time('10:30:45', 'HH:mm:ss', 'x') AS r
+        """
+      Then query error WRONG_NUM_ARGS
