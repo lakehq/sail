@@ -7,9 +7,11 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType,
 };
-use datafusion_common::{Result, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, cast,
 };
 use sail_common::utils::datetime::MICROS_PER_DAY;
 
@@ -67,6 +69,54 @@ impl ScalarUDFImpl for SparkTimestampAdd {
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(timestamp_add)(&args.args)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let data_type = info.get_data_type(&args[0])?;
+        if !matches!(data_type, DataType::Timestamp(TimeUnit::Microsecond, _)) {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        // These identities need no arithmetic; other inputs retain the checked kernel.
+        let simplified = match args.as_slice() {
+            [
+                timestamp,
+                quantity,
+                Expr::Literal(ScalarValue::Utf8(Some(unit)), _),
+            ] => {
+                if matches!(quantity, Expr::Literal(ScalarValue::Int64(Some(0)), _))
+                    && interval_for_unit(unit, 0).is_ok()
+                {
+                    Some(timestamp.clone())
+                } else if unit == "MICROSECOND"
+                    && matches!(
+                        timestamp,
+                        Expr::Literal(ScalarValue::TimestampMicrosecond(Some(0), _), _)
+                    )
+                    && info.get_data_type(quantity)? == DataType::Int64
+                {
+                    Some(cast(quantity.clone(), data_type))
+                } else {
+                    None
+                }
+            }
+            [timestamp, Expr::Literal(interval, _)]
+                if matches!(
+                    interval.data_type(),
+                    DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(_)
+                ) && *interval == ScalarValue::new_zero(&interval.data_type())? =>
+            {
+                Some(timestamp.clone())
+            }
+            _ => None,
+        };
+        // The UDF does not inherit its arguments' field metadata.
+        if let Some(expr) = simplified
+            && expr.metadata(info.schema().as_ref())?.is_empty()
+        {
+            Ok(ExprSimplifyResult::Simplified(expr))
+        } else {
+            Ok(ExprSimplifyResult::Original(args))
+        }
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {

@@ -212,6 +212,22 @@ def test_with_metadata(spark):
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
 
 
+def test_timestamp_addition_does_not_inherit_column_metadata(spark):
+    df = (
+        spark.range(2)
+        .selectExpr("id AS quantity", "timestamp_micros(id) AS ts")
+        .withMetadata("quantity", {"unit": "microsecond"})
+        .withMetadata("ts", {"source": "input"})
+    )
+    result = df.selectExpr(
+        "timestampadd(MICROSECOND, quantity, timestamp_micros(0)) AS from_epoch",
+        "timestampadd(SECOND, 0, ts) AS zero_quantity",
+        "ts + INTERVAL 0 SECOND AS zero_interval",
+    )
+    assert all(field.metadata == {} for field in result.select("*").schema)
+    assert len(result.collect()) == 2  # noqa: PLR2004
+
+
 def test_column_projections_keep_input_fields(spark):
     df = (
         spark.createDataFrame([(1, "x", None)], "a int not null, b string, c double")

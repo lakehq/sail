@@ -3,6 +3,71 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
   Background:
     Given config spark.sql.session.timeZone = UTC
 
+  Scenario Outline: Zero additions preserve <type> values in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT id,
+             timestampadd(YEAR, 0, ts) <=> ts AS years,
+             timestampadd(DAY, 0, ts) <=> ts AS days,
+             timestampadd(HOUR, 0, ts) <=> ts AS hours,
+             timestampadd(MICROSECOND, 0, ts) <=> ts AS micros,
+             (ts + INTERVAL 0 MONTH) <=> ts AS month_interval,
+             (ts + INTERVAL 0 SECOND) <=> ts AS second_interval,
+             (ts + make_interval(0, 0, 0, 0, 0, 0, 0)) <=> ts AS calendar_interval
+      FROM (
+        SELECT id, CAST(CASE WHEN id = 0 THEN '2021-11-07 01:30:00'
+                            WHEN id = 1 THEN '2020-03-08 02:30:00' END AS <type>) AS ts
+        FROM range(3)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | years | days | hours | micros | month_interval | second_interval | calendar_interval |
+      | 0  | true  | true | true  | true   | true           | true            | true              |
+      | 1  | true  | true | true  | true   | true           | true            | true              |
+      | 2  | true  | true | true  | true   | true           | true            | true              |
+
+    Examples:
+      | type          | timezone            |
+      | TIMESTAMP     | UTC                 |
+      | TIMESTAMP_NTZ | UTC                 |
+      | TIMESTAMP     | America/Los_Angeles |
+      | TIMESTAMP_NTZ | America/Los_Angeles |
+      | TIMESTAMP     | Asia/Kathmandu      |
+      | TIMESTAMP_NTZ | Asia/Kathmandu      |
+
+  Scenario Outline: Microsecond offsets from the epoch retain the full range in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT id, unix_micros(ltz) AS ltz, CAST(ntz AS STRING) AS ntz,
+             typeof(ltz) AS ltz_type, typeof(ntz) AS ntz_type
+      FROM (
+        SELECT id,
+               timestampadd(MICROSECOND, quantity, TIMESTAMP '1970-01-01 00:00:00Z') AS ltz,
+               timestampadd(MICROSECOND, quantity, TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ntz
+        FROM VALUES (0, CAST('-9223372036854775808' AS BIGINT)), (1, -1L),
+                    (2, 0L), (3, 1L), (4, 9223372036854775807L), (5, CAST(NULL AS BIGINT))
+             AS t(id, quantity)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | ltz                  | ntz                           | ltz_type  | ntz_type      |
+      | 0  | -9223372036854775808 | -290308-12-21 19:59:05.224192 | timestamp | timestamp_ntz |
+      | 1  | -1                   | 1969-12-31 23:59:59.999999    | timestamp | timestamp_ntz |
+      | 2  | 0                    | 1970-01-01 00:00:00           | timestamp | timestamp_ntz |
+      | 3  | 1                    | 1970-01-01 00:00:00.000001    | timestamp | timestamp_ntz |
+      | 4  | 9223372036854775807  | +294247-01-10 04:00:54.775807 | timestamp | timestamp_ntz |
+      | 5  | NULL                 | NULL                          | timestamp | timestamp_ntz |
+
+    Examples:
+      | timezone            |
+      | UTC                 |
+      | America/Los_Angeles |
+      | Asia/Kathmandu      |
+
   @sail-bug
   Scenario Outline: Integer epoch constructors reject <function> overflow with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>
