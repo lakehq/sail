@@ -504,9 +504,6 @@ Feature: datetime format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    # Spark reports arity through WRONG_NUM_ARGS; Sail emits its own wording. Systemic across
-    # the whole function surface, so it is recorded rather than worked around here.
-    @sail-bug
     Scenario: `date_format` rejects extra locale argument
       When query
         """
@@ -514,7 +511,6 @@ Feature: datetime format strings
         """
       Then query error \[WRONG_NUM_ARGS.*The `date_format` requires 2 parameters but the actual number is 3
 
-    @sail-bug
     Scenario: `from_unixtime` rejects extra locale argument
       When query
         """
@@ -522,7 +518,6 @@ Feature: datetime format strings
         """
       Then query error \[WRONG_NUM_ARGS.*The `from_unixtime` requires \[1, 2\] parameters but the actual number is 3
 
-    @sail-bug
     Scenario Outline: Extra argument: <case>
       When query
         """

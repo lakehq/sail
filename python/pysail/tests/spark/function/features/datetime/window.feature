@@ -236,9 +236,6 @@ Feature: window() time-based windowing function
 
   Rule: Argument validation
 
-    # Spark reports these through WRONG_NUM_ARGS and DATATYPE_MISMATCH error classes; Sail uses
-    # its own wording for every one of them.
-    @sail-bug
     Scenario Outline: Argument validation: <case>
       When query
         """
