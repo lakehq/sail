@@ -32,7 +32,7 @@ def test_rest_identifier_fields(spark, reference_catalog):
             update.set_identifier_fields("key")
         spark.sql(f"ALTER TABLE {table} DROP IDENTIFIER FIELDS key")
         assert reference_catalog.load_table(table).schema().identifier_field_ids == []
-        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2
+        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2  # noqa: PLR2004
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -233,7 +233,7 @@ def test_rest_write_order(spark, reference_catalog):
         spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg")
         exercise_iceberg_write_order(spark, table)
         loaded = reference_catalog.load_table(table)
-        assert len(loaded.sort_order().fields) == 2
+        assert len(loaded.sort_order().fields) == 2  # noqa: PLR2004
         assert loaded.sort_order().fields[0].direction.value == "desc"
         assert loaded.properties["write.distribution-mode"] == "range"
         spark.sql(f"ALTER TABLE {table} WRITE UNORDERED")

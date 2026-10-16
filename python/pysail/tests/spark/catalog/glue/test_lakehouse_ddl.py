@@ -1,3 +1,4 @@
+# ruff: noqa: S608
 """Lakehouse DDL with Glue schema and metadata-pointer verification."""
 
 import pytest
@@ -21,7 +22,7 @@ def test_glue_identifier_fields(spark, tmp_path, moto_endpoint):
         stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
         reference = StaticTable.from_metadata(stored["Parameters"]["metadata_location"])
         assert reference.schema().identifier_field_ids == [reference.schema().find_field("renamed").field_id]
-        assert reference.scan().to_arrow().num_rows == 2
+        assert reference.scan().to_arrow().num_rows == 2  # noqa: PLR2004
         spark.sql(f"ALTER TABLE {name} DROP IDENTIFIER FIELDS renamed")
         stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
         assert not StaticTable.from_metadata(stored["Parameters"]["metadata_location"]).schema().identifier_field_ids

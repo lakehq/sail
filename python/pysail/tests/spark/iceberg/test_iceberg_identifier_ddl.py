@@ -66,13 +66,13 @@ def test_identifier_evolution(spark, tmp_path, version):
         assert not current_schema(metadata(tmp_path)).get("identifier-field-ids")
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN renamed DROP NOT NULL")
         spark.sql(f"INSERT INTO {table} SELECT NULL, 30, 'nullable'")
-        assert spark.table(table).count() == 3
+        assert spark.table(table).count() == 3  # noqa: PLR2004
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
 @pytest.mark.parametrize(
-    "operation,error",
+    ("operation", "error"),
     [
         ("SET IDENTIFIER FIELDS missing", "not found"),
         ("SET IDENTIFIER FIELDS optional", "optional"),
