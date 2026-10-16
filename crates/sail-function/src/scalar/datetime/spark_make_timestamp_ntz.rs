@@ -271,7 +271,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 }
             };
             let component_types = [months, days, hours, mins].map(component_type);
-            let seconds_type = if secs.is_numeric() {
+            let seconds_type = if NativeType::from(secs).is_numeric() {
                 coerce_interval_types(self.name(), std::slice::from_ref(secs), 0)?[0].clone()
             } else {
                 secs.clone()
