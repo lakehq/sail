@@ -483,3 +483,33 @@ Feature: DATE_TRUNC output type
         | zone                | unit | input               | result              |
         | Australia/Lord_Howe | HOUR | 2020-10-04 02:45:00 | 2020-10-04 02:30:00 |
         | America/Sao_Paulo   | DAY  | 2018-11-04 12:00:00 | 2018-11-04 01:00:00 |
+
+  Rule: Invalid units skip timestamp expressions
+    # FIXME: Skip timestamp evaluation for invalid units before evaluating scalar UDF arguments.
+
+    @sail-bug
+    Scenario: invalid and NULL column units skip a throwing timestamp
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, date_trunc(
+          CASE WHEN id = 0 THEN 'invalid' WHEN id = 1 THEN CAST(NULL AS STRING) ELSE 'MM' END,
+          CAST(CASE WHEN id < 2 THEN raise_error('timestamp-evaluated')
+                    ELSE '2024-06-15 12:34:56' END AS TIMESTAMP)) AS result
+        FROM range(3)
+        """
+      Then query result
+        | id | result              |
+        | 0  | NULL                |
+        | 1  | NULL                |
+        | 2  | 2024-06-01 00:00:00 |
+
+    @sail-bug
+    Scenario: an invalid literal unit skips a throwing timestamp
+      When query
+        """
+        SELECT date_trunc('invalid', CAST(raise_error('timestamp-evaluated') AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

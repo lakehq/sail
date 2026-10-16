@@ -304,7 +304,6 @@ Feature: sequence() over DATE returns expected arrays
         | dates                                | timestamps                                                     |
         | [1970-01-01, 1970-01-02, 1970-01-03] | [1970-01-01 00:00:00, 1970-01-02 00:00:00, 1970-01-03 00:00:00] |
 
-    @sail-bug
     Scenario: ANSI temporal sequence coercion recognizes literal special datetime values
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -322,7 +321,6 @@ Feature: sequence() over DATE returns expected arrays
         | dates        | timestamps            |
         | [1970-01-01] | [1970-01-01 00:00:00] |
 
-    @sail-bug
     Scenario: ANSI temporal sequence coercion recognizes foldable special datetime expressions
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -528,3 +526,17 @@ Feature: sequence() over DATE returns expected arrays
       Then query result
         | ancient                                                         | future                                                          |
         | [1000-01-01 00:00:00, 1000-01-02 00:00:00, 1000-01-03 00:00:00] | [2500-01-01 00:00:00, 2500-01-02 00:00:00, 2500-01-03 00:00:00] |
+
+  Rule: Epoch constant coercion preserves timestamp semantics
+
+    Scenario: epoch denotes the instant zero in a named session timezone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT transform(sequence(timestamp_micros(0), concat(' E', 'POCH '), INTERVAL 1 DAY),
+                         value -> unix_micros(value)) AS result
+        """
+      Then query result
+        | result |
+        | [0]    |

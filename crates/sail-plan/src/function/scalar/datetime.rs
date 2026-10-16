@@ -1097,7 +1097,7 @@ fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanRes
         || expr_contains_spark_cast_to_variant(argument)?))
 }
 
-fn fold_timezone_argument(argument: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
+pub(super) fn fold_datetime_argument(argument: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
     if !is_foldable_timezone_argument(&argument, false)? {
         return Ok(argument);
     }
@@ -1186,7 +1186,7 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let mut arguments = Vec::with_capacity(3);
     for argument in [from_tz, to_tz, ts] {
         let argument = if can_fold {
-            fold_timezone_argument(argument, input.function_context.schema)?
+            fold_datetime_argument(argument, input.function_context.schema)?
         } else {
             argument
         };
@@ -1287,7 +1287,7 @@ fn utc_timestamp(input: ScalarFunctionInput, from_utc: bool) -> PlanResult<Expr>
         && !has_unsupported_datetime_casts([&ts, &zone], input.function_context.schema)?;
     let constant_zone = is_foldable_timezone_argument(&zone, true)?;
     let zone = if can_fold {
-        fold_timezone_argument(zone, input.function_context.schema)?
+        fold_datetime_argument(zone, input.function_context.schema)?
     } else {
         zone
     };
@@ -1397,7 +1397,7 @@ fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "date_part requires a foldable string field",
         ));
     }
-    let part = fold_timezone_argument(part, context.schema)?;
+    let part = fold_datetime_argument(part, context.schema)?;
     let Expr::Literal(value, _) = &part else {
         return Err(PlanError::invalid(
             "date_part requires a foldable string field",

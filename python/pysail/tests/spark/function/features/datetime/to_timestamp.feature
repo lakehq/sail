@@ -182,7 +182,6 @@ Feature: to_timestamp (strict variant)
     # raise CAST_OVERFLOW under ANSI and saturate under ANSI off; NaN and Infinity are
     # CAST_INVALID_INPUT under ANSI and NULL otherwise. Verified on Spark JVM 4.2.0.
 
-    @sail-bug
     Scenario Outline: Saturating BIGINT bound: <case>
       When query
         """
@@ -210,7 +209,6 @@ Feature: to_timestamp (strict variant)
         | 1e18 seconds      | 1e18  |
         | minus 1e18        | -1e18 |
 
-    @sail-bug
     Scenario Outline: DOUBLE overflowing BIGINT saturates without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
       When query

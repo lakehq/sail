@@ -79,9 +79,7 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
         | negative month | 2024, -1, 1, 0, 0, 0.0 |
         | negative hour  | 2024, 1, 1, -1, 0, 0.0 |
 
-    @sail-bug
     Scenario: a negative BIGINT component is invalid rather than an unsigned cast error
-      # FIXME: Preserve the wider unsigned component extension while handling negative BIGINT components.
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -420,9 +418,7 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: Floating-point seconds and ANSI errors
 
-    @sail-bug
     Scenario Outline: numeric seconds round exact half-microseconds up: <seconds>
-      # FIXME: Avoid binary Float64 multiplication rounding a decimal half-microsecond down.
       When query
         """
         SELECT make_timestamp_ntz(2024, 1, 1, 0, 0, <seconds>) AS result
@@ -598,3 +594,49 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
         | ansi  |
         | true  |
         | false |
+
+  Rule: Exact numeric seconds and signed component boundaries
+
+    Scenario Outline: numeric second columns preserve rounding boundaries for <type>
+      When query
+        """
+        SELECT i, make_timestamp_ntz(2024, 1, 1, 0, 0, CAST(s AS <type>)) AS result
+        FROM VALUES (0, '0.5000004'), (1, '0.5000005'), (2, '0.5000006'),
+          (3, '59.9999995'), (4, '-0.0000004'), (5, CAST(NULL AS STRING)) AS t(i, s)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result                     |
+        | 0 | 2024-01-01 00:00:00.5      |
+        | 1 | 2024-01-01 00:00:00.500001 |
+        | 2 | 2024-01-01 00:00:00.500001 |
+        | 3 | 2024-01-01 00:01:00        |
+        | 4 | 2024-01-01 00:00:00        |
+        | 5 | NULL                       |
+      Examples:
+        | type          |
+        | DOUBLE        |
+        | DECIMAL(16,7) |
+
+    Scenario: negative BIGINT components remain invalid in columns
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT i, try_make_timestamp_ntz(2024, 1, 1, h, 0, 0) AS result
+        FROM VALUES (0, -1L), (1, -2147483648L), (2, 0L), (3, CAST(NULL AS BIGINT)) AS t(i, h)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result              |
+        | 0 | NULL                |
+        | 1 | NULL                |
+        | 2 | 2024-01-01 00:00:00 |
+        | 3 | NULL                |
+
+    Scenario: a safe constructor preserves negative component cast overflow
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT try_make_timestamp_ntz(2024, -2147483649L, 1, 0, 0, 0)
+        """
+      Then query error (?i)(overflow|can't cast)

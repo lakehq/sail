@@ -25,6 +25,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
+use super::datetime::fold_datetime_argument;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -368,9 +369,30 @@ fn sequence_cast(
     source_type: &DataType,
     target_type: &DataType,
     ansi_mode: bool,
+    schema: &datafusion_common::DFSchemaRef,
 ) -> PlanResult<expr::Expr> {
     if source_type == target_type {
         return Ok(argument);
+    }
+
+    if source_type.is_string()
+        && matches!(target_type, DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _))
+        // Preserve runtime error/NULL ordering if constant evaluation fails.
+        && let Ok(expr::Expr::Literal(value, _)) = fold_datetime_argument(argument.clone(), schema)
+        && value.try_as_str().flatten().is_some_and(|value|
+            value.trim_matches(|c: char| c <= ' ').eq_ignore_ascii_case("epoch"))
+    {
+        return Ok(lit(match target_type {
+            DataType::Date32 => ScalarValue::Date32(Some(0)),
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+                ScalarValue::TimestampMicrosecond(Some(0), timezone.clone())
+            }
+            _ => {
+                return Err(PlanError::internal(format!(
+                    "unexpected target type for sequence epoch conversion: {target_type}"
+                )));
+            }
+        }));
     }
 
     Ok(match (source_type, target_type) {
@@ -428,7 +450,13 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .zip(argument_types)
         .zip(target_types)
         .map(|((argument, source_type), target_type)| {
-            sequence_cast(argument, &source_type, &target_type, config.ansi_mode)
+            sequence_cast(
+                argument,
+                &source_type,
+                &target_type,
+                config.ansi_mode,
+                function_context.schema,
+            )
         })
         .collect::<PlanResult<Vec<_>>>()?;
 
