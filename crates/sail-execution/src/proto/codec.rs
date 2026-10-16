@@ -4485,7 +4485,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udwf_kind = if node.inner().is::<SparkNtile>()
+        let udwf_kind = if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+            UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
+                first: matches!(func.kind(), SparkFirstLastValueKind::First),
+                ignore_nulls: func.ignore_nulls(),
+            })
+        } else if node.inner().is::<SparkNtile>()
             || node.inner().is::<CumeDist>()
             // Rank implements rank, dense_rank, and percent_rank.
             || node.inner().is::<Rank>()
@@ -4494,9 +4499,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             // WindowShift implements lag and lead.
             || node.inner().is::<WindowShift>()
             || node.inner().is::<RowNumber>()
-        {
-            UdwfKind::Standard(r#gen::StandardUdwf {})
-        } else if matches!(
+            || matches!(
             // Keep name matching as a fallback if upstream splits these into separate implementations.
             node.name(),
             "cume_dist"
@@ -4513,11 +4516,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 | "percent_rank"
         ) {
             UdwfKind::Standard(r#gen::StandardUdwf {})
-        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
-            UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
-                first: matches!(func.kind(), SparkFirstLastValueKind::First),
-                ignore_nulls: func.ignore_nulls(),
-            })
         } else {
             return Ok(());
         };
