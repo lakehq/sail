@@ -20,6 +20,7 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
+use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {
@@ -309,6 +310,11 @@ async fn collect_plan_with(
             stringified.push(optimized_plan.to_stringified(plan_type));
         },
     )?;
+    let optimized_logical = if is_streaming_plan(&optimized_logical)? {
+        rewrite_streaming_plan(optimized_logical)?
+    } else {
+        optimized_logical
+    };
     stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
 
     let records = Arc::new(Mutex::new(PhysicalPlanRecords::default()));

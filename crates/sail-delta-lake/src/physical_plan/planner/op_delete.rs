@@ -149,7 +149,11 @@ pub async fn build_delete_plan(
         .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let change_data = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+    // Whole-file deletes are inferred from Remove actions. Their data scan is empty,
+    // so emitting an empty CDC file would hide the removed rows from CDF readers.
+    let change_data = if crate::change_data_feed::enabled(snapshot_state.metadata())
+        && !partition_only
+    {
         let deleted = Arc::new(datafusion::physical_expr::expressions::NotExpr::new(
             adapted_retention_condition.clone(),
         ));

@@ -36,6 +36,7 @@ mod writer;
 pub use lake_source::DeltaLakeSource;
 pub use logical::DeltaTableSource;
 pub use table::create_delta_source;
+pub mod streaming;
 
 pub use crate::delta_log::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,

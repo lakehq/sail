@@ -55,6 +55,7 @@ use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
+use sail_logical_plan::streaming::aggregate::StreamAggregateNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
@@ -74,6 +75,7 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
+use sail_physical_plan::streaming::aggregate::StreamAggregateExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
@@ -507,6 +509,74 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 input.clone(),
                 node.skip(),
                 node.fetch(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<StreamAggregateNode>() {
+            use datafusion::physical_expr::aggregate::LoweredAggregateBuilder;
+            use datafusion::physical_plan::aggregates::{
+                AggregateExec, AggregateMode, PhysicalGroupBy,
+            };
+            use datafusion::physical_plan::empty::EmptyExec;
+            let [logical_input] = logical_inputs else {
+                return internal_err!("StreamAggregateExec requires one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!("StreamAggregateExec requires one physical input");
+            };
+            let logical_schema = datafusion_common::DFSchema::new_with_metadata(
+                logical_input
+                    .schema()
+                    .iter()
+                    .skip(2)
+                    .map(|(qualifier, field)| (qualifier.cloned(), field.clone()))
+                    .collect(),
+                logical_input.schema().metadata().clone(),
+            )?;
+            let schema = logical_schema.inner().clone();
+            let groups = node
+                .group_expr()
+                .iter()
+                .enumerate()
+                .map(|(index, expr)| {
+                    Ok((
+                        planner.create_physical_expr(
+                            expr,
+                            &logical_schema,
+                            session,
+                            planning_ctx,
+                        )?,
+                        node.schema().field(index + 2).name().clone(),
+                    ))
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            let aggregates = node
+                .aggr_expr()
+                .iter()
+                .map(|expr| {
+                    LoweredAggregateBuilder::new(
+                        expr,
+                        &logical_schema,
+                        &schema,
+                        session.execution_props(),
+                        planning_ctx,
+                    )
+                    .build()
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            let (exprs, filters) = aggregates
+                .into_iter()
+                .map(|lowered| (lowered.aggregate, lowered.filter))
+                .unzip();
+            let aggregate = AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(groups),
+                exprs,
+                filters,
+                Arc::new(EmptyExec::new(schema.clone())),
+                schema,
+            )?;
+            Arc::new(StreamAggregateExec::try_new(
+                input.clone(),
+                Arc::new(aggregate),
             )?)
         } else if let Some(node) = node.as_any().downcast_ref::<StreamFilterNode>() {
             let [logical_input] = logical_inputs else {

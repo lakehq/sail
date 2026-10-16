@@ -43,7 +43,7 @@
 
 - key: read_change_feed
   description: |
-    Enable batch reading of the change data feed (CDF) from the Delta table.
+    Enable reading of the change data feed (CDF) from the Delta table.
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
@@ -56,6 +56,26 @@
       keys:
         - read_change_feed
         - readChangeFeed
+      parser: crate::options::parsers::parse_bool
+
+- key: apply_changes
+  description: |
+    For streaming CDF reads, expose a dynamic table of business columns.
+    Deletes and update preimages retract rows; inserts and postimages add rows.
+    A snapshot before startingVersion seeds the table when that version is positive.
+    Without startingVersion, read the current snapshot followed by future changes.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: "bool"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - apply_changes
+        - applyChanges
       parser: crate::options::parsers::parse_bool
 
 - key: starting_version

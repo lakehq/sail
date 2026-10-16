@@ -101,6 +101,28 @@ impl DataSource for DeltaLakeSource {
         create_delta_source(ctx, table_url, schema, options, lakehouse_table).await
     }
 
+    async fn create_stream_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        let table_url = Self::parse_table_url(ctx, info.paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, info.options)?;
+        let source = crate::streaming::DeltaStreamSource::try_new(
+            ctx,
+            table_url,
+            info.schema,
+            options,
+            info.lakehouse_table,
+        )
+        .await?;
+        Ok(datafusion::datasource::provider_as_source(Arc::new(
+            sail_common_datafusion::streaming::source::StreamSourceTableProvider::new(Arc::new(
+                source,
+            )),
+        )))
+    }
+
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         let SourceInfo {
             paths,

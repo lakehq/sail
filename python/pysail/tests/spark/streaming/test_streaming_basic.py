@@ -40,3 +40,9 @@ def test_streaming_query_manager(spark):
     assert all(query.id != x.id for x in spark.streams.active)
     spark.streams.awaitAnyTermination()
     spark.streams.resetTerminated()
+
+
+def test_streaming_bounded_aggregate(spark):
+    df = spark.readStream.format("rate").option("rowsPerSecond", 100).option("numPartitions", 1).load()
+    result = df.limit(10).selectExpr("value % 3 AS k").groupBy("k").count().collect()
+    assert sorted(map(tuple, result)) == [(0, 4), (1, 3), (2, 3)]
