@@ -631,13 +631,13 @@ data:
               AggregateExec: mode=FinalPartitioned, gby=[#35@0 as #35], aggr=[count(Int64(1)), sum(custsale.#36)]
                 RepartitionExec: partitioning=Hash([#35@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#35@0 as #35], aggr=[count(Int64(1)), sum(custsale.#36)]
-                    ProjectionExec: expr=[substr(#4@0, 1, 2) as #35, #5@1 as #36]
+                    ProjectionExec: expr=[spark_string_prefix(#4@0, 2) as #35, #5@1 as #36]
                       HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(#18@0, #0@0)], projection=[#4@1, #5@2]
                         ProjectionExec: expr=[_1@0 as #18]
                           DataSourceExec: partitions=1, partition_sizes=[1]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           ProjectionExec: expr=[_0@0 as #0, _4@1 as #4, _5@2 as #5]
-                            FilterExec: substr(_4@1, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > scalar_subquery(<pending>)
+                            FilterExec: spark_string_prefix(_4@1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > scalar_subquery(<pending>)
                               DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[avg(customer.#13)@0 as #16]
           AggregateExec: mode=Final, gby=[], aggr=[avg(customer.#13)]
@@ -645,5 +645,5 @@ data:
               AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.#13)]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   ProjectionExec: expr=[_5@0 as #13]
-                    FilterExec: _5@1 > 0.00 AND substr(_4@0, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]), projection=[_5@1]
+                    FilterExec: _5@1 > 0.00 AND spark_string_prefix(_4@0, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]), projection=[_5@1]
                       DataSourceExec: partitions=1, partition_sizes=[1]
