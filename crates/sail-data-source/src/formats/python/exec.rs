@@ -186,8 +186,10 @@ impl ExecutionPlan for PythonDataSourceExec {
 
         // Create executor lazily at execution time
         // This keeps codec/construction lightweight and ensures proper worker-side initialization
-        let executor: Arc<dyn super::executor::PythonExecutor> =
-            Arc::new(super::executor::InProcessExecutor::new());
+        let executor: Arc<dyn super::executor::PythonExecutor> = Arc::new(
+            super::executor::InProcessExecutor::new()
+                .with_runtime_env(context.runtime_env(), context.session_config().options())?,
+        );
 
         let pickled_reader = self.pickled_reader.clone();
         let part = self.partitions[partition].clone();
