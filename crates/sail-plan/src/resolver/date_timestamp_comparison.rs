@@ -21,6 +21,7 @@ use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::math::random::Random;
+use sail_python_udf::udf::expr_contains_python_udf;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -337,7 +338,7 @@ fn restore_filtered_join_foldables(
         );
         for conjunct in &conditions {
             if conjunct.is_volatile()
-                || contains_python_udf(conjunct)?
+                || expr_contains_python_udf(conjunct)?
                 || !conjunct
                     .column_refs()
                     .iter()
@@ -488,7 +489,7 @@ fn is_foldable(expr: &Expr) -> Result<bool> {
 }
 
 fn contains_unevaluable(expr: &Expr) -> Result<bool> {
-    Ok(contains_python_udf(expr)?
+    Ok(expr_contains_python_udf(expr)?
         || expr.exists(|e| {
             Ok(matches!(
                 e,
@@ -502,13 +503,6 @@ fn contains_unevaluable(expr: &Expr) -> Result<bool> {
                     | Expr::Placeholder(_)
             ))
         })?)
-}
-
-fn contains_python_udf(expr: &Expr) -> Result<bool> {
-    expr.exists(|e| {
-        Ok(matches!(e, Expr::ScalarFunction(f)
-        if f.func.inner().is::<PySparkUDF>() || f.func.inner().is::<PySparkUnresolvedUDF>()))
-    })
 }
 
 fn has_date_cast(expr: &Expr) -> bool {
