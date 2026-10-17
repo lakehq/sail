@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {
@@ -233,7 +233,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {

@@ -5,4 +5,8 @@ export default createVegaLoader(["./*.vega.json"], import.meta.dirname, {
     spark: [{ name: "engine", value: "Spark" }],
     sail: [{ name: "engine", value: "Sail" }],
   },
+  "tpcds-query-time.vega.json": {
+    "1tb": [{ name: "dataset", value: "1 TB" }],
+    "3tb": [{ name: "dataset", value: "3 TB" }],
+  },
 });
