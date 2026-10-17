@@ -169,6 +169,7 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    SparkStructCastUdf struct_cast = 13;
   }
 }
 
@@ -187,6 +188,10 @@ message SparkArrayForallUdf {}
 message SparkMapFilterUdf {}
 
 message SparkTransformValuesUdf {}
+
+message SparkStructCastUdf {
+  bytes target_type = 1;
+}
 
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;

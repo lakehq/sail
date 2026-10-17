@@ -6,7 +6,7 @@ from pyspark.errors import ArithmeticException, PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-from pysail.testing.spark.utils.sql import any_of
+from pysail.testing.spark.utils.sql import any_of, parse_show_string
 
 
 @pytest.mark.parametrize(
@@ -109,6 +109,37 @@ def test_raise_error_divide_by_zero_text_is_not_arithmetic(spark):
     with pytest.raises(PySparkException, match="divide by zero") as error:
         spark.sql("SELECT raise_error('divide by zero')").collect()
     assert not isinstance(error.value, ArithmeticException)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "CASE WHEN true THEN 1 / 0 ELSE id END",
+        "CASE WHEN false THEN id ELSE 1 / 0 END",
+        "CASE WHEN CAST(NULL AS BOOLEAN) THEN id ELSE 1 / 0 END",
+        "coalesce(CAST(NULL AS DOUBLE), CASE WHEN true THEN 1 / 0 ELSE id END)",
+    ],
+)
+@pytest.mark.parametrize("union_all", [False, True])
+def test_empty_division_conditional_collect_and_show(spark, remote, expression, union_all, capsys):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        query = f"SELECT {expression} AS result FROM range(0)"  # noqa: S608
+        if union_all:
+            query += " UNION ALL SELECT CAST(id AS DOUBLE) AS result FROM range(0)"
+        assert spark.sql(query).collect() == []
+        # Spark collect() returns no rows, but show() adds ToPrettyString and raises
+        # after extra constant folding. Sail deliberately keeps show() consistent
+        # with collect() for these empty-input conditional expressions.
+        if remote.startswith("local"):
+            with pytest.raises(ArithmeticException, match=r"(?i)divi(?:de|sion).*zero"):
+                spark.sql(query).show()
+        else:
+            spark.sql(query).show()
+            assert parse_show_string(capsys.readouterr().out) == [["result"]]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
 
 
 def test_div(spark):

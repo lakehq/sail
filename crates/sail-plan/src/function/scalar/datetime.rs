@@ -897,7 +897,7 @@ fn timestamp_with_try(
                 input.function_context.schema,
             );
         }
-        if (is_null_literal(&value) || is_null_literal(&format))
+        if ((!source.is_nested() && is_null_literal(&value)) || is_null_literal(&format))
             && can_fold_datetime_arguments([&value, &format])?
             && ([&value, &format]
                 .into_iter()

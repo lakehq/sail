@@ -435,6 +435,8 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         return Ok(Expr::Literal(ScalarValue::Null, None));
     }
     // An ANSI error belongs to evaluation: an enclosing NULL or unused CASE branch may suppress it.
+    // Spark show() can add a fold that errors on an empty conditional result.
+    // Sail follows collect() in that case; formatting must not add evaluation.
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray};
-use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, TimeUnit,
+use datafusion::arrow::compute::kernels::numeric::neg;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, exec_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NegateDuration {
@@ -40,6 +41,15 @@ impl ScalarUDFImpl for NegateDuration {
         Ok(arg_types[0].clone())
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg = &args.arg_fields[0];
+        Ok(Arc::new(Field::new(
+            self.name(),
+            arg.data_type().clone(),
+            arg.is_nullable(),
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
@@ -48,50 +58,9 @@ impl ScalarUDFImpl for NegateDuration {
                 args.len()
             );
         };
-        match arg {
-            ColumnarValue::Scalar(ScalarValue::DurationSecond(val)) => Ok(ColumnarValue::Scalar(
-                ScalarValue::DurationSecond(val.map(|x| -x)),
-            )),
-            ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Array(array) => {
-                let result: ArrayRef = match array.data_type() {
-                    DataType::Duration(TimeUnit::Second) => Arc::new(
-                        array
-                            .as_primitive::<DurationSecondType>()
-                            .unary::<_, DurationSecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Millisecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationMillisecondType>()
-                            .unary::<_, DurationMillisecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Microsecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationMicrosecondType>()
-                            .unary::<_, DurationMicrosecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Nanosecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationNanosecondType>()
-                            .unary::<_, DurationNanosecondType>(|x| -x),
-                    ),
-                    other => {
-                        return exec_err!(
-                            "Unsupported data type {other:?} for function negate_duration"
-                        );
-                    }
-                };
-                Ok(ColumnarValue::Array(result))
-            }
-            other => exec_err!("Unsupported arg {other:?} for function negate_duration"),
+        if !matches!(arg.data_type(), DataType::Duration(_)) {
+            return exec_err!("Unsupported arg {arg:?} for function negate_duration");
         }
+        make_scalar_function(|args| Ok(neg(args[0].as_ref())?))(&args)
     }
 }

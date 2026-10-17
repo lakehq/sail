@@ -7665,6 +7665,115 @@ mod tests {
         assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
     }
 
+    #[test]
+    fn test_round_trip_struct_cast_preserves_fields_and_null_parents() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{AsArray, Int32Array, StringArray, StructArray};
+        use datafusion::arrow::buffer::NullBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, cast, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::spark_struct_cast::SparkStructCast;
+
+        let source = StructArray::try_new(
+            Fields::from(vec![
+                Field::new("dup", DataType::Utf8, true),
+                Field::new("dup", DataType::Int32, false),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec![Some("6"), Some("bad"), None])),
+                Arc::new(Int32Array::from(vec![10, 999, 30])),
+            ],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )?;
+        let fields = vec![
+            Field::new("source", source.data_type().clone(), true).with_metadata(HashMap::from([
+                ("origin".to_string(), "stored".to_string()),
+            ])),
+            Field::new("divisor", DataType::Int32, false),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let target_fields = Fields::from(vec![
+            Field::new("dup", DataType::Int32, true).with_metadata(HashMap::from([(
+                "position".to_string(),
+                "first".to_string(),
+            )])),
+            Field::new("dup", DataType::Int32, false).with_metadata(HashMap::from([(
+                "position".to_string(),
+                "second".to_string(),
+            )])),
+        ]);
+        let expected_field = Arc::new(
+            schema
+                .field(0)
+                .clone()
+                .with_data_type(DataType::Struct(target_fields.clone())),
+        );
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "field".to_string(),
+            Some(Arc::new(Field::new("field", DataType::Utf8, true))),
+        ));
+        let sibling = Expr::LambdaVariable(LambdaVariable::new(
+            "field".to_string(),
+            Some(Arc::new(Field::new("field", DataType::Int32, false))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkStructCast::new(
+                target_fields,
+            ))),
+            vec![
+                col("source"),
+                lambda(["field"], cast(value, DataType::Int32) / col("divisor")),
+                lambda(["field"], sibling + col("divisor")),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, schema.as_ref())?;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(source), Arc::new(Int32Array::from(vec![2, 0, 3]))],
+        )?;
+
+        for expression in [&physical, &decoded] {
+            assert_eq!(expression.return_field(schema.as_ref())?, expected_field);
+            // The NULL parent hides both an invalid cast and division by zero.
+            for input in [batch.clone(), batch.slice(1, 1), batch.slice(0, 0)] {
+                let result = expression.evaluate(&input)?.into_array(input.num_rows())?;
+                assert_eq!(result.data_type(), expected_field.data_type());
+                assert_eq!(result.len(), input.num_rows());
+                let result = result.as_struct();
+                assert_eq!(
+                    (0..result.len())
+                        .map(|i| result.is_valid(i))
+                        .collect::<Vec<_>>(),
+                    (0..input.num_rows())
+                        .map(|i| input.column(0).is_valid(i))
+                        .collect::<Vec<_>>(),
+                );
+                if input.num_rows() == 3 {
+                    let first = result.column(0).as_primitive::<Int32Type>();
+                    let second = result.column(1).as_primitive::<Int32Type>();
+                    assert!(first.is_valid(0));
+                    assert_eq!(first.value(0), 3);
+                    assert!(first.is_null(2));
+                    assert!(second.is_valid(0) && second.is_valid(2));
+                    assert_eq!((second.value(0), second.value(2)), (12, 33));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Distributed round-trip for `transform_keys(m, (k, v) -> k + 1)` over
     /// `{1: 10, 2: 20}`. Proves the `TransformKeys` higher-order UDF kind
     /// survives remote encode/decode, carrying the duplicate-key policy the

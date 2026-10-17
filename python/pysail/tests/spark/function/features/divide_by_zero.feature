@@ -56,6 +56,150 @@ Feature: Division by zero behavior
         | NULL selected branch | CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE 1 / 0 END               | NULL   |
         | NULL dividend        | CAST(NULL AS DOUBLE) / 0                                             | NULL   |
 
+  Rule: Empty-input division respects ANSI mode
+    Scenario Outline: foldable literal-zero division before empty input with ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result <input>
+        """
+      Then query <expectation>
+        | result |
+
+      Examples:
+        | case                      | expr                                                  | input                             | ansi  | expectation                      |
+        | empty range               | 1 / 0                                                 | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | empty range               | 1 / 0                                                 | FROM range(0)                     | false | result                           |
+        | false filter              | 1 / 0                                                 | WHERE false                       | true  | error (?i)divi(?:de\|sion).*zero |
+        | false filter              | 1 / 0                                                 | WHERE false                       | false | result                           |
+        | nonfoldable parent        | id + (1 / 0)                                          | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | nonfoldable parent        | id + (1 / 0)                                          | FROM range(0)                     | false | result                           |
+        | boolean parent            | (1 / 0 > 0) AND id=0                                  | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | boolean parent            | (1 / 0 > 0) AND id=0                                  | FROM range(0)                     | false | result                           |
+        | scalar parent of CASE     | abs(CASE WHEN true THEN 1 / 0 ELSE id END)            | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | scalar parent of CASE     | abs(CASE WHEN true THEN 1 / 0 ELSE id END)            | FROM range(0)                     | false | result                           |
+        | arithmetic parent of CASE | 1 + (CASE WHEN true THEN 1 / 0 ELSE id END)           | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | arithmetic parent of CASE | 1 + (CASE WHEN true THEN 1 / 0 ELSE id END)           | FROM range(0)                     | false | result                           |
+        | cast parent of CASE       | CAST(CASE WHEN true THEN 1 / 0 ELSE id END AS STRING) | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | cast parent of CASE       | CAST(CASE WHEN true THEN 1 / 0 ELSE id END AS STRING) | FROM range(0)                     | false | result                           |
+        | pruned false CASE branch  | CASE WHEN false THEN id WHEN true THEN 1 / 0 END      | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | pruned false CASE branch  | CASE WHEN false THEN id WHEN true THEN 1 / 0 END      | FROM range(0)                     | false | result                           |
+        | pruned later CASE branch  | CASE WHEN true THEN 1 / 0 WHEN false THEN id END      | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
+        | pruned later CASE branch  | CASE WHEN true THEN 1 / 0 WHEN false THEN id END      | FROM range(0)                     | false | result                           |
+        | redundant zero limit      | 1 / 0                                                 | FROM range(0) LIMIT 0             | true  | error (?i)divi(?:de\|sion).*zero |
+        | redundant zero limit      | 1 / 0                                                 | FROM range(0) LIMIT 0             | false | result                           |
+        | redundant filtered limit  | 1 / 0                                                 | FROM range(1) WHERE false LIMIT 0 | true  | error (?i)divi(?:de\|sion).*zero |
+        | redundant filtered limit  | 1 / 0                                                 | FROM range(1) WHERE false LIMIT 0 | false | result                           |
+        | redundant grouped limit   | 1 / 0                                                 | FROM range(0) GROUP BY id LIMIT 0 | true  | error (?i)divi(?:de\|sion).*zero |
+        | redundant grouped limit   | 1 / 0                                                 | FROM range(0) GROUP BY id LIMIT 0 | false | result                           |
+
+    Scenario Outline: foldable literal-zero division with one result row and ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result <input>
+        """
+      Then query <expectation>
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                     | expr                           | input         | ansi  | expectation                      | result |
+        | aggregate argument       | sum(1 / 0)                     | FROM range(0) | true  | error (?i)divi(?:de\|sion).*zero |        |
+        | empty higher-order input | transform(array(), x -> 1 / 0) |               | true  | error (?i)divi(?:de\|sion).*zero |        |
+        | empty higher-order input | transform(array(), x -> 1 / 0) |               | false | result                           | []     |
+
+    # TODO: Support SUM of untyped NULL; this ANSI=false typing gap predates the PR.
+    @sail-bug
+    Scenario: SUM of literal-zero division returns NULL with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT sum(1 / 0) AS result FROM range(0)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario Outline: empty input preserves conditional and NULL suppression: <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result FROM range(0)
+        """
+      Then query result
+        | result |
+
+      Examples:
+        | case                      | expr                                                                   | ansi  |
+        | nonfoldable dividend      | id / 0                                                                 | true  |
+        | nonfoldable dividend      | id / 0                                                                 | false |
+        | NULL dividend             | CAST(NULL AS DOUBLE) / 0                                               | true  |
+        | NULL dividend             | CAST(NULL AS DOUBLE) / 0                                               | false |
+        | NULL parent               | CAST(NULL AS DOUBLE) + (1 / 0)                                         | true  |
+        | NULL parent               | CAST(NULL AS DOUBLE) + (1 / 0)                                         | false |
+        | dynamic CASE branch       | CASE WHEN id < 0 THEN 1 / 0 ELSE 7 END                                 | true  |
+        | dynamic CASE branch       | CASE WHEN id < 0 THEN 1 / 0 ELSE 7 END                                 | false |
+        | coalesce branch           | coalesce(id, 1 / 0)                                                    | true  |
+        | coalesce branch           | coalesce(id, 1 / 0)                                                    | false |
+        | NULL parent of CASE       | CAST(NULL AS DOUBLE) + CASE WHEN true THEN 1 / 0 ELSE id END           | true  |
+        | NULL parent of CASE       | CAST(NULL AS DOUBLE) + CASE WHEN true THEN 1 / 0 ELSE id END           | false |
+        | NULL parent of eager CASE | CAST(NULL AS DOUBLE) + abs(CASE WHEN true THEN 1 / 0 ELSE id END)      | true  |
+        | NULL parent of eager CASE | CAST(NULL AS DOUBLE) + abs(CASE WHEN true THEN 1 / 0 ELSE id END)      | false |
+        | nested dynamic CASE       | CASE WHEN id < 0 THEN CASE WHEN true THEN 1 / 0 ELSE id END ELSE 7 END | true  |
+        | nested dynamic CASE       | CASE WHEN id < 0 THEN CASE WHEN true THEN 1 / 0 ELSE id END ELSE 7 END | false |
+        | unreachable CASE branch   | CASE WHEN true THEN 7 ELSE 1 / 0 + id END                              | true  |
+        | unreachable CASE branch   | CASE WHEN true THEN 7 ELSE 1 / 0 + id END                              | false |
+
+    Scenario Outline: empty set operation preserves conditional suppression: <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result FROM range(0)
+        <operation> SELECT CAST(id AS DOUBLE) AS result FROM range(0)
+        """
+      Then query result
+        | result |
+
+      Examples:
+        | case              | expr                                                              | operation | ansi  |
+        | dynamic CASE      | CASE WHEN id < 0 THEN 1 / 0 ELSE 7 END                            | UNION ALL | true  |
+        | dynamic CASE      | CASE WHEN id < 0 THEN 1 / 0 ELSE 7 END                            | UNION ALL | false |
+        | NULL eager parent | CAST(NULL AS DOUBLE) + abs(CASE WHEN true THEN 1 / 0 ELSE id END) | UNION ALL | true  |
+        | NULL eager parent | CAST(NULL AS DOUBLE) + abs(CASE WHEN true THEN 1 / 0 ELSE id END) | UNION ALL | false |
+        | distinct barrier  | CASE WHEN true THEN 1 / 0 ELSE id END                             | UNION     | true  |
+        | distinct barrier  | CASE WHEN true THEN 1 / 0 ELSE id END                             | UNION     | false |
+
+    Scenario Outline: zero limit suppresses division before evaluating its input: <input> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT 1 / 0 AS result <input> LIMIT 0
+        """
+      Then query result
+        | result |
+
+      Examples:
+        | input         | ansi  |
+        | FROM range(1) | true  |
+        | FROM range(1) | false |
+        |               | true  |
+        |               | false |
+
+    Scenario Outline: zero limit suppresses division over a global aggregate with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT count(*) + (1 / 0) AS result FROM range(0) LIMIT 0
+        """
+      Then query result
+        | result |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>
       Given config spark.sql.ansi.enabled = true

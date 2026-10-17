@@ -1,9 +1,11 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegative;
 
 /// `ConfigOptions` snapshots with `execution.enable_ansi_mode` pinned. Negation
@@ -66,6 +68,18 @@ impl ScalarUDFImpl for SparkNegative {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.inner.return_type(arg_types)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg = &args.arg_fields[0];
+        if matches!(arg.data_type(), DataType::Interval(_)) {
+            return Ok(Arc::new(Field::new(
+                self.name(),
+                arg.data_type().clone(),
+                arg.is_nullable(),
+            )));
+        }
+        self.inner.return_field_from_args(args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

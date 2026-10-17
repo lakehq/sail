@@ -178,7 +178,7 @@ fn make_interval_kernel(args: &[ArrayRef], ansi_mode: bool) -> Result<ArrayRef, 
         .transpose()?;
     let secs = args
         .get(6)
-        .map(|a| IntervalSeconds::new(a, 9))
+        .map(|a| IntervalSeconds::new(a, 6))
         .transpose()?;
 
     let mut builder = IntervalMonthDayNanoBuilder::with_capacity(n_rows);
@@ -205,7 +205,10 @@ fn make_interval_kernel(args: &[ArrayRef], ansi_mode: bool) -> Result<ArrayRef, 
         let d = days.as_ref().map_or(0, |a| a.value(i));
         let h = hours.as_ref().map_or(0, |a| a.value(i));
         let mi = mins.as_ref().map_or(0, |a| a.value(i));
-        let s = secs.as_ref().map_or(Some(0), |a| a.value(i));
+        let s = secs
+            .as_ref()
+            .map_or(Some(0), |a| a.value(i))
+            .and_then(|micros| micros.checked_mul(1_000));
 
         match s.and_then(|seconds| make_interval_month_day_nano(y, mo, w, d, h, mi, seconds)) {
             Some(v) => builder.append_value(v),
@@ -323,7 +326,7 @@ enum SecondsValues<'a> {
     Decimal256(&'a [i256], Option<i256>, bool),
 }
 
-// The two constructors need the same exact rounding, at Sail's respective micro/nanosecond scales.
+// Spark's interval and timestamp constructors round seconds to microsecond precision.
 pub(super) struct IntervalSeconds<'a> {
     values: SecondsValues<'a>,
     nulls: Option<&'a NullBuffer>,

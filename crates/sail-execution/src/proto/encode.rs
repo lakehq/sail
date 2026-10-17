@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, plan_err};
 use datafusion::datasource::source::DataSourceExec;
@@ -24,6 +24,7 @@ use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+use sail_function::scalar::spark_struct_cast::SparkStructCast;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
@@ -167,6 +168,13 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})
     } else if udf_inner.is::<SparkTransformValues>() {
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {})
+    } else if let Some(struct_cast) = udf_inner.downcast_ref::<SparkStructCast>() {
+        let target_type = DataType::Struct(struct_cast.target_fields().clone());
+        HigherOrderUdfKind::StructCast(r#gen::SparkStructCastUdf {
+            target_type: try_encode_message::<gen_datafusion_common::ArrowType>(
+                (&target_type).try_into()?,
+            )?,
+        })
     } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins: transform_keys.is_last_value_wins(),

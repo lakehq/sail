@@ -274,12 +274,16 @@ impl PlanResolver<'_> {
         let output = ScalarUDF::from(SparkStructRename::new(renamed_type))
             .call(vec![Expr::Column(output_col.clone())])
             .alias(&output_name);
-        let plan = LogicalPlanBuilder::from(input)
+        let mut plan = LogicalPlanBuilder::from(input)
             .aggregate(grouping, vec![agg])?
             .project(vec![output])?
-            .unnest_column(output_col.clone())?
+            .unnest_column(output_col.clone())?;
+        // Empty output structs only need the final projection, which preserves row count.
+        if !output_names.is_empty() {
             // Flatten the non-null row struct to preserve the declared output nullability.
-            .unnest_column(output_col.clone())?
+            plan = plan.unnest_column(output_col)?;
+        }
+        let plan = plan
             .project(
                 output_names
                     .iter()

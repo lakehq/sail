@@ -84,3 +84,28 @@ def test_grouped_pandas_preserves_output_field_names_and_nullability(spark, name
     result = spark.range(1).groupBy().applyInPandas(values, schema)
     assert result.select("*").schema == schema
     assert sorted(tuple(row) for row in result.collect()) == [(1, 2), (3, None)]
+
+
+def test_grouped_pandas_preserves_empty_output_rows(spark):
+    from pyspark.sql import Row
+    from pyspark.sql.types import StructType
+
+    result = spark.range(1).groupBy().applyInPandas(lambda _: pd.DataFrame(index=[0, 1]), StructType([]))
+    assert result.select("*").schema == StructType([])
+    assert result.collect() == [Row(), Row()]
+
+
+@pytest.mark.parametrize("api", ["pandas", "arrow"])
+def test_grouped_map_preserves_empty_nested_structs(spark, api):
+    import pyarrow as pa
+    from pyspark.sql import Row
+
+    grouped = spark.range(1).groupBy()
+    schema = "id long, empty struct<>"
+    if api == "pandas":
+        result = grouped.applyInPandas(lambda _: pd.DataFrame({"id": [1, 2, 3], "empty": [{}, None, {}]}), schema)
+    else:
+        result = grouped.applyInArrow(
+            lambda _: pa.table({"id": [1, 2, 3], "empty": pa.array([{}, None, {}], type=pa.struct([]))}), schema
+        )
+    assert result.orderBy("id").collect() == [Row(id=1, empty=Row()), Row(id=2, empty=None), Row(id=3, empty=Row())]

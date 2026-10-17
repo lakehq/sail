@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion::common::{Result, plan_datafusion_err};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::HigherOrderUDF;
@@ -27,6 +27,7 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+use sail_function::scalar::spark_struct_cast::SparkStructCast;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 
 use crate::plan::r#gen;
@@ -188,6 +189,16 @@ pub(super) fn try_decode_higher_order_udf(
         }
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
+        }
+        HigherOrderUdfKind::StructCast(r#gen::SparkStructCastUdf { target_type }) => {
+            let target_type = try_decode_message::<gen_datafusion_common::ArrowType>(&target_type)?;
+            let target_type: DataType = (&target_type).try_into()?;
+            let DataType::Struct(fields) = target_type else {
+                return Err(plan_datafusion_err!(
+                    "spark_struct_cast target must be a struct"
+                ));
+            };
+            Arc::new(HigherOrderUDF::new_from_impl(SparkStructCast::new(fields)))
         }
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins,

@@ -275,3 +275,167 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
     Then query result
       | result              |
       | 8837530302600000000 |
+
+  Scenario Outline: Scalar <type> subtraction rejects minimum intervals with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT <type> '1970-01-02' - make_dt_interval(-106751991, -4, 0, -54.775808)
+      """
+    Then query error (?is)\A(?!.*(?:panic|cancelled|rst_stream|stream removed)).*(?:interval_arithmetic_overflow|arithmetic overflow)
+
+    Examples:
+      | type          | ansi  |
+      | DATE          | true  |
+      | TIMESTAMP     | true  |
+      | TIMESTAMP_NTZ | true  |
+      | DATE          | false |
+      | TIMESTAMP     | false |
+      | TIMESTAMP_NTZ | false |
+
+  Scenario Outline: Column <type> subtraction rejects minimum intervals with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT <type> '1970-01-02'
+             - make_dt_interval(CAST(id - 106751991 AS INT), -4, 0, -54.775808)
+      FROM range(2)
+      """
+    Then query error (?is)\A(?!.*(?:panic|cancelled|rst_stream|stream removed)).*(?:interval_arithmetic_overflow|arithmetic overflow)
+
+    Examples:
+      | type          | ansi  |
+      | DATE          | true  |
+      | TIMESTAMP     | true  |
+      | TIMESTAMP_NTZ | true  |
+      | DATE          | false |
+      | TIMESTAMP     | false |
+      | TIMESTAMP_NTZ | false |
+
+  Scenario Outline: Interval subtraction preserves valid boundaries and NULL with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT id,
+             unix_micros(TIMESTAMP '1970-01-01'
+                         - make_dt_interval(-106751991, -4, 0, -54.775807)) AS boundary,
+             unix_micros(TIMESTAMP '1970-01-01'
+                         - CAST(NULL AS INTERVAL DAY TO SECOND)) AS scalar_null,
+             unix_micros(TIMESTAMP '1970-01-01' - make_dt_interval(0, 0, 0, seconds)) AS result
+      FROM VALUES (0, CAST(NULL AS INT)), (1, -1), (2, 0), (3, 1) AS t(id, seconds)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | boundary            | scalar_null | result   |
+      | 0  | 9223372036854775807 | NULL        | NULL     |
+      | 1  | 9223372036854775807 | NULL        | 1000000  |
+      | 2  | 9223372036854775807 | NULL        | 0        |
+      | 3  | 9223372036854775807 | NULL        | -1000000 |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario: Negative calendar seconds round before arithmetic
+    When query
+      """
+      SELECT id,
+             unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, -0.0000009)) AS scalar,
+             unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, -seconds)) AS added,
+             unix_micros(TIMESTAMP '1970-01-01' - make_interval(0, 0, 0, 0, 0, 0, seconds)) AS subtracted
+      FROM VALUES (0, CAST(NULL AS DECIMAL(8, 7))), (1, 0.0000009), (2, 1.0000009) AS t(id, seconds)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | scalar | added    | subtracted |
+      | 0  | -1     | NULL     | NULL       |
+      | 1  | -1     | -1       | -1         |
+      | 2  | -1     | -1000001 | -1000001   |
+
+  Scenario Outline: Calendar interval construction rounds submicrosecond seconds in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, -0.0000001)) AS added,
+             unix_micros(TIMESTAMP '1970-01-01' - make_interval(0, 0, 0, 0, 0, 0, 0.0000001)) AS subtracted,
+             unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, 0.0000001)) AS positive
+      """
+    Then query result
+      | added   | subtracted | positive |
+      | <epoch> | <epoch>    | <epoch>  |
+
+    Examples:
+      | timezone            | epoch       |
+      | UTC                 | 0           |
+      | America/Los_Angeles | 28800000000 |
+
+  Scenario Outline: Calendar interval seconds round HALF_UP before arithmetic in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT id,
+             unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, seconds))
+               - unix_micros(TIMESTAMP '1970-01-01') AS added,
+             unix_micros(TIMESTAMP '1970-01-01' - make_interval(0, 0, 0, 0, 0, 0, seconds))
+               - unix_micros(TIMESTAMP '1970-01-01') AS subtracted,
+             unix_micros(TIMESTAMP '1970-01-01' + make_interval(0, 0, 0, 0, 0, 0, CAST(seconds AS DOUBLE)))
+               - unix_micros(TIMESTAMP '1970-01-01') AS double_added
+      FROM VALUES (0, CAST(NULL AS DECIMAL(8, 7))), (1, -0.0000009), (2, -0.0000005),
+                  (3, -0.0000004), (4, 0.0000004), (5, 0.0000005), (6, 0.0000009) AS t(id, seconds)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | added | subtracted | double_added |
+      | 0  | NULL  | NULL       | NULL         |
+      | 1  | -1    | 1          | -1           |
+      | 2  | -1    | 1          | -1           |
+      | 3  | 0     | 0          | 0            |
+      | 4  | 0     | 0          | 0            |
+      | 5  | 1     | -1         | 1            |
+      | 6  | 1     | -1         | 1            |
+
+    Examples:
+      | timezone            |
+      | UTC                 |
+      | America/Los_Angeles |
+
+  Scenario Outline: Non-null interval subtraction retains non-null output with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT TIMESTAMP '2020-01-01' - INTERVAL 1 SECOND AS day_time,
+             TIMESTAMP '2020-01-01' - INTERVAL 1 MONTH AS year_month,
+             TIMESTAMP_NTZ '2020-01-01' - INTERVAL 1 SECOND AS ntz,
+             DATE '2020-01-01' - INTERVAL 1 SECOND AS date_time
+      """
+    Then query schema
+      """
+      root
+       |-- day_time: timestamp (nullable = false)
+       |-- year_month: timestamp (nullable = false)
+       |-- ntz: timestamp_ntz (nullable = false)
+       |-- date_time: timestamp (nullable = false)
+      """
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario: Nullable interval subtraction retains nullable output
+    When query
+      """
+      SELECT TIMESTAMP '2020-01-01' - dt AS day_time,
+             TIMESTAMP '2020-01-01' - ym AS year_month,
+             TIMESTAMP_NTZ '2020-01-01' - dt AS ntz
+      FROM VALUES (INTERVAL 1 SECOND, INTERVAL 1 MONTH),
+                  (CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL YEAR TO MONTH)) AS t(dt, ym)
+      """
+    Then query schema
+      """
+      root
+       |-- day_time: timestamp (nullable = true)
+       |-- year_month: timestamp (nullable = true)
+       |-- ntz: timestamp_ntz (nullable = true)
+      """

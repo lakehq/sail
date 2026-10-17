@@ -159,7 +159,12 @@ impl ScalarUDFImpl for SparkDate {
                 parse_array_with_format_array(&array, &format_array, is_try)
             }
             (ColumnarValue::Array(array), format) => {
-                if array.null_count() == array.len() {
+                // Intentionally return NULL before pattern validation in both ANSI modes.
+                // Spark's generated formatter can fail before its NULL check; interpreted
+                // evaluation skips it. Restrict this shortcut to supported string/NULL types.
+                if (array.data_type().is_string() || array.data_type() == &DataType::Null)
+                    && array.null_count() == array.len()
+                {
                     return Ok(ColumnarValue::Array(new_null_array(
                         &DataType::Date32,
                         array.len(),
@@ -196,7 +201,10 @@ impl ScalarUDFImpl for SparkDate {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
-                if scalar.is_null() {
+                // Preserve the same NULL-first contract for scalar inputs.
+                if (scalar.data_type().is_string() || scalar.data_type() == DataType::Null)
+                    && scalar.is_null()
+                {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)));
                 }
                 let format = match format {

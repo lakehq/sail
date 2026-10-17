@@ -16,7 +16,6 @@ use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl,
     WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit, try_cast,
 };
-use datafusion_functions::core::get_field;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
@@ -25,7 +24,8 @@ use sail_function::scalar::datetime::spark_date_trunc::SparkStartOfDay;
 use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
-use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_function::scalar::spark_struct_cast::SparkStructCast;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
@@ -113,7 +113,16 @@ pub(crate) fn cast_temporal(
                     expr::Expr::Lambda(Lambda::new(vec![parameter], body)),
                 ],
             ));
-            Ok(cast(transformed, to))
+            if matches!(
+                (from, &to),
+                (DataType::List(_), DataType::List(_))
+                    | (DataType::LargeList(_), DataType::LargeList(_))
+            ) {
+                // A name-based nested cast would collapse duplicate struct fields.
+                Ok(ScalarUDF::from(SparkStructRename::new(to)).call(vec![transformed]))
+            } else {
+                Ok(cast(transformed, to))
+            }
         }
         (DataType::Struct(source), DataType::Struct(target))
             if source.len() == target.len()
@@ -122,22 +131,28 @@ pub(crate) fn cast_temporal(
                     .zip(target)
                     .all(|(source, target)| source.name() == target.name()) =>
         {
-            let mut result = expression;
+            let mut arguments = vec![expression];
             for (source, target) in source.iter().zip(target) {
-                if source.data_type() != target.data_type() {
-                    let value = get_field().call(vec![result.clone(), lit(source.name().clone())]);
-                    let value = cast_temporal(
-                        value,
-                        source.data_type(),
-                        target.data_type().clone(),
-                        session_timezone,
-                        is_try,
-                    )?;
-                    result = ScalarUDF::from(UpdateStructField::new(vec![source.name().clone()]))
-                        .call(vec![result, value]);
-                }
+                let parameter = "field".to_string();
+                let variable = expr::Expr::LambdaVariable(LambdaVariable::new(
+                    parameter.clone(),
+                    Some(Arc::clone(source)),
+                ));
+                let body = cast_temporal(
+                    variable,
+                    source.data_type(),
+                    target.data_type().clone(),
+                    session_timezone,
+                    is_try,
+                )?;
+                arguments.push(expr::Expr::Lambda(Lambda::new(vec![parameter], body)));
             }
-            Ok(cast(result, to))
+            Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::new(HigherOrderUDF::new_from_impl(SparkStructCast::new(
+                    target.clone(),
+                ))),
+                arguments,
+            )))
         }
         (
             DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64,

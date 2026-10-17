@@ -140,8 +140,7 @@ Feature: make_interval output schema
         | 1 | 1000000  |
         | 2 | -1000000 |
 
-    @sail-only
-    Scenario: Calendar intervals preserve Sail nanosecond precision
+    Scenario: Calendar interval seconds round to microsecond precision
       When query
         """
         SELECT i, CAST(make_interval(0, 0, 0, 0, 0, 0, s) AS STRING) AS result
@@ -158,17 +157,17 @@ Feature: make_interval output schema
         """
       Then query result ordered
         | i | result               |
-        | 1 | 0.123456789 seconds  |
-        | 2 | -0.123456789 seconds |
-        | 3 | 0.000000001 seconds  |
-        | 4 | -0.000000001 seconds |
+        | 1 | 0.123457 seconds  |
+        | 2 | -0.123457 seconds |
+        | 3 | 0 seconds        |
+        | 4 | 0 seconds        |
         | 5 | 27 hours 46 minutes 40 seconds |
         | 6 | -27 hours -46 minutes -40 seconds |
-        | 7 | 27 hours 46 minutes 40.000000001 seconds |
-        | 8 | -27 hours -46 minutes -40.000000001 seconds |
+        | 7 | 27 hours 46 minutes 40 seconds |
+        | 8 | -27 hours -46 minutes -40 seconds |
 
     @sail-only
-    Scenario: Wide decimal seconds retain Sail support and nanosecond precision
+    Scenario: Wide decimal seconds round to microsecond precision
       When query
         """
         SELECT CAST(make_interval(0, 0, 0, 0, 0, 0,
@@ -176,7 +175,7 @@ Feature: make_interval output schema
         """
       Then query result
         | result              |
-        | 0.123456789 seconds |
+        | 0.123457 seconds |
 
   Rule: Checked component arithmetic
 
