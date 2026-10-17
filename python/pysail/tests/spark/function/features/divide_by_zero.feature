@@ -225,6 +225,92 @@ Feature: Division by zero behavior
         | true  | error (?i)divi(?:de\|sion).*zero |        |
         | false | result                           | [NULL] |
 
+  Rule: Division raises only when it is evaluated (documented divergence from Spark)
+    # Spark's optimizer folds constant expressions before execution, so a literal-zero division
+    # over an input that produces no rows fails in Spark unless another optimizer rule removes
+    # the expression first. Sail evaluates divisions only on rows that exist.
+    # `query result unless Spark raises` records Spark's expectation next to Sail's result.
+    Scenario Outline: a constant division that never runs does not raise: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result FROM <from>
+        """
+      Then query result unless Spark raises (?i)divi(?:de|sion).*zero
+        | result |
+
+      Examples:
+        | case                               | expr                                 | from                              |
+        | TRY_CAST zero over an empty range  | 1 / TRY_CAST(0 AS DOUBLE)            | range(0)                          |
+        | computed zero over an empty range  | 1 / (1 - 1)                          | range(0)                          |
+        | rows removed by a column filter    | 1 / 0                                | range(5) WHERE id > 10            |
+        | alias reused by an outer query     | r + 1                                | (SELECT 1 / 0 AS r FROM range(0)) |
+        | constant CASE selecting the branch | CASE WHEN true THEN 1 / 0 ELSE 7 END | range(0)                          |
+        | first coalesce argument            | coalesce(1 / 0, 1)                   | range(0)                          |
+        | DIV by literal zero                | 10 DIV 0                             | range(0)                          |
+
+    Scenario: a constant remainder that never runs does not raise
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT 10 % 0 AS result FROM range(0)
+        """
+      Then query result unless Spark raises (?i)remainder.*zero
+        | result |
+
+    Scenario Outline: a NULL operand removes the division before it runs: <case>
+      # Spark evaluates the divisor before the dividend and the left operand of an addition
+      # first, so a computed NULL on the other side does not stop it from raising. Sail's
+      # simplifier replaces `NULL op x` by NULL before any evaluation.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query result unless Spark raises (?i)divi(?:de|sion).*zero
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | expr                   | result |
+        | computed NULL dividend            | nullif(1, 1) / (1 / 0) | NULL   |
+        | computed NULL right operand       | (1 / 0) + nullif(1, 1) | NULL   |
+        | constant true right operand of OR | (1 / 0 > 1) OR true    | true   |
+
+    Scenario Outline: a NULL operand evaluated first suppresses the division in Spark too: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case                       | expr                           |
+        | computed NULL divisor      | (1 / 0) / nullif(1, 1)         |
+        | computed NULL left operand | nullif(1, 1) + (1 / 0)         |
+        | literal NULL right operand | (1 / 0) + CAST(NULL AS DOUBLE) |
+
+  Rule: DIV and modulo by a literal zero follow the same rules as division
+    Scenario Outline: literal zero divisor in an unevaluated DIV or modulo: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                  | expr                                     | result |
+        | unused DIV branch     | CASE WHEN false THEN 10 DIV 0 ELSE 7 END | 7      |
+        | unused modulo branch  | CASE WHEN false THEN 10 % 0 ELSE 7 END   | 7      |
+        | NULL parent of DIV    | CAST(NULL AS BIGINT) + (10 DIV 0)        | NULL   |
+        | NULL parent of modulo | CAST(NULL AS INT) + (10 % 0)             | NULL   |
+
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>
       Given config spark.sql.ansi.enabled = true

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
-use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
@@ -385,6 +384,14 @@ fn is_zero_literal(expr: &Expr) -> bool {
 ///
 /// This wraps the divisor itself (not the entire division expression) to avoid
 /// duplicating complex divisor expressions (e.g., window functions) in the plan.
+///
+/// The ANSI error is raised only when the division is evaluated, for `/`, `DIV` and `%` alike;
+/// `spark_divide` explains why this intentionally differs from Spark's optimizer. Besides the
+/// redundant `LIMIT 0`, Spark's `FoldablePropagation` folds a constant alias where it is
+/// consumed and in-memory relations are evaluated row by row, so the set of queries that fail
+/// before execution depends on the plan shape. Sail's own plans (for example Delta CHECK
+/// constraint validation) also rely on DataFusion raising errors only for rows that exist.
+/// The divergences are documented in `divide_by_zero.feature`.
 fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
@@ -430,8 +437,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
-    let literal_zero = is_zero_literal(&divisor);
-    if literal_zero && !ansi_mode {
+    if !ansi_mode && is_zero_literal(&divisor) {
         return Ok(Expr::Literal(ScalarValue::Null, None));
     }
     // Keep ANSI `/` errors in expression evaluation, so empty input, unused CASE
@@ -452,11 +458,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit(if literal_zero {
-            "divide by zero"
-        } else {
-            "Division by zero"
-        })]),
+        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit("Division by zero")]),
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -503,16 +505,12 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
+    // A literal zero divisor only short-circuits to NULL outside ANSI mode; the ANSI error
+    // is raised when the division is evaluated (see `make_safe_divisor`).
     let ansi_mode = function_context.plan_config.ansi_mode;
+    if !ansi_mode && is_zero_literal(&divisor) {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -700,18 +698,12 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
+    // A literal zero divisor only short-circuits to NULL outside ANSI mode; the ANSI error
+    // is raised when the remainder is evaluated (see `make_safe_divisor`).
     let ansi_mode = function_context.plan_config.ansi_mode;
+    if !ansi_mode && is_zero_literal(&divisor) {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.

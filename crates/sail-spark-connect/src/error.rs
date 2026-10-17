@@ -403,6 +403,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if is_remainder_by_zero_error(&x) {
+                    SparkThrowable::ArithmeticException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -419,6 +421,11 @@ fn is_timestamp_parse_error(message: &str) -> bool {
 
 fn is_array_index_out_of_bounds_error(message: &str) -> bool {
     message.contains("[INVALID_ARRAY_INDEX]")
+}
+
+/// The runtime guard for `%` and `mod()` raises this message (see `spark_modulo`).
+fn is_remainder_by_zero_error(message: &str) -> bool {
+    message.starts_with("Remainder by zero")
 }
 
 fn cast_error_to_throwable(message: String) -> SparkThrowable {

@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC", "Asia/Kathmandu"], indirect=True)
@@ -95,7 +95,15 @@ def test_grouped_pandas_preserves_empty_output_rows(spark):
     assert result.collect() == [Row(), Row()]
 
 
-@pytest.mark.parametrize("api", ["pandas", "arrow"])
+@pytest.mark.parametrize(
+    "api",
+    [
+        "pandas",
+        pytest.param(
+            "arrow", marks=pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")
+        ),
+    ],
+)
 def test_grouped_map_preserves_empty_nested_structs(spark, api):
     import pyarrow as pa
     from pyspark.sql import Row

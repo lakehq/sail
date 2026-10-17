@@ -11,6 +11,7 @@ from jinja2 import Template
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
 
 
@@ -307,6 +308,20 @@ def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+@then(parsers.parse("query result unless Spark raises {error}"))
+def query_result_unless_spark_raises(error, datatable, query, spark):
+    """Documents a deliberate divergence from Spark.
+
+    Spark raises the error while optimizing the query, because its optimizer evaluates
+    foldable expressions eagerly. Sail only raises errors for rows that are evaluated and
+    returns the expected result instead. JVM Spark checks the error, Sail checks the result.
+    """
+    if is_jvm_spark():
+        query_error(error, query, spark)
+    else:
+        query_result(datatable, "", query, spark)
 
 
 @then(parsers.parse('query result has row where "{match_column}" is "{match_value}"'))

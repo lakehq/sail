@@ -105,6 +105,17 @@ def test_divide_by_zero_exception(spark, query, action):
         spark.conf.set("spark.sql.ansi.enabled", original)
 
 
+@pytest.mark.parametrize("query", ["SELECT 10 % 0", "SELECT mod(10, id) FROM (VALUES (0)) AS t(id)"])
+def test_remainder_by_zero_exception(spark, query):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        with pytest.raises(ArithmeticException, match=r"(?i)remainder.*zero"):
+            spark.sql(query).collect()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
 def test_raise_error_divide_by_zero_text_is_not_arithmetic(spark):
     with pytest.raises(PySparkException, match="divide by zero") as error:
         spark.sql("SELECT raise_error('divide by zero')").collect()
