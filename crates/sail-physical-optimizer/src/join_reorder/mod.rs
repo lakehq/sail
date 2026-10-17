@@ -495,18 +495,24 @@ impl Debug for JoinReorder {
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::arrow::array::{Array, Int32Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::NullEquality;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::{JoinSide, NullEquality};
+    use datafusion::execution::TaskContext;
     use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::utils::collect_columns;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::collect;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::scalar::ScalarValue;
+    use datafusion_datasource::memory::MemorySourceConfig;
 
     use super::*;
 
@@ -1337,6 +1343,295 @@ mod tests {
             reorder.take_recorded_outcomes().is_empty(),
             "two-relation joins must not be enumerated"
         );
+        Ok(())
+    }
+
+    fn nullable_key_leaf(
+        name: &str,
+        values: Vec<Option<i32>>,
+        include_t: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let rows = values.len();
+        let mut fields = vec![Field::new(name, DataType::Int32, true)];
+        let mut columns: Vec<Arc<dyn datafusion::arrow::array::Array>> =
+            vec![Arc::new(Int32Array::from(values))];
+        if include_t {
+            fields.push(Field::new("b_t", DataType::Int32, false));
+            columns.push(Arc::new(Int32Array::from(vec![1; rows])));
+        }
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema.clone(), columns)?;
+        Ok(MemorySourceConfig::try_new_exec(
+            &[vec![batch]],
+            schema,
+            None,
+        )?)
+    }
+
+    fn join_plan(
+        a_keys: Vec<Option<i32>>,
+        b_keys: Vec<Option<i32>>,
+        null_equality: NullEquality,
+        residual: Option<(Operator, bool)>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let a = nullable_key_leaf("a_k", a_keys, false)?;
+        let b = nullable_key_leaf("b_k", b_keys, true)?;
+        let c_schema = Arc::new(Schema::new(vec![Field::new("c_t", DataType::Int32, false)]));
+        let c_batch =
+            RecordBatch::try_new(c_schema.clone(), vec![Arc::new(Int32Array::from(vec![1]))])?;
+        let c: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![c_batch]], c_schema, None)?;
+
+        let residual_filter = residual.map(|(operator, reverse)| {
+            let left: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a_k", 0));
+            let right: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b_k", 1));
+            let expression = if reverse {
+                BinaryExpr::new(right, operator, left)
+            } else {
+                BinaryExpr::new(left, operator, right)
+            };
+            JoinFilter::new(
+                Arc::new(expression),
+                vec![
+                    ColumnIndex {
+                        side: JoinSide::Left,
+                        index: 0,
+                    },
+                    ColumnIndex {
+                        side: JoinSide::Right,
+                        index: 0,
+                    },
+                ],
+                Arc::new(Schema::new(vec![
+                    a.schema().field(0).clone(),
+                    b.schema().field(0).clone(),
+                ])),
+            )
+        });
+        let ab: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_k", 0)),
+                Arc::new(Column::new("b_k", 0)),
+            )],
+            residual_filter,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            null_equality,
+            false,
+        )?);
+        Ok(Arc::new(HashJoinExec::try_new(
+            ab,
+            c,
+            vec![(
+                Arc::new(Column::new("b_t", 2)),
+                Arc::new(Column::new("c_t", 0)),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            null_equality,
+            false,
+        )?))
+    }
+
+    fn original_plan() -> Result<Arc<dyn ExecutionPlan>> {
+        join_plan(
+            vec![None; 128],
+            vec![None],
+            NullEquality::NullEqualsNull,
+            Some((Operator::Eq, false)),
+        )
+    }
+
+    // The reorder rule emits Auto joins, which are not executable until physical
+    // selection resolves their mode. With one partition per leaf, a mechanical
+    // CollectLeft conversion is sufficient and preserves all predicates and keys.
+    fn executable_collect_left(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = plan
+            .children()
+            .into_iter()
+            .map(|child| executable_collect_left(Arc::clone(child)))
+            .collect::<Result<Vec<_>>>()?;
+        let plan = replace_children_if_necessary(plan, children)?;
+        if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+            return join
+                .builder()
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .reset_state()
+                .build_exec();
+        }
+        Ok(plan)
+    }
+
+    fn count_join_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let here = usize::from(
+            plan.downcast_ref::<HashJoinExec>()
+                .is_some_and(|join| join.filter().is_some()),
+        );
+        here + plan
+            .children()
+            .into_iter()
+            .map(count_join_filters)
+            .sum::<usize>()
+    }
+
+    #[tokio::test]
+    async fn null_safe_hash_key_must_preserve_ordinary_equality_residual() -> Result<()> {
+        let original = original_plan()?;
+        assert_eq!(count_join_filters(&original), 1);
+
+        let reorder = JoinReorder::default();
+        let mut config = ConfigOptions::new();
+        config.optimizer.join_reordering = false;
+        let reordered = reorder.optimize(original.clone(), &config)?;
+        let outcomes = reorder.take_recorded_outcomes();
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "expected exactly one three-relation region: {outcomes:?}"
+        );
+        assert_eq!(outcomes[0].relation_count, 3);
+        assert_eq!(outcomes[0].path, RegionOutcomePath::DpCompleted);
+        assert!(
+            reordered.is::<ProjectionExec>(),
+            "reconstruction must actually replace the root"
+        );
+
+        let before = collect(
+            executable_collect_left(original)?,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+        let after = collect(
+            executable_collect_left(reordered)?,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+        let before_rows = before.iter().map(RecordBatch::num_rows).sum::<usize>();
+        let after_rows = after.iter().map(RecordBatch::num_rows).sum::<usize>();
+        assert_eq!(
+            before_rows, 0,
+            "ordinary NULL = NULL residual must reject the candidate pair"
+        );
+        assert_eq!(
+            after_rows, before_rows,
+            "join reordering must preserve the ordinary equality residual on null-safe keys"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn null_safe_residual_survives_the_complete_optimizer_pipeline() -> Result<()> {
+        for enabled in [false, true] {
+            let mut plan = original_plan()?;
+            let config = ConfigOptions::new();
+            let rules = crate::get_physical_optimizers(crate::PhysicalOptimizerOptions {
+                enable_join_reorder: enabled,
+                ..Default::default()
+            });
+            for rule in rules {
+                plan = rule.optimize(plan, &config)?;
+            }
+            let batches = collect(plan, Arc::new(TaskContext::default())).await?;
+            assert_eq!(
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                0,
+                "NULL equality residual with enable_join_reorder={enabled}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn reorder_preserves_residual_rows_in_dp_and_greedy_plans() -> Result<()> {
+        async fn rows(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<Vec<Option<i32>>>> {
+            let batches = collect(
+                executable_collect_left(plan)?,
+                Arc::new(TaskContext::default()),
+            )
+            .await?;
+            let mut rows = Vec::new();
+            for batch in batches {
+                for row in 0..batch.num_rows() {
+                    rows.push(
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|column| {
+                                let values = column
+                                    .as_any()
+                                    .downcast_ref::<Int32Array>()
+                                    .expect("int32 fixture");
+                                (!values.is_null(row)).then(|| values.value(row))
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            rows.sort();
+            Ok(rows)
+        }
+
+        for greedy in [false, true] {
+            for null_equality in [
+                NullEquality::NullEqualsNothing,
+                NullEquality::NullEqualsNull,
+            ] {
+                for residual in [
+                    None,
+                    Some((Operator::Eq, false)),
+                    Some((Operator::Eq, true)),
+                    Some((Operator::IsNotDistinctFrom, false)),
+                ] {
+                    let original = join_plan(
+                        vec![None, None, Some(1), Some(1), Some(2), Some(3)],
+                        vec![None, Some(1), Some(1), Some(2), Some(4)],
+                        null_equality,
+                        residual,
+                    )?;
+                    let reorder = JoinReorder::new(JoinReorderOptions {
+                        emit_threshold: if greedy { 0 } else { 10_000 },
+                        ..Default::default()
+                    });
+                    let reordered = reorder.optimize(original.clone(), &ConfigOptions::new())?;
+                    assert!(
+                        reordered.is::<ProjectionExec>(),
+                        "must reconstruct the region"
+                    );
+                    assert_eq!(reordered.schema(), original.schema());
+                    let outcomes = reorder.take_recorded_outcomes();
+                    assert_eq!(outcomes.len(), 1);
+                    assert_eq!(
+                        outcomes[0].path,
+                        if greedy {
+                            RegionOutcomePath::GreedyFallbackEmitThreshold
+                        } else {
+                            RegionOutcomePath::DpCompleted
+                        }
+                    );
+
+                    let mut expected = vec![vec![Some(1), Some(1), Some(1), Some(1)]; 4];
+                    expected.push(vec![Some(2), Some(2), Some(1), Some(1)]);
+                    if null_equality == NullEquality::NullEqualsNull
+                        && !matches!(residual, Some((Operator::Eq, _)))
+                    {
+                        expected.extend(vec![vec![None, None, Some(1), Some(1)]; 2]);
+                    }
+                    expected.sort();
+                    assert_eq!(rows(original).await?, expected);
+                    assert_eq!(
+                        rows(reordered).await?,
+                        expected,
+                        "greedy={greedy}, null_equality={null_equality:?}, residual={residual:?}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

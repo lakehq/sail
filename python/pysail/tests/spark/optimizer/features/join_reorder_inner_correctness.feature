@@ -242,3 +242,84 @@ Feature: Join reorder preserves inner-join correctness contracts
       | 1  | 100 | b1a | c1 | 1  |
       | 2  | 200 | b1b | c2 | 1  |
       | 3  | 300 | b2c | c3 | 1  |
+
+  Scenario Outline: Null-safe join keys preserve additional equality predicates
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW jric_residual_a AS
+      SELECT * FROM VALUES
+        (CAST(NULL AS INT), 'na1'),
+        (CAST(NULL AS INT), 'na2'),
+        (1, 'a1'),
+        (1, 'a2'),
+        (2, 'unmatched')
+      AS t(k, label)
+      """
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW jric_residual_b AS
+      SELECT * FROM VALUES
+        (CAST(NULL AS INT), 7, 'nb'),
+        (1, 7, 'b1'),
+        (1, 7, 'b2')
+      AS t(k, t, label)
+      """
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW jric_residual_c AS
+      SELECT * FROM VALUES (7) AS t(t)
+      """
+
+    When query
+      """
+      SELECT count(*) AS n, count(a.k) AS non_null_n,
+             count(DISTINCT a.label) AS a_labels,
+             count(DISTINCT b.label) AS b_labels
+      FROM jric_residual_a a
+      JOIN jric_residual_b b ON a.k <=> b.k
+      JOIN jric_residual_c c ON b.t <c_comparison> c.t AND <predicate>
+      """
+    Then query result
+      | n   | non_null_n | a_labels   | b_labels   |
+      | <n> | 4          | <a_labels> | <b_labels> |
+
+    Examples:
+      | c_comparison | predicate   | n | a_labels | b_labels |
+      | <=>          | a.k = b.k   | 4 | 2        | 2        |
+      | <=>          | b.k = a.k   | 4 | 2        | 2        |
+      | <=>          | a.k <=> b.k | 6 | 4        | 3        |
+      | =            | a.k = b.k   | 4 | 2        | 2        |
+      | =            | b.k = a.k   | 4 | 2        | 2        |
+      | =            | a.k <=> b.k | 6 | 4        | 3        |
+
+  Scenario: Null-safe joins below a limit preserve outer cross-join elimination
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW jric_boundary_keys AS
+      SELECT * FROM VALUES (CAST(NULL AS BIGINT)), (1), (2), (3) AS t(k)
+      """
+    When query
+      """
+      SELECT a.id AS a_id, b.id AS b_id, d.k
+      FROM range(100) a, range(100) b,
+        (SELECT x.k
+         FROM jric_boundary_keys x JOIN jric_boundary_keys y ON x.k <=> y.k
+         LIMIT 10) d
+      WHERE a.id = d.k AND b.id = d.k
+      """
+    Then query result
+      | a_id | b_id | k |
+      | 1    | 1    | 1 |
+      | 2    | 2    | 2 |
+      | 3    | 3    | 3 |
+    When query
+      """
+      EXPLAIN
+      SELECT a.id AS a_id, b.id AS b_id, d.k
+      FROM range(100) a, range(100) b,
+        (SELECT x.k
+         FROM jric_boundary_keys x JOIN jric_boundary_keys y ON x.k <=> y.k
+         LIMIT 10) d
+      WHERE a.id = d.k AND b.id = d.k
+      """
+    Then query plan matches snapshot

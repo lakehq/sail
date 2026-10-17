@@ -277,11 +277,11 @@ impl GraphBuilder {
         }
 
         for ((left_endpoint, right_endpoint), preds) in grouped {
-            let (filter, equi_pairs) = Self::combine_predicates(preds)?;
+            let (residual_filter, equi_pairs) = Self::combine_predicates(preds)?;
             let mut edge = JoinEdge::new(
                 left_endpoint,
                 right_endpoint,
-                filter,
+                residual_filter,
                 *join_plan.join_type(),
                 equi_pairs,
             );
@@ -486,23 +486,28 @@ impl GraphBuilder {
 
     fn combine_predicates(
         preds: Vec<PhysicalExprWithEquiPairs>,
-    ) -> Result<(PhysicalExprRef, Vec<EquiPair>)> {
+    ) -> Result<(Option<PhysicalExprRef>, Vec<EquiPair>)> {
         if preds.is_empty() {
             return Err(DataFusionError::Internal(
                 "JoinReorder: cannot combine empty predicate list".to_string(),
             ));
         }
 
-        let mut filter = preds[0].0.clone();
-        let mut equi_pairs: Vec<EquiPair> = Vec::new();
-        equi_pairs.extend_from_slice(&preds[0].1);
-
-        for (pred, pairs) in preds.into_iter().skip(1) {
-            filter = Arc::new(BinaryExpr::new(filter, Operator::And, pred)) as PhysicalExprRef;
-            equi_pairs.extend(pairs);
+        // Only original residuals belong in the filter; matching hash keys may have
+        // different NULL semantics even when they reference the same columns.
+        let mut residual: Option<PhysicalExprRef> = None;
+        let mut equi_pairs = Vec::new();
+        for (predicate, pairs) in preds {
+            if pairs.is_empty() {
+                residual = Some(match residual {
+                    Some(previous) => Arc::new(BinaryExpr::new(previous, Operator::And, predicate)),
+                    None => predicate,
+                });
+            } else {
+                equi_pairs.extend(pairs);
+            }
         }
-
-        Ok((filter, equi_pairs))
+        Ok((residual, equi_pairs))
     }
 
     /// Rewrite a HashJoin's JoinFilter expression so that any Column references are
