@@ -521,8 +521,7 @@ impl Serialize for PrimitiveType {
 fn parse_parameterized_type(value: &str, prefix: &str) -> Vec<String> {
     value
         .strip_prefix(prefix)
-        .and_then(|rest| rest.strip_prefix('('))
-        .and_then(|rest| rest.strip_suffix(')'))
+        .and_then(|rest| rest.strip_circumfix('(', ')'))
         .map(|inner| {
             inner
                 .split(',')

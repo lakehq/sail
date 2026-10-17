@@ -1125,10 +1125,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
         other => {
-            if let Some(args) = other
-                .strip_prefix("decimal(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("decimal(", ')') {
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(precision), Some(scale), None) =
                     (parts.next(), parts.next(), parts.next())
@@ -1146,10 +1143,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                     return Ok(DataType::Decimal128(precision, scale));
                 }
             }
-            if let Some(args) = other
-                .strip_prefix("geometry(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("geometry(", ')') {
                 let srid = args.trim();
                 if srid == "ANY" || srid.parse::<i32>().is_ok() {
                     return Ok(DataType::Binary);
@@ -1158,10 +1152,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                     "Unsupported JSON schema type: '{other}'"
                 )));
             }
-            if let Some(args) = other
-                .strip_prefix("geography(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("geography(", ')') {
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(srid), algorithm, None) = (parts.next(), parts.next(), parts.next()) {
                     let valid_srid = srid == "ANY" || srid.parse::<i32>().is_ok();

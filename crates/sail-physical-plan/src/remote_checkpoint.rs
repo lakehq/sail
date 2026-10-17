@@ -828,9 +828,7 @@ fn validate_partition_location(
         ));
     };
     let prefix = format!("part-{partition:05}-");
-    let file_id = filename
-        .strip_prefix(&prefix)
-        .and_then(|value| value.strip_suffix(".parquet"));
+    let file_id = filename.strip_circumfix(&prefix, ".parquet");
     let valid_file_id = file_id.is_some_and(|value| Uuid::parse_str(value).is_ok());
     if !location.prefix_matches(relation_prefix)
         || location.parts_count() != relation_prefix.parts_count() + 1
