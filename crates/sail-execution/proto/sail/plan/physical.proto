@@ -265,6 +265,7 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkAnsiStringCastUdf spark_ansi_string_cast = 40;
   }
 }
 
@@ -444,6 +445,11 @@ message SparkFromCsvUdf {
 message SparkStructRenameUdf {
   // The target data type (struct or container-of-struct), encoded as Arrow
   // ArrowType protobuf bytes.
+  bytes target_type = 1;
+}
+
+message SparkAnsiStringCastUdf {
+  // The target data type, encoded as Arrow ArrowType protobuf bytes.
   bytes target_type = 1;
 }
 

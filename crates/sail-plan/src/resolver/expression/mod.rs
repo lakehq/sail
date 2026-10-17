@@ -11,7 +11,12 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 mod attribute;
-pub(crate) mod cast;
+mod cast;
+
+pub(crate) use cast::{
+    build_rename_target_type, needs_struct_field_rename, ntz_to_zoned_timestamp,
+    spark_string_cast_arguments,
+};
 mod function;
 mod grouping;
 mod lambda;

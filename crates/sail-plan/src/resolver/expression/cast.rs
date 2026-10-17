@@ -161,14 +161,7 @@ impl PlanResolver<'_> {
                         cast(expr, cast_to_type)
                     }
                 } else {
-                    let timestamp_ntz =
-                        cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
-                    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
-                        lit(timezone.to_string()),
-                        lit("UTC"),
-                        timestamp_ntz,
-                    ]);
-                    cast(cast(instant, DataType::Int64), cast_to_type)
+                    ntz_to_zoned_timestamp(expr, timezone.as_ref(), cast_to_type)
                 }
             }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
@@ -366,7 +359,23 @@ fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool 
     }
 }
 
-fn spark_string_cast_arguments(
+/// An unzoned timestamp is local time of `timezone`. Arrow's own cast refuses a zone that has
+/// daylight saving, so the value goes through `ConvertTz` to an instant first.
+pub(crate) fn ntz_to_zoned_timestamp(
+    expr: expr::Expr,
+    timezone: &str,
+    cast_to_type: DataType,
+) -> expr::Expr {
+    let timestamp_ntz = cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
+    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+        lit(timezone.to_string()),
+        lit("UTC"),
+        timestamp_ntz,
+    ]);
+    cast(cast(instant, DataType::Int64), cast_to_type)
+}
+
+pub(crate) fn spark_string_cast_arguments(
     expr: expr::Expr,
     schema: &DFSchemaRef,
 ) -> PlanResult<Vec<expr::Expr>> {
@@ -386,9 +395,10 @@ pub(crate) fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool 
     match (from, to) {
         (DataType::Struct(a), DataType::Struct(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .any(|(fa, fb)| fa.name() != fb.name())
+                && a.iter().zip(b.iter()).any(|(fa, fb)| {
+                    fa.name() != fb.name()
+                        || needs_struct_field_rename(fa.data_type(), fb.data_type())
+                })
         }
         (DataType::List(a), DataType::List(b))
         | (DataType::LargeList(a), DataType::LargeList(b)) => {
