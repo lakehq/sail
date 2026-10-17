@@ -57,6 +57,8 @@ Feature: Division by zero behavior
         | NULL dividend        | CAST(NULL AS DOUBLE) / 0                                             | NULL   |
 
   Rule: Empty-input division respects ANSI mode
+    # The ANSI=true cases where Spark folds an unused division are tested with
+    # explicit engine expectations in test_math.py::test_division_by_zero_in_unevaluated_expressions.
     Scenario Outline: foldable literal-zero division before empty input with ANSI <ansi>: <case>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -68,29 +70,17 @@ Feature: Division by zero behavior
 
       Examples:
         | case                      | expr                                                  | input                             | ansi  | expectation                      |
-        | empty range               | 1 / 0                                                 | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | empty range               | 1 / 0                                                 | FROM range(0)                     | false | result                           |
-        | false filter              | 1 / 0                                                 | WHERE false                       | true  | error (?i)divi(?:de\|sion).*zero |
         | false filter              | 1 / 0                                                 | WHERE false                       | false | result                           |
-        | nonfoldable parent        | id + (1 / 0)                                          | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | nonfoldable parent        | id + (1 / 0)                                          | FROM range(0)                     | false | result                           |
-        | boolean parent            | (1 / 0 > 0) AND id=0                                  | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | boolean parent            | (1 / 0 > 0) AND id=0                                  | FROM range(0)                     | false | result                           |
-        | scalar parent of CASE     | abs(CASE WHEN true THEN 1 / 0 ELSE id END)            | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | scalar parent of CASE     | abs(CASE WHEN true THEN 1 / 0 ELSE id END)            | FROM range(0)                     | false | result                           |
-        | arithmetic parent of CASE | 1 + (CASE WHEN true THEN 1 / 0 ELSE id END)           | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | arithmetic parent of CASE | 1 + (CASE WHEN true THEN 1 / 0 ELSE id END)           | FROM range(0)                     | false | result                           |
-        | cast parent of CASE       | CAST(CASE WHEN true THEN 1 / 0 ELSE id END AS STRING) | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | cast parent of CASE       | CAST(CASE WHEN true THEN 1 / 0 ELSE id END AS STRING) | FROM range(0)                     | false | result                           |
-        | pruned false CASE branch  | CASE WHEN false THEN id WHEN true THEN 1 / 0 END      | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | pruned false CASE branch  | CASE WHEN false THEN id WHEN true THEN 1 / 0 END      | FROM range(0)                     | false | result                           |
-        | pruned later CASE branch  | CASE WHEN true THEN 1 / 0 WHEN false THEN id END      | FROM range(0)                     | true  | error (?i)divi(?:de\|sion).*zero |
         | pruned later CASE branch  | CASE WHEN true THEN 1 / 0 WHEN false THEN id END      | FROM range(0)                     | false | result                           |
-        | redundant zero limit      | 1 / 0                                                 | FROM range(0) LIMIT 0             | true  | error (?i)divi(?:de\|sion).*zero |
         | redundant zero limit      | 1 / 0                                                 | FROM range(0) LIMIT 0             | false | result                           |
-        | redundant filtered limit  | 1 / 0                                                 | FROM range(1) WHERE false LIMIT 0 | true  | error (?i)divi(?:de\|sion).*zero |
         | redundant filtered limit  | 1 / 0                                                 | FROM range(1) WHERE false LIMIT 0 | false | result                           |
-        | redundant grouped limit   | 1 / 0                                                 | FROM range(0) GROUP BY id LIMIT 0 | true  | error (?i)divi(?:de\|sion).*zero |
         | redundant grouped limit   | 1 / 0                                                 | FROM range(0) GROUP BY id LIMIT 0 | false | result                           |
 
     Scenario Outline: foldable literal-zero division with one result row and ANSI <ansi>: <case>
@@ -105,8 +95,6 @@ Feature: Division by zero behavior
 
       Examples:
         | case                     | expr                           | input         | ansi  | expectation                      | result |
-        | aggregate argument       | sum(1 / 0)                     | FROM range(0) | true  | error (?i)divi(?:de\|sion).*zero |        |
-        | empty higher-order input | transform(array(), x -> 1 / 0) |               | true  | error (?i)divi(?:de\|sion).*zero |        |
         | empty higher-order input | transform(array(), x -> 1 / 0) |               | false | result                           | []     |
 
     # TODO: Support SUM of untyped NULL; this ANSI=false typing gap predates the PR.
@@ -199,6 +187,43 @@ Feature: Division by zero behavior
         | ansi  |
         | true  |
         | false |
+
+  Rule: Array lambdas evaluate only existing elements
+    Scenario Outline: mixed NULL and empty arrays skip lambda division <expr> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT id, transform(a, x -> <expr>) AS result
+        FROM VALUES (0, CAST(NULL AS ARRAY<INT>)), (1, CAST(array() AS ARRAY<INT>)) AS t(id, a)
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | NULL   |
+        | 1  | []     |
+
+      Examples:
+        | expr  | ansi  |
+        | 1 / 0 | true  |
+        | 1 / 0 | false |
+        | 1 / x | true  |
+        | 1 / x | false |
+
+    # A NULL element still invokes the lambda; a NULL array has no elements to visit.
+    Scenario Outline: a NULL array element evaluates constant lambda division with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT transform(array(CAST(NULL AS INT)), x -> 1 / 0) AS result
+        """
+      Then query <expectation>
+        | result   |
+        | <result> |
+
+      Examples:
+        | ansi  | expectation                      | result |
+        | true  | error (?i)divi(?:de\|sion).*zero |        |
+        | false | result                           | [NULL] |
 
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>

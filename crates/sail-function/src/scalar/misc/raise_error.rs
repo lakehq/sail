@@ -86,6 +86,11 @@ impl ScalarUDFImpl for RaiseError {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if self.divide_by_zero {
+            // A higher-order function can invoke a lambda on an empty batch.
+            // No row reaches the zero-divisor error in that case.
+            if args.number_rows == 0 {
+                return Ok(ColumnarValue::Array(ScalarValue::Null.to_array_of_size(0)?));
+            }
             return Err(DataFusionError::External(Box::new(
                 ArrowError::DivideByZero,
             )));

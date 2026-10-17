@@ -434,7 +434,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if literal_zero && !ansi_mode {
         return Ok(Expr::Literal(ScalarValue::Null, None));
     }
-    // An ANSI error belongs to evaluation: an enclosing NULL or unused CASE branch may suppress it.
+    // Keep ANSI `/` errors in expression evaluation, so empty input, unused CASE
+    // branches, and zero-element lambdas do not fail merely while being planned.
+    // This intentionally differs from Spark's optimizer: with ANSI enabled,
+    // SELECT 1 / 0 FROM range(1) LIMIT 0 returns [], while replacing range(1) with
+    // range(0) raises DIVIDE_BY_ZERO. Spark's EliminateLimits can remove a redundant
+    // LIMIT 0 before ConstantFolding evaluates the division.
+    // Sail returns [] for both; evaluated division by zero on non-NULL inputs still raises.
     // Spark show() can add a fold that errors on an empty conditional result.
     // Sail follows collect() in that case; formatting must not add evaluation.
     let dividend_type = dividend.get_type(function_context.schema);

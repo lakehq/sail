@@ -142,6 +142,69 @@ def test_empty_division_conditional_collect_and_show(spark, remote, expression, 
         spark.conf.set("spark.sql.ansi.enabled", original)
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param("SELECT 1 / 0 AS result FROM range(0)", [], id="empty-range"),
+        pytest.param("SELECT 1 / 0 AS result WHERE false", [], id="false-filter"),
+        pytest.param("SELECT id + (1 / 0) AS result FROM range(0)", [], id="nonfoldable-parent"),
+        pytest.param("SELECT (1 / 0 > 0) AND id=0 AS result FROM range(0)", [], id="boolean-parent"),
+        pytest.param(
+            "SELECT abs(CASE WHEN true THEN 1 / 0 ELSE id END) AS result FROM range(0)",
+            [],
+            id="scalar-parent-of-case",
+        ),
+        pytest.param(
+            "SELECT 1 + (CASE WHEN true THEN 1 / 0 ELSE id END) AS result FROM range(0)",
+            [],
+            id="arithmetic-parent-of-case",
+        ),
+        pytest.param(
+            "SELECT CAST(CASE WHEN true THEN 1 / 0 ELSE id END AS STRING) AS result FROM range(0)",
+            [],
+            id="cast-parent-of-case",
+        ),
+        pytest.param(
+            "SELECT CASE WHEN false THEN id WHEN true THEN 1 / 0 END AS result FROM range(0)",
+            [],
+            id="pruned-false-case-branch",
+        ),
+        pytest.param(
+            "SELECT CASE WHEN true THEN 1 / 0 WHEN false THEN id END AS result FROM range(0)",
+            [],
+            id="pruned-later-case-branch",
+        ),
+        pytest.param("SELECT 1 / 0 AS result FROM range(0) LIMIT 0", [], id="redundant-zero-limit"),
+        pytest.param("SELECT 1 / 0 AS result FROM range(1) WHERE false LIMIT 0", [], id="redundant-filtered-limit"),
+        pytest.param("SELECT 1 / 0 AS result FROM range(0) GROUP BY id LIMIT 0", [], id="redundant-grouped-limit"),
+        pytest.param("SELECT sum(1 / 0) AS result FROM range(0)", [Row(result=None)], id="aggregate-argument"),
+        pytest.param(
+            "SELECT transform(array(), x -> 1 / 0) AS result", [Row(result=[])], id="empty-higher-order-input"
+        ),
+    ],
+)
+def test_division_by_zero_in_unevaluated_expressions(spark, remote, query, expected):
+    # Evaluated division by zero on non-NULL inputs must raise in ANSI mode.
+    # Sail deliberately does not reproduce Spark errors from folding unused expressions:
+    #   SELECT 1 / 0 FROM range(1) LIMIT 0 -> []
+    #   SELECT 1 / 0 FROM range(0) LIMIT 0 -> DIVIDE_BY_ZERO
+    # Spark removes a redundant limit over known-empty input before constant folding.
+    # Sail keeps errors tied to evaluated division, independent of those optimizer choices.
+    # An aggregate output or empty array does not require evaluating its argument/lambda.
+    # Explicit Spark errors below preserve the reference behavior for this intentional
+    # parity exception; ANSI=false and shared evaluation controls remain in the BDD tests.
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", "true")
+        if remote.startswith("local"):
+            with pytest.raises(ArithmeticException, match=r"(?i)divi(?:de|sion).*zero"):
+                spark.sql(query).collect()
+        else:
+            assert spark.sql(query).collect() == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
 def test_div(spark):
     assert spark.sql("SELECT 3 div 2 AS result").collect() == [Row(result=1)]
     assert spark.sql("SELECT -5.9 div 1").collect() == [Row(result=-5)]
