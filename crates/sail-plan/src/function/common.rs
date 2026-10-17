@@ -13,12 +13,6 @@ use datafusion_expr::{
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
-use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
-use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
