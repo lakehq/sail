@@ -663,8 +663,7 @@ fn parse_atomic_delta_type(value: &str) -> DeltaResult<DataType> {
         "date" => Ok(DataType::DATE),
         "timestamp" => Ok(DataType::TIMESTAMP),
         "timestamp_ntz" | "timestampntz" => Ok(DataType::TIMESTAMP_NTZ),
-        value if value.starts_with("decimal(") && value.ends_with(')') => {
-            let inner = &value["decimal(".len()..value.len() - 1];
+        value if let Some(inner) = value.strip_circumfix("decimal(", ')') => {
             let (precision, scale) = inner.split_once(',').ok_or_else(|| {
                 DeltaTableError::schema(format!(
                     "invalid decimal type in delta.typeChanges: {value}"
