@@ -306,6 +306,7 @@ message StandardUdf {}
 message RaiseErrorUdf {
   // Explicit raise_error and assert_true differ from foldable internal value checks.
   bool non_foldable = 1;
+  bool divide_by_zero = 2;
 }
 
 message PySparkUdf {

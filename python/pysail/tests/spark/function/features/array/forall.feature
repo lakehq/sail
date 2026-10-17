@@ -257,7 +257,7 @@ Feature: forall higher-order function
         """
         SELECT forall(<arr>, x -> 10 / x > 4) AS result
         """
-      Then query error Division by zero
+      Then query error (?i)divi(?:de|sion).*zero
 
       Examples:
         | case                                                    | arr              |

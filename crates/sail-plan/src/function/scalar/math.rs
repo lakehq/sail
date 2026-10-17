@@ -381,7 +381,7 @@ fn is_zero_literal(expr: &Expr) -> bool {
 /// Returns a guarded divisor expression that handles division by zero at runtime.
 ///
 /// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
-/// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
+/// In ANSI mode: evaluates the supplied error expression when the divisor is zero.
 ///
 /// This wraps the divisor itself (not the entire division expression) to avoid
 /// duplicating complex divisor expressions (e.g., window functions) in the plan.
@@ -389,7 +389,7 @@ fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
     ansi_mode: bool,
-    error_message: &str,
+    zero_error: Expr,
 ) -> Expr {
     // Skip wrapping for Interval/Duration types (cannot be compared to lit(0)).
     if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
@@ -398,13 +398,9 @@ fn make_safe_divisor(
 
     if ansi_mode {
         let zero_check = divisor.clone().eq(lit(0));
-        let raise = Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(RaiseError::new())),
-            args: vec![lit(error_message)],
-        });
         Expr::Case(expr::Case {
             expr: None,
-            when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+            when_then_expr: vec![(Box::new(zero_check), Box::new(zero_error))],
             else_expr: Some(Box::new(divisor)),
         })
     } else {
@@ -438,8 +434,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if literal_zero && !ansi_mode {
         return Ok(Expr::Literal(ScalarValue::Null, None));
     }
-    // An ANSI error belongs to evaluation: an enclosing NULL or unused CASE branch
-    // may suppress it. Preserve the previous literal-zero diagnostic below.
+    // An ANSI error belongs to evaluation: an enclosing NULL or unused CASE branch may suppress it.
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -449,11 +444,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        if literal_zero {
+        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit(if literal_zero {
             "divide by zero"
         } else {
             "Division by zero"
-        },
+        })]),
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -519,7 +514,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit("Division by zero")]),
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -717,7 +712,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Remainder by zero",
+        ScalarUDF::from(RaiseError::new()).call(vec![lit("Remainder by zero")]),
     );
 
     Ok(Expr::BinaryExpr(BinaryExpr {

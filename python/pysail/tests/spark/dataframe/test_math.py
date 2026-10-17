@@ -2,9 +2,10 @@ import datetime
 from decimal import Decimal
 
 import pytest
+from pyspark.errors import ArithmeticException, PySparkException
 from pyspark.sql.types import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 from pysail.testing.spark.utils.sql import any_of
 
 
@@ -82,6 +83,32 @@ def test_divide(spark):
     assert spark.sql("SELECT INTERVAL '3:15' HOUR TO MINUTE / 3 AS result").collect() == [
         Row(result=datetime.timedelta(seconds=3900))
     ]
+
+
+@pytest.mark.parametrize("query", ["SELECT 1 / 0", "SELECT 1 / id FROM range(1)"])
+@pytest.mark.parametrize(
+    "action",
+    [
+        "collect",
+        "show",
+        "toPandas",
+        pytest.param("toArrow", marks=pytest.mark.skipif(pyspark_version() < (4,), reason="requires Spark 4")),
+    ],
+)
+def test_divide_by_zero_exception(spark, query, action):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        with pytest.raises(ArithmeticException, match=r"(?i)divi(?:de|sion).*zero"):
+            getattr(spark.sql(query), action)()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
+def test_raise_error_divide_by_zero_text_is_not_arithmetic(spark):
+    with pytest.raises(PySparkException, match="divide by zero") as error:
+        spark.sql("SELECT raise_error('divide by zero')").collect()
+    assert not isinstance(error.value, ArithmeticException)
 
 
 def test_div(spark):

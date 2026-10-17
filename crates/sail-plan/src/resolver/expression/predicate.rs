@@ -12,6 +12,7 @@ use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit}
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::is_comparison_operator;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -353,7 +354,7 @@ pub(super) fn coerce_timestamp_string_predicate(
     config: &PlanConfig,
 ) -> PlanResult<expr::Expr> {
     Ok(match expression {
-        expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
+        expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison_operator(op) => {
             let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
@@ -746,20 +747,6 @@ fn is_ordering_comparison(operator: Operator) -> bool {
     matches!(
         operator,
         Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-    )
-}
-
-fn is_comparison(operator: Operator) -> bool {
-    matches!(
-        operator,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
     )
 }
 

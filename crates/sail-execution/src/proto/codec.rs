@@ -3344,8 +3344,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return Ok(Arc::new(kind.udf()));
                 }
             }
-            UdfKind::RaiseError(r#gen::RaiseErrorUdf { non_foldable }) => {
-                let udf = if non_foldable {
+            UdfKind::RaiseError(r#gen::RaiseErrorUdf {
+                non_foldable,
+                divide_by_zero,
+            }) => {
+                let udf = if divide_by_zero {
+                    RaiseError::divide_by_zero()
+                } else if non_foldable {
                     RaiseError::non_foldable()
                 } else {
                     RaiseError::new()
@@ -3985,9 +3990,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<JsonTuple>()
         {
             UdfKind::Standard(r#gen::StandardUdf {})
-        } else if node_inner.is::<RaiseError>() {
+        } else if let Some(func) = node_inner.downcast_ref::<RaiseError>() {
             UdfKind::RaiseError(r#gen::RaiseErrorUdf {
                 non_foldable: node.signature().volatility == Volatility::Volatile,
+                divide_by_zero: func.is_divide_by_zero(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
@@ -6075,11 +6081,18 @@ mod tests {
     }
 
     #[test]
-    fn test_raise_error_codec_preserves_foldability() -> Result<()> {
-        for function in [RaiseError::new(), RaiseError::non_foldable()] {
+    fn test_raise_error_codec_preserves_kind_and_foldability() -> Result<()> {
+        for function in [
+            RaiseError::new(),
+            RaiseError::non_foldable(),
+            RaiseError::divide_by_zero(),
+        ] {
             let original = ScalarUDF::from(function);
             let decoded = round_trip_udf(original.clone())?;
-            assert_eq!(original.signature(), decoded.signature());
+            assert_eq!(
+                original.inner().downcast_ref::<RaiseError>(),
+                decoded.inner().downcast_ref::<RaiseError>()
+            );
         }
         Ok(())
     }

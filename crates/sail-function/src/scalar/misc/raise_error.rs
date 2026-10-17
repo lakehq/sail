@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -12,6 +13,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RaiseError {
     signature: Signature,
+    divide_by_zero: bool,
 }
 
 impl Default for RaiseError {
@@ -28,7 +30,19 @@ impl RaiseError {
                 vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
                 Volatility::Immutable,
             ),
+            divide_by_zero: false,
         }
+    }
+
+    pub fn divide_by_zero() -> Self {
+        Self {
+            divide_by_zero: true,
+            ..Self::new()
+        }
+    }
+
+    pub fn is_divide_by_zero(&self) -> bool {
+        self.divide_by_zero
     }
 
     /// Spark's explicit raise_error is non-foldable; internal value checks remain foldable.
@@ -71,6 +85,11 @@ impl ScalarUDFImpl for RaiseError {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if self.divide_by_zero {
+            return Err(DataFusionError::External(Box::new(
+                ArrowError::DivideByZero,
+            )));
+        }
         let ScalarFunctionArgs { args, .. } = args;
         let Ok(arg) = args.one() else {
             return internal_err!("raise_error should only be called with one argument");

@@ -38,7 +38,7 @@ Feature: Division by zero behavior
         | Decimal divided by integer zero throws error in ANSI mode        | CAST(100.50 AS DECIMAL(10,2)) / 0                       | (?i)divide.*zero     |
         | DIV by literal zero throws error in ANSI mode                    | 10 DIV 0                                                | (?i)divide.*zero     |
         | Modulo by literal zero throws error in ANSI mode                 | 10 % 0                                                  | (?i)remainder.*zero  |
-        | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)division by zero |
+        | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)divi(?:de\|sion).*zero |
 
     Scenario Outline: an unused literal-zero division does not raise: <case>
       Given config spark.sql.ansi.enabled = true
@@ -54,6 +54,7 @@ Feature: Division by zero behavior
         | case                 | expr                                                                | result |
         | unused THEN branch   | CASE WHEN false THEN 1 / 0 ELSE 7 END                                | 7.0    |
         | NULL selected branch | CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE 1 / 0 END               | NULL   |
+        | NULL dividend        | CAST(NULL AS DOUBLE) / 0                                             | NULL   |
 
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>
@@ -66,11 +67,11 @@ Feature: Division by zero behavior
 
       Examples:
         | case                                                      | expr        | from                  | error                |
-        | Integer divided by dynamic zero raises error in ANSI mode | 10 / id     | (VALUES (0)) AS t(id) | (?i)division by zero |
-        | DIV by dynamic zero raises error in ANSI mode             | 10 DIV id   | (VALUES (0)) AS t(id) | (?i)division by zero |
+        | Integer divided by dynamic zero raises error in ANSI mode | 10 / id     | (VALUES (0)) AS t(id) | (?i)divi(?:de\|sion).*zero |
+        | DIV by dynamic zero raises error in ANSI mode             | 10 DIV id   | (VALUES (0)) AS t(id) | (?i)divi(?:de\|sion).*zero |
         | Modulo by dynamic zero raises error in ANSI mode          | 10 % id     | (VALUES (0)) AS t(id) | (?i)remainder.*zero  |
         | mod function with dynamic zero raises error in ANSI mode  | mod(10, id) | (VALUES (0)) AS t(id) | (?i)remainder.*zero  |
-        | Division by zero in range raises error in ANSI mode       | 1 / id      | range(2)              | (?i)division by zero |
+        | Division by zero in range raises error in ANSI mode       | 1 / id      | range(2)              | (?i)divi(?:de\|sion).*zero |
 
     Scenario Outline: Dynamic divisor (typed): <case>
       Given config spark.sql.ansi.enabled = true
@@ -79,7 +80,7 @@ Feature: Division by zero behavior
         SELECT <expr> AS result
         FROM (VALUES (0)) AS t(id)
         """
-      Then query error (?i)division by zero
+      Then query error (?i)divi(?:de|sion).*zero
 
       Examples:
         | case                                                      | expr                                                    |
@@ -98,7 +99,7 @@ Feature: Division by zero behavior
 
       Examples:
         | case                                                            | op | error                |
-        | Two-column division with zero divisor raises error in ANSI mode | /  | (?i)division by zero |
+        | Two-column division with zero divisor raises error in ANSI mode | /  | (?i)divi(?:de\|sion).*zero |
         | Two-column modulo with zero divisor raises error in ANSI mode   | %  | (?i)remainder.*zero  |
 
   Rule: Dynamic divisor division by zero returns NULL in non-ANSI mode

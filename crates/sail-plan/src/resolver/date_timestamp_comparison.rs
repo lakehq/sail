@@ -13,6 +13,7 @@ use datafusion_expr::expr::{Alias, BinaryExpr};
 use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion_expr::{Expr, ExprSchemable, Filter, LogicalPlan, Operator, Projection, Union, lit};
+use sail_common_datafusion::logical_expr::is_comparison_operator;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
@@ -27,25 +28,32 @@ use crate::config::PlanConfig;
 use crate::function::common::cast_temporal;
 
 #[derive(Default)]
-struct InputFacts {
-    foldables: HashMap<Column, Expr>,
-    local: bool,
+struct PlanEvaluationFacts {
+    foldable_columns: HashMap<Column, Expr>,
+    converts_to_local_relation: bool,
 }
 
 // Spark folds constants and local relations before unwrapping DATE/TIMESTAMP comparisons.
 // In a zone with a skipped day these orders are observably different. Keep that distinction
 // here, where defining projections and null-extending joins are available, rather than in
 // expression resolution (which sees only a column's type).
-pub(super) fn rewrite(plan: LogicalPlan, config: &PlanConfig) -> Result<LogicalPlan> {
+pub(super) fn rewrite_date_timestamp_comparisons(
+    plan: LogicalPlan,
+    config: &PlanConfig,
+) -> Result<LogicalPlan> {
     let mut candidate = false;
     plan.apply_with_subqueries(|plan| {
         for expr in plan.expressions() {
             if expr.exists(|e| {
                 Ok(match e {
                     Expr::BinaryExpr(b) => {
-                        is_comparison(b.op) && (has_date_cast(&b.left) || has_date_cast(&b.right))
+                        is_comparison_operator(b.op)
+                            && (is_start_of_day_expression(&b.left)
+                                || is_start_of_day_expression(&b.right))
                     }
-                    Expr::InList(list) => has_date_cast(&list.expr) && !list.list.is_empty(),
+                    Expr::InList(list) => {
+                        is_start_of_day_expression(&list.expr) && !list.list.is_empty()
+                    }
                     _ => false,
                 })
             })? {
@@ -58,55 +66,66 @@ pub(super) fn rewrite(plan: LogicalPlan, config: &PlanConfig) -> Result<LogicalP
     if !candidate {
         return Ok(plan);
     }
-    Ok(rewrite_plan(plan, config)?.0)
+    Ok(rewrite_date_comparisons_with_plan_facts(plan, config)?.0)
 }
 
-fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, InputFacts)> {
+fn rewrite_date_comparisons_with_plan_facts(
+    plan: LogicalPlan,
+    config: &PlanConfig,
+) -> Result<(LogicalPlan, PlanEvaluationFacts)> {
     let plan = plan
-        .map_subqueries(|p| Ok(Transformed::yes(rewrite(p, config)?)))?
+        .map_subqueries(|p| {
+            Ok(Transformed::yes(rewrite_date_timestamp_comparisons(
+                p, config,
+            )?))
+        })?
         .data;
     let mut children = Vec::new();
     let plan = plan
         .map_children(|p| {
-            let (p, facts) = rewrite_plan(p, config)?;
+            let (p, facts) = rewrite_date_comparisons_with_plan_facts(p, config)?;
             children.push(facts);
             Ok(Transformed::yes(p))
         })?
         .data;
     let mut schema = DFSchema::empty();
-    let mut foldables = HashMap::new();
+    let mut foldable_columns = HashMap::new();
     for (input, facts) in plan.inputs().into_iter().zip(&children) {
         schema.merge(input.schema());
-        foldables.extend(facts.foldables.clone());
+        foldable_columns.extend(facts.foldable_columns.clone());
     }
     if plan.inputs().is_empty() {
         schema.merge(plan.schema());
     }
-    restore_filtered_join_foldables(&plan, &mut foldables, config)?;
-    let local = match &plan {
+    restore_null_rejected_join_foldables(&plan, &mut foldable_columns, config)?;
+    let converts_to_local_relation = match &plan {
         LogicalPlan::Values(_) => true,
         LogicalPlan::TableScan(scan) => source_as_provider(&scan.source)
-            .is_ok_and(|provider| is_local_provider(provider.as_ref())),
+            .is_ok_and(|provider| is_in_memory_table_provider(provider.as_ref())),
         LogicalPlan::Projection(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Limit(_)
-        | LogicalPlan::SubqueryAlias(_) => children.first().is_some_and(|f| f.local),
+        | LogicalPlan::SubqueryAlias(_) => children
+            .first()
+            .is_some_and(|f| f.converts_to_local_relation),
         _ => false,
     };
     // Spark's ConvertToLocalRelation rejects Unevaluable expressions, including subqueries.
-    let local = local
+    let converts_to_local_relation = converts_to_local_relation
         && !plan
             .expressions()
             .iter()
-            .map(contains_unevaluable)
+            .map(contains_unevaluable_expression)
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .any(|value| value);
     let schema = Arc::new(schema);
     let rewrite_expr = |expr: Expr| {
-        expr.transform_up(|expr| rewrite_comparison(expr, &foldables, &schema, config))
+        expr.transform_up(|expr| {
+            rewrite_date_timestamp_comparison(expr, &foldable_columns, &schema, config)
+        })
     };
-    let rewritten = if local {
+    let rewritten = if converts_to_local_relation {
         Transformed::no(plan.clone())
     } else {
         plan.clone().map_expressions(rewrite_expr)?
@@ -144,13 +163,15 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
             _ => (None, None),
         };
         if let Some(pushed) = pushed
-            && let Some(branches) = union_branches(pushed.inputs()[0])?
+            && let Some(branches) = expose_union_branches(pushed.inputs()[0])?
         {
             let inputs = branches
                 .into_iter()
                 .map(|branch| {
                     let branch = pushed.with_new_exprs(pushed.expressions(), vec![branch])?;
-                    Ok(Arc::new(rewrite_plan(branch, config)?.0))
+                    Ok(Arc::new(
+                        rewrite_date_comparisons_with_plan_facts(branch, config)?.0,
+                    ))
                 })
                 .collect::<Result<_>>()?;
             let union = LogicalPlan::Union(Union::try_new(inputs)?);
@@ -175,12 +196,12 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
                 )?)
             };
             return if let Some(predicate) = residual {
-                rewrite_plan(
+                rewrite_date_comparisons_with_plan_facts(
                     LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(union))?),
                     config,
                 )
             } else {
-                Ok((union, InputFacts::default()))
+                Ok((union, PlanEvaluationFacts::default()))
             };
         }
     }
@@ -189,8 +210,11 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
     match &plan {
         LogicalPlan::Projection(p) => {
             for (column, expr) in p.schema.columns().into_iter().zip(&p.expr) {
-                let expr = substitute(expr.clone().unalias_nested().data, &foldables)?;
-                if is_foldable(&expr)? {
+                let expr = substitute_column_expressions(
+                    expr.clone().unalias_nested().data,
+                    &foldable_columns,
+                )?;
+                if is_foldable_expression(&expr)? {
                     output.insert(column, expr);
                 }
             }
@@ -211,8 +235,11 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
                 .skip(a.group_expr_len()?)
                 .zip(&a.aggr_expr);
             for (column, expr) in groups.chain(aggregates) {
-                let expr = substitute(expr.clone().unalias_nested().data, &foldables)?;
-                if is_foldable(&expr)? {
+                let expr = substitute_column_expressions(
+                    expr.clone().unalias_nested().data,
+                    &foldable_columns,
+                )?;
+                if is_foldable_expression(&expr)? {
                     output.insert(column, expr);
                 }
             }
@@ -225,7 +252,7 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
                 .into_iter()
                 .zip(alias.schema.columns())
             {
-                if let Some(expr) = foldables.get(&old) {
+                if let Some(expr) = foldable_columns.get(&old) {
                     output.insert(new, expr.clone());
                 }
             }
@@ -238,7 +265,7 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
                     (JoinType::Full, _) | (JoinType::Left, 1) | (JoinType::Right, 0)
                 );
                 if !nullable {
-                    output.extend(child.foldables);
+                    output.extend(child.foldable_columns);
                 }
             }
             output.retain(|column, _| plan.schema().has_column(column));
@@ -249,30 +276,30 @@ fn rewrite_plan(plan: LogicalPlan, config: &PlanConfig) -> Result<(LogicalPlan, 
         | LogicalPlan::Sort(_)
         | LogicalPlan::Repartition(_)
         | LogicalPlan::Distinct(_)
-        | LogicalPlan::Unnest(_) => output = foldables,
+        | LogicalPlan::Unnest(_) => output = foldable_columns,
         _ => {}
     }
     Ok((
         plan,
-        InputFacts {
-            foldables: output,
-            local,
+        PlanEvaluationFacts {
+            foldable_columns: output,
+            converts_to_local_relation,
         },
     ))
 }
 
-fn is_local_provider(provider: &dyn TableProvider) -> bool {
+fn is_in_memory_table_provider(provider: &dyn TableProvider) -> bool {
     provider.is::<MemTable>()
         || provider
             .downcast_ref::<RenameTableProvider>()
-            .is_some_and(|renamed| is_local_provider(renamed.inner().as_ref()))
+            .is_some_and(|renamed| is_in_memory_table_provider(renamed.inner().as_ref()))
 }
 
 // Spark eliminates null-extended join rows before propagating constants. Recover only
 // the corresponding provenance; the normal optimizer still owns the actual join rewrite.
-fn restore_filtered_join_foldables(
+fn restore_null_rejected_join_foldables(
     plan: &LogicalPlan,
-    foldables: &mut HashMap<Column, Expr>,
+    foldable_columns: &mut HashMap<Column, Expr>,
     config: &PlanConfig,
 ) -> Result<()> {
     let LogicalPlan::Filter(filter) = plan else {
@@ -288,7 +315,7 @@ fn restore_filtered_join_foldables(
             .zip(alias.input.schema().columns())
             .map(|(old, new)| (old, Expr::Column(new)))
             .collect();
-        condition = substitute(condition, &names)?;
+        condition = substitute_column_expressions(condition, &names)?;
         input = &alias.input;
     }
     let LogicalPlan::Join(join) = input else {
@@ -315,7 +342,7 @@ fn restore_filtered_join_foldables(
             Expr::IsNotNull(expr) => expr,
             expr => expr,
         };
-        null_intolerant_columns(condition, &mut required);
+        collect_null_intolerant_columns(condition, &mut required);
     }
     let inferred: Vec<_> = required
         .into_iter()
@@ -356,7 +383,7 @@ fn restore_filtered_join_foldables(
                     }
                 })?
                 .data;
-            if !is_foldable(&nulls)? {
+            if !is_foldable_expression(&nulls)? {
                 continue;
             }
             let result = simplifier
@@ -366,7 +393,11 @@ fn restore_filtered_join_foldables(
                 result,
                 Ok(Expr::Literal(ScalarValue::Boolean(None | Some(false)), _))
             ) {
-                for (column, value) in rewrite_plan(side.as_ref().clone(), config)?.1.foldables {
+                for (column, value) in
+                    rewrite_date_comparisons_with_plan_facts(side.as_ref().clone(), config)?
+                        .1
+                        .foldable_columns
+                {
                     if let Some(index) = join
                         .schema
                         .columns()
@@ -374,7 +405,7 @@ fn restore_filtered_join_foldables(
                         .position(|output| output == &column)
                         && let Some(output) = filter.input.schema().columns().get(index)
                     {
-                        foldables.insert(output.clone(), value);
+                        foldable_columns.insert(output.clone(), value);
                     }
                 }
                 break;
@@ -384,16 +415,16 @@ fn restore_filtered_join_foldables(
     Ok(())
 }
 
-fn null_intolerant_columns<'a>(expr: &'a Expr, columns: &mut Vec<&'a Column>) {
+fn collect_null_intolerant_columns<'a>(expr: &'a Expr, columns: &mut Vec<&'a Column>) {
     match expr {
         Expr::Column(column) => columns.push(column),
-        Expr::Alias(alias) => null_intolerant_columns(&alias.expr, columns),
-        Expr::Cast(cast) => null_intolerant_columns(&cast.expr, columns),
-        Expr::TryCast(cast) => null_intolerant_columns(&cast.expr, columns),
-        Expr::Not(expr) | Expr::Negative(expr) => null_intolerant_columns(expr, columns),
+        Expr::Alias(alias) => collect_null_intolerant_columns(&alias.expr, columns),
+        Expr::Cast(cast) => collect_null_intolerant_columns(&cast.expr, columns),
+        Expr::TryCast(cast) => collect_null_intolerant_columns(&cast.expr, columns),
+        Expr::Not(expr) | Expr::Negative(expr) => collect_null_intolerant_columns(expr, columns),
         Expr::BinaryExpr(binary) if binary.op.returns_null_on_null() => {
-            null_intolerant_columns(&binary.left, columns);
-            null_intolerant_columns(&binary.right, columns);
+            collect_null_intolerant_columns(&binary.left, columns);
+            collect_null_intolerant_columns(&binary.right, columns);
         }
         // Spark GetDateField/LastDay are null-intolerant; these Sail implementations
         // do not expose DataFusion's optional strictness metadata.
@@ -404,7 +435,7 @@ fn null_intolerant_columns<'a>(expr: &'a Expr, columns: &mut Vec<&'a Column>) {
                 || function.func.inner().is::<SparkLastDay>() =>
         {
             for arg in &function.args {
-                null_intolerant_columns(arg, columns);
+                collect_null_intolerant_columns(arg, columns);
             }
         }
         _ => {}
@@ -413,7 +444,7 @@ fn null_intolerant_columns<'a>(expr: &'a Expr, columns: &mut Vec<&'a Column>) {
 
 // Preserve the input/output names while distributing aliases and deterministic local
 // projections over a union. The comparison itself is then resolved independently per branch.
-fn union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
+fn expose_union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
     if let LogicalPlan::Union(union) = plan {
         return union
             .inputs
@@ -441,7 +472,7 @@ fn union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
         plan,
         LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_)
     ) && plan.expressions().iter().all(|e| !e.is_volatile())
-        && let Some(branches) = union_branches(plan.inputs()[0])?
+        && let Some(branches) = expose_union_branches(plan.inputs()[0])?
     {
         return branches
             .into_iter()
@@ -452,14 +483,17 @@ fn union_branches(plan: &LogicalPlan) -> Result<Option<Vec<LogicalPlan>>> {
     Ok(None)
 }
 
-fn substitute(expr: Expr, foldables: &HashMap<Column, Expr>) -> Result<Expr> {
+fn substitute_column_expressions(
+    expr: Expr,
+    foldable_columns: &HashMap<Column, Expr>,
+) -> Result<Expr> {
     Ok(expr
         .transform_up(|expr| {
             if let Expr::Column(column) = &expr
-                && let Some(value) = foldables.get(column).or_else(|| {
+                && let Some(value) = foldable_columns.get(column).or_else(|| {
                     // Resolution can retain a subquery qualifier on an unqualified field.
                     // Opaque field names remain unique in that input schema.
-                    let mut matches = foldables.iter().filter(|(key, _)| {
+                    let mut matches = foldable_columns.iter().filter(|(key, _)| {
                         key.name == column.name
                             && (key.relation.is_none() || column.relation.is_none())
                     });
@@ -475,9 +509,9 @@ fn substitute(expr: Expr, foldables: &HashMap<Column, Expr>) -> Result<Expr> {
         .data)
 }
 
-fn is_foldable(expr: &Expr) -> Result<bool> {
+fn is_foldable_expression(expr: &Expr) -> Result<bool> {
     Ok(!expr.is_volatile()
-        && !contains_unevaluable(expr)?
+        && !contains_unevaluable_expression(expr)?
         && !expr.exists(|e| {
             Ok(matches!(
                 e,
@@ -486,7 +520,7 @@ fn is_foldable(expr: &Expr) -> Result<bool> {
         })?)
 }
 
-fn contains_unevaluable(expr: &Expr) -> Result<bool> {
+fn contains_unevaluable_expression(expr: &Expr) -> Result<bool> {
     Ok(expr_contains_python_udf(expr)?
         || expr.exists(|e| {
             Ok(matches!(
@@ -503,7 +537,7 @@ fn contains_unevaluable(expr: &Expr) -> Result<bool> {
         })?)
 }
 
-fn has_date_cast(expr: &Expr) -> bool {
+fn is_start_of_day_expression(expr: &Expr) -> bool {
     let mut expr = expr;
     while let Expr::Cast(c) = expr {
         expr = &c.expr;
@@ -511,22 +545,8 @@ fn has_date_cast(expr: &Expr) -> bool {
     matches!(expr, Expr::ScalarFunction(f) if f.func.inner().is::<SparkStartOfDay>())
 }
 
-fn is_comparison(op: Operator) -> bool {
-    matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-    )
-}
-
 // Recognize only the DATE conversion generated by cast_temporal. Stop at its DATE input.
-fn date_operand<'a>(expr: &'a Expr, schema: &DFSchema) -> Result<Option<&'a Expr>> {
+fn date_input_of_timestamp_cast<'a>(expr: &'a Expr, schema: &DFSchema) -> Result<Option<&'a Expr>> {
     if !matches!(expr.get_type(schema)?, DataType::Timestamp(_, Some(_))) {
         return Ok(None);
     }
@@ -554,21 +574,21 @@ fn date_operand<'a>(expr: &'a Expr, schema: &DFSchema) -> Result<Option<&'a Expr
     }
 }
 
-fn rewrite_comparison(
+fn rewrite_date_timestamp_comparison(
     expr: Expr,
-    foldables: &HashMap<Column, Expr>,
+    foldable_columns: &HashMap<Column, Expr>,
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> Result<Transformed<Expr>> {
     if let Expr::InList(list) = &expr
-        && has_date_cast(&list.expr)
+        && is_start_of_day_expression(&list.expr)
     {
         // ConstantFolding/FoldablePropagation expose literal bounds to OptimizeIn on
         // its next iteration. A single distinct literal then becomes equality.
         let bounds = list
             .list
             .iter()
-            .map(|bound| fold_bound(bound.clone(), foldables, schema))
+            .map(|bound| simplify_timestamp_bound(bound.clone(), foldable_columns, schema))
             .collect::<Result<Option<Vec<_>>>>()?;
         let Some(bounds) = bounds else {
             return Ok(Transformed::no(expr));
@@ -584,7 +604,8 @@ fn rewrite_comparison(
             return Ok(Transformed::no(expr));
         }
         let comparison = list.expr.as_ref().clone().eq(bound.clone());
-        let rewritten = rewrite_comparison(comparison, foldables, schema, config)?;
+        let rewritten =
+            rewrite_date_timestamp_comparison(comparison, foldable_columns, schema, config)?;
         if rewritten.transformed {
             return Ok(Transformed::yes(if list.negated {
                 !rewritten.data
@@ -597,22 +618,17 @@ fn rewrite_comparison(
     let Expr::BinaryExpr(binary) = &expr else {
         return Ok(Transformed::no(expr));
     };
-    if !has_date_cast(&binary.left) && !has_date_cast(&binary.right) {
+    if !is_start_of_day_expression(&binary.left) && !is_start_of_day_expression(&binary.right) {
         return Ok(Transformed::no(expr));
     }
-    if !is_comparison(binary.op) {
+    if !is_comparison_operator(binary.op) {
         return Ok(Transformed::no(expr));
     }
-    let (date, bound, op) = if let Some(date) = date_operand(&binary.left, schema)? {
+    let (date, bound, op) = if let Some(date) = date_input_of_timestamp_cast(&binary.left, schema)?
+    {
         (date, binary.right.as_ref(), binary.op)
-    } else if let Some(date) = date_operand(&binary.right, schema)? {
-        let op = match binary.op {
-            Operator::Lt => Operator::Gt,
-            Operator::LtEq => Operator::GtEq,
-            Operator::Gt => Operator::Lt,
-            Operator::GtEq => Operator::LtEq,
-            op => op,
-        };
+    } else if let Some(date) = date_input_of_timestamp_cast(&binary.right, schema)? {
+        let op = binary.op.swap().unwrap_or(binary.op);
         (date, binary.left.as_ref(), op)
     } else {
         return Ok(Transformed::no(expr));
@@ -622,12 +638,12 @@ fn rewrite_comparison(
     }
     // ConstantFolding runs before UnwrapCastInBinaryComparison. Test foldability before
     // simplifying CASE expressions, since SimplifyConditionals runs between these rules.
-    let folded_date = substitute(date.clone(), foldables)?;
-    let bound = substitute(bound.clone(), foldables)?;
-    if is_foldable(&folded_date)? {
+    let folded_date = substitute_column_expressions(date.clone(), foldable_columns)?;
+    let bound = substitute_column_expressions(bound.clone(), foldable_columns)?;
+    if is_foldable_expression(&folded_date)? {
         return Ok(Transformed::no(expr));
     }
-    let Some(bound) = fold_bound(bound, foldables, schema)? else {
+    let Some(bound) = simplify_timestamp_bound(bound, foldable_columns, schema)? else {
         return Ok(Transformed::no(expr));
     };
     let simplifier = ExprSimplifier::new(
@@ -676,13 +692,13 @@ fn rewrite_comparison(
     ))))
 }
 
-fn fold_bound(
+fn simplify_timestamp_bound(
     bound: Expr,
-    foldables: &HashMap<Column, Expr>,
+    foldable_columns: &HashMap<Column, Expr>,
     schema: &DFSchemaRef,
 ) -> Result<Option<Expr>> {
-    let bound = substitute(bound, foldables)?;
-    if contains_unevaluable(&bound)?
+    let bound = substitute_column_expressions(bound, foldable_columns)?;
+    if contains_unevaluable_expression(&bound)?
         || bound.exists(|e| {
             Ok(matches!(e,
                 Expr::ScalarFunction(f) if f.func.inner().is::<TimestampNow>()
@@ -716,7 +732,7 @@ fn fold_bound(
                 let [seed] = function.args.as_slice() else {
                     return Ok(function.args.is_empty());
                 };
-                if !is_foldable(seed)? {
+                if !is_foldable_expression(seed)? {
                     return Ok(false);
                 }
                 // Spark validates the scalar seed before OptimizeRand. Preserve Sail's
@@ -733,7 +749,7 @@ fn fold_bound(
             } else {
                 return Ok(Transformed::no(expr));
             };
-            if !is_foldable(number)? {
+            if !is_foldable_expression(number)? {
                 return Ok(Transformed::no(expr));
             }
             let Ok(Expr::Literal(ScalarValue::Float64(Some(value)), _)) =

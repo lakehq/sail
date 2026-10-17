@@ -219,8 +219,8 @@ Feature: convert_timezone
 
       Examples:
         | case               | value                     | error                                      |
-        | computed division  | 1 / (1 - 1)               | (?i)(DIVIDE_BY_ZERO\|division by zero)        |
-        | integer division   | 1 DIV (1 - 1)             | (?i)(DIVIDE_BY_ZERO\|division by zero)        |
+        | computed division  | 1 / (1 - 1)               | (?i)divi(?:de\|sion).*zero                   |
+        | integer division   | 1 DIV (1 - 1)             | (?i)divi(?:de\|sion).*zero                   |
         | remainder          | 1 % (1 - 1)               | (?i)(DIVIDE_BY_ZERO\|remainder by zero)       |
         | array element zero | element_at(array('UTC'), 0) | (?i)(INVALID_INDEX_OF_ZERO\|index 0 is invalid) |
 
