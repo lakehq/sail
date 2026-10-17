@@ -68,7 +68,6 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
       | America/Los_Angeles |
       | Asia/Kathmandu      |
 
-  @sail-bug
   Scenario Outline: Integer epoch constructors reject <function> overflow with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>
     When query
@@ -87,6 +86,97 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
       | timestamp_seconds | -9223372036855L      | false |
       | timestamp_millis  | 9223372036854776L    | false |
       | timestamp_millis  | -9223372036854776L   | false |
+
+  Scenario Outline: Integer epoch constructor columns reject <function> overflow with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT unix_micros(<function>(id + <value>)) FROM range(1)
+      """
+    Then query error (?i)overflow|out of range|cast
+
+    Examples:
+      | function          | value               | ansi  |
+      | timestamp_seconds | 9223372036855L      | true  |
+      | timestamp_seconds | -9223372036855L     | true  |
+      | timestamp_millis  | 9223372036854776L   | true  |
+      | timestamp_millis  | -9223372036854776L  | true  |
+      | timestamp_seconds | 9223372036855L      | false |
+      | timestamp_seconds | -9223372036855L     | false |
+      | timestamp_millis  | 9223372036854776L   | false |
+      | timestamp_millis  | -9223372036854776L  | false |
+
+  Scenario Outline: Integer epoch constructors retain <function> boundaries and NULLs with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT id, unix_micros(<function>(value)) AS micros, typeof(<function>(value)) AS type
+      FROM VALUES (0, -<limit>L), (1, -1L), (2, 0L), (3, 1L),
+                  (4, <limit>L), (5, CAST(NULL AS BIGINT)) AS t(id, value)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | micros         | type      |
+      | 0  | -<micros>      | timestamp |
+      | 1  | -<factor>      | timestamp |
+      | 2  | 0              | timestamp |
+      | 3  | <factor>       | timestamp |
+      | 4  | <micros>       | timestamp |
+      | 5  | NULL           | timestamp |
+
+    Examples:
+      | function          | limit            | micros              | factor  | ansi  |
+      | timestamp_seconds | 9223372036854    | 9223372036854000000 | 1000000 | true  |
+      | timestamp_seconds | 9223372036854    | 9223372036854000000 | 1000000 | false |
+      | timestamp_millis  | 9223372036854775 | 9223372036854775000 | 1000    | true  |
+      | timestamp_millis  | 9223372036854775 | 9223372036854775000 | 1000    | false |
+
+  Scenario Outline: Integer epoch constructors defer unused <function> overflow with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT CASE WHEN false THEN unix_micros(<function>(<value>)) ELSE id END AS constant_case,
+             CASE WHEN id = -1 THEN unix_micros(<function>(<value> + 0L)) ELSE id END AS column_case
+      FROM range(2)
+      ORDER BY constant_case
+      """
+    Then query result ordered
+      | constant_case | column_case |
+      | 0             | 0           |
+      | 1             | 1           |
+
+    Examples:
+      | function          | value              | ansi  |
+      | timestamp_seconds | 9223372036855L     | true  |
+      | timestamp_seconds | 9223372036855L     | false |
+      | timestamp_millis  | 9223372036854776L  | true  |
+      | timestamp_millis  | 9223372036854776L  | false |
+
+  Scenario Outline: Integer epoch constructors preserve <type> input nullability
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT timestamp_seconds(CAST(id AS <type>)) AS seconds,
+             timestamp_millis(CAST(id AS <type>)) AS millis,
+             timestamp_seconds(CASE WHEN id = 0 THEN CAST(id AS <type>) END) AS nullable_seconds,
+             timestamp_millis(CASE WHEN id = 0 THEN CAST(id AS <type>) END) AS nullable_millis
+      FROM range(2)
+      """
+    Then query schema
+      """
+      root
+       |-- seconds: timestamp (nullable = false)
+       |-- millis: timestamp (nullable = false)
+       |-- nullable_seconds: timestamp (nullable = true)
+       |-- nullable_millis: timestamp (nullable = true)
+      """
+
+    Examples:
+      | type     |
+      | TINYINT  |
+      | SMALLINT |
+      | INT      |
+      | BIGINT   |
 
   Scenario Outline: Timestamp arithmetic rejects <expression> overflow with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>

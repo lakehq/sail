@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::compute::cast as cast_array;
+use datafusion::arrow::compute::kernels::numeric;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, i256};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
@@ -10,6 +13,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::functions_nested_utils::make_scalar_function;
 use crate::scalar::misc::raise_error::RaiseError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,7 +26,7 @@ pub enum TimestampNumberMode {
     TryCast,
 }
 
-// Planning-only conversion: column inputs must also become native expressions.
+// Native expressions handle casts and narrow inputs; wide constructors retain checked scaling.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestampFromNumber {
     signature: Signature,
@@ -43,10 +47,9 @@ impl SparkTimestampFromNumber {
             .with_schema(Arc::clone(schema))
             .build();
         let data_type = info.get_data_type(&value)?;
-        // FIXME: Integer timestamp_seconds/millis must reject scaling overflow, as Spark does.
         let micros = match self.mode {
             TimestampNumberMode::Micros => value,
-            TimestampNumberMode::Millis => cast(value, DataType::Int64) * lit(1_000_i64),
+            TimestampNumberMode::Millis => self.checked_scale(value, &data_type, 1_000),
             _ => match data_type {
                 DataType::Float32 | DataType::Float64 => self.floating_micros(value)?,
                 DataType::Decimal128(precision, scale) => {
@@ -56,6 +59,9 @@ impl SparkTimestampFromNumber {
                 _ if data_type.is_integer() || data_type.is_null() => {
                     self.integer_micros(value, &data_type)?
                 }
+                _ if self.mode == TimestampNumberMode::Seconds => {
+                    self.checked_scale(value, &data_type, 1_000_000)
+                }
                 _ => cast(value, DataType::Int64) * lit(1_000_000_i64),
             },
         };
@@ -63,20 +69,41 @@ impl SparkTimestampFromNumber {
         ExprSimplifier::new(info).coerce(expression, schema)
     }
 
+    fn checked_scale(&self, value: Expr, data_type: &DataType, factor: i64) -> Expr {
+        let value = cast(value, DataType::Int64);
+        if matches!(
+            data_type,
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+        ) {
+            return value * lit(factor);
+        }
+        // A UDF defers overflow in unused CASE arms; a checked literal cast fails during folding.
+        cast(
+            ScalarUDF::from(Self::new(self.mode)).call(vec![value]),
+            DataType::Int64,
+        )
+    }
+
     fn integer_micros(&self, value: Expr, data_type: &DataType) -> Result<Expr> {
+        if self.mode == TimestampNumberMode::Seconds {
+            return Ok(self.checked_scale(value, data_type, 1_000_000));
+        }
         let value = cast(value, DataType::Int64);
         let scaled = value.clone() * lit(1_000_000_i64);
-        if self.mode == TimestampNumberMode::Seconds
-            || matches!(
-                data_type,
-                DataType::Int8
-                    | DataType::Int16
-                    | DataType::Int32
-                    | DataType::UInt8
-                    | DataType::UInt16
-                    | DataType::UInt32
-            )
-        {
+        if matches!(
+            data_type,
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+        ) {
             return Ok(scaled);
         }
         // Java TimeUnit.SECONDS.toMicros saturates instead of overflowing.
@@ -213,11 +240,36 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
         Ok(types.to_vec())
     }
 
-    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        internal_err!("numeric timestamp conversion must be simplified before execution")
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let factor = match self.mode {
+            TimestampNumberMode::Seconds => 1_000_000,
+            TimestampNumberMode::Millis => 1_000,
+            _ => {
+                return internal_err!("numeric timestamp cast must be simplified before execution");
+            }
+        };
+        let data_type = self.return_type(&[])?;
+        make_scalar_function(|values| {
+            let [value] = values else {
+                return internal_err!("numeric timestamp conversion requires one argument");
+            };
+            if value.data_type() != &DataType::Int64 {
+                return internal_err!("numeric timestamp input must be simplified to Int64");
+            }
+            let micros = numeric::mul(value, &Int64Array::new_scalar(factor))?;
+            Ok(cast_array(&micros, &data_type)?)
+        })(&args.args)
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if matches!(
+            self.mode,
+            TimestampNumberMode::Seconds | TimestampNumberMode::Millis
+        ) && let [value] = args.as_slice()
+            && info.get_data_type(value)? == DataType::Int64
+        {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
         Ok(ExprSimplifyResult::Simplified(
             self.expression(args.one()?, info.schema())?,
         ))

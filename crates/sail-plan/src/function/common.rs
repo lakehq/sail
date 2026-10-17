@@ -215,16 +215,15 @@ pub(crate) fn common_temporal_type(
                 let field_types = structs
                     .iter()
                     .map(|fields| fields[index].data_type().clone())
+                    .filter(|data_type| !data_type.is_null())
                     .collect::<Vec<_>>();
+                let first_type = field_types.first().unwrap_or(first.data_type());
                 let target =
                     if let Some(target) = common_temporal_type(&field_types, session_timezone) {
                         has_temporal = true;
                         target
-                    } else if field_types
-                        .iter()
-                        .all(|data_type| data_type == first.data_type())
-                    {
-                        first.data_type().clone()
+                    } else if field_types.iter().all(|data_type| data_type == first_type) {
+                        first_type.clone()
                     } else if field_types.iter().all(DataType::is_numeric) {
                         field_types
                             .iter()
@@ -233,7 +232,7 @@ pub(crate) fn common_temporal_type(
                                 comparison_coercion(&previous, current)
                             })?
                     } else {
-                        // TODO: Preserve temporal conversion when sibling fields need null/string coercion.
+                        // TODO: Preserve temporal conversion when sibling fields need string coercion.
                         return None;
                     };
                 Some(Arc::new(

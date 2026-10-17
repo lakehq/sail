@@ -30,7 +30,6 @@ Feature: Timestamp comparison planning preserves query-time values
       | truncated | epoch_seconds |
       | true      | true          |
 
-  @sail-bug
   Scenario: Nested temporal coercion handles an unrelated null field
     Given config spark.sql.session.timeZone = America/Los_Angeles
     When query
@@ -47,6 +46,43 @@ Feature: Timestamp comparison planning preserves query-time values
     Then query result
       | first               | second              | null_sibling | string_sibling |
       | 2024-03-10 03:30:00 | 2024-03-10 03:30:00 | true         | x              |
+
+  Scenario: Nested temporal coercion preserves trailing and all-null siblings
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT CAST(a[0].t AS STRING) AS first, CAST(a[1].t AS STRING) AS second,
+             a[0].s AS string_sibling, a[1].s IS NULL AS null_sibling,
+             a[0].n IS NULL AND a[1].n IS NULL AS all_null,
+             typeof(a[0].n) AS null_type
+      FROM (
+        SELECT array(
+          named_struct('t', TIMESTAMP_NTZ '2024-03-10 02:30:00', 's', 'x', 'n', NULL),
+          named_struct('t', TIMESTAMP '2024-03-10 03:30:00', 's', NULL, 'n', NULL)
+        ) AS a
+      )
+      """
+    Then query result
+      | first               | second              | string_sibling | null_sibling | all_null | null_type |
+      | 2024-03-10 03:30:00 | 2024-03-10 03:30:00 | x              | true         | true     | void      |
+
+  Scenario: Nested temporal coercion widens numeric siblings alongside nulls
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT CAST(a[0].t AS STRING) AS timestamp_value, a[0].n IS NULL AS null_sibling,
+             a[1].n AS int_sibling, a[2].n AS long_sibling, typeof(a[1].n) AS number_type
+      FROM (
+        SELECT array(
+          named_struct('t', TIMESTAMP_NTZ '2024-03-10 02:30:00', 'n', NULL),
+          named_struct('t', TIMESTAMP '2024-03-10 03:30:00', 'n', 1),
+          named_struct('t', TIMESTAMP '2024-03-10 03:30:00', 'n', 2147483648L)
+        ) AS a
+      )
+      """
+    Then query result
+      | timestamp_value     | null_sibling | int_sibling | long_sibling | number_type |
+      | 2024-03-10 03:30:00 | true         | 1           | 2147483648   | bigint      |
 
   @sail-bug
   Scenario: Nested timestamp casts handle an unrelated string to integer cast
