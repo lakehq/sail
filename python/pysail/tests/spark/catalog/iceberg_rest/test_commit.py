@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import threading
 import time
 import urllib.parse
@@ -18,6 +19,7 @@ from botocore.config import Config
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import DataFileContent, read_manifest_list
 from pyiceberg.table import StaticTable
+from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
@@ -46,10 +48,15 @@ class _CommitGate:
         self._target: tuple[list[str], str] | None = None
         self._claimed = False
         self._lock = threading.Lock()
+        self.snapshot_only = True
+        self.response_fault: int | str | None = None
+        self.apply_commit = True
+        self.request_count = 0
 
-    def arm(self, namespace: str, table: str) -> None:
+    def arm(self, namespace: str, table: str, *, snapshot_only: bool = True) -> None:
         with self._lock:
             self._target = ([namespace], table)
+            self.snapshot_only = snapshot_only
 
     def claim(self, method: str, body: bytes) -> dict[str, object] | None:
         if method != "POST":
@@ -70,12 +77,14 @@ class _CommitGate:
         )
         with self._lock:
             if (
-                self._claimed
-                or self._target is None
-                or not has_snapshot_requirement
+                self._target is None
+                or (self.snapshot_only and not has_snapshot_requirement)
                 or identifier.get("namespace") != self._target[0]
                 or identifier.get("name") != self._target[1]
             ):
+                return None
+            self.request_count += 1
+            if self._claimed:
                 return None
             self._claimed = True
             self.request = payload
@@ -128,6 +137,10 @@ def _commit_gate_handler(
                     self.end_headers()
                     self.wfile.write(encoded)
                     return
+                if gate.response_fault is not None and not gate.apply_commit:
+                    self._send_fault()
+                    gate.completed.set()
+                    return
 
             headers = {
                 key: value
@@ -155,6 +168,9 @@ def _commit_gate_handler(
                 except requests.JSONDecodeError:
                     response_payload = response.text
                 gate.record_response(response.status_code, response_payload)
+                if gate.response_fault is not None:
+                    self._send_fault()
+                    return
 
             self.send_response(response.status_code)
             for key, value in response.headers.items():
@@ -169,6 +185,19 @@ def _commit_gate_handler(
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(response.content)
+
+        def _send_fault(self) -> None:
+            if gate.response_fault == "disconnect":
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            status = gate.response_fault if isinstance(gate.response_fault, int) else 200
+            body = b"invalid response body"
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, _format: str, *_args: object) -> None:
             return
@@ -931,6 +960,97 @@ def test_rest_catalog_commits_catalog_managed_iceberg_alter(
     assert after["metadata"]["table-uuid"] == before["metadata"]["table-uuid"]
     assert after["metadata"]["properties"]["owner"] == "alice"
     assert after["metadata"]["schemas"] == before["metadata"]["schemas"]
+
+
+@pytest.mark.parametrize("populated", [False, True], ids=["empty", "populated"])
+@pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
+@pytest.mark.parametrize("fault", [503, "disconnect", "malformed"])
+def test_unknown_append_preserves_files_without_retrying(
+    spark,
+    gated_remote,
+    commit_gate_proxy,
+    iceberg_rest_endpoint,
+    seaweedfs_host_endpoint,
+    populated,
+    apply_commit,
+    fault,
+    request,
+):
+    table_name = "unknown_append_" + request.node.callspec.id.replace("-", "_")
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
+    try:
+        if populated:
+            spark.sql(f"INSERT INTO {table_fqn} VALUES (1)")  # noqa: S608
+        before = _load_table(iceberg_rest_endpoint, table_name)
+        location = before["metadata"]["location"]
+        before_keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+        _, gate = commit_gate_proxy
+        gate.response_fault = fault
+        gate.apply_commit = apply_commit
+        gate.arm(NAMESPACE, table_name, snapshot_only=False)
+        gate.release.set()
+        with spark_session_factory(gated_remote) as sessions:
+            writer = sessions.create()
+            with pytest.raises(PySparkException, match="commit state unknown"):
+                writer.sql(f"INSERT INTO {table_fqn} SELECT CAST(id AS INT) FROM range(2, 4, 1, 2)").collect()  # noqa: S608
+
+        assert gate.request_count == 1
+        assert gate.request is not None
+        after = _load_table(iceberg_rest_endpoint, table_name)
+        if apply_commit:
+            snapshot = next(
+                update["snapshot"] for update in gate.request["updates"] if update["action"] == "add-snapshot"
+            )
+            assert after["metadata"]["current-snapshot-id"] == snapshot["snapshot-id"]
+            assert len(after["metadata"]["snapshots"]) == len(before["metadata"].get("snapshots", [])) + 1
+        else:
+            assert after["metadata-location"] == before["metadata-location"]
+
+        after_keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+        assert before_keys <= after_keys
+        new_keys = after_keys - before_keys
+        assert any(key.endswith(".parquet") for key in new_keys)
+        assert any(key.endswith(".avro") for key in new_keys)
+        expected = ([1] if populated else []) + ([2, 3] if apply_commit else [])
+        assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == expected
+        reference = StaticTable.from_metadata(
+            after["metadata-location"],
+            properties={
+                "s3.endpoint": seaweedfs_host_endpoint,
+                "s3.access-key-id": "admin",
+                "s3.secret-access-key": "password",
+                "s3.region": "us-east-1",
+            },
+        )
+        assert sorted(reference.scan().to_arrow().column("id").to_pylist()) == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+
+
+@pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
+def test_unknown_alter_does_not_report_success(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, apply_commit
+):
+    table_name = f"unknown_alter_{apply_commit}"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
+    try:
+        _, gate = commit_gate_proxy
+        gate.response_fault = 503
+        gate.apply_commit = apply_commit
+        gate.arm(NAMESPACE, table_name, snapshot_only=False)
+        gate.release.set()
+        with (
+            spark_session_factory(gated_remote) as sessions,
+            pytest.raises(PySparkException, match="commit state unknown"),
+        ):
+            sessions.create().sql(f"ALTER TABLE {table_fqn} SET TBLPROPERTIES ('custom'='value')").collect()
+        assert gate.request_count == 1
+        properties = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["properties"]
+        assert properties.get("custom") == ("value" if apply_commit else None)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 
 
 def test_rest_catalog_rejects_non_iceberg_create_format(

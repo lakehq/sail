@@ -231,6 +231,18 @@ impl IcebergRestCatalogProvider {
         Ok(result)
     }
 
+    fn commit_state_is_unknown<E>(error: &ApiError<E>) -> bool {
+        match error.status() {
+            Some(status) => matches!(status.as_u16(), 500 | 502 | 503 | 504) || status.is_success(),
+            // A malformed success response or a lost response may follow a successful commit.
+            // Builder and connection failures happen before the request reaches the server.
+            None => match error {
+                ApiError::Request(error) => !error.is_builder() && !error.is_connect(),
+                _ => false,
+            },
+        }
+    }
+
     // Merge the local catalog config with the [`crate::r#gen::CatalogConfig`] fetched from the REST server.
     // This only happens once, then the result is cached.
     async fn resolved_catalog_config(&self) -> CatalogResult<&CatalogConfig<'static>> {
@@ -1408,7 +1420,20 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             },
         )
         .await
-        .map(|_| ())
+        .and_then(|outcome| match outcome {
+            LakehouseCommitOutcome::Committed { .. } | LakehouseCommitOutcome::Noop { .. } => {
+                Ok(())
+            }
+            LakehouseCommitOutcome::StateUnknown { message } => {
+                Err(CatalogError::CommitStateUnknown(message.into()))
+            }
+            LakehouseCommitOutcome::RetryableConflict { message } => {
+                Err(CatalogError::Conflict(message))
+            }
+            LakehouseCommitOutcome::Rejected { message } => {
+                Err(CatalogError::CommitRejected(message))
+            }
+        })
     }
 
     async fn commit_lakehouse_table(
@@ -1470,7 +1495,19 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         .await
                 }
             })
-            .await?
+            .await?;
+        if let Err(error) = &response
+            && Self::commit_state_is_unknown(error)
+        {
+            return Ok(LakehouseCommitOutcome::StateUnknown {
+                message: format!(
+                    "Iceberg REST catalog commit for {}.{} may have succeeded: {error}. Check the table state before retrying",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table)
+                ),
+            });
+        }
+        let response = response
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -2269,6 +2306,39 @@ mod tests {
                 })))
                 .mount(&self.server)
                 .await;
+        }
+
+        async fn commit_table(&self) -> CatalogResult<LakehouseCommitOutcome> {
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let context = LakehouseExecutionContext::catalog_table_context(
+                CatalogProviderId(self.name.clone()),
+                vec![self.name.clone(), "db1".to_string(), "table1".to_string()],
+                CatalogTableIdentity {
+                    table_id: None,
+                    table_uri: Some("s3://bucket/table".to_string()),
+                },
+                LakehouseOperation::Write,
+                LakehouseFormat::Iceberg,
+                LakehouseAuthority::CatalogAuthoritative {
+                    lifecycle: TableLifecycle::Managed,
+                    pointer: MetadataPointerAuthority::IcebergRest,
+                    commit: CommitAuthority::IcebergRestCommit,
+                },
+                ScanAuthority::ClientLakeSource,
+            );
+            self.catalog
+                .commit_lakehouse_table(
+                    &namespace,
+                    "table1",
+                    LakehouseCommitRequest {
+                        context,
+                        format: "iceberg".to_string(),
+                        requirements: vec![],
+                        updates: vec![],
+                        payload: None,
+                    },
+                )
+                .await
         }
     }
 
@@ -4140,6 +4210,121 @@ mod tests {
     async fn test_get_database() {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
+    }
+
+    #[tokio::test]
+    async fn commit_reports_unknown_state_without_retrying() {
+        for status in [200, 500, 502, 503, 504] {
+            for json_body in [false, true] {
+                let ctx = TestContext::new(Some("test")).await;
+                let response = ResponseTemplate::new(status);
+                let response = if json_body {
+                    response.set_body_json(serde_json::json!({
+                        "error": {"code": status, "type": "ServerError", "message": "uncertain"}
+                    }))
+                } else {
+                    response.set_body_string("invalid response body")
+                };
+                Mock::given(method("POST"))
+                    .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                    .respond_with(response)
+                    .expect(1)
+                    .mount(&ctx.server)
+                    .await;
+
+                assert!(
+                    matches!(
+                        ctx.commit_table().await.unwrap(),
+                        LakehouseCommitOutcome::StateUnknown { .. }
+                    ),
+                    "status {status}, JSON body {json_body}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_preserves_definite_failures() {
+        for status in [400, 401, 403, 404, 409, 422, 429, 501] {
+            let ctx = TestContext::new(Some("test")).await;
+            Mock::given(method("POST"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(status).set_body_string("rejected"))
+                .expect(if status == 401 { 2 } else { 1 })
+                .mount(&ctx.server)
+                .await;
+
+            let error = ctx.commit_table().await.unwrap_err();
+            assert!(matches!(
+                (status, error),
+                (401, CatalogError::Unauthorized(_))
+                    | (403, CatalogError::Forbidden(_))
+                    | (404, CatalogError::NotFound(CatalogObject::Table, _))
+                    | (409, CatalogError::Conflict(_))
+                    | (429, CatalogError::RateLimited(_))
+                    | (400 | 422 | 501, CatalogError::External(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_response_timeout_is_unknown() {
+        let mut ctx = TestContext::new(Some("test")).await;
+        ctx.catalog.resolved_catalog_config().await.unwrap();
+        ctx.catalog.http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints())
+                    .set_delay(std::time::Duration::from_secs(1)),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        assert!(matches!(
+            ctx.commit_table().await.unwrap(),
+            LakehouseCommitOutcome::StateUnknown { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn commit_connection_failure_is_definite() {
+        let mut ctx = TestContext::new(Some("test")).await;
+        ctx.catalog.resolved_catalog_config().await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        ctx.catalog.http_client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{address}")).unwrap())
+            .build()
+            .unwrap();
+
+        assert!(matches!(
+            ctx.commit_table().await,
+            Err(CatalogError::External(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn commit_valid_response_is_committed() {
+        let ctx = TestContext::new(Some("test")).await;
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables/table1"),
+            create_table_response_with_access_session_hints(),
+        )
+        .await;
+        assert!(matches!(
+            ctx.commit_table().await.unwrap(),
+            LakehouseCommitOutcome::Committed {
+                payload: Some(_),
+                ..
+            }
+        ));
     }
 
     fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {

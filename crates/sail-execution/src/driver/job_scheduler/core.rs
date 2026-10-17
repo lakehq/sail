@@ -20,7 +20,7 @@ use crate::driver::job_scheduler::state::{
     JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions, JobState};
+use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
@@ -163,8 +163,8 @@ impl JobScheduler {
     ///      added as job output streams if not already.
     ///   3. For each stage, if all the stages that consume it have succeeded, remove
     ///      the output streams of the stage if not already.
-    ///   4. If any task exceeds the maximum allowed attempts, the task region and the job
-    ///      are marked as failed.
+    ///   4. If any task fails without allowing a retry or exceeds the maximum allowed
+    ///      attempts, the task region and the job are marked as failed.
     ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
@@ -195,7 +195,7 @@ impl JobScheduler {
             &session_id,
         ));
 
-        Self::update_task_regions(job, &self.options);
+        Self::update_task_regions(job, self.options.task_max_attempts);
 
         if job
             .regions
@@ -246,13 +246,22 @@ impl JobScheduler {
         actions
     }
 
-    fn update_task_regions(job: &mut JobDescriptor, options: &JobSchedulerOptions) {
+    fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
         for (r, region) in job.topology.regions.iter().enumerate() {
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
+                // A terminal cause can arrive after the attempt was canceled or replaced.
+                if attempts.iter().any(|attempt| {
+                    attempt
+                        .cause
+                        .as_ref()
+                        .is_some_and(|cause| !cause.is_retryable())
+                }) {
+                    return true;
+                }
                 if let Some(attempt) = attempts.last()
                     && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                    && attempts.len() >= options.task_max_attempts
+                    && attempts.len() >= task_max_attempts
                 {
                     return true;
                 }
@@ -552,6 +561,11 @@ impl JobScheduler {
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
+                    if let Some(cause) = &attempt.cause
+                        && !cause.is_retryable()
+                    {
+                        return cause.clone();
+                    }
                     if matches!(attempt.state, TaskState::Failed)
                         && let Some(cause) = &attempt.cause
                     {
@@ -1114,6 +1128,78 @@ mod tests {
     use super::StageGroup;
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    #[test]
+    fn unknown_commit_stops_retries_and_takes_precedence_over_other_failures()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{
+            JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskRegionState,
+            TaskState,
+        };
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let graph = JobGraph::try_new(
+            MemorySourceConfig::try_new_exec(&[vec![], vec![]], Arc::new(Schema::empty()), None)?,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let attempt = |state, cause| TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause,
+            job_output_fetched: false,
+        };
+        for _ in 0..2 {
+            job.stages[0].tasks[0].attempts.push(attempt(
+                TaskState::Failed,
+                Some(CommonErrorCause::Io("transient failure".into())),
+            ));
+        }
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(
+            job.regions
+                .iter()
+                .all(|r| matches!(r.state, TaskRegionState::Running))
+        );
+
+        // A late error from a canceled attempt must still stop a replacement attempt.
+        job.stages[0].tasks[1].attempts.push(attempt(
+            TaskState::Canceled,
+            Some(CommonErrorCause::CommitStateUnknown(
+                "ambiguous commit".into(),
+            )),
+        ));
+        job.stages[0].tasks[1]
+            .attempts
+            .push(attempt(TaskState::Scheduled, None));
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(
+            job.regions
+                .iter()
+                .any(|r| matches!(r.state, TaskRegionState::Failed))
+        );
+        assert!(matches!(
+            JobScheduler::infer_job_failure_cause(&job),
+            CommonErrorCause::CommitStateUnknown(message) if message == "ambiguous commit"
+        ));
+        Ok(())
+    }
 
     #[test]
     fn forward_routing_uses_only_assigned_consumers_and_refreshes_producer_attempts()
