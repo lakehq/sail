@@ -88,7 +88,6 @@ Feature: make_ym_interval builds a year-month interval from years and months
   @function(nullability) @spark-4
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to make_ym_interval yields the schema Spark declares
       When query
         """
@@ -100,7 +99,6 @@ Feature: make_ym_interval builds a year-month interval from years and months
          |-- result: interval year to month (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to make_ym_interval yields the schema Spark declares
       When query
         """

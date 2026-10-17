@@ -1,22 +1,26 @@
-use datafusion::arrow::array::types::{Decimal128Type, Int32Type, Time64MicrosecondType};
+use chrono::{
+    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
+};
+use datafusion::arrow::array::timezone::Tz;
+use datafusion::arrow::array::types::{
+    Decimal128Type, Int32Type, Time64MicrosecondType, TimestampMicrosecondType,
+};
 use datafusion::arrow::array::{Array, AsArray, Int32Array, PrimitiveArray};
+use datafusion::arrow::temporal_conversions::as_datetime;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::ColumnarValue;
+pub use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_common::utils::datetime::{MICROS_PER_DAY, civil_from_days};
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 pub(crate) fn string_array_iter(
     array: &dyn Array,
 ) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
     match array.data_type() {
-        datafusion::arrow::datatypes::DataType::Utf8 => {
-            Ok(Box::new(as_string_array(array)?.iter()))
-        }
-        datafusion::arrow::datatypes::DataType::LargeUtf8 => {
-            Ok(Box::new(as_large_string_array(array)?.iter()))
-        }
-        datafusion::arrow::datatypes::DataType::Utf8View => {
-            Ok(Box::new(as_string_view_array(array)?.iter()))
-        }
+        arrow::datatypes::DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
+        arrow::datatypes::DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
+        arrow::datatypes::DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
         data_type => exec_err!("expected string array, got {data_type}"),
     }
 }
@@ -90,4 +94,188 @@ pub(crate) fn to_int32_array(
             exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
         }
     }
+}
+
+// Helper function to create timestamp from Date32 (days since epoch) and Time64 (microseconds since midnight)
+pub(crate) fn make_timestamp_from_date_time(date: i32, time: i64) -> Option<i64> {
+    (date as i64)
+        .checked_mul(MICROS_PER_DAY)
+        .and_then(|v| v.checked_add(time))
+}
+
+fn checked_add_months(datetime: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
+    if months >= 0 {
+        datetime.checked_add_months(Months::new(months as u32))
+    } else {
+        datetime.checked_sub_months(Months::new(months.unsigned_abs()))
+    }
+}
+
+pub(crate) fn checked_add_days(datetime: NaiveDateTime, days: i32) -> Option<NaiveDateTime> {
+    if days >= 0 {
+        datetime.checked_add_days(Days::new(days as u64))
+    } else {
+        datetime.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
+    }
+}
+
+pub(crate) fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.rem_euclid(4) == 0
+            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
+        {
+            29
+        }
+        2 => 28,
+        _ => unreachable!("month is normalized to 1..=12"),
+    }
+}
+
+pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - if month <= 2 { 1 } else { 0 };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+pub(crate) fn add_wide_calendar_interval(
+    start: i128,
+    months: i32,
+    days: i32,
+    micros: i64,
+) -> Result<i128> {
+    let epoch_day = i64::try_from(start.div_euclid(i128::from(MICROS_PER_DAY)))
+        .map_err(|_| exec_datafusion_err!("cannot convert timestamp {start}"))?;
+    let micros_of_day = start.rem_euclid(i128::from(MICROS_PER_DAY));
+    let (year, month, day) = civil_from_days(epoch_day);
+
+    let month_index = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(i64::from(month - 1)))
+        .and_then(|value| value.checked_add(i64::from(months)))
+        .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+    let year = month_index.div_euclid(12);
+    let month = u32::try_from(month_index.rem_euclid(12) + 1)
+        .map_err(|_| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+    let day = day.min(days_in_month(year, month));
+    let epoch_day = days_from_civil(year, month, day)
+        .checked_add(i64::from(days))
+        .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+
+    Ok(i128::from(epoch_day) * i128::from(MICROS_PER_DAY) + micros_of_day + i128::from(micros))
+}
+
+pub(crate) fn add_calendar_interval_wide(
+    datetime: NaiveDateTime,
+    months: i32,
+    days: i32,
+) -> Option<NaiveDateTime> {
+    let date = datetime.date();
+    let month_index = i64::from(date.year())
+        .checked_mul(12)?
+        .checked_add(i64::from(date.month0()))?
+        .checked_add(i64::from(months))?;
+    let year = month_index.div_euclid(12);
+    let month = u32::try_from(month_index.rem_euclid(12) + 1).ok()?;
+    let day = date.day().min(days_in_month(year, month));
+    let epoch_day = days_from_civil(year, month, day).checked_add(i64::from(days))?;
+    let (year, month, day) = civil_from_days(epoch_day);
+    let year = i32::try_from(year).ok()?;
+
+    NaiveDate::from_ymd_opt(year, month, day).map(|date| date.and_time(datetime.time()))
+}
+
+pub(crate) fn localize_with_preferred_offset(
+    timezone: Tz,
+    datetime: NaiveDateTime,
+    preferred_offset: i32,
+) -> Result<DateTime<Tz>> {
+    match timezone.from_local_datetime(&datetime) {
+        LocalResult::Single(value) => Ok(value),
+        LocalResult::Ambiguous(first, second) => {
+            if first.offset().fix().local_minus_utc() == preferred_offset {
+                Ok(first)
+            } else if second.offset().fix().local_minus_utc() == preferred_offset {
+                Ok(second)
+            } else {
+                Ok(first)
+            }
+        }
+        LocalResult::None => {
+            Ok(localize_with_fallback(&timezone, &datetime)?.with_timezone(&timezone))
+        }
+    }
+}
+
+pub(crate) fn add_ltz_interval(
+    start: i64,
+    months: i32,
+    days: i32,
+    micros: i64,
+    timezone: Tz,
+) -> Result<i64> {
+    if months == 0 {
+        let utc = as_datetime::<TimestampMicrosecondType>(start);
+        let boundary = if start < 0 {
+            NaiveDateTime::MIN
+        } else {
+            NaiveDateTime::MAX
+        };
+        let offset = timezone
+            .offset_from_utc_datetime(&utc.unwrap_or(boundary))
+            .fix();
+        if utc
+            .and_then(|value| value.checked_add_offset(offset))
+            .and_then(|value| checked_add_days(value, days))
+            .is_none()
+        {
+            // Preserve the existing elapsed-day behavior outside Chrono's calendar range.
+            // FIXME: Recurring far-future DST rules remain outside chrono-tz's supported domain.
+            return add_ntz_interval(start, 0, days, micros);
+        }
+    }
+    let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
+        .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
+        .ok_or_else(|| exec_datafusion_err!("cannot convert timestamp {start}"))?;
+
+    let calendar_fits = checked_add_months(datetime.naive_local(), months)
+        .and_then(|value| checked_add_days(value, days))
+        .is_some();
+
+    if calendar_fits {
+        if months != 0 {
+            let preferred_offset = datetime.offset().fix().local_minus_utc();
+            let local = checked_add_months(datetime.naive_local(), months)
+                .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+        }
+        if days != 0 {
+            let preferred_offset = datetime.offset().fix().local_minus_utc();
+            let local = checked_add_days(datetime.naive_local(), days)
+                .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+        }
+    } else {
+        let preferred_offset = datetime.offset().fix().local_minus_utc();
+        let local =
+            add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
+                exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
+            })?;
+        datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+    }
+
+    datetime
+        .timestamp_micros()
+        .checked_add(micros)
+        .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))
+}
+
+pub(crate) fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
+    let result = add_wide_calendar_interval(i128::from(start), months, days, micros)?;
+    i64::try_from(result).map_err(|_| exec_datafusion_err!("long overflow"))
 }

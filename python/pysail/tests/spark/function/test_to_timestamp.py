@@ -1,7 +1,39 @@
 from datetime import datetime, timezone
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
+
+from pysail.testing.spark.utils.common import is_jvm_spark
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Arrow IPC data source is a Sail extension")
+@pytest.mark.parametrize("encoding", ["dictionary", "run_end"])
+@pytest.mark.parametrize(
+    "seconds_type", [pa.int64(), pa.float64(), pa.decimal128(16, 7), pa.decimal256(50, 7), pa.string()]
+)
+def test_make_timestamp_encoded_seconds(spark, tmp_path, seconds_type, encoding):
+    seconds = pa.array(["1", None, "2", "1"]).cast(seconds_type)
+    seconds = seconds.dictionary_encode() if encoding == "dictionary" else pc.run_end_encode(seconds)
+    table = pa.table({"id": range(4), "seconds": seconds})
+    path = tmp_path / "seconds.arrow"
+    with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+
+    rows = (
+        spark.read.format("arrow")
+        .load(str(path))
+        .selectExpr("id", "CAST(make_timestamp_ntz(2024, 1, 1, 0, 0, seconds) AS STRING) AS result")
+        .orderBy("id")
+        .collect()
+    )
+    assert [row.result for row in rows] == [
+        "2024-01-01 00:00:01",
+        None,
+        "2024-01-01 00:00:02",
+        "2024-01-01 00:00:01",
+    ]
 
 
 @pytest.mark.parametrize(

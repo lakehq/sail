@@ -3,15 +3,9 @@ Feature: try_to_date (never-throwing variant of to_date)
   # with/without ANSI SQL mode enabled" (DESCRIBE FUNCTION EXTENDED, Spark 4.2.0,
   # org.apache.spark.sql.catalyst.expressions.TryToDateExpressionBuilder, Since 4.0.0).
   #
-  # Sail does not register this function at all: every scenario below fails with
-  # "unknown function: try_to_date", so the whole file is @sail-bug. The gold data already
-  # carried Spark's answers for three of these queries
-  # (crates/sail-spark-connect/tests/gold_data/function/datetime.json).
-  #
   # All expected values were captured on Spark JVM 4.2.0 with the session time zone set
   # to UTC, which is what the test harness uses.
 
-  @sail-bug
   Rule: Valid input parses, and the value error is swallowed
 
     Scenario Outline: Valid input: <case>
@@ -42,8 +36,10 @@ Feature: try_to_date (never-throwing variant of to_date)
         | leading whitespace is trimmed   | ' 2024-01-15'              | 2024-01-15   |
         | surrounding whitespace trimmed  | '  2024-01-15  '           | 2024-01-15   |
         | trailing whitespace is trimmed  | '2024-01-15 '              | 2024-01-15   |
+        | year only                       | '2024'                    | 2024-01-01   |
+        | year and month                  | '2024-02'                 | 2024-02-01   |
+        | suffix after a complete date    | '2024-01-15Tanything'      | 2024-01-15   |
 
-  @sail-bug
   Rule: Invalid input is NULL in BOTH ANSI modes
     # This is the whole point of the try_ variant: unlike to_date, the ANSI setting does
     # not change the outcome. Asserting only one ANSI mode would not discriminate it from
@@ -70,6 +66,8 @@ Feature: try_to_date (never-throwing variant of to_date)
         | boolean input          | true            |
         | binary input           | X'48656C6C6F'   |
         | TIME input             | TIME '12:30:00' |
+        | suffix after a year    | '2024T'         |
+        | suffix after a month   | '2024-01T'      |
 
     Scenario Outline: Invalid input with ANSI off: <case>
       Given config spark.sql.ansi.enabled = false
@@ -92,8 +90,9 @@ Feature: try_to_date (never-throwing variant of to_date)
         | boolean input          | true            |
         | binary input           | X'48656C6C6F'   |
         | TIME input             | TIME '12:30:00' |
+        | suffix after a year    | '2024T'         |
+        | suffix after a month   | '2024-01T'      |
 
-  @sail-bug
   Rule: Datetime input types are converted, not parsed
 
     Scenario Outline: Datetime input: <case>
@@ -111,7 +110,25 @@ Feature: try_to_date (never-throwing variant of to_date)
         | TIMESTAMP     | TIMESTAMP '2024-01-15 12:00:00'       | 2024-01-15 |
         | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-15 12:00:00'   | 2024-01-15 |
 
-  @sail-bug
+    Scenario Outline: A temporal input ignores the format: <case>
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT try_to_date(<input>, <format>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                   | input                                | format               | result     |
+        | DATE with NULL format  | DATE '2024-01-15'                    | CAST(NULL AS STRING) | 2024-01-15 |
+        | DATE with bad format   | DATE '2024-01-15'                    | 'qqq'                | 2024-01-15 |
+        | LTZ with NULL format   | TIMESTAMP '2024-01-15 00:30:00'      | CAST(NULL AS STRING) | 2024-01-15 |
+        | LTZ with bad format    | TIMESTAMP '2024-01-15 00:30:00'      | 'qqq'                | 2024-01-15 |
+        | NTZ with NULL format   | TIMESTAMP_NTZ '2024-01-15 00:30:00'  | CAST(NULL AS STRING) | 2024-01-14 |
+        | NTZ with bad format    | TIMESTAMP_NTZ '2024-01-15 00:30:00'  | 'qqq'                | 2024-01-14 |
+
   Rule: A malformed PATTERN still raises — only VALUE errors are swallowed
     # The try_ prefix does not make the function total: an unrecognized datetime pattern
     # is an error in both ANSI modes. The NULL-value case below is what discriminates a
@@ -134,7 +151,29 @@ Feature: try_to_date (never-throwing variant of to_date)
         | result |
         | NULL   |
 
-  @sail-bug
+    Scenario: NULL values do not validate a scalar pattern in a batch
+      When query
+        """
+        SELECT try_to_date(c, 'qqq') AS result
+        FROM VALUES (CAST(NULL AS STRING)), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+
+    Scenario: only a non-NULL value validates its paired pattern
+      When query
+        """
+        SELECT try_to_date(c, f) AS result FROM VALUES
+          (CAST(NULL AS STRING), 'qqq'),
+          ('2024-01-15', 'yyyy-MM-dd') AS t(c, f)
+        """
+      Then query result
+        | result     |
+        | NULL       |
+        | 2024-01-15 |
+
   Rule: NULL and empty format handling
 
     Scenario Outline: NULL and empty formats: <case>
@@ -155,7 +194,6 @@ Feature: try_to_date (never-throwing variant of to_date)
         | empty format             | '2016-12-31', ''                            |
         | whitespace-only format   | '2016-12-31', '   '                         |
 
-  @sail-bug
   Rule: Argument count
 
     Scenario Outline: Argument count: <case>
@@ -170,7 +208,6 @@ Feature: try_to_date (never-throwing variant of to_date)
         | zero args |                                          |
         | three args | '2016-12-31', 'yyyy-MM-dd', 'yyyy-MM-dd' |
 
-  @sail-bug
   Rule: The value and the format may come from a column
     # A behaviour-governing argument given as a literal is constant-folded, so the literal
     # scenarios above never exercise the columnar kernel. These pass the same arguments
@@ -211,7 +248,18 @@ Feature: try_to_date (never-throwing variant of to_date)
         | result     |
         | 2016-12-31 |
 
-  @sail-bug
+  Rule: Formatted dates use the session timezone
+
+    Scenario: a parsed named timezone can change the date in the session timezone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT try_to_date('2024-01-01 00:30 Asia/Tokyo', 'yyyy-MM-dd HH:mm VV') AS result
+        """
+      Then query result
+        | result     |
+        | 2023-12-31 |
+
   @function(nullability)
   Rule: Output schema
 
@@ -270,4 +318,37 @@ Feature: try_to_date (never-throwing variant of to_date)
         """
         root
          |-- result: date (nullable = false)
+        """
+
+    Scenario: a non-null TIMESTAMP_NTZ input yields the nullable schema Spark declares
+      When query
+        """
+        SELECT try_to_date(TIMESTAMP_NTZ '2024-01-15 12:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    Scenario: parsing a non-null string column yields a nullable date
+      When query
+        """
+        SELECT try_to_date(c) AS result FROM VALUES ('2024-01-15'), ('2024-01-16') AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    Scenario: a DATE input with a format yields a nullable date
+      When query
+        """
+        SELECT try_to_date(DATE '2024-01-15', 'yyyy-MM-dd') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
         """

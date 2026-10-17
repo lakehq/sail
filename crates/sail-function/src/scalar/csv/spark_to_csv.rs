@@ -35,7 +35,7 @@ fn default_date_format() -> DateTimeFormat {
 
 fn default_ltz_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
-    DateTimeFormat::for_formatting("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+    DateTimeFormat::for_formatting("yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX")
         .expect("default timestamp LTZ format should be valid")
 }
 

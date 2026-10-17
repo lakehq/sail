@@ -9,6 +9,9 @@ use datafusion::arrow::temporal_conversions::{
 };
 use datafusion_common::arrow::temporal_conversions::{date32_to_datetime, date64_to_datetime};
 use sail_common::spec::{DayTimeIntervalField, YearMonthIntervalField};
+use sail_common::utils::datetime::{
+    MICROS_PER_DAY, MICROS_PER_SECOND, civil_from_days, is_fixed_zero_offset_timezone,
+};
 
 pub struct BinaryFormatter<'a>(pub &'a [u8]);
 
@@ -129,6 +132,21 @@ impl Display for TimestampMicrosecondFormatter<'_> {
         let datetime = Utc.timestamp_opt(secs, nanos as u32).earliest();
         match datetime {
             Some(datetime) => write_timestamp(f, &datetime, *tz),
+            None if tz.is_none_or(|tz| is_fixed_zero_offset_timezone(&tz.to_string())) => {
+                // Spark's timestamp range is wider than Chrono's calendar range.
+                // Only fixed-zero zones can use this fallback without timezone rules.
+                let (year, month, day) = civil_from_days(microseconds.div_euclid(MICROS_PER_DAY));
+                let time = microseconds.rem_euclid(MICROS_PER_DAY);
+                let seconds = time / MICROS_PER_SECOND;
+                let fraction = FractionFormatter::<6>((time % MICROS_PER_SECOND) as u32);
+                write!(
+                    f,
+                    "{year:+}-{month:02}-{day:02} {:02}:{:02}:{:02}{fraction}",
+                    seconds / 3600,
+                    seconds / 60 % 60,
+                    seconds % 60
+                )
+            }
             None => write!(f, "ERROR"),
         }
     }
@@ -516,5 +534,40 @@ impl Display for DurationNanosecondFormatter {
             f,
             "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}{fraction}' DAY TO SECOND"
         )
+    }
+}
+
+#[cfg(test)]
+mod wide_timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn microsecond_bounds_render_in_utc_and_ntz() -> Result<(), Box<dyn std::error::Error>> {
+        let utc: Tz = "UTC".parse()?;
+        for tz in [None, Some(&utc)] {
+            assert_eq!(
+                TimestampMicrosecondFormatter(i64::MAX, tz).to_string(),
+                "+294247-01-10 04:00:54.775807"
+            );
+            assert_eq!(
+                TimestampMicrosecondFormatter(i64::MIN, tz).to_string(),
+                "-290308-12-21 19:59:05.224192"
+            );
+            assert_eq!(
+                TimestampMicrosecondFormatter(-1, tz).to_string(),
+                "1969-12-31 23:59:59.999999"
+            );
+            assert_eq!(
+                TimestampMicrosecondFormatter(0, tz).to_string(),
+                "1970-01-01 00:00:00"
+            );
+        }
+        // A zone with changing rules must never receive the fixed-zero fallback.
+        let london: Tz = "Europe/London".parse()?;
+        assert_eq!(
+            TimestampMicrosecondFormatter(i64::MAX, Some(&london)).to_string(),
+            "ERROR"
+        );
+        Ok(())
     }
 }

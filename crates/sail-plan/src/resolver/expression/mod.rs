@@ -2,11 +2,13 @@ use std::fmt::Debug;
 
 use async_recursion::async_recursion;
 use datafusion_common::DFSchemaRef;
-use datafusion_expr::expr;
+use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::with_session_timezone;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -17,7 +19,7 @@ mod grouping;
 mod lambda;
 mod literal;
 mod misc;
-mod predicate;
+pub(in crate::resolver) mod predicate;
 mod sort;
 mod subquery;
 mod udf;
@@ -106,7 +108,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
 
-        match expr {
+        let mut resolved = match expr {
             Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
             Expr::UnresolvedAttribute {
                 name,
@@ -340,7 +342,18 @@ impl PlanResolver<'_> {
             Expr::NamedArgument { .. } => Err(PlanError::invalid(
                 "named argument expression can only be used in UDF arguments",
             )),
+        }?;
+        // Spark TimestampType stores an instant, not a per-column display timezone.
+        // Rebind stored timestamps to this query's zone before their callers use them.
+        if let Ok(data_type) = resolved.expr.get_type(schema) {
+            let target = with_session_timezone(&data_type, &self.config.session_timezone);
+            if target != data_type {
+                // DataFusion's nested cast matches fields by name and collapses duplicates.
+                resolved.expr =
+                    ScalarUDF::from(SparkStructRename::new(target)).call(vec![resolved.expr]);
+            }
         }
+        Ok(resolved)
     }
 
     pub(super) async fn resolve_named_expressions(

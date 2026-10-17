@@ -3,7 +3,6 @@ Feature: dayofmonth output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to dayofmonth yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: dayofmonth output schema
          |-- result: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null column input to dayofmonth yields the schema Spark declares
       When query
         """

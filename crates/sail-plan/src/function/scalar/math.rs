@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
-use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
@@ -9,11 +8,12 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
-use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_add::SparkTimestampAdd;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -38,7 +38,86 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
+    coerce_temporal_arguments,
+};
+
+fn timestamp_plus_interval(timestamp: Expr, interval: Expr) -> Expr {
+    ScalarUDF::from(SparkTimestampAdd::new()).call(vec![timestamp, interval])
+}
+
+fn date_plus_day_time(
+    date: Expr,
+    interval: Expr,
+    context: &FunctionContextInput<'_>,
+    subtract: bool,
+) -> PlanResult<Expr> {
+    let field = interval.to_field(context.schema)?.1;
+    let metadata = field
+        .metadata()
+        .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        .map(|value| spec::SparkIntervalMetadata::from_json(value))
+        .transpose()?;
+    let day_only = matches!(
+        metadata,
+        Some(spec::SparkIntervalMetadata::DayTime {
+            start_field: spec::DayTimeIntervalField::Day,
+            end_field: spec::DayTimeIntervalField::Day
+        })
+    );
+    if day_only {
+        let interval = cast(interval, DataType::Interval(IntervalUnit::MonthDayNano));
+        return Ok(if subtract {
+            date - interval
+        } else {
+            date + interval
+        });
+    }
+    let timezone = &context.plan_config.session_timezone;
+    let date_type = date.get_type(context.schema)?;
+    let timestamp = cast_temporal(
+        date,
+        &date_type,
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
+        timezone,
+        false,
+    )?;
+    let interval = if subtract {
+        ScalarUDF::from(NegateDuration::new()).call(vec![interval])
+    } else {
+        interval
+    };
+    Ok(timestamp_plus_interval(timestamp, interval))
+}
+
+fn subtract_timestamps(
+    left: Expr,
+    right: Expr,
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<Expr> {
+    let left_type = left.get_type(context.schema)?;
+    let right_type = right.get_type(context.schema)?;
+    let timezone = &context.plan_config.session_timezone;
+    let ntz = matches!(left_type, DataType::Timestamp(_, None))
+        || matches!(right_type, DataType::Timestamp(_, None));
+    let target = DataType::Timestamp(TimeUnit::Microsecond, (!ntz).then(|| Arc::clone(timezone)));
+    let local = |value: Expr, source: &DataType| -> PlanResult<Expr> {
+        let value = cast_temporal(value, source, target.clone(), timezone, false)?;
+        let local = cast_temporal(
+            value,
+            &target,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            timezone,
+            false,
+        )?;
+        Ok(cast(local, DataType::Int64))
+    };
+    Ok(cast(
+        local(left, &left_type)? - local(right, &right_type)?,
+        DataType::Duration(TimeUnit::Microsecond),
+    ))
+}
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -53,9 +132,7 @@ fn add_day_time_interval_to_string(
         false,
     )?)
     .call(vec![string]);
-    let calendar_interval =
-        ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
-    let shifted = timestamp + calendar_interval;
+    let shifted = timestamp_plus_interval(timestamp, interval);
     match string_type {
         DataType::Utf8 => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![shifted])),
         DataType::LargeUtf8 => Ok(ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![shifted])),
@@ -94,6 +171,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
+            (Ok(DataType::Timestamp(_, _)), Ok(DataType::Duration(_) | DataType::Interval(_))) => {
+                timestamp_plus_interval(left, right)
+            }
+            (Ok(DataType::Duration(_) | DataType::Interval(_)), Ok(DataType::Timestamp(_, _))) => {
+                timestamp_plus_interval(right, left)
+            }
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
                 Ok(DataType::Duration(TimeUnit::Microsecond)),
@@ -115,10 +198,10 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 function_context.plan_config.ansi_mode,
             )?,
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                date_plus_day_time(left, right, &function_context, false)?
             }
             (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
-                cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+                date_plus_day_time(right, left, &function_context, false)?
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
@@ -171,8 +254,23 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
+            (Ok(DataType::Timestamp(_, _)), Ok(DataType::Duration(_) | DataType::Interval(_))) => {
+                let negative = spark_unary_negate(
+                    right,
+                    function_context.plan_config.ansi_mode,
+                    function_context.schema,
+                );
+                timestamp_plus_interval(left, negative)
+            }
+            (
+                Ok(DataType::Timestamp(_, _)),
+                Ok(DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64),
+            )
+            | (Ok(DataType::Date32 | DataType::Date64), Ok(DataType::Timestamp(_, _))) => {
+                subtract_timestamps(left, right, &function_context)?
+            }
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                date_plus_day_time(left, right, &function_context, true)?
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
@@ -282,15 +380,23 @@ fn is_zero_literal(expr: &Expr) -> bool {
 /// Returns a guarded divisor expression that handles division by zero at runtime.
 ///
 /// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
-/// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
+/// In ANSI mode: evaluates the supplied error expression when the divisor is zero.
 ///
 /// This wraps the divisor itself (not the entire division expression) to avoid
 /// duplicating complex divisor expressions (e.g., window functions) in the plan.
+///
+/// The ANSI error is raised only when the division is evaluated, for `/`, `DIV` and `%` alike;
+/// `spark_divide` explains why this intentionally differs from Spark's optimizer. Besides the
+/// redundant `LIMIT 0`, Spark's `FoldablePropagation` folds a constant alias where it is
+/// consumed and in-memory relations are evaluated row by row, so the set of queries that fail
+/// before execution depends on the plan shape. Sail's own plans (for example Delta CHECK
+/// constraint validation) also rely on DataFusion raising errors only for rows that exist.
+/// The divergences are documented in `divide_by_zero.feature`.
 fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
     ansi_mode: bool,
-    error_message: &str,
+    zero_error: Expr,
 ) -> Expr {
     // Skip wrapping for Interval/Duration types (cannot be compared to lit(0)).
     if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
@@ -299,13 +405,9 @@ fn make_safe_divisor(
 
     if ansi_mode {
         let zero_check = divisor.clone().eq(lit(0));
-        let raise = Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(RaiseError::new())),
-            args: vec![lit(error_message)],
-        });
         Expr::Case(expr::Case {
             expr: None,
-            when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+            when_then_expr: vec![(Box::new(zero_check), Box::new(zero_error))],
             else_expr: Some(Box::new(divisor)),
         })
     } else {
@@ -334,16 +436,19 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
+    if !ansi_mode && is_zero_literal(&divisor) {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
+    // Keep ANSI `/` errors in expression evaluation, so empty input, unused CASE
+    // branches, and zero-element lambdas do not fail merely while being planned.
+    // This intentionally differs from Spark's optimizer: with ANSI enabled,
+    // SELECT 1 / 0 FROM range(1) LIMIT 0 returns [], while replacing range(1) with
+    // range(0) raises DIVIDE_BY_ZERO. Spark's EliminateLimits can remove a redundant
+    // LIMIT 0 before ConstantFolding evaluates the division.
+    // Sail returns [] for both; evaluated division by zero on non-NULL inputs still raises.
+    // Spark show() can add a fold that errors on an empty conditional result.
+    // Sail follows collect() in that case; formatting must not add evaluation.
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -353,7 +458,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit("Division by zero")]),
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -400,16 +505,12 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
+    // A literal zero divisor only short-circuits to NULL outside ANSI mode; the ANSI error
+    // is raised when the division is evaluated (see `make_safe_divisor`).
     let ansi_mode = function_context.plan_config.ansi_mode;
+    if !ansi_mode && is_zero_literal(&divisor) {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -419,7 +520,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        ScalarUDF::from(RaiseError::divide_by_zero()).call(vec![lit("Division by zero")]),
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -597,18 +698,12 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
+    // A literal zero divisor only short-circuits to NULL outside ANSI mode; the ANSI error
+    // is raised when the remainder is evaluated (see `make_safe_divisor`).
     let ansi_mode = function_context.plan_config.ansi_mode;
+    if !ansi_mode && is_zero_literal(&divisor) {
+        return Ok(Expr::Literal(ScalarValue::Null, None));
+    }
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
@@ -617,7 +712,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Remainder by zero",
+        ScalarUDF::from(RaiseError::new()).call(vec![lit("Remainder by zero")]),
     );
 
     Ok(Expr::BinaryExpr(BinaryExpr {
@@ -787,10 +882,26 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        (
+            "greatest",
+            F::custom(|input| {
+                Ok(expr_fn::greatest(coerce_temporal_arguments(
+                    input.arguments,
+                    &input.function_context,
+                )?))
+            }),
+        ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        (
+            "least",
+            F::custom(|input| {
+                Ok(expr_fn::least(coerce_temporal_arguments(
+                    input.arguments,
+                    &input.function_context,
+                )?))
+            }),
+        ),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),

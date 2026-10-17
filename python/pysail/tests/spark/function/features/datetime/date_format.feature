@@ -40,7 +40,6 @@ Feature: date_format with an argument coming from a column
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null timestamp literal yields a string
       When query
         """
@@ -52,7 +51,6 @@ Feature: date_format with an argument coming from a column
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null timestamp column yields a string
       When query
         """

@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
-use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Spark-compatible "rename struct fields by position".
 ///
@@ -14,8 +17,8 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 /// This UDF takes a single input column and a target type (struct or
 /// list-of-struct, possibly nested) and returns the same underlying values with
 /// the field names rewritten positionally to match the target. It is a
-/// metadata-only operation when the leaf types already match; if leaf types
-/// differ, callers should wrap the result in a regular CAST after the rename.
+/// metadata-only operation when leaf types match except for timestamp display
+/// zones; other leaf conversions require a regular CAST after the rename.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkStructRename {
     signature: Signature,
@@ -48,6 +51,18 @@ impl ScalarUDFImpl for SparkStructRename {
         Ok(self.target_type.clone())
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [source] = args.arg_fields else {
+            return exec_err!("spark_struct_rename expects exactly one argument");
+        };
+        Ok(Arc::new(
+            source
+                .as_ref()
+                .clone()
+                .with_data_type(self.target_type.clone()),
+        ))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return exec_err!("spark_struct_rename expects exactly one argument");
@@ -66,7 +81,7 @@ impl ScalarUDFImpl for SparkStructRename {
 }
 
 /// Recursively rebuild `arr` so that any `Struct` field names match those in
-/// `target_type` positionally. Leaf data types must already match.
+/// `target_type` positionally. Leaf types must match except for LTZ display zones.
 fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
     match (arr.data_type(), target_type) {
         (DataType::Struct(src_fields), DataType::Struct(tgt_fields)) => {
@@ -96,7 +111,12 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                     )
                 })
                 .collect();
-            let renamed = StructArray::try_new(new_fields, new_columns, src.nulls().cloned())?;
+            let renamed = StructArray::try_new_with_length(
+                new_fields,
+                new_columns,
+                src.nulls().cloned(),
+                src.len(),
+            )?;
             Ok(Arc::new(renamed))
         }
         (DataType::List(_), DataType::List(tgt_field)) => {
@@ -203,6 +223,11 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             Ok(Arc::new(renamed))
         }
         (source_type, target_type) if source_type == target_type => Ok(Arc::clone(arr)),
+        (DataType::Timestamp(source_unit, Some(_)), DataType::Timestamp(target_unit, Some(_)))
+            if source_unit == target_unit =>
+        {
+            Ok(cast(arr, target_type)?)
+        }
         (source_type, target_type) => {
             exec_err!("spark_struct_rename: leaf type mismatch: {source_type} vs {target_type}")
         }

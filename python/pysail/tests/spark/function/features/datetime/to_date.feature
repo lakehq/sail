@@ -436,9 +436,6 @@ Feature: to_date with an argument coming from a column
     # DateTimeFormatter. That parser trims leading and trailing whitespace (and ISO control
     # characters) and accepts an ISO `T` separator, so all of these succeed.
     #
-    # The forms Sail ALREADY handles are kept in the first table as the contrasting half:
-    # a parser that simply rejected "unusual" strings would fail those too, so listing only
-    # the broken ones would not discriminate a narrow parser from a correct one.
     # All values measured on Spark JVM 4.2.0, session time zone UTC.
 
     Scenario Outline: Accepted date string: <case>
@@ -461,10 +458,7 @@ Feature: to_date with an argument coming from a column
         | year zero                  | '0000-12-31'                           | 0000-12-31   |
         | five-digit year            | '10000-01-01'                          | +10000-01-01 |
 
-    @sail-bug
-    Scenario Outline: Accepted date string that Sail rejects: <case>
-      # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
-      # NULL. Both are wrong — Spark parses all three.
+    Scenario Outline: Accepted date string with whitespace or an ISO separator: <case>
       When query
         """
         SELECT to_date(<input>) AS result
@@ -478,3 +472,49 @@ Feature: to_date with an argument coming from a column
         | ISO T separator        | '2024-01-15T12:00:00' |
         | leading whitespace     | ' 2024-01-15'         |
         | surrounding whitespace | '  2024-01-15  '      |
+
+  Rule: Formatted timestamp inputs preserve temporal conversion metadata
+
+    Scenario Outline: Formatted timestamp dates are nullable according to ANSI mode <ansi>
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_date(TIMESTAMP '1000-06-15 00:30:00Z', 'yyyy-MM-dd') AS result
+        """
+      Then query result
+        | result     |
+        | 1000-06-14 |
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = <nullable>)
+        """
+
+      Examples:
+        | ansi  | nullable |
+        | true  | false    |
+        | false | true     |
+
+    Scenario: A nullable formatted timestamp column remains nullable across a repeated hour
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(ts, 'yyyy-MM-dd') AS result
+        FROM VALUES
+          (1, TIMESTAMP '2024-11-03 08:30:00Z'),
+          (2, TIMESTAMP '2024-11-03 09:30:00Z'),
+          (3, CAST(NULL AS TIMESTAMP)) AS t(id, ts)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result     |
+        | 2024-11-03 |
+        | 2024-11-03 |
+        | NULL       |
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """

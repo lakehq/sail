@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
-use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
+use datafusion::arrow::array::{Array, new_null_array};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -527,6 +527,22 @@ impl ScalarUDFImpl for SparkTimestamp {
                 self.parse_array_with_format_array(&array, &format_array, safe)
             }
             (ColumnarValue::Array(array), format) => {
+                // Intentionally return NULL before pattern validation in both ANSI modes.
+                // Spark folds to_timestamp(CAST(NULL AS STRING), 'QQQ') to NULL, but
+                // to_timestamp(CASE WHEN id < 0 THEN '2024-01-01' ELSE CAST(NULL AS STRING)
+                // END, 'QQQ') over range(2) errors with wholeStage=true/factoryMode=FALLBACK:
+                // code generation initializes its constant formatter before row NULL checks.
+                // The same query returns NULL with factoryMode=NO_CODEGEN. Keep NULL handling
+                // independent of Spark's execution strategy; non-NULL inputs still validate
+                // patterns. The type guard prevents invalid input types from taking this path.
+                if (array.data_type().is_string() || array.data_type() == &DataType::Null)
+                    && array.null_count() == array.len()
+                {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
+                        array.len(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 let array: PrimitiveArray<TimestampMicrosecondType> =
                     string_array_iter(array.as_ref())?
@@ -549,6 +565,15 @@ impl ScalarUDFImpl for SparkTimestamp {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
+                // Preserve the same NULL-first contract for scalar inputs.
+                if (scalar.data_type().is_string() || scalar.data_type() == DataType::Null)
+                    && scalar.is_null()
+                {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                        None,
+                        self.timezone.clone(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 if matches!(format, ScalarFormat::Null) {
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(

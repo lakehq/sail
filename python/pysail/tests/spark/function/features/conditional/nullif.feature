@@ -35,3 +35,44 @@ Feature: nullif output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Temporal argument evaluation
+
+    # Spark 3.5 evaluates the first argument twice; Spark 4.0+ binds it once.
+    @spark-4.0
+    Scenario Outline: Mixed timestamps evaluate a volatile first argument once
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT count(*) AS retained_equal_values
+        FROM range(1000)
+        WHERE nullif(
+          CAST(timestamp_micros(CAST(rand(1) * 2 AS BIGINT)) AS <left_type>),
+          CAST(timestamp_micros(0) AS <right_type>)
+        ) = CAST(timestamp_micros(0) AS <left_type>)
+        """
+      Then query result
+        | retained_equal_values |
+        | 0                     |
+      When query
+        """
+        SELECT nullif(
+          CASE WHEN id = 0 THEN CAST(NULL AS <left_type>)
+               ELSE CAST(timestamp_micros(CAST(rand(1) * 2 AS BIGINT)) AS <left_type>) END,
+          CAST(timestamp_micros(0) AS <right_type>)
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+      Then query schema
+        """
+        root
+         |-- result: <schema_type> (nullable = true)
+        """
+
+      Examples:
+        | left_type     | right_type    | schema_type   |
+        | TIMESTAMP_NTZ | TIMESTAMP     | timestamp_ntz |
+        | TIMESTAMP     | TIMESTAMP_NTZ | timestamp     |

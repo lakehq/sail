@@ -65,7 +65,7 @@ impl ScalarUDFImpl for SparkWindowBuckets {
             Field::new("start", field_type.clone(), true),
             Field::new("end", field_type, true),
         ]));
-        Ok(DataType::List(Arc::new(Field::new("item", item, true))))
+        Ok(DataType::List(Arc::new(Field::new("item", item, false))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

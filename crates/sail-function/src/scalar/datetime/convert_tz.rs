@@ -15,9 +15,40 @@ use datafusion_expr::{
     ScalarUDFImpl, ValueOrLambda, Volatility,
 };
 use datafusion_expr_common::signature::Signature;
+use datafusion_functions::datetime::to_local_time::ToLocalTimeFunc;
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+
+// Preserve timestamp nullability while using the native timezone conversion kernel.
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+pub struct SparkToLocalTime {
+    inner: ToLocalTimeFunc,
+}
+
+impl ScalarUDFImpl for SparkToLocalTime {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields[0].is_nullable();
+        let field = self.inner.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_nullable(nullable)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
+    }
+}
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -307,10 +338,21 @@ fn convert_tz_inner(
         convert_tz_non_classic
     };
 
-    let from_to_utc_timestamp_func =
+    let mut singular_timezones = [None, None];
+    let mut parse_row_zone = |index: usize, name: &str| {
+        if args[index].len() == 1 {
+            if singular_timezones[index].is_none() {
+                singular_timezones[index] = parse_tz(Some(name))?;
+            }
+            Ok(singular_timezones[index])
+        } else {
+            parse_tz(Some(name))
+        }
+    };
+    let mut from_to_utc_timestamp_func =
         |inputs: (Option<i64>, Option<&str>, Option<&str>)| match inputs {
             (Some(ts_micros), Some(from_tz), Some(to_tz)) => {
-                match (parse_tz(Some(from_tz))?, parse_tz(Some(to_tz))?) {
+                match (parse_row_zone(0, from_tz)?, parse_row_zone(1, to_tz)?) {
                     (Some(from_tz), Some(to_tz)) => Ok(convert(ts_micros, &from_tz, &to_tz)),
                     _ => Ok(None),
                 }

@@ -10,6 +10,7 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -258,19 +259,36 @@ impl PlanResolver<'_> {
         });
         let output_name = agg.name_for_alias()?;
         let output_col = Column::new_unqualified(&output_name);
-        let plan = LogicalPlanBuilder::from(input)
-            .aggregate(grouping, vec![agg])?
-            .project(vec![Expr::Column(output_col.clone())])?
-            .unnest_column(output_col.clone())?
-            .project(
+        let output_names = state.register_fields(&output_fields);
+        let renamed_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::Struct(
                 output_fields
                     .iter()
-                    .map(|f| {
-                        let expr = Expr::Column(output_col.clone()).field(f.name());
-                        let name = state.register_field(f);
-                        Ok(expr.alias(name))
-                    })
-                    .collect::<PlanResult<Vec<_>>>()?,
+                    .zip(&output_names)
+                    .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
+                    .collect(),
+            ),
+            false,
+        )));
+        // Use unique internal names so flattening also supports duplicate output names.
+        let output = ScalarUDF::from(SparkStructRename::new(renamed_type))
+            .call(vec![Expr::Column(output_col.clone())])
+            .alias(&output_name);
+        let mut plan = LogicalPlanBuilder::from(input)
+            .aggregate(grouping, vec![agg])?
+            .project(vec![output])?
+            .unnest_column(output_col.clone())?;
+        // Empty output structs only need the final projection, which preserves row count.
+        if !output_names.is_empty() {
+            // Flatten the non-null row struct to preserve the declared output nullability.
+            plan = plan.unnest_column(output_col)?;
+        }
+        let plan = plan
+            .project(
+                output_names
+                    .iter()
+                    .map(|name| ident(format!("{output_name}.{name}")).alias(name))
+                    .collect::<Vec<_>>(),
             )?
             .build()?;
         // Spark's grouped-map output has only the function output columns.
