@@ -1,5 +1,8 @@
 """Nested CTAS schemas must agree with catalog metadata and Parquet field IDs."""
 
+from collections import Counter
+from decimal import Decimal
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -111,3 +114,37 @@ def test_create_nested_table_as_select(
         spark.sql(f"DROP TABLE IF EXISTS {table}")
         if creation == "copy":
             spark.sql(f"DROP TABLE IF EXISTS {table}_source")
+
+
+@pytest.mark.parametrize("element_name", ["item", "entry"])
+@pytest.mark.parametrize(
+    ("element_type", "value"), [(pa.string(), "x"), (pa.decimal128(10, 2), Decimal("1.23"))], ids=["string", "decimal"]
+)
+def test_create_table_from_parquet_list_element_name(
+    spark, reference_catalog, storage_properties, tmp_path, element_name, element_type, value, request
+):
+    table = "nested_ctas.parquet_list_" + request.node.callspec.id.replace("-", "_")
+    source_path = tmp_path / "source.parquet"
+    expected = [{"a": [value, None]}, {"a": []}, {"a": None}]
+    source_schema = pa.schema([pa.field("a", pa.list_(pa.field(element_name, element_type)))])
+    pq.write_table(pa.Table.from_pylist(expected, schema=source_schema), source_path, use_compliant_nested_type=False)
+    assert pq.read_schema(source_path).field("a").type.value_field.name == element_name
+
+    try:
+        spark.sql(f"CREATE TABLE {table} USING iceberg AS SELECT * FROM parquet.`{source_path}`")  # noqa: S608
+        reference = StaticTable.from_metadata(
+            reference_catalog.load_table(table).metadata_location, properties=storage_properties
+        )
+        expected_ids = {"a": 1, "a.element": 2}
+        assert {name: reference.schema().find_field(name).field_id for name in expected_ids} == expected_ids
+        tasks = list(reference.scan().plan_files())
+        assert tasks
+        for task in tasks:
+            with reference.io.new_input(task.file.file_path).open() as data:
+                file_schema = pyarrow_to_schema(pq.read_schema(data))
+            assert {name: file_schema.find_field(name).field_id for name in expected_ids} == expected_ids
+        expected_values = Counter(None if row["a"] is None else tuple(row["a"]) for row in expected)
+        for actual in [reference.scan().to_arrow().to_pylist(), spark.table(table).collect()]:
+            assert Counter(None if row["a"] is None else tuple(row["a"]) for row in actual) == expected_values
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

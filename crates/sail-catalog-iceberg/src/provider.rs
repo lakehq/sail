@@ -462,7 +462,7 @@ impl IcebergRestCatalogProvider {
     }
 
     fn validate_create_table_write_schema(
-        expected: &sail_iceberg::spec::Schema,
+        expected: &crate::r#gen::Schema,
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<()> {
         let schema = find_by_id_or_last(
@@ -471,12 +471,18 @@ impl IcebergRestCatalogProvider {
             |schema| schema.schema_id,
         )
         .ok_or_else(|| CatalogError::External("Created Iceberg table has no schema".to_string()))?;
-        let actual: sail_iceberg::spec::Schema = serde_json::to_value(schema)
-            .and_then(serde_json::from_value)
-            .map_err(|error| {
-                CatalogError::External(format!("Invalid created Iceberg schema: {error}"))
-            })?;
+        let parse_schema =
+            |schema: &crate::r#gen::Schema| -> CatalogResult<sail_iceberg::spec::Schema> {
+                serde_json::to_value(schema)
+                    .and_then(serde_json::from_value)
+                    .map_err(|error| {
+                        CatalogError::External(format!("Invalid Iceberg write schema: {error}"))
+                    })
+            };
+        let actual = parse_schema(schema)?;
+        let expected = parse_schema(expected)?;
         // CTAS writers are planned before the catalog creates the table.
+        // Parse both REST schemas to normalize collection element names and type spellings.
         if actual.fields() != expected.fields() {
             return Err(CatalogError::UnsupportedCapability(
                 "Iceberg REST catalog changed the schema or field IDs for create+write; create the table first and then insert into it".to_string(),
@@ -1275,7 +1281,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let request = crate::r#gen::CreateTableRequest {
             name: table.to_string(),
             location,
-            schema: Box::new(crate::r#gen::Schema::try_from(schema.clone())?),
+            schema: Box::new(crate::r#gen::Schema::try_from(schema)?),
             partition_spec,
             write_order,
             stage_create: Some(false),
@@ -1296,7 +1302,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
         if is_write_precondition {
-            Self::validate_create_table_write_schema(&schema, &result)?;
+            Self::validate_create_table_write_schema(&request.schema, &result)?;
             Self::validate_create_table_access_session_requirements(
                 &self.name,
                 database,
