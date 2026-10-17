@@ -1,3 +1,5 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -47,6 +49,72 @@ from pyspark.sql.types import (
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
+
+
+@pytest.mark.parametrize("initial_rows", [0, 3], ids=["empty", "populated"])
+def test_iceberg_path_overwrite_rejects_concurrent_append(spark, sql_catalog, tmp_path, initial_rows):
+    identifier = "default.path_overwrite_conflict"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=IntegerType(), required=False),
+            NestedField(field_id=2, name="value", field_type=IntegerType(), required=False),
+        ),
+    )
+    arrived = tmp_path / "writer-arrived"
+    release = tmp_path / "writer-release"
+    arrived_path, release_path = str(arrived), str(release)
+
+    def gated_batches(batches):
+        from pathlib import Path
+
+        Path(arrived_path).touch()
+        deadline = time.monotonic() + 60
+        while not Path(release_path).exists():
+            if time.monotonic() >= deadline:
+                message = "path overwrite was not released"
+                raise TimeoutError(message)
+            time.sleep(0.05)
+        yield from batches
+
+    try:
+        if initial_rows:
+            spark.createDataFrame([(i, i * 10) for i in range(1, initial_rows + 1)], "id INT, value INT").write.format(
+                "iceberg"
+            ).mode("append").save(table.location())
+        replacement = spark.createDataFrame([(5, 50)], "id INT, value INT").mapInPandas(
+            gated_batches, "id INT, value INT"
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(replacement.write.format("iceberg").mode("overwrite").save, table.location())
+            try:
+                deadline = time.monotonic() + 60
+                while not arrived.exists():
+                    if future.done():
+                        future.result()
+                        pytest.fail("Overwrite completed before reaching the writer gate")
+                    if time.monotonic() >= deadline:
+                        pytest.fail("Overwrite did not reach the writer gate")
+                    time.sleep(0.05)
+                spark.createDataFrame([(4, 40)], "id INT, value INT").write.format("iceberg").mode("append").save(
+                    table.location()
+                )
+                fast_metadata = StaticTable.from_metadata(table.location()).metadata
+            finally:
+                release.touch()
+            with pytest.raises(Exception, match="expected snapshot"):
+                future.result(timeout=60)
+
+        after = StaticTable.from_metadata(table.location())
+        assert after.metadata == fast_metadata
+        expected = [(i, i * 10) for i in range(1, initial_rows + 1)] + [(4, 40)]
+        assert sorted((row["id"], row["value"]) for row in after.scan().to_arrow().to_pylist()) == expected
+        assert [
+            tuple(row) for row in spark.read.format("iceberg").load(table.location()).orderBy("id").collect()
+        ] == expected
+    finally:
+        release.touch()
+        sql_catalog.drop_table(identifier)
 
 
 def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
