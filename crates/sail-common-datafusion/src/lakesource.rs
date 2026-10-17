@@ -101,6 +101,7 @@ pub enum LakeSourceAlterTableOperation {
     SetWriteOrder {
         order: Vec<crate::catalog::CatalogSortField>,
         distribution: Option<String>,
+        case_sensitive: bool,
     },
     SetLocation {
         location: String,

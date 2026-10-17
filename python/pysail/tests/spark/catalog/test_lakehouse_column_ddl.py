@@ -253,3 +253,43 @@ def test_drop_column_respects_case_sensitive_resolution(spark, tmp_path, fmt, de
     finally:
         spark.conf.set(key, previous)
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+@pytest.mark.parametrize("case_sensitive", [False, True])
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("ADD COLUMN A INT", {"id": 1, "a": 2, "nested": {"leaf": 3}, "A": None}),
+        ("RENAME COLUMN id TO A", {"A": 1, "a": 2, "nested": {"leaf": 3}}),
+        ("ADD COLUMN nested.Leaf INT", {"id": 1, "a": 2, "nested": {"leaf": 3, "Leaf": None}}),
+        ("ADD COLUMN extra STRUCT<x: INT, X: INT>", {"id": 1, "a": 2, "nested": {"leaf": 3}, "extra": None}),
+    ],
+)
+def test_column_name_uniqueness_uses_format_rules(spark, tmp_path, fmt, case_sensitive, operation, expected):
+    table = "column_name_uniqueness"
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, a INT, nested STRUCT<leaf: INT>) "
+            f"USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1, 2, named_struct('leaf', 3))")
+        before = metadata_schema(tmp_path, fmt)
+        rows = spark.table(table).collect()
+        if fmt == "iceberg" and case_sensitive:
+            spark.sql(f"ALTER TABLE {table} {operation}")
+            assert spark.table(table).first().asDict(recursive=True) == expected
+            after = metadata_schema(tmp_path, fmt)
+            assert identity(after["fields"][1], fmt) == identity(before["fields"][1], fmt)
+        else:
+            with pytest.raises(Exception, match=r"(?i)already exists|duplicate"):
+                spark.sql(f"ALTER TABLE {table} {operation}")
+            assert metadata_schema(tmp_path, fmt) == before
+            assert spark.table(table).collect() == rows
+    finally:
+        spark.conf.set(key, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

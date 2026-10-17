@@ -85,3 +85,24 @@ def test_drop_partition_source_keeps_table_writable(spark, tmp_path, version):
         assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(2,), (3,)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_v1_partition_tombstone_name_collision_is_atomic(spark, tmp_path):
+    table = "partition_tombstone_collision"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT, part INT, other INT) USING iceberg PARTITIONED BY (part) "
+            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('format-version'='1')"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1, 10, 20)")
+        field_id = current_spec(_find_latest_metadata(tmp_path))["fields"][0]["field-id"]
+        spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD other AS part_{field_id}")
+        spark.sql(f"ALTER TABLE {table} DROP PARTITION FIELD part")
+        before = _find_latest_metadata(tmp_path)
+        with pytest.raises(Exception, match=r"(?i)duplicate|conflict|more than once"):
+            spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD part")
+        assert _find_latest_metadata(tmp_path) == before
+        spark.sql(f"INSERT INTO {table} VALUES (2, 11, 21)")
+        assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(1, 10, 20), (2, 11, 21)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

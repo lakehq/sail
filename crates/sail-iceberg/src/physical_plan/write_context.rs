@@ -196,7 +196,12 @@ pub fn prepare_iceberg_write_context(
                     let transform = iceberg_transform_from_partition_field(field);
                     builder = builder.add_field(field_id, partition_field_name(field), transform);
                 }
-                partition_spec = Some(builder.build().assign_ids(table_metadata));
+                partition_spec = Some(
+                    builder
+                        .build()
+                        .assign_ids(table_metadata)
+                        .map_err(DataFusionError::Plan)?,
+                );
             }
         } else {
             let current_schema = table_metadata.current_schema().ok_or_else(|| {

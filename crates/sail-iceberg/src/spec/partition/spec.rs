@@ -17,6 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/partition.rs
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -156,7 +157,7 @@ impl PartitionSpec {
         Self { spec_id, ..self }
     }
 
-    pub(crate) fn assign_ids(mut self, metadata: &TableMetadata) -> Self {
+    pub(crate) fn assign_ids(mut self, metadata: &TableMetadata) -> Result<Self, String> {
         let mut next_field_id = metadata.last_partition_id + 1;
         if metadata.format_version == FormatVersion::V1 {
             let mut requested = self.fields;
@@ -210,12 +211,19 @@ impl PartitionSpec {
                     });
             }
         }
+        // V1 tombstone restoration can introduce names absent from the requested spec.
+        let mut names = HashSet::new();
+        for field in &self.fields {
+            if !names.insert(&field.name) {
+                return Err(format!("Duplicate partition field '{}'", field.name));
+            }
+        }
         if let Some(previous) = metadata
             .partition_specs
             .iter()
             .find(|previous| previous.is_compatible_with(&self))
         {
-            return previous.clone();
+            return Ok(previous.clone());
         }
         self.spec_id = metadata
             .partition_specs
@@ -224,7 +232,7 @@ impl PartitionSpec {
             .max()
             .unwrap_or(-1)
             + 1;
-        self
+        Ok(self)
     }
 
     /// Get the highest field id in the partition spec.

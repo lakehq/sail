@@ -509,6 +509,7 @@ impl PlanResolver<'_> {
                     })
                     .collect::<PlanResult<Vec<_>>>()?,
                 distribution,
+                case_sensitive: self.config.case_sensitive,
             },
             spec::AlterTableOperation::SetLocation { location } => {
                 AlterTableOptions::SetLocation { location }

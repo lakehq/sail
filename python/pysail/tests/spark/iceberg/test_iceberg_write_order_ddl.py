@@ -63,6 +63,45 @@ def test_invalid_write_order_is_atomic(spark, tmp_path, clause):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize("case_sensitive", [False, True])
+@pytest.mark.parametrize(
+    ("column", "nested", "exact_case"),
+    [
+        ("id", False, False),
+        ("nested.value", True, False),
+        ("Id", False, True),
+        ("Nested.Value", True, True),
+        ("bucket(4, id)", False, False),
+    ],
+)
+def test_write_order_respects_case_sensitive_resolution(spark, tmp_path, case_sensitive, column, nested, exact_case):
+    table = "write_order_case_sensitive"
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (Id INT, Nested STRUCT<Value: INT>) USING iceberg LOCATION '{tmp_path.as_uri()}'"
+        )
+        before = _find_latest_metadata(tmp_path)
+        schema = next(schema for schema in before["schemas"] if schema["schema-id"] == before["current-schema-id"])
+        field = schema["fields"][1]["type"]["fields"][0] if nested else schema["fields"][0]
+        spark.conf.set(key, str(case_sensitive).lower())
+        statement = f"ALTER TABLE {table} WRITE ORDERED BY {column} DESC"
+        if case_sensitive and not exact_case:
+            with pytest.raises(Exception, match=r"(?i)not exist|not found|cannot be resolved"):
+                spark.sql(statement)
+            assert _find_latest_metadata(tmp_path) == before
+        else:
+            spark.sql(statement)
+            order = current_order(_find_latest_metadata(tmp_path))
+            assert [sort_field["source-id"] for sort_field in order["fields"]] == [field["id"]]
+        spark.sql(f"INSERT INTO {table} SELECT 1, named_struct('Value', 10)")
+        assert [tuple(row) for row in spark.sql(f"SELECT Id, Nested.Value FROM {table}").collect()] == [(1, 10)]
+    finally:
+        spark.conf.set(key, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.parametrize("mode", ["copy-on-write", "merge-on-read"])
 @pytest.mark.parametrize("version", [2, 3])
 def test_sorted_partitioned_table_row_level_operations(spark, tmp_path, mode, version):

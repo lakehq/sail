@@ -138,3 +138,30 @@ def test_dynamic_overwrite_uses_widened_partition_type(spark, tmp_path, initial_
     result = spark.read.format("delta").load(str(tmp_path))
     assert result.schema["part"].dataType.simpleString() == updated_type.lower()
     assert [r.id for r in result.orderBy("id").collect()] == [1, 2]
+
+
+@pytest.mark.parametrize("partition_type", ["FLOAT", "DOUBLE"])
+@pytest.mark.parametrize(("initial_zero", "replacement_zero"), [("-0.0", "0.0"), ("0.0", "-0.0")])
+@pytest.mark.parametrize("mapping", ["none", "name"])
+def test_dynamic_overwrite_matches_signed_zero_partitions(
+    spark, tmp_path, partition_type, initial_zero, replacement_zero, mapping
+):
+    spark.sql(
+        f"SELECT 1 AS id, CAST('{initial_zero}' AS {partition_type}) AS part "
+        f"UNION ALL SELECT 2, CAST(1 AS {partition_type})"
+    ).write.format("delta").partitionBy("part").option("delta.columnMapping.mode", mapping).save(str(tmp_path))
+    logs = sorted((tmp_path / "_delta_log").glob("*.json"))
+    initial_adds = [json.loads(line)["add"] for line in logs[0].read_text().splitlines() if "add" in json.loads(line)]
+    zero_paths = {add["path"] for add in initial_adds if float(next(iter(add["partitionValues"].values()))) == 0.0}
+
+    spark.sql(f"SELECT 3 AS id, CAST('{replacement_zero}' AS {partition_type}) AS part").write.format("delta").mode(
+        "overwrite"
+    ).option("partitionOverwriteMode", "dynamic").save(str(tmp_path))
+
+    result = spark.read.format("delta").load(str(tmp_path))
+    assert [r.id for r in result.orderBy("id").collect()] == [2, 3]
+    latest_log = sorted((tmp_path / "_delta_log").glob("*.json"))[-1]
+    removes = [
+        json.loads(line)["remove"] for line in latest_log.read_text().splitlines() if "remove" in json.loads(line)
+    ]
+    assert {remove["path"] for remove in removes} == zero_paths

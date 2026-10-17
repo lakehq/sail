@@ -17,7 +17,7 @@ pub fn alter_schema(
     if fields.is_empty() {
         return plan_err!("Cannot drop all columns from a table");
     }
-    validate_fields(&fields)?;
+    validate_field_names(&fields, case_sensitive)?;
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
@@ -53,26 +53,31 @@ pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> 
     if fields.is_empty() {
         return plan_err!("Cannot replace a table schema with no columns");
     }
-    validate_fields(&fields)?;
+    validate_field_names(&fields, false)?;
     Ok(Schema::new(fields))
 }
 
-fn validate_fields(fields: &[FieldRef]) -> Result<()> {
+pub fn validate_field_names(fields: &[FieldRef], case_sensitive: bool) -> Result<()> {
     let mut names = std::collections::HashSet::new();
     for field in fields {
-        if !names.insert(field.name().to_lowercase()) {
+        let name = if case_sensitive {
+            field.name().clone()
+        } else {
+            field.name().to_lowercase()
+        };
+        if !names.insert(name) {
             return plan_err!("Column '{}' already exists", field.name());
         }
-        validate_type(field.data_type())?;
+        validate_type(field.data_type(), case_sensitive)?;
     }
     Ok(())
 }
 
-fn validate_type(ty: &DataType) -> Result<()> {
+fn validate_type(ty: &DataType, case_sensitive: bool) -> Result<()> {
     match ty {
-        DataType::Struct(fields) => validate_fields(fields),
+        DataType::Struct(fields) => validate_field_names(fields, case_sensitive),
         DataType::List(field) | DataType::LargeList(field) | DataType::Map(field, _) => {
-            validate_type(field.data_type())
+            validate_type(field.data_type(), case_sensitive)
         }
         _ => Ok(()),
     }

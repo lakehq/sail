@@ -867,6 +867,12 @@ impl ExecutionPlan for DeltaCommitExec {
                                     .and_then(|value| value.as_deref()),
                                 data_type,
                             )
+                            // ScalarValue compares float bits, while Spark equates signed zeros.
+                            .map(|value| match value {
+                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
+                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
+                                value => value,
+                            })
                             .map_err(|error| DataFusionError::External(Box::new(error)))
                         })
                         .collect()

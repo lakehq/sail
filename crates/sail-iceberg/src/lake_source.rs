@@ -374,7 +374,9 @@ impl LakeSource for IcebergLakeSource {
 
         let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
         if let Some((_, metadata)) = existing_metadata.as_ref() {
-            partition_spec = partition_spec.assign_ids(metadata);
+            partition_spec = partition_spec
+                .assign_ids(metadata)
+                .map_err(DataFusionError::Plan)?;
         }
         let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
         let store_ctx = StoreContext::new(object_store, &table_url)?;

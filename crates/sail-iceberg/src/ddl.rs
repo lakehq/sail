@@ -117,9 +117,11 @@ fn catalog_alter_options(
         LakeSourceAlterTableOperation::SetWriteOrder {
             order,
             distribution,
+            case_sensitive,
         } => vec![AlterTableOptions::SetWriteOrder {
             order: order.clone(),
             distribution: distribution.clone(),
+            case_sensitive: *case_sensitive,
         }],
         LakeSourceAlterTableOperation::SetLocation { location } => {
             vec![AlterTableOptions::SetLocation {
@@ -199,14 +201,16 @@ pub(crate) fn apply_operation(
                 .current_schema()
                 .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".into()))?;
             let spec = crate::lake_source::create_table_partition_spec(schema, partition_by)?
-                .assign_ids(metadata);
+                .assign_ids(metadata)
+                .map_err(DataFusionError::Plan)?;
             commit_partition_spec(metadata, spec);
             Ok(())
         }
         LakeSourceAlterTableOperation::SetWriteOrder {
             order,
             distribution,
-        } => set_write_order(metadata, order, distribution.as_deref()),
+            case_sensitive,
+        } => set_write_order(metadata, order, distribution.as_deref(), *case_sensitive),
         LakeSourceAlterTableOperation::SetLocation { location } => {
             if location.trim().is_empty() {
                 return plan_err!("Table location cannot be empty");
@@ -566,7 +570,10 @@ fn alter_partition_spec(
         builder =
             builder.add_field_with_id(field.source_id, field.field_id, field.name, field.transform);
     }
-    let spec = builder.build().assign_ids(metadata);
+    let spec = builder
+        .build()
+        .assign_ids(metadata)
+        .map_err(DataFusionError::Plan)?;
     commit_partition_spec(metadata, spec);
     Ok(())
 }
@@ -575,6 +582,7 @@ fn set_write_order(
     metadata: &mut TableMetadata,
     requested: &[sail_common_datafusion::catalog::CatalogSortField],
     distribution: Option<&str>,
+    case_sensitive: bool,
 ) -> Result<()> {
     use crate::spec::{NullOrder, SortDirection, SortField, SortOrder};
     use crate::utils::partition_transform::iceberg_transform_from_partition_field;
@@ -584,7 +592,14 @@ fn set_write_order(
     let fields = requested
         .iter()
         .map(|field| {
-            let source = schema.field_by_name(&field.field.column).ok_or_else(|| {
+            let source = if case_sensitive {
+                schema.field_by_name(&field.field.column)
+            } else {
+                schema
+                    .field_by_name_case_insensitive(&field.field.column)
+                    .map_err(DataFusionError::Plan)?
+            }
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Sort column '{}' does not exist",
                     field.field.column

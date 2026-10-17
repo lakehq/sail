@@ -151,6 +151,8 @@ pub enum AlterTableOptions {
     SetWriteOrder {
         order: Vec<sail_common_datafusion::catalog::CatalogSortField>,
         distribution: Option<String>,
+        #[serde(default)]
+        case_sensitive: bool,
     },
     SetLocation {
         location: String,
@@ -214,9 +216,11 @@ impl From<&AlterTableOptions>
             AlterTableOptions::SetWriteOrder {
                 order,
                 distribution,
+                case_sensitive,
             } => LakeSourceAlterTableOperation::SetWriteOrder {
                 order: order.clone(),
                 distribution: distribution.clone(),
+                case_sensitive: *case_sensitive,
             },
             AlterTableOptions::SetLocation { location } => {
                 LakeSourceAlterTableOperation::SetLocation {

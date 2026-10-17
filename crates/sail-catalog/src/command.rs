@@ -485,6 +485,18 @@ impl CatalogCommand {
                     }
                     _ => (None, None),
                 };
+                if format
+                    .as_deref()
+                    .is_some_and(|format| !is_lakehouse_format(format))
+                    && let AlterTableOptions::AlterColumns { changes, .. } = &options
+                    && changes.iter().any(|change| {
+                        matches!(change, sail_common::spec::ColumnChange::Rename { .. })
+                    })
+                {
+                    return Err(CatalogError::NotSupported(
+                        "RENAME COLUMN requires a format that preserves column identities".into(),
+                    ));
+                }
 
                 // Lake sources commit authoritative format metadata, including catalog
                 // metadata when the provider supports an atomic update.

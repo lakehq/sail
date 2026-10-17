@@ -463,6 +463,8 @@ pub(crate) async fn alter_columns(
     let arrow = Schema::try_from(&current)?;
     let updated =
         sail_common_datafusion::column_change::alter_schema(&arrow, changes, case_sensitive)?;
+    // Delta requires case-insensitively unique names regardless of session resolution.
+    sail_common_datafusion::column_change::validate_field_names(updated.fields(), false)?;
     if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
         validate_unmapped_names(updated.fields())?;
     }
