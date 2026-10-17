@@ -48,6 +48,7 @@ use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_python_udf::udf::expr_contains_python_udf;
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
@@ -57,8 +58,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::formatter::SparkPlanFormatter;
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
-    cast_timestamp_ntz_to_ltz, expr_contains_python_udf, expr_contains_spark_cast_to_variant,
-    timestamp_epoch_units,
+    cast_timestamp_ntz_to_ltz, expr_contains_spark_cast_to_variant, timestamp_epoch_units,
 };
 
 fn wrong_datetime_arity(name: &str, expected: &str, actual: usize) -> PlanError {

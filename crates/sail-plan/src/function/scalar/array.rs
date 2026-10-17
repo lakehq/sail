@@ -24,13 +24,14 @@ use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_python_udf::udf::expr_contains_python_udf;
 
 use super::datetime::fold_datetime_argument;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
-    coerce_temporal_arguments, common_temporal_type, expr_contains_python_udf,
+    coerce_temporal_arguments, common_temporal_type,
 };
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
