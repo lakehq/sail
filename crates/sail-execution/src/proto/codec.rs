@@ -234,6 +234,7 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_ansi_string_cast::SparkAnsiStringCast;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -3570,6 +3571,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     target_type,
                 ))));
             }
+            UdfKind::SparkAnsiStringCast(r#gen::SparkAnsiStringCastUdf { target_type }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(SparkAnsiStringCast::new(
+                    target_type,
+                ))));
+            }
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
@@ -4113,6 +4120,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkAnsiStringCast>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkAnsiStringCast(r#gen::SparkAnsiStringCastUdf { target_type })
         } else {
             return Ok(());
         };
@@ -7238,6 +7248,64 @@ mod tests {
         downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
         assert_eq!(decoded.name(), "spark_cast_string_to_int32");
 
+        Ok(())
+    }
+
+    /// A nested target with a non-null child, field metadata, a fixed-size list, a wide decimal and
+    /// a zoned timestamp, so that the `ArrowType` bytes carry everything a worker needs.
+    fn nested_target_type() -> datafusion::arrow::datatypes::DataType {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+
+        let metadata = HashMap::from([("comment".to_string(), "kept".to_string())]);
+        DataType::Struct(Fields::from(vec![
+            Field::new(
+                "items",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Decimal128(38, 10), false)),
+                    3,
+                ),
+                true,
+            )
+            .with_metadata(metadata),
+            Field::new(
+                "at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+        ]))
+    }
+
+    #[test]
+    fn test_round_trip_spark_ansi_string_cast_udf() -> Result<()> {
+        let target = nested_target_type();
+        let decoded = round_trip_udf(ScalarUDF::from(SparkAnsiStringCast::new(target.clone())))?;
+
+        let cast = decoded
+            .inner()
+            .downcast_ref::<SparkAnsiStringCast>()
+            .ok_or_else(|| {
+                datafusion::common::exec_datafusion_err!("decoded UDF is not SparkAnsiStringCast")
+            })?;
+        assert_eq!(decoded.name(), "spark_ansi_string_cast");
+        assert_eq!(cast.target_type(), &target);
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_struct_rename_udf() -> Result<()> {
+        let target = nested_target_type();
+        let decoded = round_trip_udf(ScalarUDF::from(SparkStructRename::new(target.clone())))?;
+
+        let rename = decoded
+            .inner()
+            .downcast_ref::<SparkStructRename>()
+            .ok_or_else(|| {
+                datafusion::common::exec_datafusion_err!("decoded UDF is not SparkStructRename")
+            })?;
+        assert_eq!(decoded.name(), "spark_struct_rename");
+        assert_eq!(rename.target_type(), &target);
         Ok(())
     }
 

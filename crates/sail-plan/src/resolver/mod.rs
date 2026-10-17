@@ -8,6 +8,11 @@ mod command;
 mod constraint;
 mod data_type;
 mod expression;
+
+pub(crate) use expression::{
+    build_rename_target_type, needs_struct_field_rename, ntz_to_zoned_timestamp,
+    spark_string_cast_arguments,
+};
 mod function;
 mod lakehouse;
 mod literal;
