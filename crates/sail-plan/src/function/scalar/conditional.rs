@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
+use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
+use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
@@ -15,6 +18,7 @@ use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
     coerce_temporal_arguments,
 };
+use crate::function::scalar::lambda::lambda_with_fresh_parameter;
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -182,6 +186,28 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
     // The comparison has a common type, but NULLIF returns the original left type.
     let null = ScalarValue::try_from(left.get_type(input.function_context.schema)?)?;
+    if left.is_volatile() {
+        // Bind the original value once before using it in both the comparison and result.
+        let expr::Expr::Lambda(mut lambda) =
+            lambda_with_fresh_parameter(right, "__sail_nullif_value")?
+        else {
+            return Err(PlanError::internal("expected a NULLIF lambda"));
+        };
+        let value = expr::Expr::LambdaVariable(LambdaVariable::new(
+            lambda.params[0].clone(),
+            Some(left.to_field(input.function_context.schema)?.1),
+        ));
+        let (comparison_left, comparison_right) =
+            coerce_temporal_arguments(vec![value.clone(), *lambda.body], &input.function_context)?
+                .two()?;
+        lambda.body =
+            Box::new(when(comparison_left.eq(comparison_right), lit(null)).otherwise(value)?);
+        let result = expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
+            vec![make_array(vec![left]), expr::Expr::Lambda(lambda)],
+        ));
+        return Ok(array_element(result, lit(1_i64)));
+    }
     Ok(when(comparison_left.eq(comparison_right), lit(null)).otherwise(left)?)
 }
 

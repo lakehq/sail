@@ -163,3 +163,57 @@ Feature: Existing Sail datetime extensions remain supported
     Then query result
       | start               | end                 | n |
       | 2024-01-01 00:01:00 | 2024-01-01 00:06:00 | 1 |
+
+  Scenario Outline: Numeric <type> datetime operands retain their units in <zone>
+    Given config spark.sql.session.timeZone = <zone>
+    When query
+      """
+      SELECT id,
+             CAST(timestampadd(SECOND, 1, CAST(v AS <type>)) AS STRING) AS added,
+             timestampdiff(SECOND, CAST(0 AS <type>), CAST(v AS <type>)) AS seconds,
+             timestampdiff(DAY, 0, d) AS days,
+             months_between(CAST(m AS <type>), CAST(0 AS <type>), false) AS months
+      FROM VALUES (0, 1500000L, 2, 2678400000000L),
+                  (1, -1500000L, -1, -2678400000000L),
+                  (2, CAST(NULL AS BIGINT), CAST(NULL AS INT), CAST(NULL AS BIGINT)) AS t(id, v, d, m)
+      ORDER BY id
+      """
+    Then query result
+      | id | added      | seconds | days | months |
+      | 0  | <positive> | 1       | 2    | 1.0    |
+      | 1  | <negative> | -1      | -1   | -1.0   |
+      | 2  | NULL       | NULL    | NULL | NULL   |
+
+    Examples:
+      | type          | zone                | positive                  | negative                  |
+      | BIGINT        | UTC                 | 1970-01-01 00:00:02.5     | 1969-12-31 23:59:59.5     |
+      | DOUBLE        | UTC                 | 1970-01-01 00:00:02.5     | 1969-12-31 23:59:59.5     |
+      | DECIMAL(20,1) | UTC                 | 1970-01-01 00:00:02.5     | 1969-12-31 23:59:59.5     |
+      | BIGINT        | America/Los_Angeles | 1969-12-31 16:00:02.5     | 1969-12-31 15:59:59.5     |
+      | DOUBLE        | America/Los_Angeles | 1969-12-31 16:00:02.5     | 1969-12-31 15:59:59.5     |
+      | DECIMAL(20,1) | America/Los_Angeles | 1969-12-31 16:00:02.5     | 1969-12-31 15:59:59.5     |
+
+  Scenario: Numeric day differences retain their long result range
+    When query
+      """
+      SELECT timestampdiff(DAY, -2147483648, 2147483647) AS days
+      """
+    Then query result
+      | days       |
+      | 4294967295 |
+    Then query schema
+      """
+      root
+       |-- days: long (nullable = false)
+      """
+
+  Scenario: Numeric operands preserve the interpretation of accompanying temporal values
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT timestampdiff(SECOND, 0L, TIMESTAMP '1970-01-01 00:00:01') AS seconds,
+             months_between(1712793600000000L, TIMESTAMP_NTZ '2024-03-10 02:30:00', false) AS months
+      """
+    Then query result
+      | seconds | months             |
+      | 28801   | 1.0288978494623655 |

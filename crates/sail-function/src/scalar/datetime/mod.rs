@@ -19,6 +19,7 @@ pub mod spark_time_trunc;
 pub mod spark_timestamp;
 pub mod spark_timestamp_add;
 pub mod spark_timestamp_from_number;
+pub mod spark_timestamp_to_number;
 pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;
 pub mod spark_year;

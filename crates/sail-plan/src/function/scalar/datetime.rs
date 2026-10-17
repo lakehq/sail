@@ -296,11 +296,22 @@ fn timestampadd_with_name(input: ScalarFunctionInput, function_name: &str) -> Pl
             "{function_name} does not support interval unit type '{unit}'"
         )));
     }
-    let ntz = matches!(
-        timestamp.get_type(input.function_context.schema)?,
-        DataType::Timestamp(_, None)
-    );
-    let timestamp = datetime_timestamp(timestamp, &input.function_context, ntz, false)?;
+    let timestamp_type = timestamp.get_type(input.function_context.schema)?;
+    let ntz = matches!(timestamp_type, DataType::Timestamp(_, None));
+    let timestamp = if timestamp_type.is_numeric() {
+        // Sail's numeric timestamp operands use microseconds, unlike to_timestamp.
+        cast(
+            timestamp,
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::clone(
+                    &input.function_context.plan_config.session_timezone,
+                )),
+            ),
+        )
+    } else {
+        datetime_timestamp(timestamp, &input.function_context, ntz, false)?
+    };
     Ok(ScalarUDF::from(SparkTimestampAdd::new()).call(vec![
         timestamp,
         cast(quantity, DataType::Int64),
@@ -475,9 +486,19 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     ));
                 }
             };
+            let numeric = start.get_type(input.function_context.schema)?.is_numeric()
+                || end.get_type(input.function_context.schema)?.is_numeric();
+            // Preserve Sail's numeric day inputs to the three-argument datediff aliases.
+            if unit_str == "DAY" && numeric {
+                let days = |value| cast(cast(value, DataType::Date32), DataType::Int64);
+                return Ok(days(end) - days(start));
+            }
             // TimestampDiff first casts both operands to LTZ, then compares their
             // session-local date-times (including partial days and months).
-            let local = |value| -> PlanResult<Expr> {
+            let local = |value: Expr| -> PlanResult<Expr> {
+                if numeric {
+                    return Ok(value);
+                }
                 let timezone = &input.function_context.plan_config.session_timezone;
                 Ok(cast_temporal(
                     datetime_timestamp(value, &input.function_context, false, false)?,
@@ -1536,8 +1557,25 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
 
     // prerequisites
-    let date1 = datetime_timestamp(date1, &function_context, false, false)?;
-    let date2 = datetime_timestamp(date2, &function_context, false, false)?;
+    let numeric = date1.get_type(function_context.schema)?.is_numeric()
+        || date2.get_type(function_context.schema)?.is_numeric();
+    let timestamp = |value: Expr| -> PlanResult<Expr> {
+        if numeric {
+            // Preserve the existing timezone flavors when using Sail's numeric operands.
+            let timezone = match value.get_type(function_context.schema)? {
+                DataType::Timestamp(_, timezone) => timezone,
+                _ => None,
+            };
+            Ok(cast(
+                value,
+                DataType::Timestamp(TimeUnit::Microsecond, timezone),
+            ))
+        } else {
+            datetime_timestamp(value, &function_context, false, false)
+        }
+    };
+    let date1 = timestamp(date1)?;
+    let date2 = timestamp(date2)?;
 
     // calculations:
     let days1 = integer_part(date1.clone(), "DAY");

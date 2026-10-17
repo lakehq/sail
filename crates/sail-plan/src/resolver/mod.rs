@@ -7,6 +7,7 @@ use crate::config::PlanConfig;
 mod command;
 mod constraint;
 mod data_type;
+mod date_timestamp_comparison;
 mod expression;
 mod function;
 mod lakehouse;

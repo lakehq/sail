@@ -192,8 +192,7 @@ Feature: DATE_TRUNC output type
 
   Rule: Scalar and column truncation share timestamp boundaries
 
-    @sail-only
-    Scenario Outline: native truncation alias <unit> works for scalar and column units
+    Scenario Outline: extraction alias <unit> is invalid for scalar and column truncation units
       Given config spark.sql.session.timeZone = UTC
       When query
         """
@@ -204,14 +203,21 @@ Feature: DATE_TRUNC output type
         """
       Then query result ordered
         | scalar_result | column_result       |
-        | <result>      | <result>            |
-        | <result>      | 2024-06-15 00:00:00 |
+        | NULL          | NULL                |
+        | NULL          | 2024-06-15 00:00:00 |
 
       Examples:
-        | unit | result              |
-        | mins | 2024-06-15 12:34:00 |
-        | qtr  | 2024-04-01 00:00:00 |
-        | yrs  | 2024-01-01 00:00:00 |
+        | unit   |
+        | mins   |
+        | qtr    |
+        | yrs    |
+        | months |
+        | weeks  |
+        | days   |
+        | hours  |
+        | secs   |
+        | msecs  |
+        | usecs  |
 
     @sail-only
     Scenario: scalar units preserve native Unicode case folding

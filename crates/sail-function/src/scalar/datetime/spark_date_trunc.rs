@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::temporal_conversions::{
@@ -40,26 +39,18 @@ use sail_common::utils::datetime::time_unit_to_multiplier;
 use crate::scalar::datetime::utils::{is_fixed_zero_offset_timezone, string_array_iter};
 
 pub fn parse_granularity(value: &str) -> Result<DatePart> {
-    // DatePart also contains extraction-only fields such as day-of-week, which
-    // are not valid truncation granularities.
-    match DatePart::from_str(value) {
-        Ok(granularity)
-            if matches!(
-                granularity,
-                DatePart::Microsecond
-                    | DatePart::Millisecond
-                    | DatePart::Second
-                    | DatePart::Minute
-                    | DatePart::Hour
-                    | DatePart::Day
-                    | DatePart::Week
-                    | DatePart::Month
-                    | DatePart::Quarter
-                    | DatePart::Year
-            ) =>
-        {
-            Ok(granularity)
-        }
+    // Extraction aliases are not truncation units; the planner normalizes Spark's aliases.
+    match value.to_lowercase().as_str() {
+        "microsecond" => Ok(DatePart::Microsecond),
+        "millisecond" => Ok(DatePart::Millisecond),
+        "second" => Ok(DatePart::Second),
+        "minute" => Ok(DatePart::Minute),
+        "hour" => Ok(DatePart::Hour),
+        "day" => Ok(DatePart::Day),
+        "week" => Ok(DatePart::Week),
+        "month" => Ok(DatePart::Month),
+        "quarter" => Ok(DatePart::Quarter),
+        "year" => Ok(DatePart::Year),
         _ => {
             exec_err!(
                 "Unsupported date_trunc granularity: '{value}'. Supported granularities are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year"

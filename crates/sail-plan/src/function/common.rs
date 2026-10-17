@@ -14,13 +14,15 @@ use datafusion_expr::expr::{
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl,
-    WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit, try_cast, when,
+    WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit, try_cast,
 };
 use datafusion_functions::core::get_field;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::is_fixed_zero_offset_timezone;
+use sail_function::scalar::datetime::spark_date_trunc::SparkStartOfDay;
+use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::update_struct_field::UpdateStructField;
@@ -149,6 +151,14 @@ pub(crate) fn cast_temporal(
         ) => {
             let instant =
                 cast_timestamp_ntz_to_ltz(expression, Arc::clone(session_timezone), is_try)?;
+            let instant = if from == &DataType::Date32
+                && !is_spark_compatible_arrow_fixed_offset(session_timezone)
+            {
+                // A midnight inside a gap maps to the day's first valid time, not a shifted midnight.
+                ScalarUDF::from(SparkStartOfDay::new()).call(vec![instant])
+            } else {
+                instant
+            };
             Ok(cast(instant, to))
         }
         (
@@ -347,9 +357,8 @@ pub(crate) fn timestamp_epoch_units(
     if divisor == 1 {
         return Ok(value);
     }
-    // Spark floors epoch conversions; integer division alone truncates toward zero.
-    Ok(value.clone() / lit(divisor)
-        - when((value % lit(divisor)).lt(lit(0_i64)), lit(1_i64)).otherwise(lit(0_i64))?)
+    // Spark floors epoch conversions while evaluating the timestamp only once.
+    Ok(ScalarUDF::from(SparkTimestampToNumber::new()).call(vec![value, lit(divisor)]))
 }
 
 pub(crate) fn cast_timestamp_ntz_to_ltz(

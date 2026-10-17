@@ -195,6 +195,7 @@ use sail_function::scalar::datetime::spark_timestamp_add::SparkTimestampAdd;
 use sail_function::scalar::datetime::spark_timestamp_from_number::{
     SparkTimestampFromNumber, TimestampNumberMode,
 };
+use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -3752,6 +3753,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_start_of_day" => Ok(Arc::new(ScalarUDF::from(SparkStartOfDay::new()))),
             "spark_timestamp_add" => Ok(Arc::new(ScalarUDF::from(SparkTimestampAdd::new()))),
+            "spark_timestamp_to_number" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimestampToNumber::new())))
+            }
             "spark_timestamp_seconds" => Ok(Arc::new(ScalarUDF::from(
                 SparkTimestampFromNumber::new(TimestampNumberMode::Seconds),
             ))),
@@ -3900,6 +3904,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkStartOfDay>()
             || node_inner.is::<SparkTimestampAdd>()
             || node_inner.is::<SparkTimestampFromNumber>()
+            || node_inner.is::<SparkTimestampToNumber>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()

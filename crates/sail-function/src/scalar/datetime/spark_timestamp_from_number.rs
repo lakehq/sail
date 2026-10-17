@@ -1,16 +1,20 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::array::{Int64Array, RecordBatch};
 use datafusion::arrow::compute::cast as cast_array;
 use datafusion::arrow::compute::kernels::numeric;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, i256};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_common::{DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext, SimplifyContextBuilder};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility, cast, lit, try_cast, when,
+    Volatility, cast, col, lit, try_cast, when,
 };
+use datafusion_functions::math::expr_fn::trunc;
+use datafusion_physical_expr::create_physical_expr;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -47,6 +51,21 @@ impl SparkTimestampFromNumber {
             .with_schema(Arc::clone(schema))
             .build();
         let data_type = info.get_data_type(&value)?;
+        let repeats_value = match (&data_type, self.mode) {
+            (_, TimestampNumberMode::Micros | TimestampNumberMode::Millis) => false,
+            (DataType::Float32 | DataType::Float64, _) => true,
+            (DataType::Decimal128(_, scale), TimestampNumberMode::Seconds) => *scale > 6,
+            (DataType::Decimal128(precision, scale), _) => {
+                i16::from(*precision) - i16::from(*scale) + 6 > 18
+            }
+            (_, TimestampNumberMode::Seconds) => false,
+            (DataType::Int64 | DataType::UInt64, _) => true,
+            _ => false,
+        };
+        if repeats_value && value.is_volatile() {
+            // A UDF binds the input once before range and precision checks reuse it.
+            return Ok(ScalarUDF::from(Self::new(self.mode)).call(vec![value]));
+        }
         let micros = match self.mode {
             TimestampNumberMode::Micros => value,
             TimestampNumberMode::Millis => self.checked_scale(value, &data_type, 1_000),
@@ -153,9 +172,8 @@ impl SparkTimestampFromNumber {
     fn decimal_micros(&self, value: Expr, precision: u8, scale: i8) -> Result<Expr> {
         let wide = cast(value, DataType::Decimal256(precision, scale));
         let scaled = wide * lit(ScalarValue::Decimal256(Some(i256::from(1_000_000)), 7, 0));
-        // Decimal rescaling rounds; remove the fractional part before rescaling.
-        let fraction = scaled.clone() % lit(ScalarValue::Decimal256(Some(i256::from(1)), 1, 0));
-        let integer = cast(scaled.clone() - fraction, DataType::Decimal256(76, 0));
+        // Decimal rescaling rounds; truncate the fractional part before rescaling.
+        let integer = cast(trunc(vec![scaled.clone()]), DataType::Decimal256(76, 0));
         if self.mode == TimestampNumberMode::Seconds {
             let result = cast(scaled.clone(), DataType::Int64);
             return if scale <= 6 {
@@ -241,27 +259,49 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let factor = match self.mode {
-            TimestampNumberMode::Seconds => 1_000_000,
-            TimestampNumberMode::Millis => 1_000,
-            _ => {
-                return internal_err!("numeric timestamp cast must be simplified before execution");
-            }
-        };
         let data_type = self.return_type(&[])?;
         make_scalar_function(|values| {
             let [value] = values else {
                 return internal_err!("numeric timestamp conversion requires one argument");
             };
-            if value.data_type() != &DataType::Int64 {
-                return internal_err!("numeric timestamp input must be simplified to Int64");
+            if value.data_type() == &DataType::Int64
+                && matches!(
+                    self.mode,
+                    TimestampNumberMode::Seconds | TimestampNumberMode::Millis
+                )
+            {
+                let factor = if self.mode == TimestampNumberMode::Seconds {
+                    1_000_000
+                } else {
+                    1_000
+                };
+                let micros = numeric::mul(value, &Int64Array::new_scalar(factor))?;
+                return Ok(cast_array(&micros, &data_type)?);
             }
-            let micros = numeric::mul(value, &Int64Array::new_scalar(factor))?;
-            Ok(cast_array(&micros, &data_type)?)
+            // Reuse the same conversion with an already-evaluated column as its input.
+            let schema = Arc::new(DFSchema::from_unqualified_fields(
+                vec![Field::new("value", value.data_type().clone(), true)].into(),
+                Default::default(),
+            )?);
+            let expression = self.expression(col("value"), &schema)?;
+            create_physical_expr(
+                &expression,
+                &schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?
+            .evaluate(&RecordBatch::try_new(
+                Arc::clone(schema.inner()),
+                vec![Arc::clone(value)],
+            )?)?
+            .into_array(value.len())
         })(&args.args)
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.iter().any(Expr::is_volatile) {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
         if matches!(
             self.mode,
             TimestampNumberMode::Seconds | TimestampNumberMode::Millis
