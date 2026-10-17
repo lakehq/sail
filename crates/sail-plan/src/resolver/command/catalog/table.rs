@@ -469,6 +469,79 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::AlterIdentifierFields { names, drop } => {
+                AlterTableOptions::AlterIdentifierFields {
+                    names: names.into_iter().map(|name| name.into()).collect(),
+                    drop,
+                }
+            }
+            spec::AlterTableOperation::AlterPartitionSpec { add, drop } => {
+                AlterTableOptions::AlterPartitionSpec {
+                    add: add
+                        .map(|(field, name)| {
+                            self.resolve_partition_by_expression(field)
+                                .map(|field| (field, name))
+                        })
+                        .transpose()?,
+                    drop: drop
+                        .map(|field| self.resolve_partition_by_expression(field))
+                        .transpose()?,
+                }
+            }
+            spec::AlterTableOperation::SetWriteOrder {
+                order,
+                distribution,
+            } => AlterTableOptions::SetWriteOrder {
+                order: order
+                    .into_iter()
+                    .map(|order| {
+                        let ascending = order.direction != spec::SortDirection::Descending;
+                        let nulls_first = match order.null_ordering {
+                            spec::NullOrdering::NullsFirst => true,
+                            spec::NullOrdering::NullsLast => false,
+                            spec::NullOrdering::Unspecified => ascending,
+                        };
+                        Ok(sail_common_datafusion::catalog::CatalogSortField {
+                            field: self.resolve_partition_by_expression(*order.child)?,
+                            ascending,
+                            nulls_first,
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?,
+                distribution,
+                case_sensitive: self.config.case_sensitive,
+            },
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
+            }
+            spec::AlterTableOperation::RenameTable { name } => {
+                return self.resolve_catalog_command(CatalogCommand::RenameTable {
+                    table: table.into(),
+                    destination: name.into(),
+                    if_exists,
+                });
+            }
+            spec::AlterTableOperation::ReplaceColumns { columns } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|column| column.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
+                self.validate_delta_replacement_generated_columns(&table, &schema, state)
+                    .await?;
+                AlterTableOptions::ReplaceColumns {
+                    fields: schema.fields().clone(),
+                }
+            }
+            spec::AlterTableOperation::AlterColumns { changes } => {
+                AlterTableOptions::AlterColumns {
+                    case_sensitive: self.config.case_sensitive,
+                    changes: changes
+                        .into_iter()
+                        .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                        .collect::<PlanResult<Vec<_>>>()?,
+                }
+            }
             spec::AlterTableOperation::SetTableProperties { properties } => {
                 AlterTableOptions::SetTableProperties { properties }
             }
@@ -485,6 +558,12 @@ impl PlanResolver<'_> {
                 AlterTableOptions::AlterColumnDefault {
                     name: name.into(),
                     default,
+                }
+            }
+            spec::AlterTableOperation::DropCheckConstraint { name, if_exists } => {
+                AlterTableOptions::DropCheckConstraint {
+                    name: String::from(name).to_lowercase(),
+                    if_exists,
                 }
             }
             spec::AlterTableOperation::AddCheckConstraint { .. } => {

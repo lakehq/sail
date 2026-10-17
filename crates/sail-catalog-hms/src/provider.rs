@@ -100,6 +100,37 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
+        // Iceberg partition specs live in format metadata; HMS partition keys stay empty.
+        AlterTableOptions::AlterIdentifierFields { .. }
+        | AlterTableOptions::AlterPartitionSpec { .. }
+        | AlterTableOptions::SetPartitioning { .. } => {}
+        AlterTableOptions::SetWriteOrder { distribution, .. } => {
+            if let Some(value) = distribution {
+                hms_table
+                    .parameters
+                    .get_or_insert_with(AHashMap::new)
+                    .insert("write.distribution-mode".into(), value.into());
+            }
+        }
+        AlterTableOptions::SetLocation { location } => {
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::InvalidArgument("Missing HMS storage descriptor".into())
+            })?;
+            storage.location = Some(location.clone().into());
+            if let Some(serde) = storage.serde_info.as_mut() {
+                let parameters = serde.parameters.get_or_insert_with(AHashMap::new);
+                if parameters.contains_key("path") {
+                    parameters.insert("path".into(), location.into());
+                }
+            }
+        }
+        AlterTableOptions::ReplaceColumns { fields } => {
+            crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
+        }
+        AlterTableOptions::AlterColumns {
+            changes,
+            case_sensitive,
+        } => crate::convert::alter_columns(hms_table, &changes, case_sensitive)?,
         AlterTableOptions::SetTableProperties { properties } => {
             reject_spark_properties(&properties)?;
             managed_table::validate_metadata_location_precondition(
@@ -172,7 +203,8 @@ pub(crate) fn apply_alter_table_options(
         AlterTableOptions::AlterColumnDefault { name, default } => {
             alter_spark_column_default(hms_table, &name, default)?;
         }
-        AlterTableOptions::AddCheckConstraint { .. } => {
+        AlterTableOptions::AddCheckConstraint { .. }
+        | AlterTableOptions::DropCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(
                 "CHECK constraints are handled by lake sources".to_string(),
             ));
@@ -1173,6 +1205,36 @@ impl CatalogProvider for HmsCatalogProvider {
             }
             _ => Ok(()),
         }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let target_db = validate_namespace(destination_database)?;
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let target_db = target_db.clone();
+            let table = table.to_string();
+            let target_table = destination_table.to_string();
+            async move {
+                let mut metadata = Self::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table,
+                    "Failed to fetch HMS table for rename",
+                )
+                .await?;
+                metadata.db_name = Some(target_db.into());
+                metadata.table_name = Some(target_table.into());
+                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+            }
+        })
+        .await
     }
 
     async fn alter_table(

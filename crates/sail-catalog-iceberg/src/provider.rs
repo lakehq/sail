@@ -1359,6 +1359,35 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let config = self.resolved_catalog_config().await?;
+        let prefix = config.prefix().map(ToOwned::to_owned);
+        let body = crate::r#gen::RenameTableRequest {
+            source: Box::new(crate::r#gen::TableIdentifier {
+                name: table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(database.clone().into())),
+            }),
+            destination: Box::new(crate::r#gen::TableIdentifier {
+                name: destination_table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(destination_database.clone().into())),
+            }),
+        };
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let body = body.clone();
+            async move { client.rename_table(prefix, body).await }
+        })
+        .await?
+        .map(|_| ())
+        .map_err(|e| CatalogError::External(format!("Failed to rename Iceberg table: {e}")))
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,

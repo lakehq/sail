@@ -77,11 +77,15 @@ impl MemoryCatalogProvider {
         if let Some(schema) = schema
             && let TableKind::Table { columns, .. } = &mut updated.kind
         {
+            let replace_schema = options
+                .iter()
+                .any(|option| matches!(option, AlterTableOptions::ReplaceColumns { .. }));
             *columns = schema
                 .fields()
                 .iter()
                 .map(|field| {
                     let previous = columns.iter().find(|column| column.name == *field.name());
+                    let inherited = previous.filter(|_| !replace_schema);
                     let features = ColumnFeatures::from_field(field);
                     TableColumnStatus {
                         name: field.name().clone(),
@@ -92,17 +96,17 @@ impl MemoryCatalogProvider {
                             .get("comment")
                             .or_else(|| field.metadata().get("doc"))
                             .cloned()
-                            .or_else(|| previous.and_then(|column| column.comment.clone())),
+                            .or_else(|| inherited.and_then(|column| column.comment.clone())),
                         // Formats may store typed defaults instead of SQL expressions.
                         default: features
                             .current_default()
-                            .or_else(|| previous.and_then(|column| column.default.clone())),
+                            .or_else(|| inherited.and_then(|column| column.default.clone())),
                         generated_always_as: features.generation_expression().or_else(|| {
-                            previous.and_then(|column| column.generated_always_as.clone())
+                            inherited.and_then(|column| column.generated_always_as.clone())
                         }),
                         identity: features
                             .identity()
-                            .or_else(|| previous.and_then(|column| column.identity.clone())),
+                            .or_else(|| inherited.and_then(|column| column.identity.clone())),
                         is_partition: previous.is_some_and(|column| column.is_partition),
                         is_bucket: previous.is_some_and(|column| column.is_bucket),
                         is_cluster: previous.is_some_and(|column| column.is_cluster),
@@ -115,8 +119,75 @@ impl MemoryCatalogProvider {
                 TableKind::Table {
                     columns,
                     properties,
+                    partition_by,
+                    location,
                     ..
                 } => match options {
+                    AlterTableOptions::AlterIdentifierFields { .. }
+                    | AlterTableOptions::AlterPartitionSpec { .. } => Ok(()),
+                    AlterTableOptions::SetPartitioning {
+                        partition_by: updated,
+                    } => {
+                        *partition_by = updated;
+                        for column in columns.iter_mut() {
+                            column.is_partition =
+                                partition_by.iter().any(|field| field.column == column.name);
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::SetWriteOrder { distribution, .. } => {
+                        if let Some(value) = distribution {
+                            properties.retain(|(key, _)| key != "write.distribution-mode");
+                            properties.push(("write.distribution-mode".into(), value));
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::SetLocation { location: updated } => {
+                        *location = Some(updated);
+                        Ok(())
+                    }
+                    AlterTableOptions::ReplaceColumns {
+                        fields: replacement,
+                    } => {
+                        if schema.is_none() {
+                            sail_common_datafusion::catalog::replace_columns(
+                                columns,
+                                &arrow::datatypes::Schema::new(replacement),
+                            );
+                        }
+                        Ok(())
+                    }
+                    AlterTableOptions::AlterColumns {
+                        changes,
+                        case_sensitive,
+                    } => {
+                        for change in &changes {
+                            if let sail_catalog::provider::ColumnChange::Rename { path, name } =
+                                change
+                                && let [old] = path.as_slice()
+                            {
+                                for partition in partition_by.iter_mut() {
+                                    if partition.column.eq_ignore_ascii_case(old) {
+                                        partition.column = name.clone();
+                                    }
+                                }
+                            }
+                        }
+                        if schema.is_none() {
+                            sail_common_datafusion::catalog::alter_columns(
+                                columns,
+                                &changes,
+                                case_sensitive,
+                            )
+                            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+                        }
+                        for column in columns.iter_mut() {
+                            column.is_partition = partition_by.iter().any(|partition| {
+                                partition.column.eq_ignore_ascii_case(&column.name)
+                            });
+                        }
+                        Ok(())
+                    }
                     AlterTableOptions::SetTableProperties {
                         properties: new_props,
                     } => {
@@ -161,7 +232,8 @@ impl MemoryCatalogProvider {
                             ))
                         })
                     }
-                    AlterTableOptions::AddCheckConstraint { .. } => {
+                    AlterTableOptions::AddCheckConstraint { .. }
+                    | AlterTableOptions::DropCheckConstraint { .. } => {
                         Err(CatalogError::NotSupported(
                             "CHECK constraints are handled by lake sources".to_string(),
                         ))
@@ -461,6 +533,39 @@ impl CatalogProvider for MemoryCatalogProvider {
                 }
             }
         }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        if database != destination_database {
+            return Err(CatalogError::NotSupported(
+                "Memory catalog cannot rename across databases".into(),
+            ));
+        }
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        if !db.tables.contains_key(table) {
+            return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
+        }
+        if db.tables.contains_key(destination_table) || db.views.contains_key(destination_table) {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                destination_table.into(),
+            ));
+        }
+        let mut status = db
+            .tables
+            .remove(table)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
+        status.name = destination_table.into();
+        db.tables.insert(destination_table.into(), status);
+        Ok(())
     }
 
     async fn alter_table(

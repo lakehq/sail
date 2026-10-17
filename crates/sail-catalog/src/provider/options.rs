@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-pub use sail_common::spec::CreateTableMode;
+pub use sail_common::spec::{ColumnChange, CreateTableMode};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -137,6 +137,34 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterIdentifierFields {
+        names: Vec<Vec<String>>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(CatalogPartitionField, Option<String>)>,
+        drop: Option<CatalogPartitionField>,
+    },
+    SetPartitioning {
+        partition_by: Vec<CatalogPartitionField>,
+    },
+    SetWriteOrder {
+        order: Vec<sail_common_datafusion::catalog::CatalogSortField>,
+        distribution: Option<String>,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+    SetLocation {
+        location: String,
+    },
+    ReplaceColumns {
+        fields: datafusion::arrow::datatypes::Fields,
+    },
+    AlterColumns {
+        changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -152,6 +180,10 @@ pub enum AlterTableOptions {
         name: Vec<String>,
         default: Option<String>,
     },
+    DropCheckConstraint {
+        name: String,
+        if_exists: bool,
+    },
     AddCheckConstraint {
         name: String,
         expression: String,
@@ -164,6 +196,51 @@ impl From<&AlterTableOptions>
     fn from(options: &AlterTableOptions) -> Self {
         use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
         match options {
+            AlterTableOptions::AlterIdentifierFields { names, drop } => {
+                LakeSourceAlterTableOperation::AlterIdentifierFields {
+                    names: names.clone(),
+                    drop: *drop,
+                }
+            }
+            AlterTableOptions::AlterPartitionSpec { add, drop } => {
+                LakeSourceAlterTableOperation::AlterPartitionSpec {
+                    add: add.clone(),
+                    drop: drop.clone(),
+                }
+            }
+            AlterTableOptions::SetPartitioning { partition_by } => {
+                LakeSourceAlterTableOperation::SetPartitioning {
+                    partition_by: partition_by.clone(),
+                }
+            }
+            AlterTableOptions::SetWriteOrder {
+                order,
+                distribution,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::SetWriteOrder {
+                order: order.clone(),
+                distribution: distribution.clone(),
+                case_sensitive: *case_sensitive,
+            },
+            AlterTableOptions::SetLocation { location } => {
+                LakeSourceAlterTableOperation::SetLocation {
+                    location: location.clone(),
+                }
+            }
+            AlterTableOptions::ReplaceColumns { fields } => {
+                LakeSourceAlterTableOperation::ReplaceColumns {
+                    schema: std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(
+                        fields.clone(),
+                    )),
+                }
+            }
+            AlterTableOptions::AlterColumns {
+                changes,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::AlterColumns {
+                changes: changes.clone(),
+                case_sensitive: *case_sensitive,
+            },
             AlterTableOptions::SetTableProperties { properties } => {
                 LakeSourceAlterTableOperation::SetTableProperties {
                     changes: properties
@@ -189,6 +266,12 @@ impl From<&AlterTableOptions>
                 LakeSourceAlterTableOperation::AlterColumnDefault {
                     column_path: name.clone(),
                     default: default.clone(),
+                }
+            }
+            AlterTableOptions::DropCheckConstraint { name, if_exists } => {
+                LakeSourceAlterTableOperation::DropCheckConstraint {
+                    name: name.clone(),
+                    if_exists: *if_exists,
                 }
             }
             AlterTableOptions::AddCheckConstraint { name, expression } => {
