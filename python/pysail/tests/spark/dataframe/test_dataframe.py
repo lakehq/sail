@@ -362,6 +362,24 @@ def test_to_schema_keeps_the_qualifier_of_a_variant_it_does_not_change(spark):
     assert out.select("t.*").columns == ["v", "a"]
 
 
+def test_to_schema_keeps_the_qualifier_of_a_udt_it_does_not_change(spark):
+    # A UDT is stored as its `sqlType`, a nested Arrow type, but for Spark it is no more a
+    # container than VARIANT is: `reconcileColumnType` takes the `case (other, target)` arm and
+    # returns the column as it is, so it stays an attribute and keeps the qualifier.
+    from pyspark.ml.linalg import Vectors, VectorUDT
+
+    source = StructType([StructField("v", VectorUDT()), StructField("a", IntegerType())])
+    df = spark.createDataFrame([(Vectors.dense([1.0, 2.0]), 3)], source).alias("t")
+    out = df.to(source)
+
+    assert len(out.select("t.v").collect()) == 1
+    assert out.select("t.a").collect() == [Row(a=3)]
+    # Without the qualifier the UDT column is silently absent from the expansion rather than
+    # raising, so the star is the assertion that matters most here.
+    assert out.select("t.*").columns == ["v", "a"]
+    assert out.select("*").schema[0].dataType.simpleString() == "vector"
+
+
 def test_to_schema_rejects_an_ambiguous_input_column(spark):
     # `Project.matchSchema` raises `AMBIGUOUS_COLUMN_OR_FIELD` when more than one input column
     # matches a field of the target schema, rather than reading the first one.
@@ -438,6 +456,36 @@ def test_to_schema_can_repeat_a_target_field_name(spark):
     # `Row.asDict()` collapses duplicate names, so compare by position.
     assert [tuple(row) for row in out.collect()] == [(1, 1)]
     assert out.select("*").columns == ["a", "a"]
+
+
+def test_to_schema_reads_one_input_column_into_two_pass_through_fields(spark):
+    # The same shape as above with the SAME type on both sides, so neither field is reconciled.
+    # `reorderFields` does not care: it iterates the target schema and reads the input column
+    # once per target field.
+    df = spark.createDataFrame([(1,)], "a int")
+
+    out = df.to(StructType([StructField("a", IntegerType()), StructField("A", IntegerType())]))
+
+    assert list(out.collect()[0].asDict()) == ["a", "A"]
+    assert out.collect() == [Row(a=1, A=1)]
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="two pass-through fields of one column are distinct attributes instead of one",
+    strict=True,
+)
+def test_to_schema_dedups_a_reference_to_two_pass_through_fields(spark):
+    # A column that needs no reconciliation stays the same attribute for Spark, since
+    # `createNewColumn` renames it with `Attribute.withName`, which keeps the `exprId`. Two target
+    # fields reading it are therefore one attribute twice, and a later reference deduplicates
+    # them rather than being ambiguous. Reconciled fields are new `Alias`es and stay ambiguous,
+    # which is why the `LongType` shape above cannot tell the two rules apart.
+    df = spark.createDataFrame([(1,)], "a int")
+
+    out = df.to(StructType([StructField("a", IntegerType()), StructField("A", IntegerType())]))
+
+    assert out.select("a").collect() == [Row(a=1)]
 
 
 def test_to_schema_ambiguity_does_not_depend_on_case_when_the_names_are_equal(spark):
