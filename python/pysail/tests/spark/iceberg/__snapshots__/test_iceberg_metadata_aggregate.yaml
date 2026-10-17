@@ -321,8 +321,7 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(?table?.#0), min(?table?.#0), max(?table?.#0)]
               ProjectionExec: expr=[v@0 as #0]
                 FilterExec: v@0 = 3
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    DataSourceExec: file_groups={1 group: [[<tmp>/unpartitioned.parquet]]}, projection=[v], file_type=parquet, predicate=v@0 = 3, pruning_predicate=v_null_count@2 != row_count@3 AND v_min@0 <= 3 AND 3 <= v_max@1, required_guarantees=[v in (3)]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/unpartitioned.parquet]]}, projection=[v], file_type=parquet, predicate=v@0 = 3, pruning_predicate=v_null_count@2 != row_count@3 AND v_min@0 <= 3 AND 3 <= v_max@1, required_guarantees=[v in (3)]
 ---
 name: "test_schema_evolution_resolves_metrics_by_field_id[promote-int]"
 data:

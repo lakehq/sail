@@ -1,11 +1,20 @@
 import math
+from collections import Counter
 from datetime import datetime, timedelta
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, LongType, NestedField, StringType, TimestampType
+from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.tests.spark.iceberg.utils import create_sql_catalog
+
+
+def _local_file_path(location: str) -> Path:
+    parsed = urlparse(location)
+    return Path(unquote(parsed.path) if parsed.scheme else location).resolve()
 
 
 def test_nan_reads(spark, tmp_path):
@@ -94,6 +103,64 @@ def test_limit_with_multiple_files(spark, tmp_path):
         path = table.location()
         df = spark.read.format("iceberg").load(path).limit(3)
         assert df.count() == 3  # noqa: PLR2004
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.test_input_file_metadata_tracks_iceberg_data_files"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(1, "unused", LongType(), required=False),
+            NestedField(2, "id", LongType(), required=False),
+            NestedField(3, "label", StringType(), required=False),
+        ),
+    )
+    first_ids = [1, 2]
+    second_ids = [3, 4, 5]
+    try:
+        for ids in (first_ids, second_ids):
+            table.append(pa.table({"unused": [0] * len(ids), "id": ids, "label": [f"v{x}" for x in ids]}))
+        table_path = _local_file_path(table.location())
+        data_files = {path.resolve() for path in (table_path / "data").rglob("*.parquet")}
+
+        frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(table.location())
+        metadata = [
+            F.input_file_name().alias("file_name"),
+            F.input_file_block_start().alias("block_start"),
+            F.input_file_block_length().alias("block_length"),
+        ]
+        rows = frame.select("label", "id", *metadata).orderBy("id").collect()
+
+        assert [row.id for row in rows] == [*first_ids, *second_ids]
+        row_files = {}
+        for row in rows:
+            assert row.label == f"v{row.id}"
+            data_file = _local_file_path(row.file_name)
+            assert urlparse(row.file_name).scheme == "file"
+            assert data_file in data_files
+            assert row.block_start == 0
+            assert row.block_length == data_file.stat().st_size
+            row_files[row.id] = data_file
+
+        first_file = {row_files[value] for value in first_ids}
+        second_file = {row_files[value] for value in second_ids}
+        assert len(first_file) == 1
+        assert len(second_file) == 1
+        assert first_file.isdisjoint(second_file)
+        assert first_file | second_file == data_files
+
+        filtered = frame.filter("id % 2 = 1").select("label", *metadata).orderBy("label").collect()
+        assert [tuple(row) for row in filtered] == [
+            (row.label, row.file_name, row.block_start, row.block_length) for row in rows if row.id % 2 == 1
+        ]
+
+        metadata_only = frame.select(*metadata).collect()
+        assert Counter(tuple(row) for row in metadata_only) == Counter(
+            (row.file_name, row.block_start, row.block_length) for row in rows
+        )
     finally:
         catalog.drop_table(identifier)
 

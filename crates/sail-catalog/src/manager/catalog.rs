@@ -33,4 +33,14 @@ impl CatalogManager {
             .cloned()
             .collect::<Vec<_>>())
     }
+
+    /// Resolves an explicit or default catalog name and verifies that it exists.
+    pub fn resolve_catalog_reference(&self, catalog: Option<&str>) -> CatalogResult<Arc<str>> {
+        let state = self.state()?;
+        let catalog = catalog
+            .map(Arc::<str>::from)
+            .unwrap_or_else(|| state.default_catalog.clone());
+        state.get_catalog(&catalog)?;
+        Ok(catalog)
+    }
 }

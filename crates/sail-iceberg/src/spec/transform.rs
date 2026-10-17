@@ -401,17 +401,12 @@ impl FromStr for Transform {
             "hour" => Ok(Transform::Hour),
             "void" => Ok(Transform::Void),
             _ => {
-                if let Some(bucket_str) =
-                    s.strip_prefix("bucket[").and_then(|s| s.strip_suffix(']'))
-                {
+                if let Some(bucket_str) = s.strip_circumfix("bucket[", ']') {
                     let n: u32 = bucket_str
                         .parse()
                         .map_err(|_| format!("Invalid bucket parameter: {}", bucket_str))?;
                     Ok(Transform::Bucket(n))
-                } else if let Some(truncate_str) = s
-                    .strip_prefix("truncate[")
-                    .and_then(|s| s.strip_suffix(']'))
-                {
+                } else if let Some(truncate_str) = s.strip_circumfix("truncate[", ']') {
                     let w: u32 = truncate_str
                         .parse()
                         .map_err(|_| format!("Invalid truncate parameter: {}", truncate_str))?;

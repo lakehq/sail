@@ -249,12 +249,9 @@ fn parse_decimal_type(type_str: &str) -> CatalogResult<DataType> {
         return Ok(DataType::Decimal128(38, 18));
     }
 
-    let inner = type_str
-        .strip_prefix("decimal(")
-        .and_then(|s| s.strip_suffix(')'))
-        .ok_or_else(|| {
-            CatalogError::InvalidArgument(format!("Invalid decimal type: {type_str}"))
-        })?;
+    let inner = type_str.strip_circumfix("decimal(", ')').ok_or_else(|| {
+        CatalogError::InvalidArgument(format!("Invalid decimal type: {type_str}"))
+    })?;
 
     let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
     match parts.as_slice() {
@@ -281,8 +278,7 @@ fn parse_decimal_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_array_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("array<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("array<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid array type: {type_str}")))?;
 
     let element_type = glue_type_to_arrow(inner)?;
@@ -295,8 +291,7 @@ fn parse_array_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_map_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("map<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("map<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid map type: {type_str}")))?;
 
     // Find the comma that separates key and value types (handling nested types)
@@ -321,8 +316,7 @@ fn parse_map_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_struct_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("struct<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("struct<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid struct type: {type_str}")))?;
 
     if inner.is_empty() {

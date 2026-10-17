@@ -444,7 +444,7 @@ impl DeltaCommitExec {
             .await
     }
 
-    async fn publish_staged_commit(
+    pub(crate) async fn publish_staged_commit(
         log_store: &LogStoreRef,
         staged: &CatalogManagedStagedCommit,
     ) -> Result<()> {
@@ -473,7 +473,7 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn latest_published_backfilled_version(
+    pub(crate) async fn latest_published_backfilled_version(
         log_store: &LogStoreRef,
         end_version: i64,
     ) -> Result<Option<i64>> {

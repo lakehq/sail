@@ -592,8 +592,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }
@@ -606,8 +606,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }

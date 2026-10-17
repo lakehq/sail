@@ -86,6 +86,14 @@ pub async fn load_manifest_list(
     store_ctx: &StoreContext,
     manifest_list_str: &str,
 ) -> Result<ManifestList, DataFusionError> {
+    load_manifest_list_with_version(store_ctx, manifest_list_str, FormatVersion::V3).await
+}
+
+pub async fn load_manifest_list_with_version(
+    store_ctx: &StoreContext,
+    manifest_list_str: &str,
+    format_version: FormatVersion,
+) -> Result<ManifestList, DataFusionError> {
     let (store_ref, path) = store_ctx.resolve(manifest_list_str)?;
     let bytes = store_ref
         .get(&path)
@@ -94,8 +102,7 @@ pub async fn load_manifest_list(
         .bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    // The v3 reader also accepts older manifest lists and preserves row-ID inheritance.
-    ManifestList::parse_with_version(&bytes, FormatVersion::V3).map_err(DataFusionError::Execution)
+    ManifestList::parse_with_version(&bytes, format_version).map_err(DataFusionError::Execution)
 }
 
 pub async fn load_manifest(

@@ -21,6 +21,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -486,7 +487,19 @@ impl IcebergScan {
             .into_iter()
             .map(|(file, _)| file)
             .collect::<Vec<_>>();
-        let df_schema = self.arrow_schema.clone().to_dfschema()?;
+        // Each file is probed with a single planning-only row that carries the file's
+        // identity-partition values and NULL for every other column. The probe schema
+        // keeps the table's names and types but lets every column hold that NULL, since
+        // a required column would otherwise reject the probe row.
+        let probe_schema = Arc::new(ArrowSchema::new_with_metadata(
+            self.arrow_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone().with_nullable(true))
+                .collect::<Vec<_>>(),
+            self.arrow_schema.metadata().clone(),
+        ));
+        let df_schema = probe_schema.clone().to_dfschema()?;
         let predicate = session.create_physical_expr(condition.clone(), &df_schema)?;
         let mut paths = Vec::new();
         for file in files {
@@ -498,8 +511,7 @@ impl IcebergScan {
                         .to_string(),
                 ));
             }
-            let columns = self
-                .arrow_schema
+            let columns = probe_schema
                 .fields()
                 .iter()
                 .map(|arrow_field| {
@@ -518,7 +530,7 @@ impl IcebergScan {
                     scalar?.to_array_of_size(1)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let batch = RecordBatch::try_new(self.arrow_schema.clone(), columns)?;
+            let batch = RecordBatch::try_new(probe_schema.clone(), columns)?;
             let result = predicate.evaluate(&batch)?.into_array(1)?;
             let result = result
                 .as_any()
@@ -762,6 +774,7 @@ impl IcebergScan {
         &self,
         session: &dyn Session,
         nan_free: bool,
+        reader_factory: Arc<CachedParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -774,13 +787,18 @@ impl IcebergScan {
         } else {
             schema
         };
-        Arc::new(ParquetSource::new(schema.build()).with_table_parquet_options(parquet_options))
+        Arc::new(
+            ParquetSource::new(schema.build())
+                .with_table_parquet_options(parquet_options)
+                .with_parquet_file_reader_factory(reader_factory),
+        )
     }
 
     fn build_merge_parquet_source(
         &self,
         session: &dyn Session,
         file_column_name: &str,
+        reader_factory: Arc<CachedParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -803,7 +821,11 @@ impl IcebergScan {
             ])
             .with_virtual_columns(vec![parquet_row_position_field(&self.output_schema)])
             .build();
-        Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
+        Arc::new(
+            ParquetSource::new(table_schema)
+                .with_table_parquet_options(parquet_options)
+                .with_parquet_file_reader_factory(reader_factory),
+        )
     }
 
     fn expanded_projection(
@@ -1105,19 +1127,27 @@ impl IcebergScan {
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
+        if dirty_units.is_empty()
+            && parquet_pushdown_filters.is_empty()
+            && let Some(scan) = self.constant_projection_scan(&all_data_files, projection, limit)?
+        {
+            return Ok(scan);
+        }
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            session.runtime_env().object_store(&object_store_url)?,
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+        ));
+
         if dirty_units.is_empty() {
-            if parquet_pushdown_filters.is_empty()
-                && let Some(scan) =
-                    self.constant_projection_scan(&all_data_files, projection, limit)?
-            {
-                return Ok(scan);
-            }
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
             let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(session, nan_free);
+            let parquet_source = self.build_parquet_source(session, nan_free, reader_factory);
             let expanded_projection =
                 self.expanded_projection(projection, &parquet_pushdown_filters);
             let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
@@ -1135,7 +1165,7 @@ impl IcebergScan {
                 })
                 .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
-            let mut plan = create_data_scan(file_scan_config)?;
+            let mut plan = create_data_scan(session, file_scan_config).await?;
             if let Some(predicate) = conjunction(parquet_pushdown_filters.clone()) {
                 let schema = plan.schema().to_dfschema()?;
                 let predicate = simplify_expr(session, &schema, predicate)?;
@@ -1164,13 +1194,14 @@ impl IcebergScan {
         if !clean_files.is_empty() {
             let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source = self.build_parquet_source(session, false);
+            let parquet_source =
+                self.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            branches.push(create_data_scan(file_scan_config)?);
+            branches.push(create_data_scan(session, file_scan_config).await?);
         }
 
         // Branch B: one branch per dirty file.
@@ -1178,7 +1209,8 @@ impl IcebergScan {
             let delete_scan = self.equality_scan(&eq_deletes)?;
             let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
-            let parquet_source = delete_scan.build_parquet_source(session, false);
+            let parquet_source =
+                delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1187,7 +1219,8 @@ impl IcebergScan {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
+            let data_scan: Arc<dyn ExecutionPlan> =
+                create_data_scan(session, file_scan_config).await?;
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
@@ -1340,6 +1373,13 @@ impl IcebergScan {
             }
         }
 
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            session.runtime_env().object_store(&object_store_url)?,
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+        ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
 
@@ -1355,8 +1395,11 @@ impl IcebergScan {
                     &self.arrow_schema,
                 )?);
             }
-            let parquet_source =
-                delete_scan.build_merge_parquet_source(session, file_column_name.as_str());
+            let parquet_source = delete_scan.build_merge_parquet_source(
+                session,
+                file_column_name.as_str(),
+                Arc::clone(&reader_factory),
+            );
             let output_partitioning = output_partitioning_from_partition_fields(
                 parquet_source.table_schema().table_schema(),
                 parquet_source.table_schema().table_partition_cols(),
@@ -1366,12 +1409,18 @@ impl IcebergScan {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    // Keep whole-file units for delete routing and per-file metadata.
+                    // Keep whole files together for delete routing and per-file metadata.
+                    // These flags also make create_data_scan skip eager footer reads, allowing
+                    // the planner to discard this scan for a metadata-only delete.
+                    // Eager footer reads can fail on missing or inaccessible files before the planner
+                    // can choose a metadata-only delete.
+                    // WARNING: Do not change these flags to allow eager footer reads; metadata-only
+                    // deletes will fail when data files are unavailable.
                     .with_output_partitioning(Some(output_partitioning))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan = create_data_scan(file_scan_config)?;
+            let data_scan = create_data_scan(session, file_scan_config).await?;
             branches.push(Arc::new(
                 IcebergMergeMetadataExec::try_new_partitioned_files(
                     data_scan,
@@ -1396,17 +1445,24 @@ impl IcebergScan {
                 )?);
             }
             let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
-            let parquet_source = delete_scan.build_parquet_source(session, false);
+            let parquet_source =
+                delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    // Existing position deletes and MERGE row positions both require the
-                    // original file order and absolute offsets.
+                    // Preserve file order and absolute row positions for existing deletes and MERGE.
+                    // These flags also make create_data_scan skip eager footer reads, allowing
+                    // the planner to discard this scan for a metadata-only delete.
+                    // Eager footer reads can fail on missing or inaccessible files before the planner
+                    // can choose a metadata-only delete.
+                    // WARNING: Do not change these flags to allow eager footer reads; metadata-only
+                    // deletes will fail when data files are unavailable.
                     .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
+            let data_scan: Arc<dyn ExecutionPlan> =
+                create_data_scan(session, file_scan_config).await?;
             let with_metadata: Arc<dyn ExecutionPlan> =
                 Arc::new(IcebergMergeMetadataExec::try_new(
                     data_scan,
@@ -1649,6 +1705,70 @@ mod tests {
         Ok((read_scan, file))
     }
 
+    /// Serves the scan's table from an in-memory store whose single snapshot holds `files`,
+    /// and returns the store so that a test can remove the metadata again.
+    #[expect(clippy::expect_used)]
+    async fn commit_data_files(
+        scan: &mut IcebergScan,
+        context: &datafusion::prelude::SessionContext,
+        spec: PartitionSpec,
+        files: Vec<DataFile>,
+    ) -> Result<StoreContext> {
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+
+        use crate::spec::manifest::{ManifestMetadata, ManifestWriterBuilder};
+        use crate::spec::manifest_list::ManifestListWriter;
+        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
+        use crate::spec::{FormatVersion, ManifestContentType};
+
+        let table_url = Url::parse(scan.table_uri()).expect("table URL");
+        let store = Arc::new(object_store::memory::InMemory::new());
+        context.register_object_store(&table_url, store.clone());
+        let store_context = StoreContext::new(store, &table_url)?;
+        let mut writer = ManifestWriterBuilder::new(
+            Some(1),
+            None,
+            ManifestMetadata::new(
+                Arc::new(scan.schema.clone()),
+                0,
+                spec,
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            ),
+        )
+        .build();
+        for file in files {
+            writer.add(file);
+        }
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        store_context
+            .prefixed
+            .put(&Path::from("manifest.avro"), bytes.into())
+            .await?;
+        let mut list = ManifestListWriter::new();
+        list.append(
+            writer
+                .into_manifest_file("manifest.avro".into(), 1, 1)
+                .expect("manifest file"),
+        );
+        let bytes = list.to_bytes(FormatVersion::V2).expect("manifest list");
+        store_context
+            .prefixed
+            .put(&Path::from("list.avro"), bytes.into())
+            .await?;
+        scan.snapshot = Some(
+            SnapshotBuilder::new()
+                .with_snapshot_id(1)
+                .with_sequence_number(1)
+                .with_manifest_list("list.avro")
+                .with_summary(Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot"),
+        );
+        Ok(store_context)
+    }
+
     #[test]
     fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
         let (read_scan, mut file) = statistics_fixture()?;
@@ -1809,65 +1929,41 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::expect_used)]
     async fn metadata_aggregate_reuses_file_plan_for_partial_and_fallback() -> Result<()> {
+        use datafusion::arrow::array::{Float64Array, Int32Array};
         use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
         use datafusion::functions_aggregate::expr_fn::{count, min, sum};
         use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
         use datafusion::prelude::{SessionContext, col, lit};
         use object_store::ObjectStoreExt;
         use object_store::path::Path;
+        use parquet::arrow::ArrowWriter;
         use sail_common_datafusion::datasource::MergeCapableSource;
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
-        use crate::spec::manifest::{ManifestMetadata, ManifestWriterBuilder};
-        use crate::spec::manifest_list::ManifestListWriter;
-        use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
-        use crate::spec::{FormatVersion, ManifestContentType};
 
-        let (mut read_scan, file) = statistics_fixture()?;
+        let (mut read_scan, mut file) = statistics_fixture()?;
         let context = SessionContext::new();
-        let table_url = Url::parse(read_scan.table_uri()).expect("table URL");
-        let store = Arc::new(object_store::memory::InMemory::new());
-        context.register_object_store(&table_url, store.clone());
-        let store_context = StoreContext::new(store, &table_url)?;
-        let mut writer = ManifestWriterBuilder::new(
-            Some(1),
-            None,
-            ManifestMetadata::new(
-                Arc::new(read_scan.schema.clone()),
-                0,
-                PartitionSpec::unpartitioned_spec(),
-                FormatVersion::V2,
-                ManifestContentType::Data,
-            ),
+        let batch = RecordBatch::try_new(
+            Arc::clone(&read_scan.arrow_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 2])),
+                Arc::new(Float64Array::from(vec![2.5, 2.5])),
+            ],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None)?;
+        writer.write(&batch)?;
+        let bytes = writer.into_inner()?;
+        file.file_size_in_bytes = bytes.len() as u64;
+        let file_path = Path::from(file.file_path.as_str());
+        let store_context = commit_data_files(
+            &mut read_scan,
+            &context,
+            PartitionSpec::unpartitioned_spec(),
+            vec![file],
         )
-        .build();
-        writer.add(file);
-        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
-        store_context
-            .prefixed
-            .put(&Path::from("manifest.avro"), bytes.into())
-            .await?;
-        let mut list = ManifestListWriter::new();
-        list.append(
-            writer
-                .into_manifest_file("manifest.avro".into(), 1, 1)
-                .expect("manifest file"),
-        );
-        let bytes = list.to_bytes(FormatVersion::V2).expect("manifest list");
-        store_context
-            .prefixed
-            .put(&Path::from("list.avro"), bytes.into())
-            .await?;
-        read_scan.snapshot = Some(
-            SnapshotBuilder::new()
-                .with_snapshot_id(1)
-                .with_sequence_number(1)
-                .with_manifest_list("list.avro")
-                .with_summary(Summary::new(Operation::Append))
-                .build()
-                .expect("snapshot"),
-        );
+        .await?;
+        store_context.prefixed.put(&file_path, bytes.into()).await?;
         let read_scan = Arc::new(read_scan);
         let source = Arc::new(IcebergTableSource::new(Arc::clone(&read_scan)));
         let state = context.state();
@@ -1956,6 +2052,59 @@ mod tests {
                 )
                 .await?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn predicate_overwrite_selects_files_of_a_table_with_a_required_column() -> Result<()> {
+        use datafusion::prelude::{SessionContext, col, lit};
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields([
+                Arc::new(NestedField::required(
+                    1,
+                    "n",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "k",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(2, 1000, "k", Transform::Identity)
+            .build();
+        let mut read_scan = IcebergScan::new_empty(
+            "file:///tmp/predicate-overwrite/",
+            schema,
+            vec![spec.clone()],
+            0,
+        )?;
+        let mut files = vec![];
+        for key in ["a", "b"] {
+            let mut file: DataFile = serde_json::from_value(serde_json::json!({
+                "content": "DATA", "file_path": format!("k={key}/data.parquet"),
+                "file_format": "PARQUET", "partition": [], "record_count": 1,
+                "file_size_in_bytes": 100, "partition_spec_id": 0
+            }))
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+            file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+                key.to_string(),
+            )))];
+            files.push(file);
+        }
+        let context = SessionContext::new();
+        commit_data_files(&mut read_scan, &context, spec, files).await?;
+
+        let paths = read_scan
+            .predicate_overwrite_paths(&context.state(), &col("k").eq(lit("a")))
+            .await?;
+        assert_eq!(paths, vec!["k=a/data.parquet".to_string()]);
         Ok(())
     }
 }
