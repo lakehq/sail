@@ -487,31 +487,6 @@ pub(crate) fn theta_args_with_default_lg(
     }
 }
 
-pub fn expr_contains_python_udf(body: &expr::Expr) -> PlanResult<bool> {
-    Ok(body.exists(|expression| {
-        Ok(match expression {
-            expr::Expr::ScalarFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkUDF>()
-                    || f.is::<PySparkUnresolvedUDF>()
-                    || f.is::<PySparkCoGroupMapUDF>()
-            }
-            expr::Expr::AggregateFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkGroupAggregateUDF>()
-                    || f.is::<PySparkGroupMapUDF>()
-                    || f.is::<PySparkBatchCollectorUDF>()
-            }
-            expr::Expr::WindowFunction(window) => matches!(
-                &window.fun,
-                WindowFunctionDefinition::AggregateUDF(udf)
-                    if udf.inner().is::<PySparkGroupAggregateUDF>()
-            ),
-            _ => false,
-        })
-    })?)
-}
-
 // TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
 //  Python or Variant scalar calls, so a foldable NULL can eliminate them.
 pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
