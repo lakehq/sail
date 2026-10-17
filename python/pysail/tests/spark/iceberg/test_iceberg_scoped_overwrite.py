@@ -20,12 +20,12 @@ from pysail.tests.spark.iceberg.test_iceberg_equality_delete import (
 from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
-def _create_partitioned_table(spark, table_name: str, location: Path) -> None:
+def _create_partitioned_table(spark, table_name: str, location: Path, value_type: str = "BIGINT") -> None:
     escaped_location = escape_sql_string_literal(str(location))
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
     spark.sql(
         f"""
-        CREATE TABLE {table_name} (id BIGINT, category STRING, value BIGINT)
+        CREATE TABLE {table_name} (id BIGINT, category STRING, value {value_type})
         USING iceberg
         PARTITIONED BY (category)
         LOCATION '{escaped_location}'
@@ -61,17 +61,19 @@ def _publish_injected_metadata(location: Path) -> None:
 def test_iceberg_predicate_overwrite_rewrites_only_candidate_partition(spark, tmp_path):
     table_name = "iceberg_predicate_overwrite"
     location = tmp_path / table_name
-    _create_partitioned_table(spark, table_name, location)
+    # A required non-partition column must not stop the overwrite from choosing files.
+    _create_partitioned_table(spark, table_name, location, value_type="BIGINT NOT NULL")
     try:
+        schema = "id BIGINT, category STRING, value BIGINT NOT NULL"
         spark.createDataFrame(
             [(1, "A", 10), (2, "B", 20), (3, "A", 30), (4, "B", 40)],
-            schema="id BIGINT, category STRING, value BIGINT",
+            schema=schema,
         ).writeTo(table_name).append()
         initial_live_files = _live_data_file_paths(location)
 
         spark.createDataFrame(
             [(5, "A", 100), (6, "A", 200)],
-            schema="id BIGINT, category STRING, value BIGINT",
+            schema=schema,
         ).writeTo(table_name).overwrite(F.col("category") == "A")
 
         assert _rows(spark, table_name) == [

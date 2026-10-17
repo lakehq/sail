@@ -1549,9 +1549,9 @@ dependencies = [
 
 [[package]]
 name = "chumsky"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ba4a05c9ce83b07de31b31c874e87c069881ac4355db9e752e3a55c11ec75a6"
+checksum = "e0d2bfadce76f963d776feff99db6dc33783829539258314776383b33e2a00f8"
 dependencies = [
  "hashbrown 0.15.5",
  "unicode-ident",
@@ -7887,11 +7887,13 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-expr",
  "either",
  "futures",
  "lexical-core",
  "num-bigint 0.5.1",
+ "object_store",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
@@ -7905,6 +7907,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "url",
 ]
 
 [[package]]
@@ -7927,7 +7930,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "chumsky 0.12.0",
+ "chumsky 0.13.0",
  "csv-core",
  "dashmap",
  "datafusion",
@@ -8106,7 +8109,7 @@ dependencies = [
  "cbc 0.2.1",
  "chrono",
  "chrono-tz",
- "chumsky 0.12.0",
+ "chumsky 0.13.0",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -8318,7 +8321,7 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "chrono",
- "chumsky 0.12.0",
+ "chumsky 0.13.0",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -8505,7 +8508,7 @@ name = "sail-sql-analyzer"
 version = "0.7.2"
 dependencies = [
  "chrono",
- "chumsky 0.12.0",
+ "chumsky 0.13.0",
  "either",
  "lazy_static",
  "regex",
@@ -8527,7 +8530,7 @@ dependencies = [
 name = "sail-sql-parser"
 version = "0.7.2"
 dependencies = [
- "chumsky 0.12.0",
+ "chumsky 0.13.0",
  "either",
  "itertools 0.15.0",
  "paste",

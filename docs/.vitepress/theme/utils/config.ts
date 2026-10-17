@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 
 const APP_CONFIG_PATH = path.join(
   import.meta.dirname,
@@ -75,7 +75,7 @@ function buildConfigGroups(
 
 export async function loadConfigItems(): Promise<ConfigItem[]> {
   const content = await fs.readFile(APP_CONFIG_PATH, "utf-8");
-  return yaml.load(content) as ConfigItem[];
+  return load(content) as ConfigItem[];
 }
 
 export {
