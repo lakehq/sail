@@ -17,7 +17,8 @@ def dictionary_string_view(spark, tmp_path):
 @pytest.mark.parametrize("fn", ["sin", "acos", "acosh", "ln"])
 def test_unary_double_accepts_dictionary_encoded_string(spark, dictionary_string_view, fn, ansi):
     spark.conf.set("spark.sql.ansi.enabled", ansi)
-    direct = spark.sql(f"SELECT {fn}(CAST(c AS STRING)) AS r FROM {dictionary_string_view}").collect()
-    actual = spark.sql(f"SELECT {fn}(c) AS r FROM {dictionary_string_view}").collect()
+    dataframe = spark.table(dictionary_string_view)
+    direct = dataframe.selectExpr(f"{fn}(CAST(c AS STRING)) AS r").collect()
+    actual = dataframe.selectExpr(f"{fn}(c) AS r").collect()
     # Compare the rendering: `acosh(0.5)` is NaN, and NaN != NaN.
     assert repr(actual) == repr(direct)
