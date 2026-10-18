@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
@@ -8,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
+from pyspark.sql.types import TimestampNTZType, TimestampType
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
@@ -785,3 +787,32 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+def test_external_parquet_timestamp_logical_type_roundtrip(spark, tmp_path, adjusted_to_utc):
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    # Exercise the Parquet logical type without an Arrow schema metadata override.
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+    logical_type = str(pq.ParquetFile(path).schema.column(0).logical_type)
+    assert f"isAdjustedToUTC={str(adjusted_to_utc).lower()}" in logical_type
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten"
+    source.write.parquet(str(destination))
+    expected_type = TimestampType if adjusted_to_utc else TimestampNTZType
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, expected_type)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")

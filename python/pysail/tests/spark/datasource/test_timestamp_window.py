@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -77,32 +76,3 @@ def test_fixed_offset_timestamp_cast_overflow(spark, tmp_path):
     assert df.selectExpr("unix_micros(TRY_CAST(ts AS TIMESTAMP_LTZ)) AS micros").collect()[0].micros is None
     with pytest.raises(PySparkException):
         df.selectExpr("unix_micros(CAST(ts AS TIMESTAMP_LTZ))").collect()
-
-
-@pytest.mark.usefixtures("session_timezone")
-@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
-@pytest.mark.parametrize("adjusted_to_utc", [False, True])
-def test_external_parquet_timestamp_logical_type_roundtrip(spark, tmp_path, adjusted_to_utc):
-    session_timezone = spark.conf.get("spark.sql.session.timeZone")
-    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
-    if adjusted_to_utc:
-        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
-    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
-    path = tmp_path / "external.parquet"
-    # Exercise the Parquet logical type without an Arrow schema metadata override.
-    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
-    logical_type = str(pq.ParquetFile(path).schema.column(0).logical_type)
-    assert f"isAdjustedToUTC={str(adjusted_to_utc).lower()}" in logical_type
-
-    source = spark.read.parquet(str(path))
-    destination = tmp_path / "rewritten"
-    source.write.parquet(str(destination))
-    expected_type = TimestampType if adjusted_to_utc else TimestampNTZType
-    for frame in (source, spark.read.parquet(str(destination))):
-        assert isinstance(frame.schema["ts"].dataType, expected_type)
-        row = (
-            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
-            .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
-            .collect()[0]
-        )
-        assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
