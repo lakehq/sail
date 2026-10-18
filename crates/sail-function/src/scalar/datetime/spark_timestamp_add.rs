@@ -62,9 +62,11 @@ impl ScalarUDFImpl for SparkTimestampAdd {
             Some(false) => "spark_timestamp_subtract_legacy",
         }
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if self.subtract_ansi.is_some() && arg_types.len() == 3 {
             self.coerce_types(arg_types)?;
@@ -75,6 +77,7 @@ impl ScalarUDFImpl for SparkTimestampAdd {
             .cloned()
             .ok_or_else(|| exec_datafusion_err!("timestamp addition requires a timestamp"))
     }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
@@ -88,6 +91,7 @@ impl ScalarUDFImpl for SparkTimestampAdd {
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if self.subtract_ansi.is_some() && args.args.len() == 3 {
             make_scalar_function(timestamp_difference)(&args.args)
