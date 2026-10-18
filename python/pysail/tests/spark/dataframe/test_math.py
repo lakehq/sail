@@ -123,6 +123,21 @@ def test_raise_error_divide_by_zero_text_is_not_arithmetic(spark):
 
 
 @pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT raise_error('Remainder by zero')",
+        "SELECT raise_error('Remainder by zero user message')",
+        "SELECT assert_true(false, 'Remainder by zero')",
+        "SELECT assert_true(false, 'Remainder by zero user message')",
+    ],
+)
+def test_raise_error_remainder_by_zero_text_is_not_arithmetic(spark, query):
+    with pytest.raises(PySparkException, match="Remainder by zero") as error:
+        spark.sql(query).collect()
+    assert not isinstance(error.value, ArithmeticException)
+
+
+@pytest.mark.parametrize(
     "expression",
     [
         "CASE WHEN true THEN 1 / 0 ELSE id END",

@@ -1,12 +1,14 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use chrono::{DateTime, NaiveDateTime, Offset, TimeZone};
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{ArrayRef, AsArray, Decimal128Array, DurationMicrosecondArray};
 use datafusion::arrow::compute::kernels::cast_utils::IntervalUnit;
 use datafusion::arrow::compute::kernels::temporal::{DatePart, date_part};
 use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, Field, FieldRef, Int8Type, Int32Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, TimeUnit,
+    DataType, DurationMicrosecondType, Field, FieldRef, Int8Type, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, TimeUnit,
 };
 use datafusion::arrow::temporal_conversions::MICROSECONDS;
 use datafusion_common::utils::take_function_args;
@@ -15,7 +17,9 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_functions::datetime::date_part::DatePartFunc;
-use sail_common::utils::datetime::{MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_MINUTE};
+use sail_common::utils::datetime::{
+    MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_MINUTE, time_unit_to_multiplier,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDatePart {
@@ -53,6 +57,41 @@ impl SparkDatePart {
             },
             |second_arg| {
                 match second_arg.data_type() {
+                    DataType::Timestamp(unit, timezone) => {
+                        let timezone = timezone.as_ref().map(|tz| tz.parse::<Tz>()).transpose()?;
+                        let units_per_second = time_unit_to_multiplier(&unit);
+                        let minute = 60 * units_per_second;
+                        let scalar = matches!(second_arg, ColumnarValue::Scalar(_));
+                        let values = second_arg.cast_to(&DataType::Int64, None)?.to_array(1)?;
+                        let micros =
+                            values
+                                .as_primitive::<Int64Type>()
+                                .unary::<_, Int64Type>(|value| {
+                                    let offset = timezone.as_ref().map_or(0, |tz| {
+                                        let seconds = value.div_euclid(units_per_second);
+                                        // The terminal timezone periods also cover instants beyond Chrono.
+                                        let utc = DateTime::from_timestamp(seconds, 0)
+                                            .map(|datetime| datetime.naive_utc())
+                                            .unwrap_or(if seconds < 0 {
+                                                NaiveDateTime::MIN
+                                            } else {
+                                                NaiveDateTime::MAX
+                                            });
+                                        i64::from(
+                                            tz.offset_from_utc_datetime(&utc)
+                                                .fix()
+                                                .local_minus_utc(),
+                                        )
+                                    });
+                                    // SECOND needs only the local minute residue, even at i64 boundaries.
+                                    (value.rem_euclid(minute)
+                                        + offset.rem_euclid(60) * units_per_second)
+                                        .rem_euclid(minute)
+                                        * 1_000_000
+                                        / units_per_second
+                                });
+                        restore_shape(Arc::new(micros), scalar)
+                    }
                     DataType::Duration(TimeUnit::Microsecond) => {
                         truncate_duration_microseconds(second_arg.clone())
                     }

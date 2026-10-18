@@ -811,3 +811,93 @@ Feature: Timestamp operations preserve instants and session-local calendar value
     Then query result
       | null_date | null_timestamp |
       | NULL      | NULL           |
+
+  Rule: F8 - TRY_CAST returns NULL when date normalization overflows
+
+    Scenario Outline: TRY_CAST handles date overflow in <timezone>
+      Given config spark.sql.session.timeZone = <timezone>
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT id, TRY_CAST(date_from_unix_date(d) AS TIMESTAMP_LTZ) IS NULL AS result
+        FROM VALUES (0, 2147483647), (1, -2147483648), (2, 0), (3, CAST(NULL AS INT))
+          AS t(id, d)
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | true   |
+        | 1  | true   |
+        | 2  | false  |
+        | 3  | true   |
+
+      Examples:
+        | timezone            | ansi  |
+        | UTC                 | true  |
+        | +01:00              | false |
+        | America/Los_Angeles | true  |
+
+    Scenario: TRY_CAST handles date overflow inside a struct
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id,
+               TRY_CAST(named_struct('ts', date_from_unix_date(d))
+                        AS STRUCT<ts: TIMESTAMP_LTZ>).ts IS NULL AS result
+        FROM VALUES (0, 2147483647), (1, -2147483648), (2, 0), (3, CAST(NULL AS INT))
+          AS t(id, d)
+        ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | true   |
+        | 1  | true   |
+        | 2  | false  |
+        | 3  | true   |
+
+  Rule: Typed NULL date components retain argument type validation
+
+    Scenario Outline: make_date rejects a nested component with a typed NULL and ANSI <ansi>: <kind>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT make_date(<year>, <month>, <day>) AS result
+        """
+      Then query error (?i)(cast|type|requires|cannot resolve)
+
+      Examples:
+        | kind   | year                    | month             | day                | ansi  |
+        | array  | CAST(NULL AS INT)       | array(1)          | 1                  | true  |
+        | array  | CAST(NULL AS INT)       | array(1)          | 1                  | false |
+        | map    | 2024                    | CAST(NULL AS INT) | map('day', 1)      | true  |
+        | map    | 2024                    | CAST(NULL AS INT) | map('day', 1)      | false |
+        | struct | named_struct('year', 1) | 1                 | CAST(NULL AS INT)  | true  |
+        | struct | named_struct('year', 1) | 1                 | CAST(NULL AS INT)  | false |
+
+  Rule: Calendar arithmetic preserves supported timezone aliases
+
+    Scenario: Calendar day addition accepts the PST session alias
+      Given config spark.sql.session.timeZone = PST
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_micros(timestamp_micros(0) + INTERVAL 1 DAY) AS interval_added,
+               unix_micros(timestampadd(DAY, 1, timestamp_micros(0))) AS function_added
+        """
+      Then query result
+        | interval_added | function_added |
+        | 86400000000    | 86400000000    |
+
+    Scenario: Calendar day addition keeps EST as a fixed offset
+      Given config spark.sql.session.timeZone = EST
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_micros(ts + INTERVAL 1 DAY) - unix_micros(ts) AS interval_delta,
+               unix_micros(timestampadd(DAY, 1, ts)) - unix_micros(ts) AS function_delta
+        FROM (SELECT TIMESTAMP '2024-03-09 12:00:00Z' AS ts)
+        """
+      Then query result
+        | interval_delta | function_delta |
+        | 86400000000    | 86400000000    |

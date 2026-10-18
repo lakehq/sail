@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, NaiveDateTime, Offset, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
@@ -62,6 +62,8 @@ pub struct ConvertTz {
     classic: bool,
     /// Whether NULL rows short-circuit before parsing their time zones.
     null_short_circuit: bool,
+    /// Whether this conversion implements an LTZ-to-NTZ cast.
+    ltz_to_ntz: bool,
     signature: Signature,
 }
 
@@ -71,11 +73,17 @@ impl ConvertTz {
             signature: Signature::any(3, Volatility::Immutable),
             classic,
             null_short_circuit: false,
+            ltz_to_ntz: false,
         }
     }
 
     pub fn with_null_short_circuit(mut self) -> Self {
         self.null_short_circuit = true;
+        self
+    }
+
+    pub fn with_ltz_to_ntz(mut self) -> Self {
+        self.ltz_to_ntz = true;
         self
     }
 
@@ -85,6 +93,10 @@ impl ConvertTz {
 
     pub fn null_short_circuit(&self) -> bool {
         self.null_short_circuit
+    }
+
+    pub fn ltz_to_ntz(&self) -> bool {
+        self.ltz_to_ntz
     }
 }
 
@@ -109,6 +121,10 @@ impl ConvertTzLazy {
 
     pub fn null_short_circuit(&self) -> bool {
         self.convert_tz.null_short_circuit()
+    }
+
+    pub fn ltz_to_ntz(&self) -> bool {
+        self.convert_tz.ltz_to_ntz()
     }
 }
 
@@ -261,7 +277,7 @@ impl ScalarUDFImpl for ConvertTz {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(
-            |args| convert_tz_inner(args, self.classic, self.null_short_circuit),
+            |args| convert_tz_inner(args, self.classic, self.null_short_circuit, self.ltz_to_ntz),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
@@ -271,6 +287,7 @@ fn convert_tz_inner(
     args: &[ArrayRef],
     classic: bool,
     null_short_circuit: bool,
+    ltz_to_ntz: bool,
 ) -> Result<ArrayRef> {
     let legacy_timezones = HashMap::from([
         ("ACT", "Australia/Darwin"),
@@ -332,10 +349,23 @@ fn convert_tz_inner(
             .map(|opt| opt.flatten())
     };
 
-    let convert = if classic {
-        convert_tz_classic
-    } else {
-        convert_tz_non_classic
+    let convert = |ts_micros, from_zone: &Tz, to_zone: &Tz| {
+        if ltz_to_ntz && !classic && *from_zone == Tz::UTC {
+            let Some(utc) = DateTime::<Utc>::from_timestamp_micros(ts_micros) else {
+                // shortcut: retain pre-PR wide cast values until full-range regional offsets are supported.
+                return Some(ts_micros);
+            };
+            let offset = to_zone
+                .offset_from_utc_datetime(&utc.naive_utc())
+                .fix()
+                .local_minus_utc();
+            // Integer shifting avoids overflowing Chrono's local calendar at its bounds.
+            ts_micros.checked_add(i64::from(offset) * 1_000_000)
+        } else if classic {
+            convert_tz_classic(ts_micros, from_zone, to_zone)
+        } else {
+            convert_tz_non_classic(ts_micros, from_zone, to_zone)
+        }
     };
 
     let mut singular_timezones = [None, None];

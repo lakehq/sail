@@ -10,6 +10,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType}
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use sail_common::utils::datetime::timezone_alias_to_timezone;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -19,7 +20,7 @@ use crate::scalar::datetime::utils::string_array_iter;
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
-fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -> i64 {
+fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<Utc>) -> i64 {
     use chrono::Timelike;
 
     let timestamp_secs = datetime.timestamp();
@@ -71,37 +72,7 @@ impl SparkZone {
             }
         }
 
-        let zone_id = match value {
-            "ACT" => "Australia/Darwin",
-            "AET" => "Australia/Sydney",
-            "AGT" => "America/Argentina/Buenos_Aires",
-            "ART" => "Africa/Cairo",
-            "AST" => "America/Anchorage",
-            "BET" => "America/Sao_Paulo",
-            "BST" => "Asia/Dhaka",
-            "CAT" => "Africa/Harare",
-            "CNT" => "America/St_Johns",
-            "CST" => "America/Chicago",
-            "CTT" => "Asia/Shanghai",
-            "EAT" => "Africa/Addis_Ababa",
-            "ECT" => "Europe/Paris",
-            "IET" => "America/Indiana/Indianapolis",
-            "IST" => "Asia/Kolkata",
-            "JST" => "Asia/Tokyo",
-            "MIT" => "Pacific/Apia",
-            "NET" => "Asia/Yerevan",
-            "NST" => "Pacific/Auckland",
-            "PLT" => "Asia/Karachi",
-            "PNT" => "America/Phoenix",
-            "PRT" => "America/Puerto_Rico",
-            "PST" => "America/Los_Angeles",
-            "SST" => "Pacific/Guadalcanal",
-            "VST" => "Asia/Ho_Chi_Minh",
-            "EST" => "-05:00",
-            "MST" => "-07:00",
-            "HST" => "-10:00",
-            _ => value,
-        };
+        let zone_id = timezone_alias_to_timezone(value);
 
         if zone_id.starts_with(['+', '-']) {
             let offset = parse_zone_offset(zone_id)
@@ -467,41 +438,6 @@ impl ScalarUDFImpl for SparkTimestamp {
         ))
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if !matches!(arg_types.len(), 1 | 2) {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (1, 2),
-                arg_types.len(),
-            ));
-        }
-        match &arg_types[0] {
-            // String-only, matching the kernel (which parses strings) and the
-            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
-            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
-            other => {
-                return Err(unsupported_data_type_exec_err(
-                    self.name(),
-                    "STRING or NULL",
-                    other,
-                ));
-            }
-        }
-        let mut coerced = arg_types.to_vec();
-        if let Some(format) = arg_types.get(1) {
-            match format {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
-                // A NULL format yields a NULL result; coerce it to a Utf8 null.
-                DataType::Null => coerced[1] = DataType::Utf8,
-                other => {
-                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
-                }
-            }
-        }
-        Ok(coerced)
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let (arg, format) = match args.len() {
@@ -604,6 +540,41 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
         }
     }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !matches!(arg_types.len(), 1 | 2) {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 2),
+                arg_types.len(),
+            ));
+        }
+        match &arg_types[0] {
+            // String-only, matching the kernel (which parses strings) and the
+            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
+            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+            other => {
+                return Err(unsupported_data_type_exec_err(
+                    self.name(),
+                    "STRING or NULL",
+                    other,
+                ));
+            }
+        }
+        let mut coerced = arg_types.to_vec();
+        if let Some(format) = arg_types.get(1) {
+            match format {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
+                // A NULL format yields a NULL result; coerce it to a Utf8 null.
+                DataType::Null => coerced[1] = DataType::Utf8,
+                other => {
+                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
+                }
+            }
+        }
+        Ok(coerced)
+    }
 }
 
 fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
@@ -621,8 +592,8 @@ fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
 impl SparkTimestamp {
     fn parse_array_with_format_array(
         &self,
-        array: &Arc<dyn datafusion::arrow::array::Array>,
-        format_array: &Arc<dyn datafusion::arrow::array::Array>,
+        array: &Arc<dyn Array>,
+        format_array: &Arc<dyn Array>,
         safe: bool,
     ) -> Result<ColumnarValue> {
         if array.len() != format_array.len() {
@@ -638,7 +609,7 @@ impl SparkTimestamp {
 
     fn parse_array_with_formats<'f>(
         &self,
-        array: &Arc<dyn datafusion::arrow::array::Array>,
+        array: &Arc<dyn Array>,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
         safe: bool,

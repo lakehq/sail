@@ -158,6 +158,18 @@ pub(crate) fn cast_temporal(
             DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64,
             DataType::Timestamp(_, Some(_)),
         ) => {
+            // Preserve infallible timestamp cast shapes used by comparison rewriting.
+            let expression = if is_try
+                && matches!(
+                    from,
+                    DataType::Date32
+                        | DataType::Date64
+                        | DataType::Timestamp(TimeUnit::Second | TimeUnit::Millisecond, None)
+                ) {
+                try_cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None))
+            } else {
+                expression
+            };
             let instant =
                 cast_timestamp_ntz_to_ltz(expression, Arc::clone(session_timezone), is_try)?;
             let instant = if from == &DataType::Date32
@@ -175,7 +187,13 @@ pub(crate) fn cast_temporal(
             DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64,
         ) => {
             let localized = cast(
-                shift_timestamp_timezone(expression, session_timezone, is_try, false)?,
+                shift_timestamp_timezone(
+                    expression,
+                    session_timezone,
+                    is_try,
+                    false,
+                    matches!(to, DataType::Timestamp(_, None)),
+                )?,
                 DataType::Timestamp(TimeUnit::Microsecond, None),
             );
             Ok(cast(localized, to))
@@ -376,7 +394,7 @@ pub(crate) fn cast_timestamp_ntz_to_ltz(
     is_try: bool,
 ) -> DataFusionResult<expr::Expr> {
     Ok(cast(
-        shift_timestamp_timezone(expression, &timezone, is_try, true)?,
+        shift_timestamp_timezone(expression, &timezone, is_try, true, false)?,
         DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
     ))
 }
@@ -386,6 +404,7 @@ fn shift_timestamp_timezone(
     timezone: &str,
     is_try: bool,
     to_utc: bool,
+    ltz_to_ntz: bool,
 ) -> DataFusionResult<expr::Expr> {
     let timestamp_ntz = cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None));
     // A plain timezone cast can be unwrapped into a numeric comparison by DataFusion,
@@ -420,7 +439,13 @@ fn shift_timestamp_timezone(
         }
     } else {
         // TODO: Support second-resolution fixed offsets rejected by Arrow and ConvertTz.
-        let converted = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+        let conversion = ConvertTz::new(false);
+        let conversion = if ltz_to_ntz {
+            conversion.with_ltz_to_ntz()
+        } else {
+            conversion
+        };
+        let converted = ScalarUDF::from(conversion).call(vec![
             lit(if to_utc { timezone } else { "UTC" }),
             lit(if to_utc { "UTC" } else { timezone }),
             timestamp_ntz,

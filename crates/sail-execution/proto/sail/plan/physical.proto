@@ -312,6 +312,7 @@ message RaiseErrorUdf {
   // Explicit raise_error and assert_true differ from foldable internal value checks.
   bool non_foldable = 1;
   bool divide_by_zero = 2;
+  bool remainder_by_zero = 3;
 }
 
 message PySparkUdf {
@@ -498,6 +499,7 @@ message SparkMakeTimestampNtzUdf {
 message ConvertTzUdf {
   bool classic = 1;
   bool null_short_circuit = 2;
+  bool ltz_to_ntz = 3;
 }
 
 message StandardUdaf {}

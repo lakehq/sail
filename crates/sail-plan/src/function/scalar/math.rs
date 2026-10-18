@@ -83,12 +83,14 @@ fn date_plus_day_time(
         timezone,
         false,
     )?;
-    let interval = if subtract {
-        ScalarUDF::from(NegateDuration::new()).call(vec![interval])
+    Ok(if subtract {
+        ScalarUDF::from(SparkTimestampAdd::new_subtract(
+            context.plan_config.ansi_mode,
+        ))
+        .call(vec![timestamp, interval])
     } else {
-        interval
-    };
-    Ok(timestamp_plus_interval(timestamp, interval))
+        timestamp_plus_interval(timestamp, interval)
+    })
 }
 
 fn subtract_timestamps(
@@ -102,19 +104,24 @@ fn subtract_timestamps(
     let ntz = matches!(left_type, DataType::Timestamp(_, None))
         || matches!(right_type, DataType::Timestamp(_, None));
     let target = DataType::Timestamp(TimeUnit::Microsecond, (!ntz).then(|| Arc::clone(timezone)));
-    let local = |value: Expr, source: &DataType| -> PlanResult<Expr> {
-        let value = cast_temporal(value, source, target.clone(), timezone, false)?;
-        let local = cast_temporal(
+    let timestamp = |value: Expr, source: &DataType| -> PlanResult<Expr> {
+        Ok(cast_temporal(
             value,
-            &target,
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            source,
+            target.clone(),
             timezone,
             false,
-        )?;
-        Ok(cast(local, DataType::Int64))
+        )?)
     };
     Ok(cast(
-        local(left, &left_type)? - local(right, &right_type)?,
+        ScalarUDF::from(SparkTimestampAdd::new_subtract(
+            context.plan_config.ansi_mode,
+        ))
+        .call(vec![
+            timestamp(left, &left_type)?,
+            timestamp(right, &right_type)?,
+            lit(1_i64),
+        ]),
         DataType::Duration(TimeUnit::Microsecond),
     ))
 }
@@ -255,12 +262,10 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         );
         Ok(match (left_type, right_type) {
             (Ok(DataType::Timestamp(_, _)), Ok(DataType::Duration(_) | DataType::Interval(_))) => {
-                let negative = spark_unary_negate(
-                    right,
+                ScalarUDF::from(SparkTimestampAdd::new_subtract(
                     function_context.plan_config.ansi_mode,
-                    function_context.schema,
-                );
-                timestamp_plus_interval(left, negative)
+                ))
+                .call(vec![left, right])
             }
             (
                 Ok(DataType::Timestamp(_, _)),
@@ -712,7 +717,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        ScalarUDF::from(RaiseError::new()).call(vec![lit("Remainder by zero")]),
+        ScalarUDF::from(RaiseError::remainder_by_zero()).call(vec![lit("Remainder by zero")]),
     );
 
     Ok(Expr::BinaryExpr(BinaryExpr {

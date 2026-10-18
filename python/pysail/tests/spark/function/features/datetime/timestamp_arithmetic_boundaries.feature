@@ -439,3 +439,111 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
        |-- year_month: timestamp (nullable = true)
        |-- ntz: timestamp_ntz (nullable = true)
       """
+
+  Scenario Outline: NULL <type> rows do not negate minimum intervals with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    # The minimum interval is valid; only negating it would overflow.
+    When query
+      """
+      SELECT id, CAST(ts - iv AS STRING) AS result
+      FROM (
+        SELECT id,
+               CASE WHEN id = 0 THEN CAST(NULL AS <type>)
+                    ELSE <type> '1970-01-02' END AS ts,
+               CASE WHEN id = 0 THEN make_dt_interval(-106751991, -4, 0, -54.775808)
+                    ELSE make_dt_interval(0, 0, 0, 1) END AS iv
+        FROM range(0, 2, 1, 1)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | result              |
+      | 0  | NULL                |
+      | 1  | 1970-01-01 23:59:59 |
+
+    Examples:
+      | type          | ansi  |
+      | TIMESTAMP     | true  |
+      | TIMESTAMP_NTZ | false |
+      | DATE          | true  |
+
+  Scenario Outline: Adjacent wide timestamp differences retain microseconds in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT CAST(end_ts - start_ts AS STRING) AS difference,
+             timestampdiff(MICROSECOND, start_ts, end_ts) AS micros
+      FROM (
+        SELECT timestamp_micros(<end>) AS end_ts,
+               timestamp_micros(<start>) AS start_ts
+      )
+      """
+    Then query result
+      | difference                            | micros   |
+      | INTERVAL '<difference>' DAY TO SECOND | <micros> |
+
+    Examples:
+      | timezone            | end                                    | start                 | difference         | micros |
+      | +01:00              | 9223372036854775807L                   | 9223372036854775806L  | 0 00:00:00.000001  | 1      |
+      | -01:00              | CAST('-9223372036854775808' AS BIGINT) | -9223372036854775807L | -0 00:00:00.000001 | -1     |
+      | America/Los_Angeles | 9000000000000000000L                   | 8999999999999999999L  | 0 00:00:00.000001  | 1      |
+
+  Scenario Outline: Mixed wide timestamp differences preserve NULL rows in <timezone> with ANSI <ansi>
+    Given config spark.sql.session.timeZone = <timezone>
+    And config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT id, CAST(end_ts - start_ts AS STRING) AS difference,
+             timestampdiff(SECOND, start_ts, end_ts) AS seconds
+      FROM (
+        SELECT id, timestamp_micros(end_micros) AS end_ts,
+               timestamp_micros(start_micros) AS start_ts
+        FROM VALUES (0, 9000000000000000000L, 1719835200000000L),
+                    (1, CAST(NULL AS BIGINT), 1719835200000000L),
+                    (2, 9000000000000000000L, CAST(NULL AS BIGINT))
+             AS t(id, end_micros, start_micros)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | difference                                  | seconds       |
+      | 0  | INTERVAL '104146761 04:00:00' DAY TO SECOND | 8998280164800 |
+      | 1  | NULL                                        | NULL          |
+      | 2  | NULL                                        | NULL          |
+
+    Examples:
+      | timezone            | ansi  |
+      | Etc/GMT+8           | true  |
+      | America/Los_Angeles | false |
+      | Asia/Kolkata        | true  |
+
+  Scenario: Constant NULL timestamp differences do not evaluate unused errors
+    When query
+      """
+      SELECT CAST(NULL AS TIMESTAMP) - CAST(raise_error('unused') AS TIMESTAMP) AS difference,
+             timestampdiff(SECOND, CAST(NULL AS TIMESTAMP),
+                           CAST(raise_error('unused') AS TIMESTAMP)) AS seconds
+      """
+    Then query result
+      | difference | seconds |
+      | NULL       | NULL    |
+
+  Scenario Outline: Timestamp differences reject overflow with ANSI <ansi>: <expression>
+    Given config spark.sql.session.timeZone = UTC
+    And config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT <expression> AS result
+      FROM (
+        SELECT timestamp_micros(CAST('-9223372036854775808' AS BIGINT)) AS lo,
+               timestamp_micros(9223372036854775807L) AS hi
+      )
+      """
+    Then query error (?i)overflow
+
+    Examples:
+      | expression                         | ansi  |
+      | hi - lo                            | true  |
+      | hi - lo                            | false |
+      | timestampdiff(MICROSECOND, lo, hi) | true  |
+      | timestampdiff(MICROSECOND, lo, hi) | false |

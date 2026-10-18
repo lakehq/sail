@@ -11,9 +11,16 @@ use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RaiseErrorKind {
+    Message,
+    DivideByZero,
+    RemainderByZero,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RaiseError {
     signature: Signature,
-    divide_by_zero: bool,
+    kind: RaiseErrorKind,
 }
 
 impl Default for RaiseError {
@@ -30,19 +37,30 @@ impl RaiseError {
                 vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
                 Volatility::Immutable,
             ),
-            divide_by_zero: false,
+            kind: RaiseErrorKind::Message,
         }
     }
 
     pub fn divide_by_zero() -> Self {
         Self {
-            divide_by_zero: true,
+            kind: RaiseErrorKind::DivideByZero,
             ..Self::new()
         }
     }
 
     pub fn is_divide_by_zero(&self) -> bool {
-        self.divide_by_zero
+        self.kind == RaiseErrorKind::DivideByZero
+    }
+
+    pub fn remainder_by_zero() -> Self {
+        Self {
+            kind: RaiseErrorKind::RemainderByZero,
+            ..Self::new()
+        }
+    }
+
+    pub fn is_remainder_by_zero(&self) -> bool {
+        self.kind == RaiseErrorKind::RemainderByZero
     }
 
     /// Spark's explicit raise_error is non-foldable; internal value checks remain foldable.
@@ -85,15 +103,20 @@ impl ScalarUDFImpl for RaiseError {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if self.divide_by_zero {
+        let arithmetic_error = match self.kind {
+            RaiseErrorKind::Message => None,
+            RaiseErrorKind::DivideByZero => Some(ArrowError::DivideByZero),
+            RaiseErrorKind::RemainderByZero => Some(ArrowError::ArithmeticOverflow(
+                "Remainder by zero".to_string(),
+            )),
+        };
+        if let Some(error) = arithmetic_error {
             // A higher-order function can invoke a lambda on an empty batch.
             // No row reaches the zero-divisor error in that case.
             if args.number_rows == 0 {
                 return Ok(ColumnarValue::Array(ScalarValue::Null.to_array_of_size(0)?));
             }
-            return Err(DataFusionError::External(Box::new(
-                ArrowError::DivideByZero,
-            )));
+            return Err(DataFusionError::External(Box::new(error)));
         }
         let ScalarFunctionArgs { args, .. } = args;
         let Ok(arg) = args.one() else {

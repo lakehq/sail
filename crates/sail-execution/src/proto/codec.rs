@@ -3347,9 +3347,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::RaiseError(r#gen::RaiseErrorUdf {
                 non_foldable,
                 divide_by_zero,
+                remainder_by_zero,
             }) => {
                 let udf = if divide_by_zero {
                     RaiseError::divide_by_zero()
+                } else if remainder_by_zero {
+                    RaiseError::remainder_by_zero()
                 } else if non_foldable {
                     RaiseError::non_foldable()
                 } else {
@@ -3588,10 +3591,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                ltz_to_ntz,
             }) => {
                 let func = ConvertTz::new(classic);
                 let func = if null_short_circuit {
                     func.with_null_short_circuit()
+                } else {
+                    func
+                };
+                let func = if ltz_to_ntz {
+                    func.with_ltz_to_ntz()
                 } else {
                     func
                 };
@@ -3760,6 +3769,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_start_of_day" => Ok(Arc::new(ScalarUDF::from(SparkStartOfDay::new()))),
             "spark_timestamp_add" => Ok(Arc::new(ScalarUDF::from(SparkTimestampAdd::new()))),
+            "spark_timestamp_subtract" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampAdd::new_subtract(true),
+            ))),
+            "spark_timestamp_subtract_legacy" => Ok(Arc::new(ScalarUDF::from(
+                SparkTimestampAdd::new_subtract(false),
+            ))),
             "spark_timestamp_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimestampToNumber::new())))
             }
@@ -3994,6 +4009,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::RaiseError(r#gen::RaiseErrorUdf {
                 non_foldable: node.signature().volatility == Volatility::Volatile,
                 divide_by_zero: func.is_divide_by_zero(),
+                remainder_by_zero: func.is_remainder_by_zero(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
@@ -4180,6 +4196,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                ltz_to_ntz: func.ltz_to_ntz(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -6086,6 +6103,7 @@ mod tests {
             RaiseError::new(),
             RaiseError::non_foldable(),
             RaiseError::divide_by_zero(),
+            RaiseError::remainder_by_zero(),
         ] {
             let original = ScalarUDF::from(function);
             let decoded = round_trip_udf(original.clone())?;
@@ -8604,6 +8622,7 @@ mod tests {
             .ok_or_else(|| plan_datafusion_err!("decoded HOF should be ConvertTzLazy"))?;
         assert!(convert_tz.classic());
         assert!(convert_tz.null_short_circuit());
+        assert!(!convert_tz.ltz_to_ntz());
 
         assert_same_result(
             &physical,
@@ -8965,6 +8984,14 @@ mod tests {
         let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
         assert!(decoded.classic());
         assert!(decoded.null_short_circuit());
+        assert!(!decoded.ltz_to_ntz());
+
+        let cast = ConvertTz::new(false).with_ltz_to_ntz();
+        let decoded = round_trip_udf(ScalarUDF::from(cast))?;
+        let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
+        assert!(!decoded.classic());
+        assert!(!decoded.null_short_circuit());
+        assert!(decoded.ltz_to_ntz());
 
         Ok(())
     }

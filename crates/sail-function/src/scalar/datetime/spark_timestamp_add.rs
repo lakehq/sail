@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Offset, TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, AsArray, Int64Array, TimestampMicrosecondArray,
+};
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, Field, FieldRef, Int64Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType,
 };
+use datafusion::arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -16,15 +20,17 @@ use datafusion_expr::{
 use sail_common::utils::datetime::MICROS_PER_DAY;
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::datetime::spark_timestamp::normalize_timezone_alias;
 use crate::scalar::datetime::utils::{
     add_ltz_interval, add_ntz_interval, is_fixed_zero_offset_timezone,
 };
 
-// Spark calendar arithmetic: months, then local days, then elapsed microseconds.
-// The same kernel is used for interval addition, TIMESTAMPADD, and SEQUENCE.
+// Spark timestamp arithmetic: calendar intervals and session-local differences.
+// Interval addition, TIMESTAMPADD, and SEQUENCE share the calendar kernel.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestampAdd {
     signature: Signature,
+    subtract_ansi: Option<bool>,
 }
 
 impl Default for SparkTimestampAdd {
@@ -37,18 +43,34 @@ impl SparkTimestampAdd {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            subtract_ansi: None,
+        }
+    }
+
+    pub fn new_subtract(ansi_mode: bool) -> Self {
+        Self {
+            subtract_ansi: Some(ansi_mode),
+            ..Self::new()
         }
     }
 }
 
 impl ScalarUDFImpl for SparkTimestampAdd {
     fn name(&self) -> &str {
-        "spark_timestamp_add"
+        match self.subtract_ansi {
+            None => "spark_timestamp_add",
+            Some(true) => "spark_timestamp_subtract",
+            Some(false) => "spark_timestamp_subtract_legacy",
+        }
     }
     fn signature(&self) -> &Signature {
         &self.signature
     }
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if self.subtract_ansi.is_some() && arg_types.len() == 3 {
+            self.coerce_types(arg_types)?;
+            return Ok(DataType::Int64);
+        }
         arg_types
             .first()
             .cloned()
@@ -68,12 +90,34 @@ impl ScalarUDFImpl for SparkTimestampAdd {
         )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(timestamp_add)(&args.args)
+        if self.subtract_ansi.is_some() && args.args.len() == 3 {
+            make_scalar_function(timestamp_difference)(&args.args)
+        } else {
+            make_scalar_function(|args| timestamp_add(args, self.subtract_ansi))(&args.args)
+        }
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         let data_type = info.get_data_type(&args[0])?;
         if !matches!(data_type, DataType::Timestamp(TimeUnit::Microsecond, _)) {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        if self.subtract_ansi.is_some() && args.len() == 3 {
+            let types = args
+                .iter()
+                .map(|arg| info.get_data_type(arg))
+                .collect::<Result<Vec<_>>>()?;
+            self.coerce_types(&types)?;
+            // Retain native subtraction's constant-NULL suppression of unused operands.
+            if args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Literal(value, _) if value.is_null()))
+            {
+                return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                    ScalarValue::Int64(None),
+                    None,
+                )));
+            }
             return Ok(ExprSimplifyResult::Original(args));
         }
         // These identities need no arithmetic; other inputs retain the checked kernel.
@@ -82,7 +126,7 @@ impl ScalarUDFImpl for SparkTimestampAdd {
                 timestamp,
                 quantity,
                 Expr::Literal(ScalarValue::Utf8(Some(unit)), _),
-            ] => {
+            ] if self.subtract_ansi.is_none() => {
                 if matches!(quantity, Expr::Literal(ScalarValue::Int64(Some(0)), _))
                     && interval_for_unit(unit, 0).is_ok()
                 {
@@ -121,6 +165,14 @@ impl ScalarUDFImpl for SparkTimestampAdd {
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         match types {
+            [
+                DataType::Timestamp(_, left),
+                DataType::Timestamp(_, right),
+                DataType::Int64,
+            ] if self.subtract_ansi.is_some() && left == right => {
+                let timestamp = DataType::Timestamp(TimeUnit::Microsecond, left.clone());
+                Ok(vec![timestamp.clone(), timestamp, DataType::Int64])
+            }
             [DataType::Timestamp(_, timezone), interval]
                 if matches!(interval, DataType::Interval(_) | DataType::Duration(_)) =>
             {
@@ -133,17 +185,67 @@ impl ScalarUDFImpl for SparkTimestampAdd {
                     },
                 ])
             }
-            [DataType::Timestamp(_, timezone), _, unit] if unit.is_string() => Ok(vec![
-                DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()),
-                DataType::Int64,
-                DataType::Utf8,
-            ]),
-            _ => exec_err!("invalid timestamp addition arguments: {types:?}"),
+            [DataType::Timestamp(_, timezone), _, unit]
+                if self.subtract_ansi.is_none() && unit.is_string() =>
+            {
+                Ok(vec![
+                    DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()),
+                    DataType::Int64,
+                    DataType::Utf8,
+                ])
+            }
+            _ => exec_err!("invalid timestamp arithmetic arguments: {types:?}"),
         }
     }
 }
 
-fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn timestamp_difference(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let end = args[0].as_primitive::<TimestampMicrosecondType>();
+    let start = args[1].as_primitive::<TimestampMicrosecondType>();
+    let divisors = args[2].as_primitive::<Int64Type>();
+    let timezone = end
+        .timezone()
+        .filter(|timezone| !is_fixed_zero_offset_timezone(timezone));
+    let result = (0..end.len())
+        .map(|row| {
+            if end.is_null(row) || start.is_null(row) || divisors.is_null(row) {
+                return Ok(None);
+            }
+            let divisor = divisors.value(row);
+            if divisor <= 0 {
+                return exec_err!("timestamp difference divisor must be positive");
+            }
+            let (end, start) = (end.value(row), start.value(row));
+            let mut difference = i128::from(end) - i128::from(start);
+            if let Some(timezone) = timezone {
+                let timezone = normalize_timezone_alias(timezone).parse::<Tz>()?;
+                // shortcut: keep raw wide pairs until full-range regional offsets are supported.
+                if let (Some(end), Some(start)) = (
+                    DateTime::<Utc>::from_timestamp_micros(end),
+                    DateTime::<Utc>::from_timestamp_micros(start),
+                ) {
+                    let offset = |utc: DateTime<Utc>| {
+                        i128::from(
+                            timezone
+                                .offset_from_utc_datetime(&utc.naive_utc())
+                                .fix()
+                                .local_minus_utc(),
+                        ) * 1_000_000
+                    };
+                    difference += offset(end) - offset(start);
+                }
+            }
+            // Divide before narrowing: the scaled difference may fit when microseconds do not.
+            let value = i64::try_from(difference / i128::from(divisor)).map_err(|_| {
+                ArrowError::ArithmeticOverflow("timestamp difference overflow".to_string())
+            })?;
+            Ok(Some(value))
+        })
+        .collect::<Result<Int64Array>>()?;
+    Ok(Arc::new(result))
+}
+
+fn timestamp_add(args: &[ArrayRef], subtract_ansi: Option<bool>) -> Result<ArrayRef> {
     let timestamps = args[0].as_primitive::<TimestampMicrosecondType>();
     let timezone = match timestamps.data_type() {
         DataType::Timestamp(_, timezone) => timezone.clone(),
@@ -162,6 +264,7 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
             {
                 return Ok(None);
             }
+            // A NULL timestamp must not negate an unused minimum interval.
             let (months, days, micros) = if let Some(unit) = unit {
                 interval_for_unit(
                     unit.value(row),
@@ -170,9 +273,13 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
             } else {
                 match intervals.data_type() {
                     DataType::Duration(TimeUnit::Microsecond) => {
-                        let micros = intervals
-                            .as_primitive::<DurationMicrosecondType>()
-                            .value(row);
+                        // ANSI intervals use checked negation in both ANSI modes.
+                        let micros = interval_component(
+                            intervals
+                                .as_primitive::<DurationMicrosecondType>()
+                                .value(row),
+                            subtract_ansi.map(|_| true),
+                        )?;
                         (
                             0,
                             i32::try_from(micros / MICROS_PER_DAY)
@@ -181,19 +288,31 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                         )
                     }
                     DataType::Interval(IntervalUnit::YearMonth) => (
-                        intervals.as_primitive::<IntervalYearMonthType>().value(row),
+                        interval_component(
+                            intervals.as_primitive::<IntervalYearMonthType>().value(row),
+                            subtract_ansi.map(|_| true),
+                        )?,
                         0,
                         0,
                     ),
                     DataType::Interval(IntervalUnit::DayTime) => {
                         let value = intervals.as_primitive::<IntervalDayTimeType>().value(row);
-                        (0, value.days, i64::from(value.milliseconds) * 1_000)
+                        (
+                            0,
+                            interval_component(value.days, subtract_ansi)?,
+                            i64::from(interval_component(value.milliseconds, subtract_ansi)?)
+                                * 1_000,
+                        )
                     }
                     DataType::Interval(IntervalUnit::MonthDayNano) => {
                         let value = intervals
                             .as_primitive::<IntervalMonthDayNanoType>()
                             .value(row);
-                        (value.months, value.days, value.nanoseconds / 1_000)
+                        (
+                            interval_component(value.months, subtract_ansi)?,
+                            interval_component(value.days, subtract_ansi)?,
+                            interval_component(value.nanoseconds, subtract_ansi)? / 1_000,
+                        )
                     }
                     data_type => return exec_err!("invalid timestamp interval type: {data_type}"),
                 }
@@ -207,7 +326,8 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
             } else if utc_or_ntz {
                 add_ntz_interval(start, months, days, micros)?
             } else {
-                let tz = timezone.as_deref().unwrap_or("UTC").parse::<Tz>()?;
+                let tz =
+                    normalize_timezone_alias(timezone.as_deref().unwrap_or("UTC")).parse::<Tz>()?;
                 add_ltz_interval(start, months, days, micros, tz)?
             };
             Ok(Some(value))
@@ -215,6 +335,14 @@ fn timestamp_add(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Result<TimestampMicrosecondArray>>()?
         .with_timezone_opt(timezone);
     Ok(Arc::new(result))
+}
+
+fn interval_component<T: ArrowNativeTypeOp>(value: T, subtract_ansi: Option<bool>) -> Result<T> {
+    match subtract_ansi {
+        None => Ok(value),
+        Some(true) => Ok(value.neg_checked()?),
+        Some(false) => Ok(value.neg_wrapping()),
+    }
 }
 
 fn interval_for_unit(unit: &str, quantity: i64) -> Result<(i32, i32, i64)> {

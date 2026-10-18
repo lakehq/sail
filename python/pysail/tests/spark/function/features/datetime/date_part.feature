@@ -390,3 +390,49 @@ Feature: date_part / extract output schema
       Then query result
         | days | months |
         | 2    | 2      |
+
+  Rule: Fractional seconds retain valid timestamp values
+
+    Scenario: Fractional seconds at timestamp boundaries preserve the non-null schema
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, date_part('second', timestamp_micros(IF(id=0,9223372036854775807L,-9223372036854775808L))) AS seconds
+        FROM range(2) ORDER BY id
+        """
+      Then query result
+        | id | seconds   |
+        | 0  | 54.775807 |
+        | 1  | 5.224192  |
+      Then query schema
+        """
+        root
+         |-- id: long (nullable = false)
+         |-- seconds: decimal(8,6) (nullable = false)
+        """
+
+    Scenario: Fractional seconds preserve nullable and pre-epoch inputs
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, date_part('second',timestamp_micros(micros)) AS seconds
+        FROM VALUES (0,9223372036854775807L),(1,-1L),(2,CAST(NULL AS BIGINT)) AS t(id,micros)
+        ORDER BY id
+        """
+      Then query result
+        | id | seconds   |
+        | 0  | 54.775807 |
+        | 1  | 59.999999 |
+        | 2  | NULL      |
+
+    Scenario: Fractional seconds retain historical timezone offset seconds
+      Given config spark.sql.session.timeZone = Asia/Kathmandu
+      When query
+        """
+        SELECT date_part('second',timestamp_micros(-2208988765000000L)) AS historical,
+               date_part('second',timestamp_micros(-9223372036854775808L)) AS lower_seconds,
+               date_part('second',timestamp_micros(9223372036854775807L)) AS upper_seconds
+        """
+      Then query result
+        | historical | lower_seconds | upper_seconds |
+        | 51.000000  | 21.224192     | 54.775807     |

@@ -341,7 +341,7 @@ fn make_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
             .into_iter()
             .any(|argument| matches!(argument, Expr::Literal(ScalarValue::Null, _)))
             || !has_unsupported_datetime_casts(
-                [&year, &month, &day],
+                &[&year, &month, &day].map(|arg| cast(arg.clone(), DataType::Int32)),
                 input.function_context.schema,
             )?)
     {
@@ -444,10 +444,6 @@ fn timestampdiff_calendar_unit(unit: &str, start: Expr, end: Expr) -> PlanResult
 }
 
 fn timestampdiff_fixed_unit(unit: &str, start: Expr, end: Expr) -> Expr {
-    // The microsecond difference can exceed i64 even when the requested unit fits.
-    let wide = DataType::Decimal128(20, 0);
-    let diff_micros =
-        cast(timestamp_micros(end), wide.clone()) - cast(timestamp_micros(start), wide);
     let divisor = match unit {
         "MILLISECOND" => 1_000i64,
         "SECOND" => 1_000_000i64,
@@ -457,10 +453,7 @@ fn timestampdiff_fixed_unit(unit: &str, start: Expr, end: Expr) -> Expr {
         "WEEK" => 7 * 24 * 3_600_000_000i64,
         _ => 1i64,
     };
-    cast(
-        diff_micros / lit(ScalarValue::Decimal128(Some(i128::from(divisor)), 20, 0)),
-        DataType::Int64,
-    )
+    ScalarUDF::from(SparkTimestampAdd::new_subtract(true)).call(vec![end, start, lit(divisor)])
 }
 
 fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -493,6 +486,26 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 let days = |value| cast(cast(value, DataType::Date32), DataType::Int64);
                 return Ok(days(end) - days(start));
             }
+            if matches!(
+                unit_str.as_str(),
+                "DAY" | "HOUR" | "MINUTE" | "SECOND" | "MILLISECOND" | "MICROSECOND" | "WEEK"
+            ) {
+                let timestamp = |value| -> PlanResult<Expr> {
+                    if numeric {
+                        Ok(cast(
+                            value,
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                        ))
+                    } else {
+                        datetime_timestamp(value, &input.function_context, false, false)
+                    }
+                };
+                return Ok(timestampdiff_fixed_unit(
+                    &unit_str,
+                    timestamp(start)?,
+                    timestamp(end)?,
+                ));
+            }
             // TimestampDiff first casts both operands to LTZ, then compares their
             // session-local date-times (including partial days and months).
             let local = |value: Expr| -> PlanResult<Expr> {
@@ -511,9 +524,6 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
             let start = local(start)?;
             let end = local(end)?;
             match unit_str.as_str() {
-                "DAY" | "HOUR" | "MINUTE" | "SECOND" | "MILLISECOND" | "MICROSECOND" | "WEEK" => {
-                    Ok(timestampdiff_fixed_unit(&unit_str, start, end))
-                }
                 "MONTH" | "YEAR" | "QUARTER" => timestampdiff_calendar_unit(&unit_str, start, end),
                 other => Err(PlanError::unsupported(format!("datediff unit: {other}"))),
             }
