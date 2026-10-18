@@ -1,5 +1,8 @@
+import datetime
+
 import pytest
 from pyspark.sql import Row
+from pyspark.sql.functions import PandasUDFType, pandas_udf
 
 
 @pytest.mark.parametrize(
@@ -62,3 +65,109 @@ def test_datetime_parsing_checks_null_before_pattern(spark, remote, tmp_path, fu
     finally:
         for key, value in original.items():
             spark.conf.set(key, value)
+
+
+# Spark can eliminate known-NULL conversions before extracting Python iterators.
+# Sail permits ordinary Python execution; NULL-first pattern/zone validation does
+# not promise to suppress the expressions that compute those arguments.
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize(
+    ("query", "expected", "spark_error", "sail_error"),
+    [
+        pytest.param(
+            "SELECT convert_timezone(CAST(NULL AS STRING), fail_iter_string(id), "
+            "TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)",
+            None,
+            None,
+            "datetime-iterator-evaluated",
+            id="literal_null_iterator",
+        ),
+        pytest.param(
+            "SELECT convert_timezone(CAST(concat(CAST(NULL AS STRING), 'UTC') AS STRING), "
+            "fail_iter_string(id), TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)",
+            None,
+            None,
+            "datetime-iterator-evaluated",
+            id="computed_source_null_iterator",
+        ),
+        pytest.param(
+            "SELECT convert_timezone(fail_iter_string(id), "
+            "CAST(concat(CAST(NULL AS STRING), 'UTC') AS STRING), "
+            "TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)",
+            None,
+            None,
+            "datetime-iterator-evaluated",
+            id="computed_target_null_iterator",
+        ),
+        pytest.param(
+            "SELECT convert_timezone(CAST(NULL AS STRING), "
+            "fail_iter_string(CAST(raise_error(concat('iterator-input-evaluated-', id)) AS BIGINT)), "
+            "TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)",
+            None,
+            None,
+            "datetime-iterator-evaluated",
+            id="null_iterator_input_error",
+        ),
+        # Both engines extract this iterator before checking the NULL timestamp.
+        pytest.param(
+            "SELECT to_timestamp(CAST(NULL AS STRING), fail_iter_string(id)) AS result FROM range(1)",
+            None,
+            "datetime-iterator-evaluated",
+            "datetime-iterator-evaluated",
+            id="null_timestamp_iterator_format",
+        ),
+        pytest.param(
+            "SELECT to_timestamp(DATE '2024-01-01', CAST(convert_timezone("
+            "CAST(concat(CAST(NULL AS STRING), 'UTC') AS STRING), fail_iter_string(id), "
+            "TIMESTAMP_NTZ '2024-01-01') AS STRING)) AS result FROM range(1)",
+            datetime.datetime(2024, 1, 1),  # noqa: DTZ001 - PySpark returns naive timestamps.
+            None,
+            "datetime-iterator-evaluated",
+            id="nested_typed_format_iterator",
+        ),
+        pytest.param(
+            "SELECT to_timestamp(DATE '2024-01-01', CAST(convert_timezone("
+            "CAST(CAST(concat(CAST(NULL AS STRING), '1') AS INT) AS STRING), fail_iter_string(id), "
+            "TIMESTAMP_NTZ '2024-01-01') AS STRING)) AS result FROM range(1)",
+            datetime.datetime(2024, 1, 1),  # noqa: DTZ001 - PySpark returns naive timestamps.
+            None,
+            "datetime-iterator-evaluated",
+            id="nested_typed_format_cast_iterator",
+        ),
+        pytest.param(
+            "SELECT convert_timezone('UTC', fail_iter_string(id), TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)",
+            None,
+            "datetime-iterator-evaluated",
+            "datetime-iterator-evaluated",
+            id="live_iterator_error",
+        ),
+        pytest.param(
+            "SELECT convert_timezone(CAST(NULL AS STRING), fail_iter_string(id), "
+            "TIMESTAMP_NTZ '2024-01-01') AS result FROM range(2) GROUP BY id % 2",
+            None,
+            "MISSING_AGGREGATION",
+            "(?i)No field named",
+            id="null_iterator_grouping_error",
+        ),
+    ],
+)
+def test_datetime_null_validation_before_iterator_execution(
+    spark, remote, ansi, query, expected, spark_error, sail_error
+):
+    @pandas_udf("string", PandasUDFType.SCALAR_ITER)
+    def fail_iter_string(_batches):
+        message = "datetime-iterator-evaluated"
+        raise RuntimeError(message)
+
+    spark.udf.register("fail_iter_string", fail_iter_string)
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        error = spark_error if remote.startswith("local") else sail_error
+        if error:
+            with pytest.raises(Exception, match=error):
+                spark.sql(query).collect()
+        else:
+            assert spark.sql(query).collect() == [Row(result=expected)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)

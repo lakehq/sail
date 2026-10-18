@@ -269,9 +269,15 @@ def assert_schema_tree(df, docstring):
     assert docstring.strip() == actual.strip()
 
 
-@then(parsers.re("query result(?P<ordered>( ordered)?)"))
-def query_result(datatable, ordered, query, spark):
-    """Execute the SQL query and compare result with expected data table."""
+@then(parsers.re("query result(?P<ordered>( ordered)?)(?: for (?P<engine>Spark|Sail))?"))
+def query_result(datatable, ordered, query, spark, engine=None):
+    """Compare results, optionally keeping explicit expectations for each engine.
+
+    Paired Spark/Sail tables document approved differences, including incorrect Spark
+    optimizer results. The active engine executes the unchanged query in its own step.
+    """
+    if engine is not None and (engine == "Spark") != is_jvm_spark():
+        return
     header, *rows = datatable
     df = spark.sql(query)
     [h, *r] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
@@ -303,9 +309,11 @@ def query_result_collected(datatable, ordered, query, spark):
         assert sorted(expected_rows) == sorted(actual)
 
 
-@then(parsers.parse("query error {error}"))
-def query_error(error, query, spark):
-    """Executes the SQL query and expects it to fail with an error (regex match)."""
+@then(parsers.re(r"query error(?: for (?P<engine>Spark|Sail))? (?P<error>.*)"))
+def query_error(error, query, spark, engine=None):
+    """Check an error, optionally paired with the other engine's approved result."""
+    if engine is not None and (engine == "Spark") != is_jvm_spark():
+        return
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
 
@@ -314,9 +322,9 @@ def query_error(error, query, spark):
 def query_result_unless_spark_raises(error, datatable, query, spark):
     """Documents a deliberate divergence from Spark.
 
-    Spark raises the error while optimizing the query, because its optimizer evaluates
-    foldable expressions eagerly. Sail only raises errors for rows that are evaluated and
-    returns the expected result instead. JVM Spark checks the error, Sail checks the result.
+    Spark can raise during optimization or generated-code initialization, before runtime
+    short-circuiting applies. The scenario documents Sail's chosen result for that case.
+    JVM Spark checks the error; Sail checks the result.
     """
     if is_jvm_spark():
         query_error(error, query, spark)

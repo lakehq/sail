@@ -439,16 +439,20 @@ impl ScalarUDFImpl for SparkTimestamp {
         )
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if let [value, format] = args.arg_fields
+            && value.data_type()
+                == &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone())
+        {
+            return Ok(Arc::new(value.as_ref().clone().with_nullable(
+                self.safe() || value.is_nullable() || format.is_nullable(),
+            )));
+        }
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
             true,
         )))
-    }
-
-    fn is_strict(&self) -> bool {
-        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -461,6 +465,14 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
             _ => return exec_err!("spark_timestamp requires 1 or 2 arguments"),
         };
+        if format.is_some()
+            && arg.data_type() == DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone())
+        {
+            // The planner has already converted temporal inputs. Spark also ignores their
+            // pattern value, including NULL or 'QQQ'. Sail deliberately lets the format
+            // expression follow ordinary evaluation before this call, including its errors.
+            return Ok(arg);
+        }
         let safe = self.safe();
         match (arg, format) {
             (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
@@ -563,14 +575,13 @@ impl ScalarUDFImpl for SparkTimestamp {
             ));
         }
         match &arg_types[0] {
-            // String-only, matching the kernel (which parses strings) and the
-            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
-            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+            DataType::Timestamp(TimeUnit::Microsecond, timezone)
+                if arg_types.len() == 2 && timezone == &self.timezone => {}
             other => {
                 return Err(unsupported_data_type_exec_err(
                     self.name(),
-                    "STRING or NULL",
+                    "STRING, converted TIMESTAMP, or NULL",
                     other,
                 ));
             }
@@ -579,7 +590,7 @@ impl ScalarUDFImpl for SparkTimestamp {
         if let Some(format) = arg_types.get(1) {
             match format {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
-                // A NULL format yields a NULL result; coerce it to a Utf8 null.
+                // A NULL format yields NULL only for string input; temporal input ignores it.
                 DataType::Null => coerced[1] = DataType::Utf8,
                 other => {
                     return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));

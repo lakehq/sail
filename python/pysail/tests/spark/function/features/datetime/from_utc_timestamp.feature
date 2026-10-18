@@ -26,7 +26,11 @@ Feature: from_utc_timestamp
 
   Rule: Invalid time zone validation
 
-    Scenario: `from_utc_timestamp` validates a constant zone for a runtime-null timestamp
+    # Spark's generated execution parses constant zones before checking the timestamp;
+    # higher-order zones and interpreted execution check NULL first. Sail deliberately
+    # checks NULL before parsing zones, while non-NULL timestamps still validate their zones.
+
+    Scenario: `from_utc_timestamp` skips a constant zone for a runtime-null timestamp
       When query
         """
         SELECT from_utc_timestamp(
@@ -38,9 +42,11 @@ Feature: from_utc_timestamp
         ) AS result
         FROM range(0, 1, 1, 1)
         """
-      Then query error INVALID_TIMEZONE
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
 
-    Scenario: `from_utc_timestamp` validates a query-time constant zone for a null timestamp
+    Scenario: `from_utc_timestamp` skips a query-time constant zone for a null timestamp
       When query
         """
         SELECT from_utc_timestamp(
@@ -48,9 +54,11 @@ Feature: from_utc_timestamp
           concat('Not/AZone', substring(CAST(current_timestamp() AS STRING), 1, 0))
         ) AS result FROM range(1)
         """
-      Then query error INVALID_TIMEZONE
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
 
-    Scenario: `from_utc_timestamp` validates a constant zone containing convert_timezone
+    Scenario: `from_utc_timestamp` skips a constant zone containing convert_timezone for a null timestamp
       When query
         """
         SELECT from_utc_timestamp(
@@ -61,7 +69,9 @@ Feature: from_utc_timestamp
           ))
         ) AS result FROM range(1)
         """
-      Then query error INVALID_TIMEZONE
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
 
     Scenario: `from_utc_timestamp` skips a higher-order zone for a null timestamp
       # Spark treats higher-order expressions as non-foldable, even with constant inputs.

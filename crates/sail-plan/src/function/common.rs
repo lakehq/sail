@@ -158,7 +158,7 @@ pub(crate) fn cast_temporal(
             DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64,
             DataType::Timestamp(_, Some(_)),
         ) => {
-            // Preserve infallible timestamp cast shapes used by comparison rewriting.
+            // TRY casts must handle overflow when promoting dates or seconds/milliseconds to micros.
             let expression = if is_try
                 && matches!(
                     from,

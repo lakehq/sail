@@ -8,7 +8,6 @@ use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit}
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_common_datafusion::logical_expr::is_comparison_operator;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -342,13 +341,41 @@ fn timestamp_string_coercion_requires_rewrite(
 
 /// Applies Spark timestamp coercion to one predicate before DataFusion's generic coercion,
 /// preserving session-zone conversion and Spark TimestampType's microsecond precision.
+///
+/// Compare the converted values, without reversing their casts against a literal bound.
+/// Spark's `UnwrapCastInBinaryComparison` can change results because timezone conversions
+/// are not one-to-one; a successful round trip of the bound does not make the rewrite valid:
+/// - In Pacific/Apia, DATE '2011-12-30' and DATE '2011-12-31' both convert to
+///   TIMESTAMP '2011-12-31 00:00:00'. Spark reports TRUE for the literal skipped date's
+///   equality, but FALSE for the same date computed with date_add(..., id) at id = 0.
+/// - In America/Los_Angeles, NTZ '2020-03-08 02:30:00' converts across the gap to
+///   LTZ '2020-03-08 03:30:00'. Spark's rewrite instead compares the original 02:30
+///   with 03:30, returning FALSE for equality (and incorrectly TRUE for < LTZ 03:00).
+/// - Both LTZ instants '2020-11-01 08:30:00Z' and '2020-11-01 09:30:00Z' convert
+///   to NTZ '2020-11-01 01:30:00' in Los Angeles. Reversing that equality selects
+///   the first overlap instant and incorrectly rejects the second.
+///
+/// Sail deliberately preserves the cast results for literal and computed inputs alike,
+/// including IN comparisons, instead of reproducing these Spark optimizer bugs.
 pub(super) fn coerce_timestamp_string_predicate(
     expression: expr::Expr,
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> PlanResult<expr::Expr> {
     Ok(match expression {
-        expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison_operator(op) => {
+        expr::Expr::BinaryExpr(BinaryExpr {
+            left,
+            op:
+                op @ (Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom),
+            right,
+        }) => {
             let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
@@ -377,15 +404,8 @@ pub(super) fn coerce_timestamp_string_predicate(
             let has_null_list_value = list.iter().any(is_null_literal_expression);
             let recursive_list_coercion =
                 matches!(&coercion, TimestampStringInCoercion::List { .. });
-            let mixed_timestamps = matches!(&coercion, TimestampStringInCoercion::ToTimestamp(_))
-                && data_types
-                    .iter()
-                    .any(|t| matches!(t, DataType::Timestamp(_, None)))
-                && data_types
-                    .iter()
-                    .any(|t| matches!(t, DataType::Timestamp(_, Some(_))));
             let coerce = |value, data_type: &DataType| -> DataFusionResult<expr::Expr> {
-                let value = apply_timestamp_string_in_coercion(
+                apply_timestamp_string_in_coercion(
                     value,
                     data_type,
                     &coercion,
@@ -393,17 +413,6 @@ pub(super) fn coerce_timestamp_string_predicate(
                     &config.session_timezone,
                     config.ansi_mode,
                     0,
-                )?;
-                // Spark casts every mixed-IN operand, including an already-common literal.
-                // Its folding opportunity precedes the later singleton-IN comparison.
-                Ok(
-                    if mixed_timestamps
-                        && !timestamp_string_coercion_requires_rewrite(data_type, &coercion)
-                    {
-                        cast(value, data_type.clone())
-                    } else {
-                        value
-                    },
                 )
             };
 

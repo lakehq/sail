@@ -539,23 +539,67 @@ Feature: DATE_TRUNC output type
         | 1  | NULL                |
         | 2  | 2024-06-01 00:00:00 |
 
-    Scenario: an invalid literal unit skips a throwing timestamp
+    # Spark skips timestamp evaluation for a constant invalid unit, but generated
+    # execution evaluates it for an equivalent column unit. Sail deliberately uses
+    # ordinary argument evaluation for both; invalid units still return NULL when it succeeds.
+    Scenario: an invalid literal unit does not suppress a throwing timestamp
       When query
         """
         SELECT date_trunc('invalid', CAST(raise_error('timestamp-evaluated') AS TIMESTAMP)) AS result
+        """
+      Then query result for Spark
+        | result |
+        | NULL   |
+      Then query error for Sail timestamp-evaluated
+
+    Scenario: an invalid literal unit does not suppress a malformed timestamp in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT date_trunc('invalid', CAST(concat('bad', id) AS TIMESTAMP)) AS result FROM range(1)
+        """
+      Then query result for Spark
+        | result |
+        | NULL   |
+      Then query error for Sail (?i)(CAST_INVALID_INPUT|invalid timestamp)
+
+    Scenario: an invalid column unit does not suppress a malformed timestamp in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.codegen.factoryMode = FALLBACK
+      Given config spark.sql.codegen.wholeStage = true
+      When query
+        """
+        SELECT date_trunc(CASE WHEN id >= 0 THEN 'invalid' ELSE 'DAY' END,
+          CAST(concat('bad', id) AS TIMESTAMP)) AS result FROM range(1)
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|invalid timestamp)
+
+    Scenario Outline: an invalid <shape> unit and malformed timestamp return NULL without ANSI
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT date_trunc(<unit>, CAST(concat('bad', id) AS TIMESTAMP)) AS result FROM range(1)
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: a NULL literal unit skips a throwing timestamp
+      Examples:
+        | shape   | unit                                                  |
+        | literal | 'invalid'                                             |
+        | column  | CASE WHEN id >= 0 THEN 'invalid' ELSE 'DAY' END          |
+
+    # Spark skips the timestamp argument for a literal NULL unit. Sail computes
+    # ordinary arguments before checking the unit, preserving timestamp errors.
+    Scenario: timestamp evaluation with a NULL literal unit
       When query
         """
         SELECT date_trunc(CAST(NULL AS STRING), CAST(raise_error('timestamp-evaluated') AS TIMESTAMP)) AS result
         """
-      Then query result
+      Then query result for Spark
         | result |
         | NULL   |
+      And query error for Sail timestamp-evaluated
 
     Scenario: an invalid literal unit does not hide an invalid timestamp argument type
       When query

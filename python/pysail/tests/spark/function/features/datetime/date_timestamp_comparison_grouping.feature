@@ -1,6 +1,11 @@
 Feature: Date comparisons preserve grouping-set provenance
 
-  Scenario Outline: Date comparisons distinguish <grouping> from a foldable grouping key
+  # The skipped Apia date converts to 2011-12-31 midnight even when it is a grouping
+  # key. Spark's inverse-cast rewrite loses that equality after grouping-set expansion.
+  # Sail preserves the converted instant while retaining the grouping-set NULL row.
+  # The paired tables document the intentional correction of Spark's optimizer result.
+
+  Scenario Outline: Date comparisons retain <grouping> rows and NULLs
     Given config spark.sql.session.timeZone = Pacific/Apia
     When query
       """
@@ -15,9 +20,12 @@ Feature: Date comparisons preserve grouping-set provenance
         )
       )
       """
-    Then query result
+    Then query result for Spark
       | row_count | matches   | nulls   |
       | <rows>    | <matches> | <nulls> |
+    And query result for Sail
+      | row_count | matches | nulls   |
+      | <rows>    | 1       | <nulls> |
 
     Examples:
       | grouping                  | rows | matches | nulls |

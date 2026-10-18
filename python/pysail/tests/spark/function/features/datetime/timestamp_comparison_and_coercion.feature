@@ -157,7 +157,33 @@ Feature: Timestamp comparison planning preserves query-time values
       | VALUES (TIMESTAMP_NTZ '2020-03-08 02:30:00') AS t(ts)                           |
       | (SELECT TIMESTAMP_NTZ '2020-03-08 02:30:00' AS ts FROM range(1))                 |
 
-  Scenario: Explicit timestamp cast comparisons distinguish overlap instants
+  # The gap shifts NTZ 02:30 to LTZ 03:30, so it is not less than LTZ 03:00.
+  # Spark's inverse-cast rewrite incorrectly compares the original 02:30 value
+  # with 03:00. Sail retains the conversion for ordering as well as equality.
+  Scenario: Dynamic timestamp gap ordering compares converted instants
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.ansi.enabled = true
+    And config spark.sql.optimizer.excludedRules = {{ '' }}
+    When query
+      """
+      SELECT id, CAST(CAST(ts AS TIMESTAMP) AS STRING) AS converted, ts = TIMESTAMP '2020-03-08 03:30:00' AS equal, ts < TIMESTAMP '2020-03-08 03:00:00' AS less FROM (SELECT id, TIMESTAMP_NTZ '2020-03-08 02:30:00' + id * INTERVAL '1' SECOND AS ts FROM range(1))
+      """
+    Then query result for Spark
+      | id | converted           | equal | less |
+      | 0  | 2020-03-08 03:30:00 | false | true |
+    And query result for Sail
+      | id | converted           | equal | less  |
+      | 0  | 2020-03-08 03:30:00 | true  | false |
+
+  # Time-zone conversion is not one-to-one. In Los Angeles, NTZ 2020-03-08 02:30
+  # and 03:30 both convert to LTZ 03:30; the overlap instants 2020-11-01 08:30Z
+  # and 09:30Z both convert to NTZ 01:30. Spark's UnwrapCastInBinaryComparison
+  # checks only that the literal round-trips, then compares the unconverted input.
+  # It can wrongly reject the gap value or the later overlap instant, even though
+  # the corresponding literal-folded comparison returns TRUE. Sail deliberately
+  # compares the converted values. Paired tables retain Spark's observed answers
+  # alongside that consistent contract, including nested casts, NULLs, and NULLIF.
+  Scenario: Explicit timestamp cast comparisons preserve overlap wall times
     Given config spark.sql.session.timeZone = America/Los_Angeles
     When query
       """
@@ -173,10 +199,15 @@ Feature: Timestamp comparison planning preserves query-time values
       )
       ORDER BY id
       """
-    Then query result
+    Then query result for Spark
       | id | equal | reverse | nested |
       | 0  | true  | true    | true   |
       | 1  | false | false   | false  |
+      | 2  | NULL  | NULL    | NULL   |
+    And query result for Sail
+      | id | equal | reverse | nested |
+      | 0  | true  | true    | true   |
+      | 1  | true  | true    | true   |
       | 2  | NULL  | NULL    | NULL   |
 
   Scenario: Nullif uses the same timestamp comparison as equality
@@ -192,12 +223,16 @@ Feature: Timestamp comparison planning preserves query-time values
       )
       ORDER BY id
       """
-    Then query result
+    Then query result for Spark
       | id | equal | value               |
       | 0  | false | 2020-03-08 02:30:00 |
       | 1  | true  | NULL                |
+    And query result for Sail
+      | id | equal | value |
+      | 0  | true  | NULL  |
+      | 1  | true  | NULL  |
 
-  Scenario: Timestamp comparisons in lambda bodies unwrap a valid bound
+  Scenario: Timestamp comparisons in lambda bodies preserve gap conversion
     Given config spark.sql.session.timeZone = America/Los_Angeles
     When query
       """
@@ -209,9 +244,12 @@ Feature: Timestamp comparison planning preserves query-time values
         ) AS values
       )
       """
-    Then query result
+    Then query result for Spark
       | gap   | normal |
       | false | true   |
+    And query result for Sail
+      | gap  | normal |
+      | true | true   |
 
   Scenario: Timestamp comparison rewriting preserves intervening date casts
     Given config spark.sql.session.timeZone = America/Los_Angeles
@@ -231,7 +269,10 @@ Feature: Timestamp comparison planning preserves query-time values
       | 0  | true  |
       | 1  | true  |
 
-  Scenario Outline: Rewritten skipped-day comparisons retain <grouping> output names
+  # Apia DATE 2011-12-30 and 2011-12-31 convert to the same midnight. Spark's
+  # inverse-cast rewrite loses the first match before grouping, producing 3/1.
+  # Sail keeps both converted matches, producing 2/2 with the same output names.
+  Scenario Outline: Skipped-day comparisons retain <grouping> output names
     Given config spark.sql.session.timeZone = Pacific/Apia
     When query
       """
@@ -240,10 +281,14 @@ Feature: Timestamp comparison planning preserves query-time values
       GROUP BY <grouping>
       ORDER BY equal
       """
-    Then query result
+    Then query result for Spark
       | equal | n |
       | false | 3 |
       | true  | 1 |
+    And query result for Sail
+      | equal | n |
+      | false | 2 |
+      | true  | 2 |
 
     Examples:
       | grouping                                                     |
@@ -282,11 +327,14 @@ Feature: Timestamp comparison planning preserves query-time values
         FROM range(1)
       )
       """
-    Then query result
+    Then query result for Spark
       | source              | result |
       | 2020-03-08 02:30:00 | false  |
+    And query result for Sail
+      | source              | result |
+      | 2020-03-08 02:30:00 | true   |
 
-  Scenario: A comparison pushed into a union unwraps before evaluating its local branch
+  Scenario: A comparison pushed into a union preserves gap conversion
     Given config spark.sql.session.timeZone = America/Los_Angeles
     When query
       """
@@ -297,10 +345,15 @@ Feature: Timestamp comparison planning preserves query-time values
           ELSE '2020-03-08 03:30:00' END AS TIMESTAMP_NTZ) AS ts FROM range(2)
       ) ORDER BY id
       """
-    Then query result
+    Then query result for Spark
       | id | result |
       | 0  | false  |
       | 1  | false  |
+      | 2  | true   |
+    And query result for Sail
+      | id | result |
+      | 0  | true   |
+      | 1  | true   |
       | 2  | true   |
 
   Scenario Outline: Nested timestamp casts fold literal conditional branches before <operator>
@@ -346,7 +399,7 @@ Feature: Timestamp comparison planning preserves query-time values
       | 0    |
       | 2    |
 
-  Scenario: A single-use timestamp alias preserves distinct overlap instants
+  Scenario: A single-use timestamp alias preserves converted overlap wall times
     Given config spark.sql.ansi.enabled = true
     And config spark.sql.session.timeZone = America/Los_Angeles
     When query
@@ -356,10 +409,14 @@ Feature: Timestamp comparison planning preserves query-time values
         FROM range(2)
       )
       """
-    Then query result
+    Then query result for Spark
       | equal |
       | true  |
       | false |
+    And query result for Sail
+      | equal |
+      | true  |
+      | true  |
 
   Scenario Outline: Nested timestamp casts compare <branches> CASE branches at an overlap
     Given config spark.sql.ansi.enabled = true
@@ -370,10 +427,14 @@ Feature: Timestamp comparison planning preserves query-time values
         ELSE <alternative> END AS TIMESTAMP_NTZ) AS TIMESTAMP)
         = TIMESTAMP '2020-11-01 08:30:00Z' AS result FROM range(2) ORDER BY id
       """
-    Then query result ordered
+    Then query result ordered for Spark
       | id | result          |
       | 0  | true            |
       | 1  | <second_result> |
+    And query result ordered for Sail
+      | id | result |
+      | 0  | true   |
+      | 1  | true   |
 
     Examples:
       | branches        | alternative                                                 | second_result |

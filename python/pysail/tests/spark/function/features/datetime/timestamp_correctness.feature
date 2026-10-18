@@ -801,16 +801,14 @@ Feature: Timestamp operations preserve instants and session-local calendar value
       | from_utc_timestamp timestamp   | from_utc_timestamp(CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP), CAST(NULL AS STRING))                                      |
       | to_utc_timestamp timestamp     | to_utc_timestamp(CAST(CAST(NULL AS ARRAY<INT>) AS TIMESTAMP), CAST(NULL AS STRING))                                        |
 
-  @sail-only
-  Scenario: Existing bare NULL datetime shortcuts skip unevaluated unsupported casts
+  # Bare NULLs retain the same static cast validation as typed NULLs above.
+  Scenario: Bare NULL datetime inputs retain unsupported-cast validation
     When query
       """
       SELECT make_date(NULL, CAST(CAST(NULL AS ARRAY<INT>) AS INT), 1) AS null_date,
              to_timestamp(NULL, CAST(CAST(NULL AS ARRAY<INT>) AS INT)) AS null_timestamp
       """
-    Then query result
-      | null_date | null_timestamp |
-      | NULL      | NULL           |
+    Then query error (?i)(cannot cast|unsupported.*cast|casting.*not supported)
 
   Rule: F8 - TRY_CAST returns NULL when date normalization overflows
 

@@ -1,6 +1,11 @@
-Feature: Date comparisons beside subqueries preserve Spark optimization order
+Feature: Date comparisons beside subqueries preserve converted instants
 
-  Scenario Outline: A <kind> prevents early local date comparison evaluation
+  # A neighboring subquery changes when Spark applies its skipped-day cast rewrite.
+  # It does not change the DATE's converted instant: Sail keeps equality TRUE for
+  # Apia 2011-12-30 at 2011-12-31 midnight, while the Spark table records FALSE.
+  # Only that incorrect optimizer result differs; the subquery result stays unchanged.
+
+  Scenario Outline: Date comparison retains its converted instant beside a <kind>
     Given config spark.sql.session.timeZone = Pacific/Apia
     When query
       """
@@ -8,9 +13,12 @@ Feature: Date comparisons beside subqueries preserve Spark optimization order
              <subquery> AS other
       FROM VALUES(DATE '2011-12-30') AS t(d)
       """
-    Then query result
+    Then query result for Spark
       | eq    | other      |
       | false | <expected> |
+    And query result for Sail
+      | eq   | other      |
+      | true | <expected> |
 
     Examples:
       | kind              | subquery                          | expected |

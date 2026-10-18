@@ -498,3 +498,751 @@ Feature: to_timestamp (strict variant)
         root
          |-- result: timestamp (nullable = true)
         """
+
+  Rule: Temporal timestamp inputs retain ignored format dependencies
+
+    # GetTimestamp ignores the scalar format value for DATE/TIMESTAMP inputs,
+    # but analysis must still extract its aggregates before that value is ignored.
+    # Both arguments retain required dependencies and validation. A live aggregate
+    # error remains an error even for NULL input; ignoring its eventual scalar
+    # value must not erase that computation or change the number of rows.
+    # Sail evaluates scalar format expressions and subqueries ordinarily, including
+    # their errors. Typed temporal values need no pattern parser, but that does not
+    # suppress argument computation. Spark can skip that computation; the paired
+    # expectations below document the deliberate difference.
+    Scenario Outline: Temporal format aggregate retains one row with ANSI <ansi>: <function>, range(<rows>)
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(<function>(DATE '2024-01-01', max('yyyy')) AS STRING) AS result
+        FROM range(<rows>)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | function         | rows | ansi  | result              |
+        | to_timestamp     | 0    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp     | 3    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp     | 0    | false | 2024-01-01 00:00:00 |
+        | to_timestamp     | 3    | false | 2024-01-01 00:00:00 |
+        | to_timestamp_ltz | 0    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp_ltz | 3    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp_ltz | 0    | false | 2024-01-01 00:00:00 |
+        | to_timestamp_ltz | 3    | false | 2024-01-01 00:00:00 |
+        | to_timestamp_ntz | 0    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp_ntz | 3    | true  | 2024-01-01 00:00:00 |
+        | to_timestamp_ntz | 0    | false | 2024-01-01 00:00:00 |
+        | to_timestamp_ntz | 3    | false | 2024-01-01 00:00:00 |
+        | try_to_timestamp | 0    | true  | 2024-01-01 00:00:00 |
+        | try_to_timestamp | 3    | true  | 2024-01-01 00:00:00 |
+        | try_to_timestamp | 0    | false | 2024-01-01 00:00:00 |
+        | try_to_timestamp | 3    | false | 2024-01-01 00:00:00 |
+        | try_to_date      | 0    | true  | 2024-01-01          |
+        | try_to_date      | 3    | true  | 2024-01-01          |
+        | try_to_date      | 0    | false | 2024-01-01          |
+        | try_to_date      | 3    | false | 2024-01-01          |
+
+    Scenario Outline: Temporal format aggregate preserves NULL input cardinality with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(CAST(NULL AS DATE), max('yyyy')) AS result FROM range(<rows>)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | rows | ansi  |
+        | 0    | true  |
+        | 0    | false |
+        | 3    | true  |
+        | 3    | false |
+
+    Scenario Outline: Temporal format preserves a live aggregate error with ANSI <ansi>: <value>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(<value>, max(CAST(raise_error(concat('format-aggregate-', id)) AS STRING)))
+        FROM range(2)
+        """
+      Then query error format-aggregate-[01]
+
+      Examples:
+        | value              | ansi  |
+        | DATE '2024-01-01'  | true  |
+        | DATE '2024-01-01'  | false |
+        | CAST(NULL AS DATE) | true  |
+        | CAST(NULL AS DATE) | false |
+
+    Scenario Outline: Temporal format retains grouping validation with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(max(DATE '2024-01-01'), CAST(id AS STRING)) FROM range(3)
+        """
+      Then query error (?i)(group|field|column)
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Temporal format retains grouped expression identity with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(max(DATE '2024-01-01'), CAST(id % 2 AS STRING)) AS STRING) AS result
+        FROM range(4) GROUP BY CAST(id % 2 AS STRING)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Typed DATE conversion still returns a timestamp when the format is NULL,
+    # so this predicate must retain the unmatched outer-join row.
+    Scenario Outline: Temporal conversion preserves an unmatched outer join row with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT t.id FROM range(2) t LEFT JOIN (SELECT 0 AS id, 'yyyy' AS f) s ON t.id=s.id WHERE to_timestamp(DATE '2024-01-01', s.f) = TIMESTAMP '2024-01-01' ORDER BY t.id
+        """
+      Then query result
+        | id |
+        | 0  |
+        | 1  |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Temporal format evaluates scalar expressions around a live aggregate with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(DATE '2024-01-01',
+          concat(max(CAST(id AS STRING)), CAST(raise_error('unused-format-value') AS STRING))) AS STRING) AS result
+        FROM range(2)
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+      And query error for Sail unused-format-value
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Temporal format preserves a dead aggregate branch with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(max(DATE '2024-01-01'),
+          CASE WHEN true THEN 'yyyy'
+               ELSE concat(CAST(CAST(concat('b', 'ad') AS INT) AS STRING),
+                           max(CAST(raise_error(concat('dead-format-', id)) AS STRING))) END) AS STRING) AS result
+        FROM range(2)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  |
+        | false |
+
+    # TODO: Fix eager constant CAST evaluation in dead aggregate CASE branches
+    # in the separate CASE work.
+    @sail-bug
+    Scenario: Temporal format preserves a dead aggregate branch with ANSI enabled
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(to_timestamp(max(DATE '2024-01-01'),
+          CASE WHEN true THEN 'yyyy'
+               ELSE concat(CAST(CAST(concat('b', 'ad') AS INT) AS STRING),
+                           max(CAST(raise_error(concat('dead-format-', id)) AS STRING))) END) AS STRING) AS result
+        FROM range(2)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+    Scenario Outline: Temporal format preserves a constant coalesce condition with ANSI <ansi>: <condition>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(max(DATE '2024-01-01'),
+          CASE WHEN <condition> THEN 'yyyy'
+               ELSE max(CAST(raise_error(concat('dead-format-', id)) AS STRING)) END) AS STRING) AS result
+        FROM range(2)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | condition                              | ansi  |
+        | coalesce(true, false)                  | true  |
+        | coalesce(true, false)                  | false |
+        | coalesce(CAST(NULL AS BOOLEAN), true) | true  |
+        | coalesce(CAST(NULL AS BOOLEAN), true) | false |
+
+    # CheckAnalysis validates every expression, including lambda bodies, before
+    # optimizer branch pruning. Ignoring a scalar format value cannot hide an
+    # unsupported ARRAY-to-INT cast in an unreachable branch in either ANSI mode.
+    Scenario Outline: Temporal format validates an invalid <case> cast in a dead branch with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', CASE WHEN false THEN CAST(<cast> AS STRING) ELSE 'yyyy' END) AS result
+        """
+      Then query error (?i)cast.*(array|list).*int
+
+      Examples:
+        | case   | cast                                                   | ansi  |
+        | direct | CAST(array(1) AS INT)                                   | true  |
+        | direct | CAST(array(1) AS INT)                                   | false |
+
+    # TODO: Validate native cast types before dead CASE pruning; this existing
+    # general validation gap is outside the datetime scope.
+    @sail-bug
+    Scenario Outline: Temporal format validates an invalid lambda cast in a dead branch with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', CASE WHEN false THEN CAST(<cast> AS STRING) ELSE 'yyyy' END) AS result
+        """
+      Then query error (?i)cast.*(array|list).*int
+
+      Examples:
+        | cast                                                  | ansi  |
+        | transform(array(array(1)), x -> CAST(x AS INT))         | true  |
+        | transform(array(array(1)), x -> CAST(x AS INT))         | false |
+
+    # TRY_CAST tolerates malformed values only for supported source/target types.
+    # CheckAnalysis still rejects ARRAY-to-INT inside a dead CASE branch whose
+    # eventual scalar format value is unused.
+    # TODO: Validate native TRY_CAST types before dead CASE pruning; this existing
+    # general validation gap is outside the datetime scope.
+    @sail-bug
+    Scenario Outline: Temporal format validates an invalid TRY_CAST in a dead branch with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', CASE WHEN false THEN CAST(try_cast(array(id) AS INT) AS STRING) ELSE 'yyyy' END) AS result FROM range(2)
+        """
+      Then query error (?i)cast.*(array|list).*int
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Spark removes a constant-true filter and inlines no-FROM scalar subqueries,
+    # leaving their errors inside the unused format expression. Sail follows
+    # ordinary expression execution, including correlated and uncorrelated
+    # projection errors. Native decorrelation does not make a retained scalar
+    # expression exempt from evaluation.
+    Scenario Outline: Temporal format follows ordinary scalar subquery execution with ANSI <ansi>: <format>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(DATE '2024-01-01', <format>) AS STRING) AS result FROM range(2) t
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+      And query <sail_expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | format                                                                    | ansi  | sail_expectation             |
+        | (SELECT CAST(raise_error('unused-format') AS STRING))                      | true  | error for Sail unused-format |
+        | (SELECT CAST(raise_error('unused-format') AS STRING))                      | false | error for Sail unused-format |
+        | (SELECT CAST(raise_error(concat('unused-format-', t.id)) AS STRING))        | true  | error for Sail unused-format-[01] |
+        | (SELECT CAST(raise_error(concat('unused-format-', t.id)) AS STRING))        | false | error for Sail unused-format-[01] |
+        | (SELECT CAST(raise_error('unused-format') AS STRING) WHERE true)           | true  | error for Sail unused-format |
+        | (SELECT CAST(raise_error('unused-format') AS STRING) WHERE true)           | false | error for Sail unused-format |
+        | (SELECT v FROM (SELECT CAST(raise_error('unused-format') AS STRING) AS v) s) | true  | error for Sail unused-format |
+        | (SELECT v FROM (SELECT CAST(raise_error('unused-format') AS STRING) AS v) s) | false | error for Sail unused-format |
+
+    # WHERE 1=1 retains the subquery projection. Spark folds the invalid CAST in
+    # ANSI mode; Sail also raises when ordinary subquery execution reaches it.
+    Scenario Outline: Temporal format executes a scalar subquery projection with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(DATE '2024-01-01', (SELECT CAST('bad' AS INT) WHERE 1=1)) AS STRING) AS result FROM range(2)
+        """
+      Then query <expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  | expectation          |
+        | true  | error (?i)cast.*bad   |
+        | false | result               |
+
+    # Spark executes a scalar subquery over a real range before its result can be
+    # ignored by ToTimestamp. Preserve its required error even with one known row.
+    Scenario Outline: Temporal format preserves a required scalar subquery error with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT CAST(raise_error('required-filter') AS STRING) FROM range(1) WHERE id=0)) AS result FROM range(2)
+        """
+      Then query error required-filter
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Spark's ComputeCurrentTime uses the query's current time in subqueries.
+    # Folding this filter with a default 1970 timestamp would incorrectly choose
+    # TRUE and erase its required error. Use the real query context.
+    Scenario Outline: Temporal format retains a time-dependent subquery filter error with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT 'yyyy' WHERE CASE WHEN current_timestamp() < TIMESTAMP '2000-01-01 00:00:00' THEN true ELSE CAST(raise_error('required-filter') AS BOOLEAN) END)) AS result FROM range(2)
+        """
+      Then query error required-filter
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # The DATE conversion ignores 'QQQ' and makes the selected timezone constant.
+    # Spark initializes that zone before checking runtime NULL timestamps. Sail
+    # deliberately checks NULL first, independently of whether the zone is constant;
+    # no timezone conversion or zone-string validation is needed for these rows.
+    Scenario Outline: Temporal format preserves NULL-first timezone validation with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT from_utc_timestamp(CASE WHEN id<0 THEN TIMESTAMP '2024-01-01 00:00:00' ELSE CAST(NULL AS TIMESTAMP) END, CASE WHEN to_timestamp(DATE '2024-01-01','QQQ')=TIMESTAMP '2024-01-01 00:00:00' THEN 'bad-zone' ELSE 'UTC' END) AS result FROM range(2)
+        """
+      Then query result unless Spark raises bad-zone
+        | result |
+        | NULL   |
+        | NULL   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Spark skips the scalar CAST for these constant DATE aliases. Sail computes
+    # the format ordinarily, so ANSI rejects the cast before temporal conversion.
+    Scenario Outline: Temporal format evaluates scalar casts through <case> with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(d, CAST('bad' AS INT)) AS STRING) AS result FROM <input>
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+      And query <sail_expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | case       | input                                                                                                          | ansi  | sail_expectation            |
+        | projection | (SELECT DATE '2024-01-01' AS d FROM range(2)) q                                                                  | true  | error for Sail (?i)cast.*bad |
+        | projection | (SELECT DATE '2024-01-01' AS d FROM range(2)) q                                                                  | false | result for Sail             |
+        | filter     | (SELECT DATE '2024-01-01' AS d, id FROM range(2)) q WHERE id >= 0                                                 | true  | error for Sail (?i)cast.*bad |
+        | filter     | (SELECT DATE '2024-01-01' AS d, id FROM range(2)) q WHERE id >= 0                                                 | false | result for Sail             |
+        | union      | (SELECT DATE '2024-01-01' AS d UNION ALL SELECT DATE '2024-01-01' AS d) q                                        | true  | error for Sail (?i)cast.*bad |
+        | union      | (SELECT DATE '2024-01-01' AS d UNION ALL SELECT DATE '2024-01-01' AS d) q                                        | false | result for Sail             |
+        | generator  | (SELECT d, explode(array(1, 2)) AS x FROM (SELECT DATE '2024-01-01' AS d) s) q                                    | true  | error for Sail (?i)cast.*bad |
+        | generator  | (SELECT d, explode(array(1, 2)) AS x FROM (SELECT DATE '2024-01-01' AS d) s) q                                    | false | result for Sail             |
+
+    # Spark's ToTimestamp.eval/doGenCode does not read the format for DATE/TIMESTAMP
+    # input. ConstantFolding can still evaluate CAST('bad' AS INT) when the DATE is
+    # generated; a literal DATE alias skips the same cast in the preceding cases.
+    # Sail computes the format ordinarily in both shapes. Both engines reject
+    # this generated-date case under ANSI and preserve both dates without ANSI.
+    Scenario Outline: Temporal conversion evaluates a scalar format for generated dates with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(to_timestamp(d, CAST('bad' AS INT)) AS STRING) AS result
+        FROM (SELECT explode(array(DATE '2024-01-01', DATE '2024-01-02')) AS d) q
+        """
+      Then query <expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-02 00:00:00 |
+
+      Examples:
+        | ansi  | expectation          |
+        | true  | error (?i)cast.*bad   |
+        | false | result               |
+
+    # The projected k is the literal 1, so its filter retains the selected CAST.
+    # Ordinary execution must still honor ANSI cast errors through these aliases.
+    Scenario Outline: Temporal format executes a cast behind an aliased true filter with ANSI <ansi>: <case>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', <format>) AS result FROM range(2)
+        """
+      Then query <expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | case             | format                                                                    | ansi  | expectation          |
+        | projected key    | (SELECT CAST('bad' AS INT) FROM (SELECT 1 AS k) s WHERE k = 1)              | true  | error (?i)cast.*bad   |
+        | projected key    | (SELECT CAST('bad' AS INT) FROM (SELECT 1 AS k) s WHERE k = 1)              | false | result               |
+        | projected format | (SELECT v FROM (SELECT CAST('bad' AS INT) AS v, 1 AS k) s WHERE k=1)        | true  | error (?i)cast.*bad   |
+        | projected format | (SELECT v FROM (SELECT CAST('bad' AS INT) AS v, 1 AS k) s WHERE k=1)        | false | result               |
+
+    # Spark inlines both no-FROM projections and leaves the nested CAST unused.
+    # Sail instead retains ordinary subquery execution: ANSI rejects the bad cast,
+    # while ANSI off produces NULL for the ignored format value.
+    Scenario Outline: Temporal format executes nested scalar subquery casts with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT (SELECT CAST('bad' AS INT)))) AS result FROM range(2)
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+      And query <sail_expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  | sail_expectation              |
+        | true  | error for Sail (?i)cast.*bad   |
+        | false | result for Sail               |
+
+    # Spark removes LIMIT 1 from its known one-row relation and then inlines the
+    # projection. Sail retains ordinary subquery execution and its projected error.
+    Scenario Outline: Temporal format executes a one-row limit projection with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT CAST(raise_error('unused-format') AS STRING) LIMIT 1)) AS result FROM range(2)
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+      And query error for Sail unused-format
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # These predicates consume k, so its CAST is required. A non-nullable field
+    # alone cannot justify replacing k=k or k IS NOT NULL with TRUE: evaluating
+    # k can fail. Without ANSI, the cast yields NULL and the outer DATE still converts.
+    Scenario Outline: Temporal format preserves a required aliased predicate cast with ANSI <ansi>: <predicate>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT 'yyyy' FROM (SELECT CAST('bad' AS INT) AS k) s WHERE <predicate>)) AS result FROM range(2)
+        """
+      Then query <expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | predicate     | ansi  | expectation          |
+        | k = k         | true  | error (?i)cast.*bad   |
+        | k = k         | false | result               |
+        | k IS NOT NULL | true  | error (?i)cast.*bad   |
+        | k IS NOT NULL | false | result               |
+
+    # The inner range remains a real relation inside the outer no-FROM projection.
+    # Spark executes that required subquery before ignoring its result.
+    Scenario Outline: Temporal format retains a nested relational subquery error with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT (SELECT CAST(raise_error('required-nested') AS STRING) FROM range(1)))) AS result FROM range(2)
+        """
+      Then query error required-nested
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # ExtractWindowExpressions retains the window producer before ToTimestamp
+    # ignores its scalar format value, so errors in live window input still raise.
+    Scenario Outline: Temporal format retains a live window error with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', max(CAST(raise_error(concat('required-window-', id)) AS STRING)) OVER ()) AS result FROM range(2)
+        """
+      Then query error required-window-[01]
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # False/NULL filters produce empty subqueries; a nested SELECT true retains a
+    # row. Ordinary constant folding can reach the bad CAST before filter pruning.
+    # Sail accepts ordinary subquery optimization and its ANSI errors.
+    Scenario Outline: Temporal format follows ordinary subquery optimization with ANSI <ansi>: <case>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', <format>) AS result FROM range(2)
+        """
+      Then query <expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | case             | format                                                                                   | ansi  | expectation          |
+        | false literal    | (SELECT CAST('bad' AS INT) WHERE false)                                                   | true  | error (?i)cast.*bad   |
+        | false literal    | (SELECT CAST('bad' AS INT) WHERE false)                                                   | false | result               |
+        | false alias      | (SELECT CAST('bad' AS INT) FROM (SELECT 1 AS k) q WHERE k=2)                               | true  | error (?i)cast.*bad   |
+        | false alias      | (SELECT CAST('bad' AS INT) FROM (SELECT 1 AS k) q WHERE k=2)                               | false | result               |
+        | NULL alias       | (SELECT CAST('bad' AS INT) FROM (SELECT CAST(NULL AS BOOLEAN) AS k) q WHERE k)              | true  | error (?i)cast.*bad   |
+        | NULL alias       | (SELECT CAST('bad' AS INT) FROM (SELECT CAST(NULL AS BOOLEAN) AS k) q WHERE k)              | false | result               |
+        | nested predicate | (SELECT CAST('bad' AS INT) WHERE (SELECT true))                                           | true  | error (?i)cast.*bad   |
+        | nested predicate | (SELECT CAST('bad' AS INT) WHERE (SELECT true))                                           | false | result               |
+
+    # CheckAnalysis validates the inner projection even when its column is unused.
+    # Ordinary subquery optimization must not erase an unsupported ARRAY-to-INT cast.
+    Scenario Outline: Temporal format validates an unselected subquery projection with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT 'yyyy' FROM (SELECT CAST(array(1) AS INT) AS unused) s)) AS result FROM range(2)
+        """
+      Then query error (?i)cast.*(array|list).*int
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # The inner scalar subquery refers to v in its immediately enclosing projection.
+    # Spark inlines it into the ignored format. Sail keeps ordinary producer
+    # execution, so raise_error and ANSI cast failures remain visible. Failure to
+    # plan the correlation is a regression, not an acceptable execution error.
+    Scenario Outline: Temporal format executes locally correlated scalar nesting with ANSI <ansi>: <case>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT (SELECT <format>) FROM (SELECT 1 AS v) s)) AS result FROM range(2)
+        """
+      Then query result for Spark
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+      And query <sail_expectation>
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | case         | format                                                       | ansi  | sail_expectation              |
+        | raise error  | CAST(raise_error(concat('unused-local-',v)) AS STRING)         | true  | error for Sail unused-local-1 |
+        | raise error  | CAST(raise_error(concat('unused-local-',v)) AS STRING)         | false | error for Sail unused-local-1 |
+        | invalid cast | CAST(concat('bad',v) AS INT)                                  | true  | error for Sail (?i)cast.*bad   |
+        | invalid cast | CAST(concat('bad',v) AS INT)                                  | false | result for Sail               |
+
+    # CheckAnalysis also visits nested subqueries in an unselected projection.
+    # Removing that projection cannot hide its unsupported ARRAY-to-INT cast.
+    Scenario Outline: Temporal format validates nested unselected subquery casts with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT 'yyyy' FROM (SELECT (SELECT CAST(array(1) AS INT)) AS unused) s)) AS result FROM range(2)
+        """
+      Then query error (?i)cast.*(array|list).*int
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # LIMIT 1 over a real range retains required subquery execution in both engines.
+    Scenario Outline: Temporal format retains a limited relational subquery error with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT CAST(raise_error('required-limit') AS STRING) FROM range(1) LIMIT 1)) AS result FROM range(2)
+        """
+      Then query error required-limit
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # yyyy1 is a valid format, but the typed DATE does not need to parse it.
+    # The inner scalar subquery references v from its immediate parent. Keeping
+    # that producer must preserve the valid query and both outer rows.
+    Scenario Outline: Temporal format retains valid locally correlated nesting with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(DATE '2024-01-01', (SELECT (SELECT concat('yyyy', CAST(v AS STRING))) FROM (SELECT 1 AS v) s)) AS result FROM range(2)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # The same producer must work outside a datetime conversion; correlation
+    # handling must preserve its value rather than erase it as an ignored format.
+    Scenario Outline: Locally correlated nested format has its scalar value with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (SELECT (SELECT concat('yyyy', CAST(v AS STRING))) FROM (SELECT 1 AS v) s) AS result FROM range(2)
+        """
+      Then query result
+        | result |
+        | yyyy1  |
+        | yyyy1  |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Scalar subqueries return NULL for no rows. Lifting a correlated projection
+    # must neither drop the outer row nor evaluate concat against a missing row.
+    Scenario Outline: Correlated format projection preserves scalar row counts with ANSI <ansi>: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (SELECT concat('yyyy', CAST(v AS STRING)) <suffix>) AS result FROM (SELECT 1 AS v) s
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case           | suffix                  | ansi  | result |
+        | one row        |                         | true  | yyyy1  |
+        | one row        |                         | false | yyyy1  |
+        | false filter   | WHERE false             | true  | NULL   |
+        | false filter   | WHERE false             | false | NULL   |
+        | empty relation | FROM range(0) LIMIT 1   | true  | NULL   |
+        | empty relation | FROM range(0) LIMIT 1   | false | NULL   |
+
+    # The scalar-subquery handling used by temporal formats must keep a missing
+    # row nullable through outer projections and UNION.
+    Scenario: Missing correlated scalar remains NULL through an outer projection
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT result IS NULL AS is_null FROM (SELECT (SELECT coalesce(CAST(o.id AS STRING), 'yyyy') FROM range(0) LIMIT 1) AS result FROM range(1) o) t
+        """
+      Then query result
+        | is_null |
+        | true    |
+
+    Scenario: Missing correlated scalar remains NULL through a union
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT result IS NULL AS is_null FROM (SELECT (SELECT coalesce(CAST(o.id AS STRING), 'yyyy') FROM range(0) LIMIT 1) AS result FROM range(1) o UNION ALL SELECT 'x' AS result) t
+        """
+      Then query result
+        | is_null |
+        | true    |
+        | false   |
+
+    Scenario Outline: Correlated format projection rejects multiple scalar rows with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (SELECT concat('yyyy', CAST(v AS STRING)) FROM range(2)) AS result FROM (SELECT 1 AS v) s
+        """
+      Then query error (?i)(scalar.*(more than one|multiple|one row)|more than one row)
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # A retained scalar subquery checks its own row count before the typed input
+    # can ignore its value. NULL input does not remove this required query work.
+    Scenario Outline: Temporal format retains scalar subquery cardinality with ANSI <ansi>: <value>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp(<value>, (SELECT CAST(id AS STRING) FROM range(2))) AS result
+        """
+      Then query error (?i)(scalar.*(more than one|multiple|one row)|more than one row)
+
+      Examples:
+        | value              | ansi  |
+        | DATE '2024-01-01'  | true  |
+        | DATE '2024-01-01'  | false |
+        | CAST(NULL AS DATE) | true  |
+        | CAST(NULL AS DATE) | false |

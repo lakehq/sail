@@ -302,6 +302,21 @@ Feature: date_part / extract output schema
 
   Rule: Foldable and null fields
 
+    # The field chooses the expression during analysis, so its value is required even
+    # when other datetime functions can ignore unused scalar arguments at runtime.
+    Scenario Outline: a failed constant field expression raises with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT date_part(element_at(array('YEAR'), 0), DATE '2024-01-07') AS result
+        """
+      Then query error (?i)index.*0
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
     Scenario: foldable string expressions select the field
       When query
         """

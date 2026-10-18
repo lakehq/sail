@@ -24,9 +24,7 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy, Spar
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::{
-    SparkDateTrunc, SparkStartOfDay, parse_granularity,
-};
+use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
 use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
@@ -177,16 +175,10 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
-    let literal_part = matches!(&part, Expr::Literal(_, _)) || is_null_literal(&part);
     let part = trunc_part_conversion(part);
-    let part = if literal_part {
-        fold_datetime_argument(part, input.function_context.schema)?
-    } else {
-        part
-    };
-    let invalid_literal = matches!(&part, Expr::Literal(value, _)
-        if value.is_null() || value.try_as_str().flatten()
-            .is_some_and(|unit| parse_granularity(unit).is_err()));
+    // Spark skips the timestamp for invalid constant units, but generated execution evaluates
+    // it for equivalent dynamic units. Keep ordinary argument evaluation in both cases: an
+    // invalid unit returns NULL only after its non-NULL arguments evaluate successfully.
     let timestamp = datetime_timestamp(timestamp, &input.function_context, false, false)?;
     let truncated = ScalarUDF::from(SparkDateTrunc::new()).call(vec![part, timestamp]);
     let truncated = match truncated.get_type(input.function_context.schema)? {
@@ -198,15 +190,6 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "date_trunc expected a timestamp result, got {other:?}"
         )))?,
     };
-    // Validate types first; only an invalid literal unit can suppress timestamp evaluation.
-    if invalid_literal
-        && can_fold_datetime_arguments([&truncated])?
-        && !has_unsupported_datetime_casts([&truncated], input.function_context.schema)?
-    {
-        return Ok(lit(ScalarValue::try_from(
-            &truncated.get_type(input.function_context.schema)?,
-        )?));
-    }
     Ok(truncated)
 }
 
@@ -335,18 +318,6 @@ fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> 
 
 fn make_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (year, month, day) = input.arguments.three()?;
-    if [&year, &month, &day].into_iter().any(is_null_literal)
-        && can_fold_datetime_arguments([&year, &month, &day])?
-        && ([&year, &month, &day]
-            .into_iter()
-            .any(|argument| matches!(argument, Expr::Literal(ScalarValue::Null, _)))
-            || !has_unsupported_datetime_casts(
-                &[&year, &month, &day].map(|arg| cast(arg.clone(), DataType::Int32)),
-                input.function_context.schema,
-            )?)
-    {
-        return Ok(lit(ScalarValue::Date32(None)));
-    }
     let ansi = input.function_context.plan_config.ansi_mode;
     let args = [year, month, day]
         .into_iter()
@@ -745,24 +716,6 @@ fn timestamp_data_type(input: &ScalarFunctionInput, timestamp_ntz: bool) -> Data
     DataType::Timestamp(TimeUnit::Microsecond, timezone)
 }
 
-fn timestamp_null(input: &ScalarFunctionInput, timestamp_ntz: bool) -> Expr {
-    let timezone = if timestamp_ntz {
-        None
-    } else {
-        Some(input.function_context.plan_config.session_timezone.clone())
-    };
-    lit(ScalarValue::TimestampMicrosecond(None, timezone))
-}
-
-fn is_null_literal(expr: &Expr) -> bool {
-    match expr {
-        Expr::Literal(value, _) => value.is_null(),
-        Expr::Cast(cast) => is_null_literal(&cast.expr),
-        Expr::TryCast(cast) => is_null_literal(&cast.expr),
-        _ => false,
-    }
-}
-
 fn can_fold_datetime_arguments<'a>(
     arguments: impl IntoIterator<Item = &'a Expr>,
 ) -> PlanResult<bool> {
@@ -882,44 +835,26 @@ fn timestamp_with_try(
         let expr = input.arguments.one()?;
         datetime_timestamp(expr, &input.function_context, timestamp_ntz, is_try)
     } else if input.arguments.len() == 2 {
-        let null = timestamp_null(&input, timestamp_ntz);
         let (value, format) = input.arguments.two()?;
         let format = coerce_datetime_format("to_timestamp", format, input.function_context.schema)?;
         let source = value.get_type(input.function_context.schema)?;
-        if matches!(
+        let value = if matches!(
             source,
             DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64
         ) {
             // Spark GetTimestamp ignores the format for temporal inputs and
             // preserves timestamp microseconds, even when the output flavor changes.
-            let nullable = is_try
-                || !ansi_mode
-                || value.nullable(input.function_context.schema)?
-                || format.nullable(input.function_context.schema)?;
             let instant = if matches!(source, DataType::Date32 | DataType::Date64) {
                 datetime_timestamp(value, &input.function_context, false, false)?
             } else {
                 cast(value, DataType::Timestamp(TimeUnit::Microsecond, None))
             };
-            return declare_nullable_result(
-                cast(cast(instant, DataType::Int64), data_type),
-                nullable,
-                input.function_context.schema,
-            );
-        }
-        if ((!source.is_nested() && is_null_literal(&value)) || is_null_literal(&format))
-            && can_fold_datetime_arguments([&value, &format])?
-            && ([&value, &format]
-                .into_iter()
-                .any(|argument| matches!(argument, Expr::Literal(value, _) if value.is_null()))
-                || !has_unsupported_datetime_casts(
-                    [&value, &format],
-                    input.function_context.schema,
-                )?)
-        {
-            return Ok(null);
-        }
-        let value = if source.is_string() || source.is_nested() {
+            // Keep both arguments through analysis and ordinary execution so formats
+            // cannot erase required aggregates, windows or subqueries. Computing a format
+            // can raise even though a typed temporal value needs no format parser; Sail
+            // deliberately does not reproduce Spark's optimizer-dependent suppression.
+            cast(cast(instant, DataType::Int64), data_type.clone())
+        } else if source.is_string() || source.is_nested() {
             value
         } else {
             cast(value, DataType::Utf8)
@@ -1088,11 +1023,8 @@ fn has_unsupported_datetime_casts<'a>(
     Ok(false)
 }
 
-fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanResult<bool> {
-    fn has_non_foldable_node(
-        argument: &Expr,
-        allow_stable: bool,
-    ) -> datafusion_common::Result<bool> {
+fn is_foldable_timezone_argument(argument: &Expr) -> PlanResult<bool> {
+    fn has_non_foldable_node(argument: &Expr) -> datafusion_common::Result<bool> {
         let mut found = false;
         argument.apply(|expr| {
             if let Expr::HigherOrderFunction(function) = expr
@@ -1104,7 +1036,7 @@ fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanRes
                         found = true;
                         return Ok(TreeNodeRecursion::Stop);
                     };
-                    if has_non_foldable_node(&lambda.body, allow_stable)? {
+                    if has_non_foldable_node(&lambda.body)? {
                         found = true;
                         return Ok(TreeNodeRecursion::Stop);
                     }
@@ -1113,9 +1045,7 @@ fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanRes
             }
             found = match expr {
                 Expr::ScalarFunction(function) => {
-                    function.func.signature().volatility == Volatility::Volatile
-                        || (!allow_stable
-                            && function.func.signature().volatility != Volatility::Immutable)
+                    function.func.signature().volatility != Volatility::Immutable
                 }
                 Expr::HigherOrderFunction(_)
                 | Expr::ScalarVariable(_, _)
@@ -1143,27 +1073,26 @@ fn is_foldable_timezone_argument(argument: &Expr, allow_stable: bool) -> PlanRes
 
     Ok(!(argument.any_column_refs()
         || !can_fold_datetime_arguments([argument])?
-        || has_non_foldable_node(argument, allow_stable)?
+        || has_non_foldable_node(argument)?
         || expr_contains_python_udf(argument)?
         || expr_contains_spark_cast_to_variant(argument)?))
 }
 
 pub(super) fn fold_datetime_argument(argument: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
-    if !is_foldable_timezone_argument(&argument, false)? {
+    if !is_foldable_timezone_argument(&argument)? {
         return Ok(argument);
     }
     // Stable functions such as current_timestamp require the query's execution context.
-    let simplifier = ExprSimplifier::new(
-        SimplifyContextBuilder::default()
-            .with_schema(Arc::clone(schema))
-            .build(),
-    );
-    let argument = simplifier.simplify(simplifier.coerce(argument, schema)?)?;
-    if matches!(argument, Expr::Literal(_, _)) {
-        return Ok(argument);
-    }
-    // Simplification retains runtime errors; evaluate this constant before a later NULL can mask it.
-    Ok(lit(LiteralEvaluator::new().evaluate(&argument)?))
+    let context = SimplifyContextBuilder::default()
+        .with_schema(Arc::clone(schema))
+        .build();
+    let simplifier = ExprSimplifier::new(context);
+    let argument = simplifier.coerce(argument, schema)?;
+    // Keep normal simplification, including NULL propagation, without forcing deferred
+    // errors. Spark's NullPropagation/ConstantFolding ordering can raise for a computed
+    // NULL where a literal NULL suppresses the same argument. Sail leaves surviving
+    // expressions to ordinary execution and convert_timezone's left-to-right NULL checks.
+    Ok(simplifier.simplify(argument)?)
 }
 
 /// A helper function for processing the input NTZ timestamp.
@@ -1213,7 +1142,7 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }?;
     validate_convert_timezone_zone(&from_tz, input.function_context.schema)?;
     validate_convert_timezone_zone(&to_tz, input.function_context.schema)?;
-    let (ts, unit) = ntz_timestamp_and_unit(
+    let (ts, _) = ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
@@ -1226,29 +1155,6 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 .call(vec![from_tz, to_tz, ts]),
         );
     }
-    let can_fold = can_fold_datetime_arguments([&from_tz, &to_tz, &ts])?;
-    if can_fold && [&from_tz, &to_tz, &ts].into_iter().any(is_null_literal) {
-        return Ok(lit(ScalarValue::try_from(&DataType::Timestamp(
-            unit, None,
-        ))?));
-    }
-    // Fold in argument order: a later NULL masks row-dependent expressions, but not
-    // an earlier constant error. This must precede Python-UDF extraction.
-    let mut arguments = Vec::with_capacity(3);
-    for argument in [from_tz, to_tz, ts] {
-        let argument = if can_fold {
-            fold_datetime_argument(argument, input.function_context.schema)?
-        } else {
-            argument
-        };
-        if can_fold && is_null_literal(&argument) {
-            return Ok(lit(ScalarValue::try_from(&DataType::Timestamp(
-                unit, None,
-            ))?));
-        }
-        arguments.push(argument);
-    }
-    let (from_tz, to_tz, ts) = arguments.three()?;
     let requires_scalar_evaluation =
         [&from_tz, &to_tz, &ts]
             .into_iter()
@@ -1256,8 +1162,7 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 if found {
                     PlanResult::Ok(true)
                 } else {
-                    Ok(expr_contains_python_udf(argument)?
-                        || expr_contains_spark_cast_to_variant(argument)?)
+                    Ok(expr_contains_python_udf(argument)?)
                 }
             })?;
 
@@ -1334,24 +1239,11 @@ fn utc_timestamp(input: ScalarFunctionInput, from_utc: bool) -> PlanResult<Expr>
         &session_tz,
         input.function_context.plan_config.ansi_mode,
     )?;
-    let can_fold = can_fold_datetime_arguments([&ts, &zone])?
-        && !has_unsupported_datetime_casts([&ts, &zone], input.function_context.schema)?;
-    let constant_zone = is_foldable_timezone_argument(&zone, true)?;
-    let zone = if can_fold {
-        fold_datetime_argument(zone, input.function_context.schema)?
-    } else {
-        zone
-    };
     let output_type = DataType::Timestamp(unit, Some(session_tz));
-    if can_fold && is_null_literal(&zone) {
-        return Ok(lit(ScalarValue::try_from(&output_type)?));
-    }
-    // Spark validates constant zones eagerly, but skips dynamic zones on NULL rows.
-    let func = if constant_zone {
-        ConvertTz::new(false)
-    } else {
-        ConvertTz::new(false).with_null_short_circuit()
-    };
+    // Spark's generated code validates constant zones before checking a NULL timestamp,
+    // while dynamic zones and interpreted execution check NULL first. Always check NULL
+    // before parsing zone values; non-NULL conversions still reject invalid time zones.
+    let func = ConvertTz::new(false).with_null_short_circuit();
     let (from, to) = if from_utc {
         (lit("UTC"), zone)
     } else {
@@ -1449,6 +1341,13 @@ fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ));
     }
     let part = fold_datetime_argument(part, context.schema)?;
+    // Spark resolves EXTRACT's field during analysis; unlike timezone arguments,
+    // its value is required here, so a failed constant expression must still raise.
+    let part = if !matches!(part, Expr::Literal(_, _)) && is_foldable_timezone_argument(&part)? {
+        lit(LiteralEvaluator::new().evaluate(&part)?)
+    } else {
+        part
+    };
     let Expr::Literal(value, _) = &part else {
         return Err(PlanError::invalid(
             "date_part requires a foldable string field",

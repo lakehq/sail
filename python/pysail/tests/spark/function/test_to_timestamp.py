@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -55,3 +55,47 @@ def test_timestamp_conversion_in_dataframe_aggregate(spark, conversion):
     if timestamp_type == "timestamp":
         expected = [value.astimezone() for value in expected]
     assert result.collect() == [tuple(value.replace(tzinfo=None) for value in expected)]
+
+
+@pytest.mark.parametrize(
+    "function", ["to_timestamp", "to_timestamp_ltz", "to_timestamp_ntz", "try_to_timestamp", "try_to_date"]
+)
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize("timestamp_type", ["TIMESTAMP_LTZ", "TIMESTAMP_NTZ"])
+@pytest.mark.parametrize("rows", [0, 3])
+def test_temporal_format_aggregate_schema(spark, function, ansi, timestamp_type, rows):
+    settings = {
+        "spark.sql.ansi.enabled": ansi,
+        "spark.sql.timestampType": timestamp_type,
+        "spark.sql.session.timeZone": "America/Los_Angeles",
+    }
+    original = {key: spark.conf.get(key) for key in settings}
+    try:
+        for key, value in settings.items():
+            spark.conf.set(key, value)
+        value = F.lit(date(2024, 1, 1))
+        format_expr = F.max(F.lit("yyyy"))
+        result = spark.range(rows).select(
+            F.call_function(function, value, format_expr).alias("nullable_format"),
+            F.call_function(function, value, F.coalesce(format_expr, F.lit("yyyy"))).alias("nonnull_format"),
+        )
+        expected_type = {
+            "try_to_date": "date",
+            "to_timestamp_ntz": "timestamp_ntz",
+            "to_timestamp_ltz": "timestamp",
+        }.get(function, "timestamp_ntz" if timestamp_type == "TIMESTAMP_NTZ" else "timestamp")
+        assert result.dtypes == [("nullable_format", expected_type), ("nonnull_format", expected_type)]
+        assert [field.nullable for field in result.schema] == [True, ansi == "false" or function.startswith("try_")]
+        expected_value = (
+            "2024-01-01"
+            if expected_type == "date"
+            else "2024-01-01 08:00:00"
+            if expected_type == "timestamp_ntz"
+            else "2024-01-01 00:00:00"
+        )
+        assert result.selectExpr("CAST(nullable_format AS STRING)", "CAST(nonnull_format AS STRING)").collect() == [
+            (expected_value, expected_value)
+        ]
+    finally:
+        for key, value in original.items():
+            spark.conf.set(key, value)
