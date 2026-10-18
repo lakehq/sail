@@ -1121,3 +1121,24 @@ Feature: unary DOUBLE math functions (acos and siblings)
         SELECT sin(TIME'10:00:00') AS result
         """
       Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+  Rule: log2 of an exact power of two is exact
+
+    # Deliberate difference. Spark computes `StrictMath.log(x) / StrictMath.log(2)`
+    # (mathExpressions.scala, `Log2`), which rounds away from the exact result: the Spark 4.2.0 JVM
+    # gives 29.000000000000004 for 2^29 and 31.000000000000004 for 2^31. Sail returns the exact log2.
+    @sail-only
+    Scenario Outline: log2(<input>) = <result>
+      When query
+        """
+        SELECT log2(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | input                         | result |
+        | 536870912                     | 29.0   |
+        | CAST(2147483648 AS DOUBLE)    | 31.0   |
+        | 8                             | 3.0    |

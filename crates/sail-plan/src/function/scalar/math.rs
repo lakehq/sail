@@ -573,8 +573,8 @@ fn log2(expr: Expr) -> Expr {
 // TODO: The kernels still come from DataFusion (the platform libm), which differs from Java's
 //  `StrictMath` (fdlibm) in the last digit, e.g. `acos(0.5)`. The `libm` crate (already in the
 //  lockfile via `bigdecimal`) is a candidate, and Spark's own formulas are needed for `atanh`,
-//  `asinh`, `acosh`, `log2` and `cot`. See the `@sail-bug` rows of
-//  `math/unary_double_math.feature`.
+//  `asinh`, `acosh` and `cot`. See the `@sail-bug` rows of `math/unary_double_math.feature`.
+//  `log2` keeps the exact DataFusion result on purpose (`@sail-only` rows in the same file).
 // TODO: A string argument still goes through Arrow's string to DOUBLE cast: no `[CAST_INVALID_INPUT]`
 //  class under ANSI and no Java grammar (`'1d'`, `'0x1p3'`).
 /// Spark's `UnaryMathExpression` family: `inputTypes = Seq(DoubleType)` with
