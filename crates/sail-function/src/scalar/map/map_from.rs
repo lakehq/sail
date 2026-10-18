@@ -49,6 +49,8 @@ impl ScalarUDFImpl for SparkMapFromArrays {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // FIXME: Preserve key/value field metadata in the upstream delegate and the
+        // runtime map constructors together; fixing inference alone is insufficient.
         self.delegate.return_field_from_args(args)
     }
 
@@ -118,6 +120,8 @@ impl ScalarUDFImpl for SparkMapFromEntries {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // FIXME: Preserve entry child metadata in the upstream delegate and runtime
+        // map constructors together, as for SparkMapFromArrays.
         self.delegate.return_field_from_args(args)
     }
 

@@ -128,6 +128,8 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+        // FIXME: Retain logical value metadata in result and state fields while
+        // clearing Spark user metadata; cloning the input field wholesale is incorrect.
         Ok(arg_types[0].to_owned())
     }
 
@@ -230,6 +232,8 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+        // FIXME: Retain logical value metadata in result and state fields while
+        // clearing Spark user metadata, as for MaxByFunction.
         Ok(arg_types[0].to_owned())
     }
 

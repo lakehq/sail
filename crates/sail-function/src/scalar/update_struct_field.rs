@@ -162,6 +162,8 @@ impl ScalarUDFImpl for UpdateStructField {
         }
         let data_type = &arg_types[0];
         let new_field_type = &arg_types[1];
+        // FIXME: Retain the new value's logical type metadata on both addition and
+        // replacement, while clearing user metadata as Spark WithField requires.
         let new_field = Field::new(
             self.field_names
                 .last()

@@ -474,24 +474,34 @@ fn make_nullable_array_type(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field) => {
             let inner_type = make_nullable_array_type(field.data_type());
-            DataType::List(Arc::new(arrow::datatypes::Field::new(
-                field.name(),
-                inner_type,
-                true,
-            )))
+            DataType::List(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(inner_type)
+                    .with_nullable(true),
+            ))
         }
         DataType::LargeList(field) => {
             let inner_type = make_nullable_array_type(field.data_type());
-            DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
-                field.name(),
-                inner_type,
-                true,
-            )))
+            DataType::LargeList(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(inner_type)
+                    .with_nullable(true),
+            ))
         }
         DataType::FixedSizeList(field, size) => {
             let inner_type = make_nullable_array_type(field.data_type());
             DataType::FixedSizeList(
-                Arc::new(arrow::datatypes::Field::new(field.name(), inner_type, true)),
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(inner_type)
+                        .with_nullable(true),
+                ),
                 *size,
             )
         }

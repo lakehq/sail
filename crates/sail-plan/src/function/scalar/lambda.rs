@@ -26,6 +26,8 @@ use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
+// FIXME: DataFusion Expr::to_field rebuilds lambda result fields from only type and
+// nullability. Preserve the body field upstream so these HOFs receive its metadata.
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
 

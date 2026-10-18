@@ -54,11 +54,7 @@ impl DeltaTypeConverter {
 
         if table_type == input_type {
             let is_nullable = table_field.is_nullable() || input_field.is_nullable();
-            return Ok(Field::new(
-                table_field.name(),
-                table_type.clone(),
-                is_nullable,
-            ));
+            return Ok(table_field.clone().with_nullable(is_nullable));
         }
 
         let merged_type = match (table_type, input_type) {
@@ -133,7 +129,11 @@ impl DeltaTypeConverter {
                 let merged_key = Self::promote_field_types(t_key, i_key)?;
                 let merged_val = Self::promote_field_types(t_val, i_val)?;
                 let kv_struct = DataType::Struct(vec![merged_key, merged_val].into());
-                let kv_field = Field::new(table_kv.name(), kv_struct, false);
+                let kv_field = table_kv
+                    .as_ref()
+                    .clone()
+                    .with_data_type(kv_struct)
+                    .with_nullable(false);
                 let _ = i_sorted;
                 Some(DataType::Map(Arc::new(kv_field), *t_sorted))
             }
@@ -186,7 +186,10 @@ impl DeltaTypeConverter {
 
         if let Some(new_type) = merged_type {
             let is_nullable = table_field.is_nullable() || input_field.is_nullable();
-            Ok(Field::new(table_field.name(), new_type, is_nullable))
+            Ok(table_field
+                .clone()
+                .with_data_type(new_type)
+                .with_nullable(is_nullable))
         } else {
             Err(DataFusionError::Plan(format!(
                 "Schema evolution failed: incompatible types for field '{}'. Cannot merge from {:?} to {:?}. Consider using overwriteSchema=true if you want to replace the schema entirely.",

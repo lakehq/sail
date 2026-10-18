@@ -104,6 +104,8 @@ impl PySparkUDTF {
         } else {
             function_return_fields
         };
+        // FIXME: Carry full passthrough fields through the UDTF constructor and codec;
+        // names and DataTypes cannot retain the input column metadata.
         let output_fields = (0..passthrough_columns)
             .map(|i| {
                 Arc::new(Field::new(

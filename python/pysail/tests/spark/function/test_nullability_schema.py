@@ -66,6 +66,21 @@ def test_input_schema_is_honored(spark):
     assert _nullable(df, "nl") is True
 
 
+@pytest.mark.parametrize(
+    ("expression", "expected_type"),
+    [
+        ("array_repeat(a, 2)", "array<array<interval day>>"),
+        ("flatten(array(a))", "array<interval day>"),
+    ],
+)
+def test_nullable_array_conversion_preserves_interval_type(spark, expression, expected_type):
+    result = spark.sql(
+        f"SELECT {expression} AS result FROM (SELECT CAST(array(INTERVAL '1' DAY) AS ARRAY<INTERVAL DAY>) AS a)"
+    )
+    assert result.schema["result"].dataType.simpleString() == expected_type
+    assert len(result.collect()) == 1
+
+
 @pytest.mark.parametrize("nullable", [False, True])
 def test_nullifzero_preserves_null_type_with_nullable_output(spark, nullable):
     # Arrange

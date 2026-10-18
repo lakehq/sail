@@ -62,6 +62,8 @@ impl ScalarUDFImpl for SparkArray {
         if args.arg_fields.is_empty() {
             return Ok(Arc::new(Field::new(self.name(), empty_array_type(), false)));
         }
+        // FIXME: Resolve element logical metadata along with the common type. Copying
+        // one input field is incorrect when interval qualifiers differ across inputs.
         let element_type = args
             .arg_fields
             .iter()

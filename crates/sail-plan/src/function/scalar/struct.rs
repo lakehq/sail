@@ -35,6 +35,8 @@ pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunct
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
+        // FIXME: DataFusion named_struct reconstructs child fields without metadata;
+        // retain the named argument fields in its upstream implementation.
         ("named_struct", F::var_arg(expr_fn::named_struct)),
         ("struct", F::custom(r#struct)),
     ]

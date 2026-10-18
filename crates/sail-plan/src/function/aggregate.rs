@@ -616,6 +616,8 @@ fn duplicate_agnostic_extreme(
     input: AggFunctionInput,
     function: fn() -> Arc<AggregateUDF>,
 ) -> PlanResult<expr::Expr> {
+    // FIXME: DataFusion min/max return inference loses logical input metadata such
+    // as interval qualifiers; preserve it upstream without forwarding user metadata.
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: function(),
         params: AggregateFunctionParams {
@@ -725,6 +727,8 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// values to collect, but DataFusion's `array_agg` returns NULL over zero rows. Coalesce the
 /// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
 fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
+    // FIXME: Preserve the element field here and in upstream array_agg inference/state
+    // fields together; a metadata-free empty fallback loses interval qualifiers.
     let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
     coalesce(vec![agg, lit(empty)])
 }

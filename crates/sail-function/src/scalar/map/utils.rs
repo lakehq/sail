@@ -72,6 +72,8 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
 /// - Map entries are non-nullable
 /// - Map values can be null
 pub fn map_type_from_key_value_types(key_type: &DataType, value_type: &DataType) -> DataType {
+    // FIXME: Carry key/value Fields through the map construction helpers so both
+    // inferred and materialized maps retain logical metadata such as interval qualifiers.
     DataType::Map(
         Arc::new(Field::new(
             SAIL_MAP_FIELD_NAME,

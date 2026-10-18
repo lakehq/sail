@@ -47,6 +47,8 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
+        // FIXME: Carry a full result Field through Python UDF resolution and the
+        // codec; a bare DataType loses declared interval qualifiers and other annotations.
         let output_type = self.resolve_data_type(&output_type, state)?;
         Ok(PythonUdf {
             python_version,

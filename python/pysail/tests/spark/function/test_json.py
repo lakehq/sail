@@ -22,3 +22,23 @@ def test_json_functions(spark, expression, expected):
     ).repartition(2)
     rows = df.selectExpr("id", expression).orderBy("id").collect()
     assert [tuple(row) for row in rows] == expected
+
+
+def test_from_json_preserves_schema_metadata(spark):
+    from pyspark.sql import functions as F  # noqa: N812
+    from pyspark.sql.types import LongType, StructField, StructType
+
+    metadata = {"comment": "keep me", "id": 7, "flags": [True, False]}
+    schema = StructType(
+        [
+            StructField(
+                "nested",
+                StructType([StructField("value", LongType(), True, metadata)]),
+                True,
+                {"parent": "keep me too"},
+            )
+        ]
+    )
+    result = spark.range(1).select(F.from_json(F.lit('{"nested":{"value":1}}'), schema).alias("result"))
+    assert result.schema["result"].dataType == schema
+    assert result.collect()[0].result.nested.value == 1

@@ -1039,7 +1039,19 @@ fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<Data
                             DataFusionError::Plan("Struct field missing 'type'".to_string())
                         })?;
                         let dt = json_value_to_data_type(field_type, session_timezone)?;
-                        arrow_fields.push(Arc::new(Field::new(name, dt, nullable)));
+                        let metadata = field
+                            .get("metadata")
+                            .map(|metadata| {
+                                (
+                                    spec::SPARK_METADATA_JSON_KEY.to_string(),
+                                    metadata.to_string(),
+                                )
+                            })
+                            .into_iter()
+                            .collect();
+                        arrow_fields.push(Arc::new(
+                            Field::new(name, dt, nullable).with_metadata(metadata),
+                        ));
                     }
                     Ok(DataType::Struct(Fields::from(arrow_fields)))
                 }
@@ -1272,11 +1284,14 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
         SDT::Struct { fields } => {
             let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
             for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
+                out.push(Arc::new(
+                    Field::new(
+                        f.name.clone(),
+                        spec_to_arrow_data_type(&f.data_type, session_timezone)?,
+                        f.nullable,
+                    )
+                    .with_metadata(f.metadata.iter().cloned().collect()),
+                ));
             }
             Ok(DataType::Struct(Fields::from(out)))
         }
