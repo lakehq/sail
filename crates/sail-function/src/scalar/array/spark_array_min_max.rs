@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
+    ArrayAccessor, ArrayRef, AsArray, GenericListArray, GenericListViewArray,
+    as_large_list_array, as_list_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
@@ -20,11 +21,14 @@ enum ArrayOp {
 
 fn element_return_field(name: &str, data_type: Option<&DataType>) -> Result<Field> {
     match data_type {
-        Some(DataType::List(field) | DataType::LargeList(field)) => {
-            Ok(field.as_ref().clone().with_nullable(true))
-        }
+        Some(
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field),
+        ) => Ok(field.as_ref().clone().with_nullable(true)),
         Some(DataType::Null) => Ok(Field::new(name, DataType::Null, true)),
-        _ => plan_err!("{name} can only accept List or LargeList."),
+        _ => plan_err!("{name} can only accept a list."),
     }
 }
 
@@ -42,7 +46,7 @@ impl Default for ArrayMin {
 impl ArrayMin {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -60,6 +64,18 @@ impl ScalarUDFImpl for ArrayMin {
         internal_err!(
             "`return_type` should not be called; `return_field_from_args` is used instead"
         )
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types {
+            [DataType::Null
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)] => Ok(arg_types.to_vec()),
+            [DataType::FixedSizeList(field, _)] => Ok(vec![DataType::List(Arc::clone(field))]),
+            _ => plan_err!("{} requires one list argument", self.name()),
+        }
     }
 
     /// Spark: `ArrayMin.nullable = true`, unconditional (an empty array yields NULL).
@@ -94,7 +110,7 @@ impl Default for ArrayMax {
 impl ArrayMax {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -112,6 +128,18 @@ impl ScalarUDFImpl for ArrayMax {
         internal_err!(
             "`return_type` should not be called; `return_field_from_args` is used instead"
         )
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types {
+            [DataType::Null
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)] => Ok(arg_types.to_vec()),
+            [DataType::FixedSizeList(field, _)] => Ok(vec![DataType::List(Arc::clone(field))]),
+            _ => plan_err!("{} requires one list argument", self.name()),
+        }
     }
 
     /// Spark: `ArrayMax.nullable = true`, unconditional (an empty array yields NULL).
@@ -140,13 +168,23 @@ fn array_min_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(field) => {
             let array = as_list_array(&args[0]);
             let data_type = field.data_type();
-            compute_min_max_values::<i32>(array, data_type, ArrayOp::Min)
+            compute_min_max_values::<&GenericListArray<i32>>(array, data_type, ArrayOp::Min)
         }
         DataType::LargeList(field) => {
             let array = as_large_list_array(&args[0]);
             let data_type = field.data_type();
-            compute_min_max_values::<i64>(array, data_type, ArrayOp::Min)
+            compute_min_max_values::<&GenericListArray<i64>>(array, data_type, ArrayOp::Min)
         }
+        DataType::ListView(field) => compute_min_max_values::<&GenericListViewArray<i32>>(
+            args[0].as_list_view::<i32>(),
+            field.data_type(),
+            ArrayOp::Min,
+        ),
+        DataType::LargeListView(field) => compute_min_max_values::<&GenericListViewArray<i64>>(
+            args[0].as_list_view::<i64>(),
+            field.data_type(),
+            ArrayOp::Min,
+        ),
         _ => exec_err!(
             "array_min does not support type: {:?}",
             &args[0].data_type()
@@ -163,13 +201,23 @@ fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(field) => {
             let array = as_list_array(&args[0]);
             let data_type = field.data_type();
-            compute_min_max_values::<i32>(array, data_type, ArrayOp::Max)
+            compute_min_max_values::<&GenericListArray<i32>>(array, data_type, ArrayOp::Max)
         }
         DataType::LargeList(field) => {
             let array = as_large_list_array(&args[0]);
             let data_type = field.data_type();
-            compute_min_max_values::<i64>(array, data_type, ArrayOp::Max)
+            compute_min_max_values::<&GenericListArray<i64>>(array, data_type, ArrayOp::Max)
         }
+        DataType::ListView(field) => compute_min_max_values::<&GenericListViewArray<i32>>(
+            args[0].as_list_view::<i32>(),
+            field.data_type(),
+            ArrayOp::Max,
+        ),
+        DataType::LargeListView(field) => compute_min_max_values::<&GenericListViewArray<i64>>(
+            args[0].as_list_view::<i64>(),
+            field.data_type(),
+            ArrayOp::Max,
+        ),
         _ => exec_err!(
             "array_max does not support type: {:?}",
             &args[0].data_type()
@@ -178,16 +226,17 @@ fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     ScalarValue::iter_to_array(result_values)
 }
 
-fn compute_min_max_values<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
+fn compute_min_max_values<A: ArrayAccessor<Item = ArrayRef>>(
+    array: A,
     data_type: &DataType,
     op: ArrayOp,
-) -> Result<Vec<ScalarValue>>
-where
-    i64: TryInto<O>,
-{
+) -> Result<Vec<ScalarValue>> {
     let mut result_values = Vec::new();
     for i in 0..array.len() {
+        if array.is_null(i) {
+            result_values.push(ScalarValue::try_from(data_type)?);
+            continue;
+        }
         let inner_array = array.value(i);
         let value = match op {
             ArrayOp::Min => {
@@ -221,12 +270,16 @@ mod tests {
         for data_type in [
             DataType::List(Arc::clone(&element)),
             DataType::LargeList(Arc::clone(&element)),
+            DataType::ListView(Arc::clone(&element)),
+            DataType::LargeListView(Arc::clone(&element)),
         ] {
             let input = Arc::new(
                 Field::new("array", data_type, false)
                     .with_metadata(HashMap::from([("logical_type".into(), "container".into())])),
             );
             for func in [&ArrayMin::new() as &dyn ScalarUDFImpl, &ArrayMax::new()] {
+                let coerced = func.coerce_types(&[input.data_type().clone()])?;
+                assert_eq!(coerced, vec![input.data_type().clone()]);
                 let actual = func.return_field_from_args(ReturnFieldArgs {
                     arg_fields: &[Arc::clone(&input)],
                     scalar_arguments: &[None],

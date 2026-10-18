@@ -1,7 +1,5 @@
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 @pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_explode_in_aggregate_with_group_by_id(spark):
@@ -45,7 +43,7 @@ def test_explode_in_grouping_expression_projection(spark):
 @pytest.mark.parametrize(
     "function", ["explode", "explode_outer", "posexplode", "posexplode_outer", "inline", "inline_outer"]
 )
-def test_generators_on_arrow_list_views(spark, tmp_path, large, sliced, function):
+def test_generators_on_arrow_list_views(spark, remote, tmp_path, large, sliced, function):
     import pyarrow as pa
 
     values = [{"a": 10, "b": "ten"}, {"a": 20, "b": None}, None, {"a": 40, "b": "forty"}, {"a": 50, "b": "fifty"}]
@@ -72,7 +70,7 @@ def test_generators_on_arrow_list_views(spark, tmp_path, large, sliced, function
         logical_rows = logical_rows[1:6]
 
     # Spark uses equivalent logical arrays; Sail reads the original Arrow view layout.
-    if is_jvm_spark():
+    if remote.startswith("local"):
         frame = spark.createDataFrame(logical_rows, "id long, items array<struct<a:int,b:string>>")
     else:
         path = tmp_path / "list_views.arrow"
@@ -102,3 +100,22 @@ def test_generators_on_arrow_list_views(spark, tmp_path, large, sliced, function
                 row["col"] = None
             expected.append(row)
     assert sorted((row.asDict(recursive=True) for row in rows), key=repr) == sorted(expected, key=repr)
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+def test_posexplode_shared_view_values_have_positions_per_row(spark, remote, tmp_path, large):
+    import pyarrow as pa
+
+    array_type = pa.LargeListViewArray if large else pa.ListViewArray
+    items = array_type.from_arrays([0, 1], [3, 2], pa.array([10, 20, 30], type=pa.int32()))
+    table = pa.table({"id": [0, 1], "items": items})
+    if remote.startswith("local"):
+        frame = spark.createDataFrame([(0, [10, 20, 30]), (1, [20, 30])], "id long, items array<int>")
+    else:
+        path = tmp_path / "overlapping_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    rows = frame.selectExpr("id", "posexplode(items)").orderBy("id", "pos").collect()
+    assert [tuple(row) for row in rows] == [(0, 0, 10), (0, 1, 20), (0, 2, 30), (1, 0, 20), (1, 1, 30)]

@@ -99,3 +99,46 @@ def test_to_arrow_rejects_year_month_interval(arrow_spark):
 def test_to_arrow_struct_field_nullability(arrow_spark):
     table = arrow_spark.sql("SELECT named_struct('a',1,'b',CAST(NULL AS INT)) AS c").toArrow()
     assert str(table.schema.field(0).type) == "struct<a: int32 not null, b: int32>"
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("sliced", [False, True], ids=["full", "sliced"])
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("array_min(items)", [30, 10, None, None, None, 10]),
+        ("array_max(items)", [40, 30, None, None, None, 10]),
+        ("transform(items, (x, i) -> x + i + id)", [[30, 41], [11, None, 33], None, [], [None], [15, None]]),
+    ],
+    ids=["min", "max", "transform"],
+)
+def test_array_functions_on_arrow_list_views(spark, remote, tmp_path, large, sliced, expression, expected):
+    import pyarrow as pa
+
+    array_type = pa.LargeListViewArray if large else pa.ListViewArray
+    items = array_type.from_arrays(
+        [2, 0, 1, 0, 4, 0],
+        [2, 3, 2, 0, 1, 2],
+        pa.array([10, None, 30, 40, None], type=pa.int32()),
+        mask=pa.array([False, False, True, False, False, False]),
+    )
+    table = pa.table({"id": range(6), "items": items})
+    logical_rows = [(0, [30, 40]), (1, [10, None, 30]), (2, None), (3, []), (4, [None]), (5, [10, None])]
+    expected_rows = [{"id": row_id, "result": value} for row_id, value in enumerate(expected)]
+    if sliced:
+        table = table.slice(1, 4)
+        logical_rows = logical_rows[1:5]
+        expected_rows = expected_rows[1:5]
+
+    # SQL cannot express Arrow's overlapping views or unused values behind a NULL list.
+    # Spark checks equivalent logical arrays; Sail reads the original physical layout.
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(logical_rows, "id long, items array<int>")
+    else:
+        path = tmp_path / "list_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    result = frame.selectExpr("id", f"{expression} AS result").orderBy("id").toArrow()
+    assert result.to_pylist() == expected_rows

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, GenericListArray, OffsetSizeTrait, PrimitiveArray,
-    StructArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, GenericListArray, GenericListViewArray,
+    MutableArrayData, OffsetSizeTrait, PrimitiveArray, StructArray, make_array,
 };
-use datafusion::arrow::compute::cast;
+use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{
     ArrowNativeType, DataType, Field, FieldRef, Fields, Int32Type, Int64Type,
 };
@@ -77,6 +77,51 @@ impl ArrayItemWithPosition {
             array.nulls().cloned(),
         )?))
     }
+
+    fn list_view_item_with_position<P: ArrowPrimitiveType>(
+        array: &GenericListViewArray<P::Native>,
+        field: &FieldRef,
+    ) -> Result<ArrayRef>
+    where
+        P::Native: OffsetSizeTrait,
+        PrimitiveArray<P>: From<Vec<P::Native>>,
+    {
+        let mut offsets = Vec::with_capacity(array.len() + 1);
+        offsets.push(P::Native::usize_as(0));
+        let source = array.values().to_data();
+        let mut values = MutableArrayData::new(vec![&source], false, 0);
+        let mut positions = Vec::new();
+        // Shared view elements can have different positions in different rows.
+        for row in 0..array.len() {
+            if array.is_valid(row) {
+                let start = array.value_offsets()[row].as_usize();
+                let size = array.value_sizes()[row].as_usize();
+                if size > P::Native::MAX_OFFSET - positions.len() {
+                    return exec_err!("array_item_with_position output offset overflow");
+                }
+                values.try_extend(0, start, start + size)?;
+                positions.extend((0..size).map(P::Native::usize_as));
+            }
+            offsets.push(P::Native::usize_as(positions.len()));
+        }
+        let values = StructArray::try_new(
+            Self::item_fields::<P>(field),
+            vec![
+                Arc::new(PrimitiveArray::<P>::from(positions)) as ArrayRef,
+                make_array(values.freeze()),
+            ],
+            None,
+        )?;
+        Ok(Arc::new(GenericListArray::<P::Native>::try_new(
+            Arc::new(Field::new_list_field(
+                Self::item_type::<P>(field),
+                field.is_nullable(),
+            )),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            array.nulls().cloned(),
+        )?))
+    }
 }
 
 impl ScalarUDFImpl for ArrayItemWithPosition {
@@ -131,20 +176,20 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 self.name()
             );
         };
-        // Overlapping views need separate values so each row can have its own positions.
-        let arg = match arg.data_type() {
-            DataType::ListView(field) => cast(arg, &DataType::List(Arc::clone(field)))?,
-            DataType::LargeListView(field) => cast(arg, &DataType::LargeList(Arc::clone(field)))?,
-            _ => Arc::clone(arg),
-        };
         let out = match arg.data_type() {
             DataType::List(f) => {
-                let array = as_list_array(&arg)?;
+                let array = as_list_array(arg)?;
                 Self::general_array_item_with_position::<Int32Type>(array, f)?
             }
             DataType::LargeList(f) => {
-                let array = as_large_list_array(&arg)?;
+                let array = as_large_list_array(arg)?;
                 Self::general_array_item_with_position::<Int64Type>(array, f)?
+            }
+            DataType::ListView(f) => {
+                Self::list_view_item_with_position::<Int32Type>(arg.as_list_view::<i32>(), f)?
+            }
+            DataType::LargeListView(f) => {
+                Self::list_view_item_with_position::<Int64Type>(arg.as_list_view::<i64>(), f)?
             }
             DataType::FixedSizeList(_, _) => {
                 return Err(DataFusionError::NotImplemented(
