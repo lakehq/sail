@@ -46,10 +46,6 @@ impl ScalarUDFImpl for SparkYear {
         &self.signature
     }
 
-    fn is_strict(&self) -> bool {
-        true
-    }
-
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!(
             "`return_type` should not be called; `return_field_from_args` is used instead"
@@ -62,6 +58,10 @@ impl ScalarUDFImpl for SparkYear {
             DataType::Int32,
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -95,24 +95,6 @@ impl ScalarUDFImpl for SparkYear {
         }
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("year", (1, 1), arg_types.len()));
-        }
-        let native: NativeType = (&arg_types[0]).into();
-        if matches!(
-            native,
-            NativeType::Date | NativeType::String | NativeType::Null | NativeType::Timestamp(_, _)
-        ) {
-            Ok(vec![DataType::Date32])
-        } else {
-            plan_err!(
-                "The argument of the Spark `year` function can only be a date, string or timestamp, but got {}",
-                &arg_types[0]
-            )
-        }
-    }
-
     fn preimage(
         &self,
         args: &[Expr],
@@ -140,6 +122,24 @@ impl ScalarUDFImpl for SparkYear {
             expr: args[0].clone(),
             interval: Box::new(Interval::try_new(lo, hi)?),
         })
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return Err(invalid_arg_count_exec_err("year", (1, 1), arg_types.len()));
+        }
+        let native: NativeType = (&arg_types[0]).into();
+        if matches!(
+            native,
+            NativeType::Date | NativeType::String | NativeType::Null | NativeType::Timestamp(_, _)
+        ) {
+            Ok(vec![DataType::Date32])
+        } else {
+            plan_err!(
+                "The argument of the Spark `year` function can only be a date, string or timestamp, but got {}",
+                &arg_types[0]
+            )
+        }
     }
 }
 

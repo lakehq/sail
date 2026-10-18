@@ -120,6 +120,10 @@ impl ScalarUDFImpl for SparkDate {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() == 3 {
             let make_date = datafusion::functions::datetime::make_date();

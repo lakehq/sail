@@ -54,6 +54,10 @@ macro_rules! define_interval_udf {
                 &self.signature
             }
 
+            fn is_strict(&self) -> bool {
+                true
+            }
+
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
                 Ok($return_type)
             }
@@ -147,6 +151,10 @@ impl ScalarUDFImpl for YearMonthIntervalMonths {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args.one()? {
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(months)) => {
@@ -217,6 +225,10 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

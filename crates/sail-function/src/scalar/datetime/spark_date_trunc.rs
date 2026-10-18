@@ -200,6 +200,10 @@ impl ScalarUDFImpl for SparkDateTrunc {
         "spark_date_trunc"
     }
 
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -216,6 +220,10 @@ impl ScalarUDFImpl for SparkDateTrunc {
             field.data_type().clone()
         };
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -253,10 +261,6 @@ impl ScalarUDFImpl for SparkDateTrunc {
         };
 
         invoke_value(granularity, &granularity_str, array, false)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -969,12 +973,15 @@ impl ScalarUDFImpl for SparkStartOfDay {
     fn name(&self) -> &str {
         "spark_start_of_day"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!("return_field_from_args should be called instead")
     }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let field = &args.arg_fields[0];
         Ok(Arc::new(Field::new(
@@ -983,6 +990,11 @@ impl ScalarUDFImpl for SparkStartOfDay {
             field.is_nullable(),
         )))
     }
+
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         invoke_value(DatePart::Day, "day", &args.args[0], true)
     }

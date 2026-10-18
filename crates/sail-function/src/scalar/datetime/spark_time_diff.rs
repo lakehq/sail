@@ -57,6 +57,10 @@ impl ScalarUDFImpl for SparkTimeDiff {
         Ok(DataType::Int64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args, number_rows, ..

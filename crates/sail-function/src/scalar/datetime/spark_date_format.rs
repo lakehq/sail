@@ -68,14 +68,8 @@ impl ScalarUDFImpl for SparkDateFormat {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
     }
 
-    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        if matches!(args.as_slice(), [_, Expr::Literal(format, _)] if format.is_null()) {
-            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-                ScalarValue::Utf8(None),
-                None,
-            )));
-        }
-        Ok(ExprSimplifyResult::Original(args))
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -233,6 +227,16 @@ impl ScalarUDFImpl for SparkDateFormat {
                 format_timestamp_array_dynamic(&timestamp_array, &format_array, tz.as_ref())
             }
         }
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if matches!(args.as_slice(), [_, Expr::Literal(format, _)] if format.is_null()) {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(None),
+                None,
+            )));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 }
 

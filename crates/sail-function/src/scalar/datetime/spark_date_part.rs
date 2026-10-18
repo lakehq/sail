@@ -156,12 +156,12 @@ impl ScalarUDFImpl for SparkDatePart {
         "spark_date_part"
     }
 
-    fn signature(&self) -> &Signature {
-        self.inner.signature()
+    fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
-    fn is_strict(&self) -> bool {
-        true
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -200,6 +200,10 @@ impl ScalarUDFImpl for SparkDatePart {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if matches!(args.args.first(), Some(ColumnarValue::Scalar(value)) if value.is_null()) {
             return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
@@ -217,10 +221,6 @@ impl ScalarUDFImpl for SparkDatePart {
         } else {
             Ok(result)
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        self.inner.aliases()
     }
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()

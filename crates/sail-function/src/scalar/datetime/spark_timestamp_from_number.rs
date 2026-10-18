@@ -250,12 +250,8 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
         )))
     }
 
-    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() != 1 {
-            return exec_err!("numeric timestamp conversion requires one argument");
-        }
-        // Preserve Sail's castable constructor inputs and wide decimal extension.
-        Ok(types.to_vec())
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -313,5 +309,13 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
         Ok(ExprSimplifyResult::Simplified(
             self.expression(args.one()?, info.schema())?,
         ))
+    }
+
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        if types.len() != 1 {
+            return exec_err!("numeric timestamp conversion requires one argument");
+        }
+        // Preserve Sail's castable constructor inputs and wide decimal extension.
+        Ok(types.to_vec())
     }
 }

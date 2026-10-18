@@ -202,6 +202,11 @@ impl ScalarUDFImpl for SparkTime {
         Ok(DataType::Time64(TimeUnit::Microsecond))
     }
 
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let is_try = self.is_try;
+        make_scalar_function(move |a: &[ArrayRef]| Self::kernel(is_try, a), vec![])(&args.args)
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if !matches!(arg_types.len(), 1 | 2) {
             return Err(invalid_arg_count_exec_err(
@@ -239,10 +244,5 @@ impl ScalarUDFImpl for SparkTime {
             }
         }
         Ok(coerced)
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let is_try = self.is_try;
-        make_scalar_function(move |a: &[ArrayRef]| Self::kernel(is_try, a), vec![])(&args.args)
     }
 }

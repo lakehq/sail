@@ -92,6 +92,10 @@ impl ScalarUDFImpl for SparkTimestampAdd {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if self.subtract_ansi.is_some() && args.args.len() == 3 {
             make_scalar_function(timestamp_difference)(&args.args)

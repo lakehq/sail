@@ -438,6 +438,10 @@ impl ScalarUDFImpl for SparkTimestamp {
         ))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let (arg, format) = match args.len() {

@@ -45,6 +45,10 @@ impl ScalarUDFImpl for SparkToLocalTime {
         Ok(Arc::new(field.as_ref().clone().with_nullable(nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
     }
@@ -171,10 +175,6 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
         )
     }
 
-    fn short_circuits(&self) -> bool {
-        true
-    }
-
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         check_lazy_convert_tz_args(&args.args)?;
         let lambdas = args
@@ -227,6 +227,10 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
             args.number_rows,
         )?))
     }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
 }
 
 fn check_lazy_convert_tz_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
@@ -273,6 +277,10 @@ impl ScalarUDFImpl for ConvertTz {
         let data_type = self.return_type(&arg_types)?;
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
