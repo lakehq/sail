@@ -722,7 +722,8 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | tanh    | str_padded  | ' 1 '                       | 0.7615941559557649    |
 
     # Last-digit differences: Java's StrictMath is fdlibm, Sail calls the platform libm.
-    # Fixing them needs an fdlibm port, tracked as its own change.
+    # Fixing them needs an fdlibm port, tracked as its own change. Only the rows that differ on
+    # glibc (Linux) as well as on macOS are listed: the result of the others depends on the platform.
     @sail-bug
     Scenario Outline: <fn>(<input>) = <result> to the last digit (<what>)
       When query
@@ -735,42 +736,14 @@ Feature: unary DOUBLE math functions (acos and siblings)
 
       Examples:
         | fn    | what       | input                       | result              |
-        | acos  | half       | 0.5                         | 1.0471975511965979  |
-        | acos  | float      | CAST(0.5 AS FLOAT)          | 1.0471975511965979  |
-        | acos  | str_ok     | '0.5'                       | 1.0471975511965979  |
-        | asin  | half       | 0.5                         | 0.5235987755982989  |
-        | asin  | neg_half   | -0.5                        | -0.5235987755982989 |
-        | asin  | float      | CAST(0.5 AS FLOAT)          | 0.5235987755982989  |
-        | asin  | dec_small  | CAST(-0.5 AS DECIMAL(10,2)) | -0.5235987755982989 |
-        | asin  | str_ok     | '0.5'                       | 0.5235987755982989  |
-        | atan  | half       | 0.5                         | 0.4636476090008061  |
-        | atan  | two        | 2                           | 1.1071487177940904  |
-        | atan  | neg_two    | -2                          | -1.1071487177940904 |
-        | atan  | neg_half   | -0.5                        | -0.4636476090008061 |
-        | atan  | float      | CAST(0.5 AS FLOAT)          | 0.4636476090008061  |
-        | atan  | dec_small  | CAST(-0.5 AS DECIMAL(10,2)) | -0.4636476090008061 |
-        | atan  | str_ok     | '0.5'                       | 0.4636476090008061  |
-        | atanh | half       | 0.5                         | 0.5493061443340548  |
-        | atanh | float      | CAST(0.5 AS FLOAT)          | 0.5493061443340548  |
-        | atanh | str_ok     | '0.5'                       | 0.5493061443340548  |
         | cosh  | one        | 1                           | 1.543080634815244   |
         | cosh  | neg_one    | -1                          | 1.543080634815244   |
         | cosh  | tinyint    | CAST(1 AS TINYINT)          | 1.543080634815244   |
         | cosh  | str_padded | ' 1 '                       | 1.543080634815244   |
-        | cot   | one        | 1                           | 0.6420926159343306  |
-        | cot   | neg_one    | -1                          | -0.6420926159343306 |
-        | cot   | tinyint    | CAST(1 AS TINYINT)          | 0.6420926159343306  |
-        | cot   | str_padded | ' 1 '                       | 0.6420926159343306  |
         | exp   | one        | 1                           | 2.7182818284590455  |
         | exp   | tinyint    | CAST(1 AS TINYINT)          | 2.7182818284590455  |
         | exp   | str_padded | ' 1 '                       | 2.7182818284590455  |
         | log1p | two        | 2                           | 1.0986122886681096  |
-        | sinh  | two        | 2                           | 3.626860407847019   |
-        | sinh  | neg_two    | -2                          | -3.626860407847019  |
-        | tan   | one        | 1                           | 1.5574077246549023  |
-        | tan   | neg_one    | -1                          | -1.5574077246549023 |
-        | tan   | tinyint    | CAST(1 AS TINYINT)          | 1.5574077246549023  |
-        | tan   | str_padded | ' 1 '                       | 1.5574077246549023  |
 
   Rule: String argument under ANSI=true
 
