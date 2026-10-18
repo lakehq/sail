@@ -17,10 +17,9 @@ use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, Volatility, cast,
 };
-use sail_common::utils::datetime::MICROS_PER_DAY;
+use sail_common::utils::datetime::{MICROS_PER_DAY, timezone_alias_to_timezone};
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::datetime::spark_timestamp::normalize_timezone_alias;
 use crate::scalar::datetime::utils::{
     add_ltz_interval, add_ntz_interval, is_fixed_zero_offset_timezone,
 };
@@ -218,7 +217,7 @@ fn timestamp_difference(args: &[ArrayRef]) -> Result<ArrayRef> {
             let (end, start) = (end.value(row), start.value(row));
             let mut difference = i128::from(end) - i128::from(start);
             if let Some(timezone) = timezone {
-                let timezone = normalize_timezone_alias(timezone).parse::<Tz>()?;
+                let timezone = timezone_alias_to_timezone(timezone).parse::<Tz>()?;
                 // shortcut: keep raw wide pairs until full-range regional offsets are supported.
                 if let (Some(end), Some(start)) = (
                     DateTime::<Utc>::from_timestamp_micros(end),
@@ -326,8 +325,8 @@ fn timestamp_add(args: &[ArrayRef], subtract_ansi: Option<bool>) -> Result<Array
             } else if utc_or_ntz {
                 add_ntz_interval(start, months, days, micros)?
             } else {
-                let tz =
-                    normalize_timezone_alias(timezone.as_deref().unwrap_or("UTC")).parse::<Tz>()?;
+                let tz = timezone_alias_to_timezone(timezone.as_deref().unwrap_or("UTC"))
+                    .parse::<Tz>()?;
                 add_ltz_interval(start, months, days, micros, tz)?
             };
             Ok(Some(value))
