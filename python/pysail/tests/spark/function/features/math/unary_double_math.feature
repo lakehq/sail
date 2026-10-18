@@ -938,3 +938,173 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | asin | -0.0      |
         | sin  | -0.0      |
         | csc  | -Infinity |
+
+  Rule: A typed NULL keeps its Spark type
+
+    Scenario Outline: <fn> of a NULL typed as <type> is DATATYPE_MISMATCH
+      When query
+        """
+        SELECT <fn>(CAST(NULL AS <type>)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+      Examples:
+        | fn   | type       |
+        | sin  | BOOLEAN    |
+        | sin  | DATE       |
+        | sin  | ARRAY<INT> |
+        | sqrt | BOOLEAN    |
+        | ln   | BOOLEAN    |
+
+    Scenario Outline: <fn> of a NULL typed as <type> is NULL
+      When query
+        """
+        SELECT <fn>(CAST(NULL AS <type>)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | fn   | type          |
+        | sin  | STRING        |
+        | sin  | DECIMAL(5,2)  |
+        | sqrt | STRING        |
+        | ln   | STRING        |
+
+  Rule: The error names the function and the argument the way Spark does
+
+    Scenario Outline: <call> keeps the function name Spark prints
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query error Cannot resolve "<shown>\(true\)" due to data type mismatch: The first parameter requires the "DOUBLE" type, however "true" has the type "BOOLEAN"
+
+      Examples:
+        | call       | shown |
+        | SIN(true)  | SIN   |
+        | Sqrt(true) | SQRT  |
+
+    Scenario: the function name in the arity error is the registered one
+      When query
+        """
+        SELECT ACOS(1, 2) AS result
+        """
+      Then query error The `acos` requires 1 parameters but the actual number is 2
+
+    # Spark shows the attribute without its qualifier: `SIN(f)` for `sin(t.f)`.
+    Scenario: a qualified column is named without its qualifier
+      When query
+        """
+        SELECT sin(t.f) AS result FROM VALUES (true) AS t(f)
+        """
+      Then query error Cannot resolve "SIN\(f\)" due to data type mismatch: The first parameter requires the "DOUBLE" type, however "f" has the type "BOOLEAN"
+
+  Rule: Argument shapes other than a literal
+
+    Scenario: qualified columns of a join that has the same name on both sides
+      When query
+        """
+        SELECT sqrt(l.b) AS lb, sqrt(r.b) AS rb
+        FROM (SELECT 1 AS a, 0.5 AS b) l JOIN (SELECT 1 AS a, 0.25 AS b) r ON l.a = r.a
+        """
+      Then query result
+        | lb                 | rb  |
+        | 0.7071067811865476 | 0.5 |
+
+    Scenario: a qualified boolean column is rejected
+      When query
+        """
+        SELECT sin(t.f) AS result FROM VALUES (true) AS t(f)
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+    Scenario: a column of strings with a malformed value and a NULL under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT sqrt(c) AS result FROM VALUES ('0.25'), ('abc'), (NULL) AS t(c)
+        """
+      Then query result
+        | result |
+        | 0.5    |
+        | NULL   |
+        | NULL   |
+
+    Scenario Outline: an element of a <container>
+      When query
+        """
+        SELECT sqrt(<value>) AS result
+        """
+      Then query result
+        | result |
+        | 0.5    |
+
+      Examples:
+        | container | value                              |
+        | array     | array(0.25D)[0]                    |
+        | map       | map('k', 0.25D)['k']               |
+        | struct    | named_struct('x', 0.25D).x         |
+
+    Scenario: a lambda variable that is a string
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT transform(array('0.25', 'abc'), x -> sqrt(x)) AS result
+        """
+      Then query result
+        | result      |
+        | [0.5, NULL] |
+
+    Scenario: a lambda variable that is a boolean is rejected
+      When query
+        """
+        SELECT transform(array(true), x -> sin(x)) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+    Scenario Outline: <fn> of a <type> value inside a container is rejected
+      When query
+        """
+        SELECT <fn>(<value>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+      Examples:
+        | fn  | type   | value                     |
+        | sin | array  | array(1.0D)               |
+        | sin | struct | named_struct('x', 0.5D)   |
+        | sin | map    | map('k', 0.5D)            |
+
+    Scenario Outline: <fn> of a <type> is rejected
+      When query
+        """
+        SELECT <fn>(<value>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+      Examples:
+        | fn  | type              | value                                |
+        | sin | TIMESTAMP_NTZ     | TIMESTAMP_NTZ'2024-01-02 03:04:05'   |
+        | sin | DAY-TIME INTERVAL | INTERVAL '1' DAY                     |
+
+  @spark-4
+  Rule: A VARIANT argument is rejected
+
+    Scenario: sin of a VARIANT
+      When query
+        """
+        SELECT sin(parse_json('1')) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]
+
+  @spark-4.1
+  Rule: A TIME argument is rejected
+
+    Scenario: sin of a TIME
+      When query
+        """
+        SELECT sin(TIME'10:00:00') AS result
+        """
+      Then query error \[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE\]

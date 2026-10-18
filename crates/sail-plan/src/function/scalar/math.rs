@@ -643,7 +643,7 @@ fn unary_double(
                     .argument_display_names
                     .first()
                     .map_or("input", String::as_str);
-                // The same `prettyName` rule that names the output column (`ACOSH(1)`, `ln(1)`).
+                // The formatter that names the output column, which prints `ACOSH(1)` but `ln(1)` like Spark.
                 let call = formatter.function_to_string(name, vec![arg_name], false)?;
                 return Err(PlanError::analysis(format!(
                     "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{call}\" due to data type mismatch: \
