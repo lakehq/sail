@@ -14,6 +14,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayStructField {
     signature: Signature,
@@ -172,12 +174,19 @@ impl ScalarUDFImpl for ArrayStructField {
         };
         let field_name = self.field_name(args.scalar_arguments.get(1).copied().flatten())?;
         let data_type = self.return_type_for_list(array_field.data_type(), field_name)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            list_view_to_list_type(&data_type),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
-            args, arg_fields, ..
+            args,
+            arg_fields,
+            return_field,
+            ..
         } = args;
         let field_name = arg_fields
             .get(1)
@@ -219,6 +228,6 @@ impl ScalarUDFImpl for ArrayStructField {
                 );
             }
         };
-        Ok(ColumnarValue::Array(out))
+        cast_list_result(ColumnarValue::Array(out), return_field.data_type())
     }
 }

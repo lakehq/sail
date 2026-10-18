@@ -7,13 +7,15 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, take};
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, arrow_err, exec_err, plan_err};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{DataFusionError, Result, arrow_err, exec_err, internal_err, plan_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
+use crate::scalar::array::{cast_list_result, list_view_to_list_type};
 use crate::scalar::struct_function::to_struct_array;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -61,10 +63,17 @@ impl ScalarUDFImpl for ArraysZip {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let params = arg_types
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let params = args
+            .arg_fields
             .iter()
-            .map(get_list_params)
+            .map(|field| get_list_params(field.data_type()))
             .collect::<Result<Vec<_>>>()?;
 
         let field_names = self.get_field_names(params.len());
@@ -89,11 +98,16 @@ impl ScalarUDFImpl for ArraysZip {
             .ok()
             .flatten();
 
-        Ok(match (is_large, fixed_size_opt) {
+        let data_type = match (is_large, fixed_size_opt) {
             (true, _) => DataType::LargeList(struct_field),
             (false, Some(fixed_size)) => DataType::FixedSizeList(struct_field, fixed_size),
             _ => DataType::List(struct_field),
-        })
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            list_view_to_list_type(&data_type),
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -134,7 +148,7 @@ impl ScalarUDFImpl for ArraysZip {
             DataType::FixedSizeList(_, size) => arrays_zip_fixed_size(&arrays, size, &field_names),
             _ => arrays_zip_generic::<i32>(&arrays, &field_names),
         }?;
-        Ok(ColumnarValue::Array(result))
+        cast_list_result(ColumnarValue::Array(result), args.return_type())
     }
 }
 

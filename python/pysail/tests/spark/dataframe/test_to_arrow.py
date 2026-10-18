@@ -140,5 +140,256 @@ def test_array_functions_on_arrow_list_views(spark, remote, tmp_path, large, sli
             writer.write_table(table)
         frame = spark.read.format("arrow").load(str(path))
 
-    result = frame.selectExpr("id", f"{expression} AS result").orderBy("id").toArrow()
-    assert result.to_pylist() == expected_rows
+    result = frame.selectExpr("id", f"{expression} AS result").orderBy("id")
+    assert [row.asDict(recursive=True) for row in result.collect()] == expected_rows
+    assert result.toArrow().to_pylist() == expected_rows
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("sliced", [False, True], ids=["full", "sliced"])
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("array_compact(items)", [[30, 40], [10, 30], None, [], [], [10]]),
+        ("filter(items, (x, i) -> x > 20 OR i = 1)", [[30, 40], [None, 30], None, [], [], [None]]),
+        ("exists(items, x -> x > 25)", [True, True, None, False, None, None]),
+        ("forall(items, x -> x > 0)", [True, None, None, True, None, None]),
+        (
+            "aggregate(items, CAST(id AS INT), (acc, x) -> acc + coalesce(x, 0), acc -> acc + 100)",
+            [170, 141, None, 103, 104, 115],
+        ),
+        (
+            "array_sort(items, (l, r) -> CASE WHEN l IS NULL THEN IF(r IS NULL, 0, 1) "
+            "WHEN r IS NULL THEN -1 ELSE r - l END)",
+            [[40, 30], [30, 10, None], None, [], [None], [10, None]],
+        ),
+        ("array_position(items, 30)", [1, 3, None, 0, 0, 0]),
+        ("array_intersect(items, array(30, 10))", [[30], [10, 30], None, [], [], [10]]),
+        ("array(items)", [[[30, 40]], [[10, None, 30]], [None], [[]], [[None]], [[10, None]]]),
+        (
+            "arrays_zip(items, array(30, 10))",
+            [
+                [{"items": 30, "1": 30}, {"items": 40, "1": 10}],
+                [{"items": 10, "1": 30}, {"items": None, "1": 10}, {"items": 30, "1": None}],
+                None,
+                [{"items": None, "1": 30}, {"items": None, "1": 10}],
+                [{"items": None, "1": 30}, {"items": None, "1": 10}],
+                [{"items": 10, "1": 30}, {"items": None, "1": 10}],
+            ],
+        ),
+    ],
+    ids=["compact", "filter", "exists", "forall", "aggregate", "sort", "position", "intersect", "array", "zip"],
+)
+def test_additional_array_functions_on_arrow_list_views(spark, remote, tmp_path, large, sliced, expression, expected):
+    import pyarrow as pa
+
+    array_type = pa.LargeListViewArray if large else pa.ListViewArray
+    items = array_type.from_arrays(
+        [2, 0, 1, 0, 4, 0],
+        [2, 3, 2, 0, 1, 2],
+        pa.array([10, None, 30, 40, None], type=pa.int32()),
+        mask=pa.array([False, False, True, False, False, False]),
+    )
+    table = pa.table({"id": range(6), "items": items})
+    logical_rows = [(0, [30, 40]), (1, [10, None, 30]), (2, None), (3, []), (4, [None]), (5, [10, None])]
+    expected_rows = [{"id": row_id, "result": value} for row_id, value in enumerate(expected)]
+    if sliced:
+        table = table.slice(1, 4)
+        logical_rows = logical_rows[1:5]
+        expected_rows = expected_rows[1:5]
+
+    # Spark checks logical values; Sail also exercises overlapping and sliced Arrow views.
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(logical_rows, "id long, items array<int>")
+    else:
+        path = tmp_path / "array_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    # View inputs must produce ordinary lists, including nested results, for Spark clients.
+    result = frame.selectExpr("id", f"{expression} AS result").orderBy("id")
+    assert [row.asDict(recursive=True) for row in result.collect()] == expected_rows
+    table = result.toArrow()
+    table.validate(full=True)
+    assert table.to_pylist() == expected_rows
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list", "large_list"])
+def test_array_compact_on_sliced_arrow_lists(spark, remote, tmp_path, large):
+    import pyarrow as pa
+
+    array_type = pa.LargeListArray if large else pa.ListArray
+    items = array_type.from_arrays(
+        [0, 1, 4, 6, 6, 7],
+        pa.array([99, 10, None, 30, 40, None, 99], type=pa.int32()),
+        mask=pa.array([False, False, True, False, False]),
+    )
+    table = pa.table({"id": range(5), "items": items})
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(
+            [(0, [99]), (1, [10, None, 30]), (2, None), (3, []), (4, [99])], "id long, items array<int>"
+        )
+    else:
+        path = tmp_path / "sliced_lists.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    query = frame.offset(1).limit(3).selectExpr("id", "array_compact(items) AS result").orderBy("id")
+    result = query.toArrow()
+    assert result.to_pylist() == [{"id": 1, "result": [10, 30]}, {"id": 2, "result": None}, {"id": 3, "result": []}]
+    assert [row.asDict(recursive=True) for row in query.collect()] == result.to_pylist()
+    assert not result.schema.field("result").type.value_field.nullable
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("outer_view", [False, True], ids=["list", "view"])
+@pytest.mark.parametrize("sliced", [False, True], ids=["full", "sliced"])
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("array_min(items)", [[10, None, 30], [10, None, 30], None, None, [], [50]]),
+        ("array_max(items)", [[10, None, 30], [30, 40], None, None, [50], [50]]),
+        ("array_compact(items)", [[[10, None, 30]], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]]),
+        (
+            "filter(items, x -> x IS NOT NULL)",
+            [[[10, None, 30]], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+        ),
+        (
+            "filter(items, x -> true)",
+            [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+        ),
+        ("filter(items, x -> false)", [[], [], [], None, [], []]),
+        (
+            "transform(items, x -> x)",
+            [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+        ),
+        (
+            "array_intersect(items, items)",
+            [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+        ),
+        ("array_position(items, seed)", [0, 2, None, None, 2, 0]),
+        ("aggregate(items, seed, (acc, x) -> x)", [None, [10, None, 30], None, None, [50], [50]]),
+        ("aggregate(items, seed, (acc, x) -> acc)", [[30, 40], [10, None, 30], None, None, [50], [30, 40]]),
+        (
+            "aggregate(items, 0, (acc, x) -> acc + 1, acc -> seed)",
+            [[30, 40], [10, None, 30], None, None, [50], [30, 40]],
+        ),
+        (
+            "array_sort(items, (l, r) -> CASE WHEN l IS NULL THEN IF(r IS NULL, 0, 1) "
+            "WHEN r IS NULL THEN -1 ELSE size(r) - size(l) END)",
+            [[[10, None, 30], None], [[10, None, 30], [30, 40]], [], None, [[50], []], [[50]]],
+        ),
+        (
+            "arrays_zip(items)",
+            [
+                [{"items": [10, None, 30]}, {"items": None}],
+                [{"items": [30, 40]}, {"items": [10, None, 30]}],
+                [],
+                None,
+                [{"items": []}, {"items": [50]}],
+                [{"items": [50]}],
+            ],
+        ),
+        (
+            "array(items)",
+            [[[[10, None, 30], None]], [[[30, 40], [10, None, 30]]], [[]], [None], [[[], [50]]], [[[50]]]],
+        ),
+    ],
+    ids=[
+        "min",
+        "max",
+        "compact",
+        "filter",
+        "filter_true",
+        "filter_false",
+        "transform",
+        "intersect",
+        "position",
+        "merge",
+        "zero",
+        "finish",
+        "sort",
+        "zip",
+        "array",
+    ],
+)
+def test_array_functions_return_ordinary_nested_lists(
+    spark, remote, tmp_path, large, outer_view, sliced, expression, expected
+):
+    import pyarrow as pa
+
+    view_type = pa.LargeListViewArray if large else pa.ListViewArray
+    inner = view_type.from_arrays(
+        [2, 0, 1, 0, 4],
+        [2, 3, 2, 0, 1],
+        pa.array([10, None, 30, 40, 50], type=pa.int32()),
+        mask=pa.array([False, False, True, False, False]),
+    )
+    mask = pa.array([False, False, False, True, False, False])
+    if outer_view:
+        items = view_type.from_arrays([1, 0, 0, 2, 3, 4], [2, 2, 0, 2, 2, 1], inner, mask=mask)
+    else:
+        list_type = pa.LargeListArray if large else pa.ListArray
+        items = list_type.from_arrays([0, 2, 4, 4, 6, 8, 9], inner.take([1, 2, 0, 1, 2, 3, 3, 4, 4]), mask=mask)
+    seed = inner.take([0, 1, 2, 3, 4, 0])
+    table = pa.table({"id": range(6), "items": items, "seed": seed})
+    logical_rows = [
+        (0, [[10, None, 30], None], [30, 40]),
+        (1, [[30, 40], [10, None, 30]], [10, None, 30]),
+        (2, [], None),
+        (3, None, []),
+        (4, [[], [50]], [50]),
+        (5, [[50]], [30, 40]),
+    ]
+    expected_rows = [{"id": row_id, "result": value} for row_id, value in enumerate(expected)]
+    if sliced:
+        table = table.slice(1, 4)
+        logical_rows = logical_rows[1:5]
+        expected_rows = expected_rows[1:5]
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(logical_rows, "id long, items array<array<int>>, seed array<int>")
+    else:
+        path = tmp_path / "nested_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    # An ordinary outer list is insufficient: nested views must also be materialized.
+    result = frame.selectExpr("id", f"{expression} AS result").orderBy("id")
+    assert [row.asDict(recursive=True) for row in result.collect()] == expected_rows
+    table = result.toArrow()
+    table.validate(full=True)
+    assert table.to_pylist() == expected_rows
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+def test_array_results_normalize_views_inside_structs_and_maps(spark, remote, tmp_path, large):
+    import pyarrow as pa
+
+    view_type = pa.LargeListViewArray if large else pa.ListViewArray
+    seed = view_type.from_arrays(
+        [1, 0, 0], [2, 0, 1], pa.array([10, 20, None], type=pa.int32()), mask=pa.array([False, False, True])
+    )
+    if remote.startswith("local"):
+        frame = spark.createDataFrame([(0, [20, None]), (1, []), (2, None)], "id long, seed array<int>")
+    else:
+        table = pa.table({"id": range(3), "seed": seed})
+        path = tmp_path / "nested_fields.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+    result = frame.selectExpr(
+        "id",
+        "array(named_struct('values', seed)) AS structs",
+        "aggregate(array(1), 0, (acc, x) -> acc, acc -> map('k', seed)) AS maps",
+    ).orderBy("id")
+    expected = [
+        {"id": i, "structs": [{"values": value}], "maps": {"k": value}}
+        for i, value in enumerate([[20, None], [], None])
+    ]
+    assert [row.asDict(recursive=True) for row in result.collect()] == expected
+    table = result.toArrow()
+    table.validate(full=True)
+    assert table.to_pylist() == [dict(row, maps=list(row["maps"].items())) for row in expected]

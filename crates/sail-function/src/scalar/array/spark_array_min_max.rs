@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayAccessor, ArrayRef, AsArray, GenericListArray, GenericListViewArray,
-    as_large_list_array, as_list_array,
+    ArrayAccessor, ArrayRef, AsArray, GenericListArray, GenericListViewArray, as_large_list_array,
+    as_list_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
@@ -13,6 +13,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 enum ArrayOp {
     Min,
@@ -26,7 +27,10 @@ fn element_return_field(name: &str, data_type: Option<&DataType>) -> Result<Fiel
             | DataType::LargeList(field)
             | DataType::ListView(field)
             | DataType::LargeListView(field),
-        ) => Ok(field.as_ref().clone().with_nullable(true)),
+        ) => Ok(list_view_to_list_field(field)
+            .as_ref()
+            .clone()
+            .with_nullable(true)),
         Some(DataType::Null) => Ok(Field::new(name, DataType::Null, true)),
         _ => plan_err!("{name} can only accept a list."),
     }
@@ -68,11 +72,13 @@ impl ScalarUDFImpl for ArrayMin {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Null
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)] => Ok(arg_types.to_vec()),
+            [
+                DataType::Null
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_),
+            ] => Ok(arg_types.to_vec()),
             [DataType::FixedSizeList(field, _)] => Ok(vec![DataType::List(Arc::clone(field))]),
             _ => plan_err!("{} requires one list argument", self.name()),
         }
@@ -132,11 +138,13 @@ impl ScalarUDFImpl for ArrayMax {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Null
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)] => Ok(arg_types.to_vec()),
+            [
+                DataType::Null
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_),
+            ] => Ok(arg_types.to_vec()),
             [DataType::FixedSizeList(field, _)] => Ok(vec![DataType::List(Arc::clone(field))]),
             _ => plan_err!("{} requires one list argument", self.name()),
         }
@@ -231,21 +239,23 @@ fn compute_min_max_values<A: ArrayAccessor<Item = ArrayRef>>(
     data_type: &DataType,
     op: ArrayOp,
 ) -> Result<Vec<ScalarValue>> {
+    // DataFusion's accumulator accepts nested lists, but not nested list views.
+    let data_type = list_view_to_list_type(data_type);
     let mut result_values = Vec::new();
     for i in 0..array.len() {
         if array.is_null(i) {
-            result_values.push(ScalarValue::try_from(data_type)?);
+            result_values.push(ScalarValue::try_from(&data_type)?);
             continue;
         }
-        let inner_array = array.value(i);
+        let inner_array = datafusion::arrow::compute::cast(&array.value(i), &data_type)?;
         let value = match op {
             ArrayOp::Min => {
-                let mut min_accumulator = min_max::MinAccumulator::try_new(data_type)?;
+                let mut min_accumulator = min_max::MinAccumulator::try_new(&data_type)?;
                 min_accumulator.update_batch(&[inner_array])?;
                 min_accumulator.evaluate()?
             }
             ArrayOp::Max => {
-                let mut max_accumulator = min_max::MaxAccumulator::try_new(data_type)?;
+                let mut max_accumulator = min_max::MaxAccumulator::try_new(&data_type)?;
                 max_accumulator.update_batch(&[inner_array])?;
                 max_accumulator.evaluate()?
             }

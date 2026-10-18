@@ -21,6 +21,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::array::{cast_list_result, list_view_to_list_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayIntersect {
@@ -56,12 +57,18 @@ impl ScalarUDFImpl for ArrayIntersect {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [array1, array2] = take_function_args(self.name(), arg_types)?;
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
 
-        match (array1, array2) {
-            (DataType::Null, DataType::Null) => Ok(DataType::new_list(DataType::Null, true)),
-            (DataType::Null, dt) | (dt, DataType::Null) => Ok(dt.clone()),
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [array1, array2] = take_function_args(self.name(), args.arg_fields)?;
+
+        let return_type = match (array1.data_type(), array2.data_type()) {
+            (DataType::Null, DataType::Null) => DataType::new_list(DataType::Null, true),
+            (DataType::Null, dt) | (dt, DataType::Null) => dt.clone(),
 
             (DataType::List(field1), DataType::List(field2)) => {
                 let field = if field1.data_type().is_null() {
@@ -69,7 +76,7 @@ impl ScalarUDFImpl for ArrayIntersect {
                 } else {
                     field1
                 };
-                Ok(DataType::List(field.clone()))
+                DataType::List(field.clone())
             }
 
             (DataType::LargeList(field1), DataType::LargeList(field2)) => {
@@ -78,7 +85,7 @@ impl ScalarUDFImpl for ArrayIntersect {
                 } else {
                     field1
                 };
-                Ok(DataType::LargeList(field.clone()))
+                DataType::LargeList(field.clone())
             }
 
             (DataType::List(field1), DataType::LargeList(field2))
@@ -88,30 +95,24 @@ impl ScalarUDFImpl for ArrayIntersect {
                 } else {
                     field1
                 };
-                Ok(DataType::LargeList(field.clone()))
+                DataType::LargeList(field.clone())
             }
 
-            (dt, _) => Ok(dt.clone()),
-        }
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let return_type = self.return_type(&arg_types)?;
+            (dt, _) => dt.clone(),
+        };
 
         Ok(Arc::new(Field::new(
             self.name(),
-            return_type,
+            list_view_to_list_type(&return_type),
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_intersect_inner)(&args.args)
+        cast_list_result(
+            make_scalar_function(array_intersect_inner)(&args.args)?,
+            args.return_type(),
+        )
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -381,7 +382,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, exec_err};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 
     use super::ArrayIntersect;
 
@@ -466,10 +467,11 @@ mod tests {
 
             assert_eq!(
                 result.data_type(),
-                udf.return_type(&[
-                    input_field.data_type().clone(),
-                    input_field.data_type().clone()
-                ])?
+                *udf.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[input_field.clone().into(), input_field.into()],
+                    scalar_arguments: &[None, None],
+                })?
+                .data_type()
             );
         }
         Ok(())

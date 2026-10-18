@@ -14,6 +14,7 @@ use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::list_view_to_list_type;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
@@ -174,6 +175,26 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             columns_to_unnest,
             UnnestOptions::new().with_null_handling(null_handling),
         )?;
+
+        // Normalize generated values too: unnesting can expose a nested list view.
+        let out = out
+            .into_iter()
+            .map(|expr| {
+                let data_type = expr.get_type(self.plan.schema())?;
+                let output_type = list_view_to_list_type(&data_type);
+                if data_type == output_type {
+                    return Ok(expr);
+                }
+                match expr {
+                    Expr::Alias(mut alias) => {
+                        alias.expr =
+                            Box::new(alias.expr.cast_to(&output_type, self.plan.schema())?);
+                        Ok(Expr::Alias(alias))
+                    }
+                    expr => expr.cast_to(&output_type, self.plan.schema()),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let out = match out.one_or_more()? {
             Either::Left(node) => node,

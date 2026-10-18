@@ -322,7 +322,6 @@ Feature: arrays_zip comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: non-null array literals yield a non-nullable array
       When query
         """
@@ -337,7 +336,6 @@ Feature: arrays_zip comprehensive tests
          |    |    |-- 1: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null array column yields a non-nullable array
       When query
         """
@@ -366,7 +364,6 @@ Feature: arrays_zip comprehensive tests
          |    |    |-- c: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: nullable input elements propagate into the struct fields
       When query
         """
@@ -403,8 +400,7 @@ Feature: arrays_zip comprehensive tests
   Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
 
     # All three inline-table arrays are non-nullable, so Spark keeps the zipped array
-    # non-nullable. Sail widens it.
-    @sail-bug
+    # non-nullable.
     @function(nullability)
     Scenario: arrays_zip doctest #2 (schema)
       When query

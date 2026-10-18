@@ -78,7 +78,8 @@ def test_generators_on_arrow_list_views(spark, remote, tmp_path, large, sliced, 
             writer.write_table(table)
         frame = spark.read.format("arrow").load(str(path))
 
-    rows = frame.selectExpr("id", f"{function}(items)").collect()
+    result = frame.selectExpr("id", f"{function}(items)")
+    rows = result.collect()
     expected = []
     for row_id, elements in logical_rows:
         for position, element in enumerate(elements or []):
@@ -100,6 +101,7 @@ def test_generators_on_arrow_list_views(spark, remote, tmp_path, large, sliced, 
                 row["col"] = None
             expected.append(row)
     assert sorted((row.asDict(recursive=True) for row in rows), key=repr) == sorted(expected, key=repr)
+    assert sorted(result.toArrow().to_pylist(), key=repr) == sorted(expected, key=repr)
 
 
 @pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
@@ -117,5 +119,100 @@ def test_posexplode_shared_view_values_have_positions_per_row(spark, remote, tmp
             writer.write_table(table)
         frame = spark.read.format("arrow").load(str(path))
 
-    rows = frame.selectExpr("id", "posexplode(items)").orderBy("id", "pos").collect()
+    result = frame.selectExpr("id", "posexplode(items)").orderBy("id", "pos")
+    rows = result.collect()
     assert [tuple(row) for row in rows] == [(0, 0, 10), (0, 1, 20), (0, 2, 30), (1, 0, 20), (1, 1, 30)]
+    assert [tuple(row.values()) for row in result.toArrow().to_pylist()] == [tuple(row) for row in rows]
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("outer_view", [False, True], ids=["list", "view"])
+@pytest.mark.parametrize(
+    "function", ["explode", "explode_outer", "posexplode", "posexplode_outer", "inline", "inline_outer"]
+)
+def test_generators_return_ordinary_nested_lists(spark, remote, tmp_path, large, outer_view, function):
+    import pyarrow as pa
+
+    view_type = pa.LargeListViewArray if large else pa.ListViewArray
+    inner = view_type.from_arrays(
+        [1, 0, 0], [2, 0, 1], pa.array([10, 20, None], type=pa.int32()), mask=pa.array([False, False, True])
+    )
+    structs = pa.StructArray.from_arrays([inner], names=["values"], mask=pa.array([False, False, True]))
+    mask = pa.array([False, False, False, True])
+    if outer_view:
+        items = view_type.from_arrays([0, 1, 0, 0], [3, 2, 0, 1], structs, mask=mask)
+    else:
+        list_type = pa.LargeListArray if large else pa.ListArray
+        items = list_type.from_arrays([0, 3, 5, 5, 6], structs.take([0, 1, 2, 1, 2, 0]), mask=mask)
+    logical_rows = [
+        (0, [{"values": [20, None]}, {"values": []}, None]),
+        (1, [{"values": []}, None]),
+        (2, []),
+        (3, None),
+    ]
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(logical_rows, "id long, items array<struct<values:array<int>>>")
+    else:
+        table = pa.table({"id": range(4), "items": items})
+        path = tmp_path / "nested_generator_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    expected = []
+    for row_id, elements in logical_rows:
+        entries = list(enumerate(elements or []))
+        if not entries and function.endswith("outer"):
+            entries = [(None, None)]
+        for position, value in entries:
+            row = {"id": row_id}
+            if function.startswith("inline"):
+                row.update(value or {"values": None})
+            else:
+                if function.startswith("posexplode"):
+                    row["pos"] = position
+                row["col"] = value
+            expected.append(row)
+    result = frame.selectExpr("id", f"{function}(items)")
+    assert sorted([row.asDict(recursive=True) for row in result.collect()], key=repr) == sorted(expected, key=repr)
+    table = result.toArrow()
+    table.validate(full=True)
+    assert sorted(table.to_pylist(), key=repr) == sorted(expected, key=repr)
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.parametrize("function", ["explode", "explode_outer", "posexplode", "posexplode_outer"])
+def test_map_generators_return_ordinary_list_values(spark, remote, tmp_path, large, function):
+    import pyarrow as pa
+
+    view_type = pa.LargeListViewArray if large else pa.ListViewArray
+    values = view_type.from_arrays(
+        [1, 0, 0], [2, 0, 1], pa.array([10, 20, None], type=pa.int32()), mask=pa.array([False, False, True])
+    )
+    items = pa.MapArray.from_arrays(
+        [0, 3, 3, 3], pa.array(["a", "b", "c"]), values, mask=pa.array([False, False, True])
+    )
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(
+            [(0, {"a": [20, None], "b": [], "c": None}), (1, {}), (2, None)], "id long, items map<string,array<int>>"
+        )
+    else:
+        table = pa.table({"id": range(3), "items": items})
+        path = tmp_path / "map_views.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+    expected = [{"id": 0, "key": key, "value": value} for key, value in [("a", [20, None]), ("b", []), ("c", None)]]
+    if function.startswith("posexplode"):
+        expected = [dict(row, pos=i) for i, row in enumerate(expected)]
+    if function.endswith("outer"):
+        for i in [1, 2]:
+            row = {"id": i, "key": None, "value": None}
+            if function.startswith("posexplode"):
+                row["pos"] = None
+            expected.append(row)
+    result = frame.selectExpr("id", f"{function}(items)").orderBy("id", "key")
+    assert [row.asDict(recursive=True) for row in result.collect()] == expected
+    table = result.toArrow()
+    table.validate(full=True)
+    assert table.to_pylist() == expected

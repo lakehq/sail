@@ -33,6 +33,7 @@ use datafusion_expr::{
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
 };
+use crate::scalar::array::{cast_list_result, list_view_to_list_type};
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
 /// with the body projected to the columns it actually uses, which only lines up
@@ -99,7 +100,10 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
         let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
 
         let element = match list.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
 
@@ -116,11 +120,19 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-        Ok(Arc::new(Field::new(
-            "",
-            list.data_type().clone(),
-            list.is_nullable(),
-        )))
+        let data_type = match list.data_type() {
+            DataType::List(field) | DataType::ListView(field) => DataType::List(Arc::clone(field)),
+            DataType::LargeList(field) | DataType::LargeListView(field) => {
+                DataType::LargeList(Arc::clone(field))
+            }
+            other => return plan_err!("{} expected a list, got {other}", self.name()),
+        };
+        Ok(Arc::new(
+            list.as_ref()
+                .clone()
+                .with_name("")
+                .with_data_type(list_view_to_list_type(&data_type)),
+        ))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -132,7 +144,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
             ListValuesResult::Values(v) => v,
         };
 
-        let field = match args.return_field.data_type() {
+        let field = match list_array.data_type() {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             _ => {
                 return exec_err!(
@@ -158,13 +170,11 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
         // Scalar predicate short-circuit: the lambda body used neither the
         // element nor the index, e.g. x -> true or x -> false/null.
         if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &predicate_output {
-            return match b {
-                Some(true) => Ok(ColumnarValue::Array(list_array)),
-                _ => Ok(ColumnarValue::Array(empty_filtered_list(
-                    &list_array,
-                    field,
-                )?)),
+            let output = match b {
+                Some(true) => list_array,
+                _ => empty_filtered_list(&list_array, field)?,
             };
+            return cast_list_result(ColumnarValue::Array(output), args.return_type());
         }
 
         let predicate = predicate_output.into_array(list_values.len())?;
@@ -204,7 +214,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
             other => exec_err!("expected list, got {other}")?,
         };
 
-        Ok(ColumnarValue::Array(filtered_list))
+        cast_list_result(ColumnarValue::Array(filtered_list), args.return_type())
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

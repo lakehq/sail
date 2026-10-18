@@ -6,6 +6,8 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion_common::{internal_err, plan_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 
+use crate::scalar::array::list_view_to_list_field;
+
 pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     match name {
         "explode" => Ok(ExplodeKind::Explode),
@@ -80,7 +82,7 @@ impl ScalarUDFImpl for Explode {
                 | DataType::LargeListView(element)
                 | DataType::FixedSizeList(element, _)
                 | DataType::Map(element, _) => Ok(Arc::new(
-                    element
+                    list_view_to_list_field(element)
                         .as_ref()
                         .clone()
                         .with_name(self.name())

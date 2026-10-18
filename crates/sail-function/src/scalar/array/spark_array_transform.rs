@@ -121,7 +121,7 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         // the input element type — this is what distinguishes `transform` (map)
         // from `filter` (which keeps the input element type).
         let field = Arc::new(
-            lambda
+            super::list_view_to_list_field(lambda)
                 .as_ref()
                 .clone()
                 .with_name(Field::LIST_FIELD_DEFAULT_NAME),
@@ -176,6 +176,8 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
                 Ok(take_arrays(arrays, &indices, None)?)
             })?
             .into_array(list_values.len())?;
+        let transformed_values =
+            datafusion::arrow::compute::cast(&transformed_values, field.data_type())?;
 
         let transformed_list = match list_array.data_type() {
             DataType::List(_) => {

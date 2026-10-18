@@ -164,11 +164,17 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        Ok(Arc::new(Field::new(self.name(), out, true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            super::list_view_to_list_type(&out),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+        let ScalarFunctionArgs {
+            args, return_field, ..
+        } = args;
         let args = ColumnarValue::values_to_arrays(&args)?;
         let [arg] = args.as_slice() else {
             return exec_err!(
@@ -203,7 +209,10 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        Ok(ColumnarValue::Array(Arc::new(out)))
+        super::cast_list_result(
+            ColumnarValue::Array(Arc::new(out)),
+            return_field.data_type(),
+        )
     }
 }
 

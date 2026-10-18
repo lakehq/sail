@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, plan_datafusion_err, plan_err};
+use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -17,6 +17,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::array::{cast_list_result, list_view_to_list_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
@@ -51,38 +52,31 @@ impl ScalarUDFImpl for SparkArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                let expr_type = arg_types
-                    .iter()
-                    .find(|f| !f.is_null())
-                    .cloned()
-                    .unwrap_or(DataType::Null);
-
-                Ok(DataType::List(Arc::new(Field::new_list_field(
-                    expr_type, true,
-                ))))
-            }
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
+        if args.arg_fields.is_empty() {
+            return Ok(Arc::new(Field::new(self.name(), empty_array_type(), false)));
+        }
+        let element_type = args
             .arg_fields
             .iter()
             .map(|f| f.data_type())
+            .find(|data_type| !data_type.is_null())
             .cloned()
-            .collect::<Vec<_>>();
+            .unwrap_or(DataType::Null);
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
-        let return_type = match self.return_type(&data_types)? {
-            DataType::List(field) => DataType::List(Arc::new(
-                field.as_ref().clone().with_nullable(contains_null),
-            )),
-            data_type => data_type,
-        };
-        Ok(Arc::new(Field::new(self.name(), return_type, false)))
+        let return_type =
+            DataType::List(Arc::new(Field::new_list_field(element_type, contains_null)));
+        Ok(Arc::new(Field::new(
+            self.name(),
+            list_view_to_list_type(&return_type),
+            false,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -96,7 +90,7 @@ impl ScalarUDFImpl for SparkArray {
         let func = make_scalar_function(move |arrays| {
             make_array_inner_with_nullable(arrays, value_nullable)
         });
-        func(args.as_slice())
+        cast_list_result(func(args.as_slice())?, return_field.data_type())
     }
 
     fn aliases(&self) -> &[String] {
