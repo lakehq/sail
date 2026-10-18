@@ -117,11 +117,12 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         // The element type of the result is the lambda body's return type, not
         // the input element type — this is what distinguishes `transform` (map)
         // from `filter` (which keeps the input element type).
-        let field = Arc::new(Field::new(
-            Field::LIST_FIELD_DEFAULT_NAME,
-            lambda.data_type().clone(),
-            lambda.is_nullable(),
-        ));
+        let field = Arc::new(
+            lambda
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
+        );
 
         let return_type = match list.data_type() {
             DataType::List(_) => DataType::List(field),
@@ -220,6 +221,41 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
 
     use super::*;
+
+    #[test]
+    fn transform_preserves_lambda_field_metadata() -> Result<()> {
+        let lambda = Arc::new(
+            Field::new("body", DataType::Int64, false)
+                .with_metadata(HashMap::from([("logical_type".into(), "lambda".into())])),
+        );
+        let input = Arc::new(Field::new("input", DataType::Int32, true));
+        for data_type in [
+            DataType::List(Arc::clone(&input)),
+            DataType::LargeList(input),
+        ] {
+            let result =
+                SparkArrayTransform::new().return_field_from_args(HigherOrderReturnFieldArgs {
+                    arg_fields: &[
+                        ValueOrLambda::Value(Arc::new(Field::new("array", data_type, true))),
+                        ValueOrLambda::Lambda(Arc::clone(&lambda)),
+                    ],
+                    scalar_arguments: &[None, None],
+                })?;
+            let (DataType::List(element) | DataType::LargeList(element)) = result.data_type()
+            else {
+                return datafusion_common::internal_err!("expected a list");
+            };
+            assert_eq!(
+                element.as_ref(),
+                &lambda
+                    .as_ref()
+                    .clone()
+                    .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+            );
+            assert!(result.is_nullable());
+        }
+        Ok(())
+    }
 
     fn create_i32_list(
         values: impl Into<Int32Array>,

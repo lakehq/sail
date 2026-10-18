@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray, make_array,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
+    OffsetSizeTrait, StructArray, make_array,
 };
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
@@ -44,6 +45,8 @@ impl ArrayStructField {
         match data_type {
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _) => Ok(field),
             _ => exec_err!("array_struct_field requires a list, got {data_type}"),
         }
@@ -75,6 +78,8 @@ impl ArrayStructField {
         match data_type {
             DataType::List(_) => Ok(DataType::List(field)),
             DataType::LargeList(_) => Ok(DataType::LargeList(field)),
+            DataType::ListView(_) => Ok(DataType::ListView(field)),
+            DataType::LargeListView(_) => Ok(DataType::LargeListView(field)),
             DataType::FixedSizeList(_, size) => Ok(DataType::FixedSizeList(field, *size)),
             _ => unreachable!("list_field accepted only list data types"),
         }
@@ -106,6 +111,21 @@ impl ArrayStructField {
         Ok(Arc::new(GenericListArray::<O>::try_new(
             Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             array.offsets().clone(),
+            values,
+            array.nulls().cloned(),
+        )?))
+    }
+
+    fn project_list_view<O: OffsetSizeTrait>(
+        array: &GenericListViewArray<O>,
+        field_name: &str,
+    ) -> Result<ArrayRef> {
+        let list_field = Self::list_field(array.data_type())?;
+        let (values, child) = Self::struct_values(array.values(), field_name)?;
+        Ok(Arc::new(GenericListViewArray::<O>::try_new(
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
+            array.offsets().clone(),
+            array.sizes().clone(),
             values,
             array.nulls().cloned(),
         )?))
@@ -177,6 +197,12 @@ impl ScalarUDFImpl for ArrayStructField {
         let out = match array.data_type() {
             DataType::List(_) => Self::project_list(as_list_array(array)?, field_name)?,
             DataType::LargeList(_) => Self::project_list(as_large_list_array(array)?, field_name)?,
+            DataType::ListView(_) => {
+                Self::project_list_view(array.as_list_view::<i32>(), field_name)?
+            }
+            DataType::LargeListView(_) => {
+                Self::project_list_view(array.as_list_view::<i64>(), field_name)?
+            }
             DataType::FixedSizeList(_, size) => {
                 let Some(array) = array.as_any().downcast_ref::<FixedSizeListArray>() else {
                     return exec_err!(
