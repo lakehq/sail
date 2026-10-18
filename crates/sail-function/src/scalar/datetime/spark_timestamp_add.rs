@@ -11,7 +11,7 @@ use datafusion::arrow::datatypes::{
     TimestampMicrosecondType,
 };
 use datafusion::arrow::error::ArrowError;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
@@ -67,27 +67,30 @@ impl ScalarUDFImpl for SparkTimestampAdd {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if self.subtract_ansi.is_some() && arg_types.len() == 3 {
-            self.coerce_types(arg_types)?;
-            return Ok(DataType::Int64);
-        }
-        arg_types
-            .first()
-            .cloned()
-            .ok_or_else(|| exec_datafusion_err!("timestamp addition requires a timestamp"))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = if self.subtract_ansi.is_some() && arg_types.len() == 3 {
+            self.coerce_types(&arg_types)?;
+            DataType::Int64
+        } else {
+            arg_types
+                .first()
+                .cloned()
+                .ok_or_else(|| exec_datafusion_err!("timestamp addition requires a timestamp"))?
+        };
         Ok(Arc::new(Field::new(
             self.name(),
-            self.return_type(
-                &args
-                    .arg_fields
-                    .iter()
-                    .map(|field| field.data_type().clone())
-                    .collect::<Vec<_>>(),
-            )?,
+            data_type,
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }

@@ -42,16 +42,15 @@ impl ScalarUDFImpl for TimestampNow {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            *self.time_unit(),
-            Some(self.session_timezone().into()),
-        ))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
-            self.return_type(&[])?,
+            DataType::Timestamp(*self.time_unit(), Some(self.session_timezone().into())),
             matches!(self.time_unit(), TimeUnit::Nanosecond),
         )))
     }

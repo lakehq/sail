@@ -7,7 +7,7 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -35,8 +35,10 @@ impl ScalarUDFImpl for SparkToLocalTime {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -258,14 +260,10 @@ impl ScalarUDFImpl for ConvertTz {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [_, _, ts] = arg_types else {
-            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
-        };
-        match ts {
-            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
-            _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -274,7 +272,13 @@ impl ScalarUDFImpl for ConvertTz {
             .iter()
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
+        let [_, _, ts] = arg_types.as_slice() else {
+            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
+        };
+        let data_type = match ts {
+            DataType::Timestamp(unit, None) => DataType::Timestamp(*unit, None),
+            _ => return plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
+        };
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }

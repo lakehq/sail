@@ -10,7 +10,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::{NativeType, logical_int32};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_err, plan_datafusion_err, plan_err,
+    DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -101,7 +101,9 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Interval(MonthDayNano))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

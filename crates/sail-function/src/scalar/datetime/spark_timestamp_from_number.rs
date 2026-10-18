@@ -10,8 +10,8 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext, SimplifyContextBuilder};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility, cast, col, lit, try_cast, when,
+    ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility, cast, col, lit, try_cast, when,
 };
 use datafusion_functions::math::expr_fn::trunc;
 use datafusion_physical_expr::create_physical_expr;
@@ -66,6 +66,10 @@ impl SparkTimestampFromNumber {
             // A UDF binds the input once before range and precision checks reuse it.
             return Ok(ScalarUDF::from(Self::new(self.mode)).call(vec![value]));
         }
+        let return_field = self.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[value.to_field(schema)?.1],
+            scalar_arguments: &[value.as_literal()],
+        })?;
         let micros = match self.mode {
             TimestampNumberMode::Micros => value,
             TimestampNumberMode::Millis => self.checked_scale(value, &data_type, 1_000),
@@ -84,7 +88,7 @@ impl SparkTimestampFromNumber {
                 _ => cast(value, DataType::Int64) * lit(1_000_000_i64),
             },
         };
-        let expression = cast(micros, self.return_type(&[])?);
+        let expression = cast(micros, return_field.data_type().clone());
         ExprSimplifier::new(info).coerce(expression, schema)
     }
 
@@ -231,10 +235,9 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some("UTC".into()),
-        ))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -245,7 +248,7 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
         });
         Ok(Arc::new(Field::new(
             self.name(),
-            self.return_type(&[])?,
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             nullable,
         )))
     }
@@ -255,7 +258,7 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let data_type = self.return_type(&[])?;
+        let data_type = args.return_field.data_type().clone();
         make_scalar_function(|values| {
             let [value] = values else {
                 return internal_err!("numeric timestamp conversion requires one argument");

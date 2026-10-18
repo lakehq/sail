@@ -3,9 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, PrimitiveBuilder, StringArrayType, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Time64MicrosecondType, TimeUnit};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::scalar::datetime::utils::invalid_time_unit_err;
 
@@ -51,7 +53,17 @@ impl ScalarUDFImpl for SparkTimeTrunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Time64(TimeUnit::Microsecond))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )))
     }
 
     fn is_strict(&self) -> bool {

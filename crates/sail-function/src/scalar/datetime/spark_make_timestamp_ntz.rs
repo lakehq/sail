@@ -9,7 +9,7 @@ use datafusion_common::cast::{
     as_date32_array, as_int32_array, as_int64_array, as_time64_microsecond_array, as_uint32_array,
 };
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -85,7 +85,9 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -110,7 +112,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 });
         Ok(Arc::new(Field::new(
             self.name(),
-            self.return_type(&[])?,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
             // Spark's date/time NTZ overload declares a nullable result independently of its inputs.
             args.arg_fields.len() == 2
                 || self.is_try

@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::kernels::numeric::neg;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -37,17 +38,23 @@ impl ScalarUDFImpl for NegateDuration {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg = &args.arg_fields[0];
-        Ok(Arc::new(Field::new(
-            self.name(),
-            arg.data_type().clone(),
-            arg.is_nullable(),
-        )))
+        let mut field = Field::new(self.name(), arg.data_type().clone(), arg.is_nullable());
+        // Negation preserves the interval type, not arbitrary column metadata.
+        if let Some(interval) = arg.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY) {
+            field.metadata_mut().insert(
+                SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                interval.clone(),
+            );
+        }
+        Ok(Arc::new(field))
     }
 
     fn is_strict(&self) -> bool {

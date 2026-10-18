@@ -6,10 +6,12 @@ use std::sync::Arc;
 use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, new_null_array};
-use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common::utils::datetime::timezone_alias_to_timezone;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -432,10 +434,17 @@ impl ScalarUDFImpl for SparkTimestamp {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            self.timezone.clone(),
-        ))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
+            true,
+        )))
     }
 
     fn is_strict(&self) -> bool {

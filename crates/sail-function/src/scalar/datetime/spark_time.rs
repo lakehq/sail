@@ -5,9 +5,11 @@ use std::sync::Arc;
 use chrono::{NaiveTime, Timelike};
 use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{Result, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion_common::{Result, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -199,7 +201,17 @@ impl ScalarUDFImpl for SparkTime {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Time64(TimeUnit::Microsecond))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
