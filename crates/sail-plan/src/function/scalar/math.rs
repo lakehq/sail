@@ -575,6 +575,8 @@ fn log2(expr: Expr) -> Expr {
 //  lockfile via `bigdecimal`) is a candidate, and Spark's own formulas are needed for `atanh`,
 //  `asinh`, `acosh` and `cot`. See the `@sail-bug` rows of `math/unary_double_math.feature`.
 //  `log2` keeps the exact DataFusion result on purpose (`@sail-only` rows in the same file).
+// TODO: `positive_or_null` repeats the argument inside a CASE, so `ln`, `log10` and `log2` evaluate a
+//  volatile argument twice, and `log1p` is `ln(x + 1)`. Both need a Sail UDF. See the `@sail-bug` rows.
 // TODO: A string argument still goes through Arrow's string to DOUBLE cast: no `[CAST_INVALID_INPUT]`
 //  class under ANSI and no Java grammar (`'1d'`, `'0x1p3'`).
 /// Spark's `UnaryMathExpression` family: `inputTypes = Seq(DoubleType)` with

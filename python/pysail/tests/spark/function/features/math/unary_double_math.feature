@@ -1142,3 +1142,210 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | 536870912                     | 29.0   |
         | CAST(2147483648 AS DOUBLE)    | 31.0   |
         | 8                             | 3.0    |
+
+  Rule: Every function names itself as Spark does in the mismatch message
+
+    Scenario Outline: <fn> of a BOOLEAN names <shown>
+      When query
+        """
+        SELECT <fn>(true) AS result
+        """
+      Then query error Cannot resolve "<shown>\(true\)" due to data type mismatch
+
+      Examples:
+        | fn      | shown   |
+        | acos    | ACOS    |
+        | acosh   | ACOSH   |
+        | asin    | ASIN    |
+        | asinh   | ASINH   |
+        | atan    | ATAN    |
+        | atanh   | ATANH   |
+        | cbrt    | CBRT    |
+        | cos     | COS     |
+        | cosh    | COSH    |
+        | cot     | COT     |
+        | csc     | CSC     |
+        | degrees | DEGREES |
+        | exp     | EXP     |
+        | expm1   | EXPM1   |
+        | ln      | ln      |
+        | log10   | LOG10   |
+        | log1p   | LOG1P   |
+        | log2    | LOG2    |
+        | radians | RADIANS |
+        | rint    | rint    |
+        | sec     | SEC     |
+        | sin     | SIN     |
+        | sinh    | SINH    |
+        | sqrt    | SQRT    |
+        | tan     | TAN     |
+        | tanh    | TANH    |
+
+  Rule: The type in the mismatch message is rendered as Spark renders it
+
+    Scenario Outline: sin of a <type> names the type
+      When query
+        """
+        SELECT sin(<value>) AS result
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\].*has the type "<shown>"
+
+      Examples:
+        | type      | value                          | shown        |
+        | ARRAY     | array(1.0D)                    | ARRAY<DOUBLE> |
+        | DATE      | DATE'2024-01-02'               | DATE         |
+        | TIMESTAMP | TIMESTAMP'2024-01-02 03:04:05' | TIMESTAMP    |
+        | BINARY    | X'01'                          | BINARY       |
+
+  Rule: A string under ANSI=true
+
+    Scenario Outline: <call> of a valid string is <result>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | call           | result             |
+        | sin('0.5')     | 0.479425538604203  |
+        | sin(' 1 ')     | 0.8414709848078965 |
+        | sqrt('4')      | 2.0                |
+        | sqrt(' 4 ')    | 2.0                |
+        | rint('2.5')    | 2.0                |
+        | rint(' 3.5 ')  | 4.0                |
+        | ln('1')        | 0.0                |
+        | acos('1')      | 0.0                |
+
+    # The class is Spark's `CAST_INVALID_INPUT`; Sail still raises Arrow's own text, which the
+    # `@sail-bug` scenario above would replace. This one pins that a malformed string RAISES.
+    Scenario Outline: <call> of a malformed string raises
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query error (CAST_INVALID_INPUT|Cannot cast string)
+
+      Examples:
+        | call        |
+        | sin('abc')  |
+        | sqrt('')    |
+        | rint('x')   |
+
+  Rule: A volatile argument is evaluated once
+
+    # TODO: migrate ln, log10 and log2 to a Sail UDF that evaluates the argument once.
+    # `positive_or_null` repeats the argument inside a CASE, so for `rand()` the draw that is tested
+    # and the draw that is computed differ and about half of the rows are NaN or -Infinity.
+    # Spark evaluates the child once. Pre-existing on `main`.
+    @sail-bug
+    Scenario Outline: <fn> of a volatile argument is NULL or finite
+      When query
+        """
+        SELECT count(*) AS bad
+        FROM (SELECT <fn>(rand() - 0.5) AS r FROM range(20000))
+        WHERE r IS NOT NULL AND (isnan(r) OR r = double('infinity') OR r = double('-infinity'))
+        """
+      Then query result
+        | bad |
+        | 0   |
+
+      Examples:
+        | fn    |
+        | ln    |
+        | log10 |
+        | log2  |
+
+  Rule: The log family keeps what Spark's kernel keeps
+
+    # TODO: migrate log1p to a Sail UDF built on `ln_1p`. It is `ln(x + 1)`, which loses the digits
+    # of a small `x` and the sign of -0.0. Pre-existing on `main`.
+    @sail-bug
+    Scenario Outline: log1p(<input>) = <result>
+      When query
+        """
+        SELECT log1p(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | input                 | result                |
+        | 1e-20D                | 1.0E-20               |
+        | 1e-10D                | 9.999999999500001E-11 |
+        | -CAST(0.0 AS DOUBLE)  | -0.0                  |
+
+    # TODO: migrate the log family to a Sail UDF. `positive_or_null` tests `x > 0`, which is false for
+    # a NaN with the sign bit set, so Sail returns NULL where Spark returns NaN. Pre-existing on `main`.
+    @sail-bug
+    Scenario Outline: <fn> of a negative NaN is NaN
+      When query
+        """
+        SELECT <fn>(-CAST('NaN' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+      Examples:
+        | fn    |
+        | ln    |
+        | log10 |
+        | log2  |
+        | log1p |
+
+  Rule: The mismatch message renders compound types as Spark does
+
+    # TODO: render the type with Spark's `DataType.sql` instead of the simple string in upper case.
+    # Sail drops the space after the comma, upper-cases field names and drops NOT NULL, and an
+    # interval loses its fields on the way to Arrow. Pre-existing gap of the plan formatter.
+    @sail-bug
+    Scenario Outline: sin of a <type> names the compound type
+      When query
+        """
+        SELECT sin(<value>) AS result
+        """
+      Then query error has the type "<shown>"
+
+      Examples:
+        | type              | value                           | shown                 |
+        | MAP               | map('k', 0.5D)                  | MAP<STRING, DOUBLE>   |
+        | STRUCT            | named_struct('x', 0.5D)         | STRUCT<x: DOUBLE NOT NULL> |
+        | ARRAY OF MAP      | array(map('k', 1))              | ARRAY<MAP<STRING, INT>> |
+        | YEAR INTERVAL     | INTERVAL '1' YEAR               | INTERVAL YEAR         |
+        | DAY INTERVAL      | INTERVAL '1' DAY                | INTERVAL DAY          |
+
+    @spark-4
+    @sail-bug
+    Scenario: sin of a VARIANT names the type
+      When query
+        """
+        SELECT sin(parse_json('1')) AS result
+        """
+      Then query error has the type "VARIANT"
+
+  Rule: A column is named the way Spark names it
+
+    # TODO: the plan formatter keeps the case the caller typed for ln and rint (`LN(1)`), and Spark
+    # always prints them in lower case. Pre-existing on `main`.
+    @sail-bug
+    Scenario Outline: <call> names its column <column>
+      When query
+        """
+        SELECT <call>
+        """
+      Then query schema
+        """
+        root
+         |-- <column>: double (nullable = true)
+        """
+
+      Examples:
+        | call    | column  |
+        | LN(1)   | ln(1)   |
+        | RINT(1) | rint(1) |
