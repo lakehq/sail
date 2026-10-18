@@ -1,7 +1,9 @@
 Feature: unary DOUBLE math functions (acos and siblings)
 
   # Spark's UnaryMathExpression family: ImplicitCastInputTypes(DoubleType), always nullable DOUBLE.
-  # Expected values come from the Spark JVM (4.2.0).
+  # Expected values come from the Spark JVM (4.2.0); the `acosh` and `asinh` digits are 4.2's, which
+  # rewrote both formulas. `signum`/`sign` (they also accept intervals), `ceil`/`floor` and the binary
+  # functions (`atan2`, `hypot`, `pow`, `log`) are not part of this family here.
 
   Rule: Argument count error carries Spark's class
 
@@ -934,10 +936,21 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | <result> |
 
       Examples:
-        | fn   | result    |
-        | asin | -0.0      |
-        | sin  | -0.0      |
-        | csc  | -Infinity |
+        | fn      | result    |
+        | asin    | -0.0      |
+        | asinh   | -0.0      |
+        | atan    | -0.0      |
+        | atanh   | -0.0      |
+        | cbrt    | -0.0      |
+        | cot     | -Infinity |
+        | csc     | -Infinity |
+        | degrees | -0.0      |
+        | radians | -0.0      |
+        | sec     | 1.0       |
+        | sin     | -0.0      |
+        | sinh    | -0.0      |
+        | tan     | -0.0      |
+        | tanh    | -0.0      |
 
   Rule: A typed NULL keeps its Spark type
 

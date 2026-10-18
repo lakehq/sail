@@ -460,26 +460,6 @@ fn positive(expr: Expr) -> Expr {
     expr
 }
 
-/// `Math.rint`: rounds half to even, where `round` rounds half away from zero. A tie is the only
-/// case where the two differ, and `2 * round(x / 2)` picks the even neighbour of a tie. The result
-/// is nullable like every `UnaryMathExpression` (`nullable = true`), whatever the argument is.
-fn rint(expr: Expr) -> Expr {
-    let is_tie = expr_fn::abs(expr.clone() - expr_fn::trunc(vec![expr.clone()])).eq(lit(0.5_f64));
-    let half_even = Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(
-            Box::new(is_tie),
-            Box::new(lit(2.0_f64) * expr_fn::round(vec![expr.clone() / lit(2.0_f64)])),
-        )],
-        else_expr: Some(Box::new(expr_fn::round(vec![expr.clone()]))),
-    });
-    Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(Box::new(expr.is_not_null()), Box::new(half_even))],
-        else_expr: None,
-    })
-}
-
 fn positive_or_null(expr: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
@@ -890,7 +870,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
-        ("rint", unary_double("rint", rint)),
+        ("rint", unary_double("rint", math_fn::rint)),
         ("round", F::custom(spark_round)),
         (
             "sec",
