@@ -4,7 +4,7 @@ use chrono::{Datelike, NaiveDate};
 use datafusion::arrow::array::{ArrayRef, AsArray, Int32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -44,8 +44,14 @@ impl ScalarUDFImpl for SparkYear {
         &self.signature
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

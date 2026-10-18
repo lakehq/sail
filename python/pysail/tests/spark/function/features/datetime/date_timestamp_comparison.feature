@@ -315,6 +315,7 @@ Feature: Date comparisons preserve Spark local-day boundaries
       | abs(r.id) = l.id |
       | date_add(r.d, CAST(l.id AS INT)) = DATE '2011-12-30' |
       | year(r.d) = 2011 + l.id |
+      | date_part('MONTH', r.d) = 12 + l.id |
       | last_day(r.d) = date_add(DATE '2011-12-31', CAST(l.id AS INT)) |
 
   Scenario Outline: Null accepting outer join filter keeps date comparisons dynamic for <filter>
@@ -334,6 +335,9 @@ Feature: Date comparisons preserve Spark local-day boundaries
       | filter |
       | r.id = 0 OR l.id = 1 |
       | coalesce(r.id,0) = 0 |
+      | year(r.d) = 2011 OR r.d IS NULL |
+      | date_part('MONTH', r.d) = 12 OR r.d IS NULL |
+      | last_day(r.d) = DATE '2011-12-31' OR r.d IS NULL |
 
   Scenario Outline: Date membership comparison preserves Spark <case> optimization
     Given config spark.sql.session.timeZone = Pacific/Apia

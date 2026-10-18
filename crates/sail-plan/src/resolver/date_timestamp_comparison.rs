@@ -21,11 +21,8 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::logical_expr::is_comparison_operator;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkStartOfDay;
-use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::math::random::Random;
 use sail_python_udf::udf::expr_contains_python_udf;
@@ -500,14 +497,7 @@ fn collect_null_intolerant_columns<'a>(expr: &'a Expr, columns: &mut Vec<&'a Col
             collect_null_intolerant_columns(&binary.left, columns);
             collect_null_intolerant_columns(&binary.right, columns);
         }
-        // Spark GetDateField/LastDay are null-intolerant; these Sail implementations
-        // do not expose DataFusion's optional strictness metadata.
-        Expr::ScalarFunction(function)
-            if function.func.is_strict()
-                || function.func.inner().is::<SparkYear>()
-                || function.func.inner().is::<SparkDatePart>()
-                || function.func.inner().is::<SparkLastDay>() =>
-        {
+        Expr::ScalarFunction(function) if function.func.is_strict() => {
             for arg in &function.args {
                 collect_null_intolerant_columns(arg, columns);
             }

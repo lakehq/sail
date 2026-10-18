@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::temporal_conversions::MICROSECONDS;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -160,8 +160,14 @@ impl ScalarUDFImpl for SparkDatePart {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn is_strict(&self) -> bool {
+        true
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
