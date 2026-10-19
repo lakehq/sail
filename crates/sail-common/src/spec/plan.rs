@@ -1384,7 +1384,31 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterIdentifierFields {
+        names: Vec<ObjectName>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(Expr, Option<String>)>,
+        drop: Option<Expr>,
+    },
+    SetWriteOrder {
+        order: Vec<SortOrder>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
+    RenameTable {
+        name: ObjectName,
+    },
     Unknown,
+    ReplaceColumns {
+        columns: Vec<super::ColumnChange>,
+    },
+    AlterColumns {
+        changes: Vec<super::ColumnChange>,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -1399,6 +1423,10 @@ pub enum AlterTableOperation {
     AlterColumnDefault {
         name: ObjectName,
         default: Option<String>,
+    },
+    DropCheckConstraint {
+        name: Identifier,
+        if_exists: bool,
     },
     AddCheckConstraint {
         name: Identifier,

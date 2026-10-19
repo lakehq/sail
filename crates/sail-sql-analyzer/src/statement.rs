@@ -14,16 +14,17 @@ use sail_sql_parser::ast::statement::{
     AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
-    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
-    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
-    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
-    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SetPropertyKeyValue, ShowFunctionScope,
-    ShowFunctionsClause, ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList,
-    Statement, TableColumnIdentityOption, TableColumnIdentityOptions, TimeZoneValue,
-    UpdateTableAlias, ViewColumn, ViewColumnList, ViewUsingClause,
+    ColumnDropList, ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause,
+    CreateTableClause, CreateViewClause, CreateViewDefinition, DeleteTableAlias,
+    DescribeFunctionName, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
+    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
+    SetPropertyKeyValue, ShowFunctionScope, ShowFunctionsClause, ShowFunctionsPattern, SortColumn,
+    SortColumnClause, SortColumnList, Statement, TableColumnIdentityOption,
+    TableColumnIdentityOptions, TimeZoneValue, UpdateTableAlias, ViewColumn, ViewColumnList,
+    ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -2389,30 +2390,45 @@ impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
     }
 }
 
-// TODO: implement the conversion properly for column-level ALTER TABLE operations
-fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
-    // TODO: implement the conversion properly
+fn from_ast_column_position(position: ColumnPosition) -> SqlResult<spec::ColumnPosition> {
+    match position {
+        ColumnPosition::First(_) => Ok(spec::ColumnPosition::First),
+        ColumnPosition::After(_, name) => {
+            let name: Vec<String> = from_ast_object_name(name)?.into();
+            let [name] = name.as_slice() else {
+                return Err(SqlError::invalid("AFTER requires a sibling column name"));
+            };
+            Ok(spec::ColumnPosition::After(name.clone()))
+        }
+    }
+}
+
+fn from_ast_column_alteration_list(
+    items: ColumnAlterationList,
+) -> SqlResult<Vec<spec::ColumnChange>> {
     let columns = match items {
-        ColumnAlterationList::Delimited {
-            left: _,
-            columns,
-            right: _,
-        } => columns,
-        ColumnAlterationList::NotDelimited { columns } => columns,
+        ColumnAlterationList::Delimited { columns, .. }
+        | ColumnAlterationList::NotDelimited { columns } => columns,
     };
-    let _ = columns
+    columns
         .into_items()
-        .map(|x| {
+        .map(|column| {
             let ColumnAlteration {
-                name: _,
-                data_type: _,
+                name,
+                data_type,
                 options,
-            } = x;
-            let _: ColumnAlterationOptions = options.try_into()?;
-            Ok(())
+            } = column;
+            let options: ColumnAlterationOptions = options.try_into()?;
+            Ok(spec::ColumnChange::Add {
+                path: from_ast_object_name(name)?.into(),
+                data_type: from_ast_data_type(data_type)?,
+                nullable: !options.not_null,
+                comment: options.comment.map(from_ast_string).transpose()?,
+                default: options.default.map(|expr| expr.text().trim().to_string()),
+                position: options.position.map(from_ast_column_position).transpose()?,
+            })
         })
-        .collect::<SqlResult<Vec<_>>>()?;
-    Ok(())
+        .collect()
 }
 
 fn from_ast_merge_optional_condition<T>(
@@ -2453,6 +2469,98 @@ fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
     match operation {
+        AlterTableOperation::SetIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: false,
+            })
+        }
+        AlterTableOperation::DropIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: true,
+            })
+        }
+        AlterTableOperation::AddPartitionField {
+            transform, name, ..
+        } => Ok(spec::AlterTableOperation::AlterPartitionSpec {
+            add: Some((
+                from_ast_expression(transform)?,
+                name.map(|(_, name)| name.value),
+            )),
+            drop: None,
+        }),
+        AlterTableOperation::DropPartitionField { transform, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: None,
+                drop: Some(from_ast_expression(transform)?),
+            })
+        }
+        AlterTableOperation::ReplacePartitionField { old, new, name, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: Some((from_ast_expression(*new)?, name.map(|(_, name)| name.value))),
+                drop: Some(from_ast_expression(old)?),
+            })
+        }
+        AlterTableOperation::Write { specifications, .. } => {
+            use sail_sql_parser::ast::statement::{TableWriteOrderList, TableWriteSpec};
+            let mut distributed = false;
+            let mut order = None;
+            let mut distribution = None;
+            for specification in specifications {
+                match specification {
+                    TableWriteSpec::Distributed { .. } => {
+                        if distributed {
+                            return Err(SqlError::invalid("Duplicate write distribution clause"));
+                        }
+                        distributed = true;
+                    }
+                    TableWriteSpec::Ordered {
+                        locally, columns, ..
+                    } => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        let columns = match columns {
+                            TableWriteOrderList::Delimited { columns, .. }
+                            | TableWriteOrderList::NotDelimited { columns } => columns,
+                        };
+                        order = Some(
+                            columns
+                                .into_items()
+                                .map(crate::expression::from_ast_order_by)
+                                .collect::<SqlResult<Vec<_>>>()?,
+                        );
+                        distribution = locally.is_none().then(|| "range".to_string());
+                    }
+                    TableWriteSpec::Unordered(_) => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        order = Some(vec![]);
+                        distribution = Some("none".to_string());
+                    }
+                }
+            }
+            if !distributed && order.is_none() {
+                return Err(SqlError::invalid(
+                    "Missing write ordering or distribution clause",
+                ));
+            }
+            if distributed {
+                distribution = Some("hash".into());
+            }
+            Ok(spec::AlterTableOperation::SetWriteOrder {
+                order: order.unwrap_or_default(),
+                distribution,
+            })
+        }
         AlterTableOperation::SetTableProperties { properties, .. } => {
             let properties = from_ast_property_list(properties)?;
             Ok(spec::AlterTableOperation::SetTableProperties { properties })
@@ -2504,22 +2612,100 @@ fn from_ast_alter_table_operation(
                 },
             })
         }
-        AlterTableOperation::RenameTable { .. }
-        | AlterTableOperation::RenamePartition { .. }
-        | AlterTableOperation::DropColumns { .. }
-        | AlterTableOperation::RenameColumn { .. }
+        AlterTableOperation::DropConstraint {
+            name, if_exists, ..
+        } => Ok(spec::AlterTableOperation::DropCheckConstraint {
+            name: name.value.into(),
+            if_exists: if_exists.is_some(),
+        }),
+        AlterTableOperation::RenameTable { name, .. } => {
+            Ok(spec::AlterTableOperation::RenameTable {
+                name: from_ast_object_name(name)?,
+            })
+        }
+        AlterTableOperation::SetLocation {
+            partition, value, ..
+        } => {
+            if partition.is_some() {
+                return Err(SqlError::unsupported("ALTER TABLE PARTITION SET LOCATION"));
+            }
+            Ok(spec::AlterTableOperation::SetLocation {
+                location: from_ast_string(value)?,
+            })
+        }
+        AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
-        | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AddColumns { items, .. }
-        | AlterTableOperation::ReplaceColumns { items, .. } => {
-            // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
-            // clauses) even though we do not yet translate these operations.
-            from_ast_column_alteration_list(items)?;
-            Ok(spec::AlterTableOperation::Unknown)
+        AlterTableOperation::RenameColumn { old, new, .. } => {
+            let names: Vec<String> = from_ast_object_name(new)?.into();
+            let [name] = names.as_slice() else {
+                return Err(SqlError::invalid(
+                    "RENAME COLUMN requires a single new name",
+                ));
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![spec::ColumnChange::Rename {
+                    path: from_ast_object_name(old)?.into(),
+                    name: name.clone(),
+                }],
+            })
+        }
+        AlterTableOperation::DropColumns {
+            names, if_exists, ..
+        } => {
+            let columns = match names {
+                ColumnDropList::Delimited { columns, .. }
+                | ColumnDropList::NotDelimited { columns } => columns,
+            };
+            let changes = columns
+                .into_items()
+                .map(|name| {
+                    Ok(spec::ColumnChange::Drop {
+                        path: from_ast_object_name(name)?.into(),
+                        if_exists: if_exists.is_some(),
+                    })
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::AlterTableOperation::AlterColumns { changes })
+        }
+        AlterTableOperation::AlterColumn {
+            name, operation, ..
+        } => {
+            let path = from_ast_object_name(name)?.into();
+            let change = match operation {
+                AlterColumnOperation::Comment(_, value) => spec::ColumnChange::Comment {
+                    path,
+                    comment: from_ast_string(value)?,
+                },
+                AlterColumnOperation::SetNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: false,
+                },
+                AlterColumnOperation::DropNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: true,
+                },
+                AlterColumnOperation::Position(position) => spec::ColumnChange::Position {
+                    path,
+                    position: from_ast_column_position(position)?,
+                },
+                _ => return Err(SqlError::invalid("Unexpected ALTER COLUMN operation")),
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![change],
+            })
+        }
+        AlterTableOperation::AddColumns { items, .. } => {
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: from_ast_column_alteration_list(items)?,
+            })
+        }
+        AlterTableOperation::ReplaceColumns { items, .. } => {
+            Ok(spec::AlterTableOperation::ReplaceColumns {
+                columns: from_ast_column_alteration_list(items)?,
+            })
         }
     }
 }

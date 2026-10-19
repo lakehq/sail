@@ -374,7 +374,9 @@ impl LakeSource for IcebergLakeSource {
 
         let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
         if let Some((_, metadata)) = existing_metadata.as_ref() {
-            partition_spec = partition_spec.assign_ids(metadata);
+            partition_spec = partition_spec
+                .assign_ids(metadata)
+                .map_err(DataFusionError::Plan)?;
         }
         let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
         let store_ctx = StoreContext::new(object_store, &table_url)?;
@@ -440,12 +442,16 @@ impl LakeSource for IcebergLakeSource {
                 },
             );
         }
-        let schema = self
+        if matches!(operation, LakeSourceAlterTableOperation::SetLocation { .. }) {
+            return not_impl_err!("SET LOCATION is not supported for path-based Iceberg tables");
+        }
+        let (schema, partition_by) = self
             .alter_path_table(ctx.runtime_env(), path, &operation)
             .await?;
         Ok(
             sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
                 schema: Some(schema),
+                partition_by: Some(partition_by),
                 ..Default::default()
             },
         )
@@ -797,7 +803,7 @@ impl IcebergLakeSource {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: &LakeSourceAlterTableOperation,
-    ) -> Result<SchemaRef> {
+    ) -> Result<(SchemaRef, Vec<CatalogPartitionField>)> {
         let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
         let object_store = runtime_env
             .object_store_registry
@@ -923,7 +929,7 @@ impl IcebergLakeSource {
 
             write_version_hint(&store_ctx.prefixed, &next_version.to_string()).await;
 
-            return Ok(schema);
+            return Ok((schema, partition_columns_from_table_metadata(&table_meta)?));
         }
     }
 
@@ -1176,7 +1182,7 @@ fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Resul
     Ok(ArrowSchema::new(fields))
 }
 
-fn create_table_partition_spec(
+pub(crate) fn create_table_partition_spec(
     iceberg_schema: &Schema,
     partition_by: &[CatalogPartitionField],
 ) -> Result<PartitionSpec> {
