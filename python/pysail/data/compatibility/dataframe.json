@@ -12,7 +12,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "approxQuantile",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",

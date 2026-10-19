@@ -13,11 +13,14 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
-    try_cast,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, cast, col, expr, lit,
+    not, or, try_cast,
 };
+use datafusion_functions::expr_fn::{coalesce, isnan};
+use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
@@ -540,6 +543,80 @@ impl PlanResolver<'_> {
         .alias(state.register_field_name("corr"));
         Ok(LogicalPlanBuilder::from(input)
             .aggregate(Vec::<Expr>::new(), vec![corr])?
+            .build()?)
+    }
+
+    pub(super) async fn resolve_query_stat_approx_quantile(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        probabilities: Vec<f64>,
+        relative_error: f64,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if relative_error.is_nan() || relative_error < 0.0 {
+            return Err(PlanError::invalid(format!(
+                "Relative Error must be non-negative but got {relative_error}"
+            )));
+        }
+        if let Some(p) = probabilities.iter().find(|p| !(0.0..=1.0).contains(*p)) {
+            return Err(PlanError::invalid(format!(
+                "percentile should be in the range [0.0, 1.0], but got {p}"
+            )));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let probabilities = lit(ScalarValue::List(ScalarValue::new_list_nullable(
+            &probabilities
+                .iter()
+                .map(|p| ScalarValue::Float64(Some(*p)))
+                .collect::<Vec<_>>(),
+            &DataType::Float64,
+        )));
+        let mut aggregates = vec![];
+        for column in &columns {
+            let column = self.resolve_one_column(input.schema(), column.as_ref(), state)?;
+            let data_type = input.schema().field_from_column(&column)?.data_type();
+            if !data_type.is_numeric() {
+                return Err(PlanError::invalid(format!(
+                    "Quantile calculation for column {} with data type {data_type} is not supported",
+                    column.name()
+                )));
+            }
+            // Spark ignores null and NaN values. The exact quantile is used for any
+            // relative error, since it is always within the error bound.
+            let value = cast(Expr::Column(column.clone()), DataType::Float64);
+            let quantile = Expr::AggregateFunction(expr::AggregateFunction {
+                func: percentile_disc_udaf(self.config.ansi_mode),
+                params: AggregateFunctionParams {
+                    args: vec![value.clone(), probabilities.clone()],
+                    distinct: false,
+                    filter: Some(Box::new(not(isnan(value.clone())))),
+                    order_by: vec![value.sort(true, false)],
+                    null_treatment: None,
+                },
+            })
+            .alias(state.register_field_name(format!("approx_quantile_{}", column.name())));
+            aggregates.push(quantile);
+        }
+        let plan = LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), aggregates)?
+            .build()?;
+        // Spark returns an empty array for a column without any values.
+        let empty = lit(ScalarValue::List(ScalarValue::new_list_nullable(
+            &[],
+            &DataType::Float64,
+        )));
+        let quantiles = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|column| coalesce(vec![Expr::Column(column), empty.clone()]))
+            .collect();
+        Ok(LogicalPlanBuilder::from(plan)
+            .project(vec![
+                nested_fn::make_array(quantiles)
+                    .alias(state.register_field_name("approx_quantile")),
+            ])?
             .build()?)
     }
 
