@@ -6,10 +6,32 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::expr::{Cast, HigherOrderFunction, Lambda};
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion_functions::{core, math};
+use datafusion_functions_nested as nested;
+use datafusion_spark::function::array::shuffle::SparkShuffle;
+use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
+use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_common::spec;
+use sail_function::scalar::array::array_intersect::ArrayIntersect;
+use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
+use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
+use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::collection::spark_concat::SparkConcat;
+use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
+use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
+use sail_function::scalar::math::spark_abs::SparkAbs;
+use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::spark_struct_cast::SparkStructCast;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::PlanResult;
 use crate::resolver::state::PlanResolverState;
@@ -310,73 +332,125 @@ fn expression_shape(
         Expr::ScalarFunction(function) => {
             let args = &function.args;
             let first = || args.first().map(infer).unwrap_or(S::NonInterval);
-            match function.func.name() {
-                "spark_abs" | "abs" | "negate_duration" | "negative" => first(),
-                "make_dt_interval" => S::day_time_default(),
-                "coalesce" | "greatest" | "least" => common(args),
-                "struct" => S::Struct(args.iter().map(infer).collect()),
-                "named_struct" => S::Struct(args.iter().skip(1).step_by(2).map(infer).collect()),
-                "get_field" => match first() {
+            // DataFusion keeps some implementation types private; use their canonical UDFs.
+            match function.func.inner().as_ref() {
+                f if f.is::<SparkAbs>()
+                    || f.is::<math::abs::AbsFunc>()
+                    || f.is::<NegateDuration>()
+                    || f.is::<SparkNegative>() =>
+                {
+                    first()
+                }
+                f if f.is::<SparkMakeDtInterval>() => S::day_time_default(),
+                f if f.is::<core::coalesce::CoalesceFunc>()
+                    || f.is::<core::greatest::GreatestFunc>()
+                    || f.is::<core::least::LeastFunc>() =>
+                {
+                    common(args)
+                }
+                f if f.is::<StructFunction>() || f.is::<core::r#struct::StructFunc>() => {
+                    S::Struct(args.iter().map(infer).collect())
+                }
+                f if f.is::<core::named_struct::NamedStructFunc>() => {
+                    S::Struct(args.iter().skip(1).step_by(2).map(infer).collect())
+                }
+                f if f.is::<core::getfield::GetFieldFunc>() => match first() {
                     S::Struct(fields) => struct_field_index(args, schema, false)
                         .and_then(|i| fields.get(i).cloned())
                         .unwrap_or_else(fallback),
                     S::Map(_, value) => *value,
                     _ => fallback(),
                 },
-                "spark_array" | "make_array" => S::List(Box::new(common(args))),
-                "arrays_zip" => S::List(Box::new(S::Struct(
-                    args.iter().map(|arg| infer(arg).element()).collect(),
-                ))),
-                "array_element" | "array_min" | "array_max" => first().element(),
-                "array_append" => S::List(Box::new(
+                f if f.is::<SparkArray>() || f.is::<nested::make_array::MakeArray>() => {
+                    S::List(Box::new(common(args)))
+                }
+                f if f.is::<ArraysZip>() || f.is::<nested::arrays_zip::ArraysZip>() => {
+                    S::List(Box::new(S::Struct(
+                        args.iter().map(|arg| infer(arg).element()).collect(),
+                    )))
+                }
+                f if f.is::<nested::extract::ArrayElement>()
+                    || f.is::<ArrayMin>()
+                    || f.is::<ArrayMax>()
+                    || f.is::<nested::min_max::ArrayMax>()
+                    || function.func == nested::min_max::array_min_udf() =>
+                {
+                    first().element()
+                }
+                f if f.is::<nested::concat::ArrayAppend>() => S::List(Box::new(
                     first()
                         .element()
                         .merge(args.get(1).map(infer).unwrap_or(S::Null)),
                 )),
-                "array_prepend" => S::List(Box::new(
+                f if f.is::<nested::concat::ArrayPrepend>() => S::List(Box::new(
                     args.get(1)
                         .map(infer)
                         .unwrap_or(S::Null)
                         .element()
                         .merge(first()),
                 )),
-                "array_concat" | "spark_concat" | "array_union" | "array_intersect"
-                | "array_except" => common(args),
-                "array_slice"
-                | "array_sort"
-                | "array_distinct"
-                | "spark_array_compact"
-                | "array_remove_all"
-                | "spark_reverse"
-                | "shuffle" => first(),
-                "flatten" => S::List(Box::new(first().element().element())),
-                "array_repeat" => S::List(Box::new(first())),
-                "map" | "map_from_arrays" => S::Map(
-                    Box::new(first().element()),
-                    Box::new(args.get(1).map(infer).unwrap_or(S::Null).element()),
-                ),
-                "map_from_entries" => match first().element() {
-                    S::Struct(fields) if fields.len() == 2 => {
-                        S::Map(Box::new(fields[0].clone()), Box::new(fields[1].clone()))
+                f if f.is::<nested::concat::ArrayConcat>()
+                    || f.is::<SparkConcat>()
+                    || f.is::<nested::set_ops::ArrayUnion>()
+                    || f.is::<ArrayIntersect>()
+                    || f.is::<nested::set_ops::ArrayIntersect>()
+                    || f.is::<nested::except::ArrayExcept>() =>
+                {
+                    common(args)
+                }
+                f if function.func == nested::extract::array_slice_udf()
+                    || f.is::<nested::sort::ArraySort>()
+                    || f.is::<nested::set_ops::ArrayDistinct>()
+                    || f.is::<SparkArrayCompact>()
+                    || f.is::<nested::remove::ArrayRemoveAll>()
+                    || f.is::<SparkReverse>()
+                    || f.is::<SparkShuffle>() =>
+                {
+                    first()
+                }
+                f if f.is::<nested::flatten::Flatten>() => {
+                    S::List(Box::new(first().element().element()))
+                }
+                f if f.is::<nested::repeat::ArrayRepeat>() => S::List(Box::new(first())),
+                f if f.is::<nested::map::MapFunc>()
+                    || f.is::<MapFromArrays>()
+                    || f.is::<SparkMapFromArrays>() =>
+                {
+                    S::Map(
+                        Box::new(first().element()),
+                        Box::new(args.get(1).map(infer).unwrap_or(S::Null).element()),
+                    )
+                }
+                f if f.is::<MapFromEntries>() || f.is::<SparkMapFromEntries>() => {
+                    match first().element() {
+                        S::Struct(fields) if fields.len() == 2 => {
+                            S::Map(Box::new(fields[0].clone()), Box::new(fields[1].clone()))
+                        }
+                        _ => fallback(),
                     }
-                    _ => fallback(),
-                },
-                "map_extract" | "map_values" => match first() {
-                    S::Map(_, value) => S::List(value),
-                    _ => fallback(),
-                },
-                "map_keys" => match first() {
+                }
+                f if f.is::<nested::map_extract::MapExtract>()
+                    || function.func == nested::map_values::map_values_udf() =>
+                {
+                    match first() {
+                        S::Map(_, value) => S::List(value),
+                        _ => fallback(),
+                    }
+                }
+                f if f.is::<nested::map_keys::MapKeysFunc>() => match first() {
                     S::Map(key, _) => S::List(key),
                     _ => fallback(),
                 },
-                "map_entries" => match first() {
-                    S::Map(key, value) => S::List(Box::new(S::Struct(vec![*key, *value]))),
-                    _ => fallback(),
-                },
-                "array_item_with_position" => {
+                f if f.is::<SparkMapEntries>() || f.is::<nested::map_entries::MapEntriesFunc>() => {
+                    match first() {
+                        S::Map(key, value) => S::List(Box::new(S::Struct(vec![*key, *value]))),
+                        _ => fallback(),
+                    }
+                }
+                f if f.is::<ArrayItemWithPosition>() => {
                     S::List(Box::new(S::Struct(vec![S::NonInterval, first().element()])))
                 }
-                "array_struct_field" => match first().element() {
+                f if f.is::<ArrayStructField>() => match first().element() {
                     S::Struct(fields) => S::List(Box::new(
                         struct_field_index(args, schema, true)
                             .and_then(|i| fields.get(i).cloned())
@@ -384,7 +458,7 @@ fn expression_shape(
                     )),
                     _ => fallback(),
                 },
-                "spark_struct_rename" => target_shape(fallback(), first()),
+                f if f.is::<SparkStructRename>() => target_shape(fallback(), first()),
                 _ => fallback(),
             }
         }

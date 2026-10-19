@@ -33,6 +33,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -695,6 +698,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -1231,6 +1237,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -1777,6 +1786,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -2589,6 +2601,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -3243,6 +3258,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -3663,6 +3681,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -4129,6 +4150,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -4654,6 +4678,9 @@ data:
             Projection: column1 AS #0
               Values: (Int32(1)), (Int32(2))
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -5166,6 +5193,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -5614,6 +5644,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -6096,6 +6129,9 @@ data:
           Projection: #0 AS #2, #1 AS #3
             Projection: column1 AS #0, column2 AS #1
               Values: (Utf8("a"), Int32(2)), (Utf8("b"), Int32(1)), (Utf8("c"), Int32(3))
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -6603,6 +6639,9 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -7108,6 +7147,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -7573,6 +7615,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -8058,6 +8103,9 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(4))
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -8540,6 +8588,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -9094,6 +9145,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -9608,6 +9662,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -10097,6 +10154,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -10547,6 +10607,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -10983,6 +11046,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -11440,6 +11506,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -11924,6 +11993,9 @@ data:
             Projection: #0 AS #1
               Projection: column1 AS #0
                 Values: (Int32(1)), (Int32(2)), (Int32(3)), (Int32(4))
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE

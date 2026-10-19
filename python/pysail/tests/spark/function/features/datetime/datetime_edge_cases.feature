@@ -65,9 +65,12 @@ Feature: datetime edge cases
           CAST(NULL AS STRING)
         ) AS result
         """
-      Then query result
+      # Spark's NULL propagation skips the timestamp expression. Sail keeps ordinary argument
+      # evaluation; bypassing timezone-string validation does not suppress argument errors.
+      Then query result for Spark
         | result |
         | NULL   |
+      Then query error for Sail timestamp-evaluated
 
   Rule: Half-hour and quarter-hour timezone offsets
 

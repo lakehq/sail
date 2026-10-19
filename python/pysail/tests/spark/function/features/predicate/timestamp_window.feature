@@ -137,28 +137,39 @@ Feature: Timestamp windows use the session time zone
         (8, TIMESTAMP_NTZ '2020-11-01 02:00:00'),
         (9, CAST(NULL AS TIMESTAMP_NTZ)) AS t(id, ts)
       """
-    # Spark moves a round-trippable literal bound to NTZ, but evaluates dynamic bounds as LTZ.
+    # Spark rewrites constant bounds to NTZ and includes 02:30, even though it converts to 03:30.
+    # Sail compares converted values consistently, so 02:30 is not before the 03:15 bound.
     When query
       """
       SELECT id FROM timestamp_dst_window
       WHERE ts < TIMESTAMP '2020-03-08 03:15:00' ORDER BY id
       """
-    Then query result
+    Then query result for Spark
       | id |
       | 0  |
       | 1  |
       | 2  |
+      | 3  |
+    Then query result for Sail
+      | id |
+      | 0  |
+      | 1  |
       | 3  |
     When query
       """
       SELECT id FROM timestamp_dst_window
       WHERE ts < to_timestamp('2020-03-08 03:15:00') ORDER BY id
       """
-    Then query result
+    Then query result for Spark
       | id |
       | 0  |
       | 1  |
       | 2  |
+      | 3  |
+    Then query result for Sail
+      | id |
+      | 0  |
+      | 1  |
       | 3  |
     When query
       """

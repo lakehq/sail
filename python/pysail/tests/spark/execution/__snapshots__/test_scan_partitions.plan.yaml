@@ -126,6 +126,9 @@ data:
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -606,6 +609,9 @@ data:
           Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -1089,6 +1095,9 @@ data:
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -1571,6 +1580,9 @@ data:
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -2051,6 +2063,9 @@ data:
           Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -2534,6 +2549,9 @@ data:
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -3016,6 +3034,9 @@ data:
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
 
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
+
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -3496,6 +3517,9 @@ data:
           Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -3978,6 +4002,9 @@ data:
           Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
             Projection: ?table?.id AS #2, ?table?.payload AS #3
               TableScan: ?table?
+
+    logical_plan after decorrelate_scalar_projection:
+    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE

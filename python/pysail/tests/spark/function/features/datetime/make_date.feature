@@ -8,9 +8,12 @@ Feature: make_date output schema
              make_date(CAST(1 / id AS INT), 1, NULL) AS null_day
       FROM range(1)
       """
-    Then query result
+    # Spark's NULL propagation removes these calls before evaluating their arguments.
+    # Sail preserves ordinary argument evaluation, including division errors in ANSI mode.
+    Then query result for Spark
       | null_year | null_day |
       | NULL      | NULL     |
+    Then query error for Sail (?i)divi(?:de|sion).*zero
 
   @function(nullability)
   Rule: Output schema
