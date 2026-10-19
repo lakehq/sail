@@ -1429,4 +1429,300 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_render_typed_null() -> SqlResult<()> {
+        use spec::{DataType, IntervalFieldType, Literal, TimestampType};
+
+        let cases: Vec<(Literal, &str)> = vec![
+            (Literal::Boolean { value: None }, "BOOLEAN"),
+            (Literal::Int8 { value: None }, "TINYINT"),
+            (Literal::Int16 { value: None }, "SMALLINT"),
+            (Literal::Int32 { value: None }, "INT"),
+            (Literal::Int64 { value: None }, "BIGINT"),
+            (Literal::Float32 { value: None }, "FLOAT"),
+            (Literal::Float64 { value: None }, "DOUBLE"),
+            (
+                Literal::Decimal128 {
+                    precision: 10,
+                    scale: 2,
+                    value: None,
+                },
+                "DECIMAL(10, 2)",
+            ),
+            (
+                Literal::Decimal256 {
+                    precision: 40,
+                    scale: 3,
+                    value: None,
+                },
+                "DECIMAL(40, 3)",
+            ),
+            (Literal::Utf8View { value: None }, "STRING"),
+            (Literal::BinaryView { value: None }, "BINARY"),
+            (Literal::Date32 { days: None }, "DATE"),
+            (
+                Literal::TimestampSecond {
+                    seconds: None,
+                    timestamp_type: TimestampType::Configured,
+                },
+                "TIMESTAMP",
+            ),
+            (
+                Literal::TimestampMillisecond {
+                    milliseconds: None,
+                    timestamp_type: TimestampType::WithLocalTimeZone,
+                },
+                "TIMESTAMP_LTZ",
+            ),
+            (
+                Literal::TimestampMicrosecond {
+                    microseconds: None,
+                    timestamp_type: TimestampType::WithoutTimeZone,
+                },
+                "TIMESTAMP_NTZ",
+            ),
+            (Literal::Time32Second { seconds: None }, "TIME"),
+            (
+                Literal::IntervalYearMonth {
+                    months: None,
+                    start_field: Some(IntervalFieldType::Year),
+                    end_field: Some(IntervalFieldType::Month),
+                },
+                "INTERVAL YEAR TO MONTH",
+            ),
+            (
+                Literal::IntervalDayTimeMicrosecond {
+                    microseconds: None,
+                    start_field: Some(IntervalFieldType::Hour),
+                    end_field: Some(IntervalFieldType::Hour),
+                },
+                "INTERVAL HOUR",
+            ),
+            (
+                Literal::LargeList {
+                    data_type: DataType::List {
+                        data_type: Box::new(DataType::Int64),
+                        nullable: true,
+                    },
+                    nullable: true,
+                    values: None,
+                },
+                "ARRAY<ARRAY<BIGINT>>",
+            ),
+            (
+                Literal::Map {
+                    key_type: DataType::Utf8,
+                    value_type: DataType::Date32,
+                    value_type_nullable: true,
+                    keys: None,
+                    values: None,
+                },
+                "MAP<STRING, DATE>",
+            ),
+        ];
+        for (literal, data_type) in cases {
+            let rendered = render_literal(&literal)?;
+            assert_eq!(
+                rendered,
+                format!("CAST(NULL AS {data_type})"),
+                "{literal:?}"
+            );
+            parse_expression(&rendered)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_literal_encodings() -> SqlResult<()> {
+        use spec::{DataType, Literal, TimestampType, i256};
+
+        let cases: Vec<(Literal, &str)> = vec![
+            (
+                Literal::Decimal128 {
+                    precision: 10,
+                    scale: 3,
+                    value: Some(123_450),
+                },
+                "123.450BD",
+            ),
+            (
+                Literal::Decimal128 {
+                    precision: 5,
+                    scale: 0,
+                    value: Some(42),
+                },
+                "42BD",
+            ),
+            (
+                Literal::Decimal256 {
+                    precision: 40,
+                    scale: 2,
+                    value: Some(i256::from_i128(-12_345)),
+                },
+                "-123.45BD",
+            ),
+            (
+                Literal::LargeUtf8 {
+                    value: Some("a".to_string()),
+                },
+                "'a'",
+            ),
+            (
+                Literal::Utf8View {
+                    value: Some("b".to_string()),
+                },
+                "'b'",
+            ),
+            (
+                Literal::LargeBinary {
+                    value: Some(vec![0x00]),
+                },
+                "X'00'",
+            ),
+            (
+                Literal::BinaryView {
+                    value: Some(vec![]),
+                },
+                "X''",
+            ),
+            (
+                Literal::FixedSizeBinary {
+                    size: 2,
+                    value: Some(vec![0xff, 0x10]),
+                },
+                "X'FF10'",
+            ),
+            (
+                Literal::TimestampSecond {
+                    seconds: Some(1_714_564_800),
+                    timestamp_type: TimestampType::Configured,
+                },
+                "TIMESTAMP '2024-05-01 12:00:00.000000+00:00'",
+            ),
+            (
+                Literal::TimestampMillisecond {
+                    milliseconds: Some(1_714_564_800_123),
+                    timestamp_type: TimestampType::WithoutTimeZone,
+                },
+                "TIMESTAMP_NTZ '2024-05-01 12:00:00.123000'",
+            ),
+            (
+                Literal::Time32Second {
+                    seconds: Some(3_661),
+                },
+                "TIME '01:01:01.000000'",
+            ),
+            (
+                Literal::Time32Millisecond {
+                    milliseconds: Some(500),
+                },
+                "TIME '00:00:00.500000'",
+            ),
+            (
+                Literal::LargeList {
+                    data_type: DataType::Boolean,
+                    nullable: false,
+                    values: Some(vec![Literal::Boolean { value: Some(false) }]),
+                },
+                "ARRAY(FALSE)",
+            ),
+            (
+                Literal::FixedSizeList {
+                    length: 2,
+                    data_type: DataType::Int16,
+                    nullable: true,
+                    values: Some(vec![
+                        Literal::Int16 { value: Some(1) },
+                        Literal::Int16 { value: None },
+                    ]),
+                },
+                "ARRAY(1S, CAST(NULL AS SMALLINT))",
+            ),
+            (
+                Literal::Map {
+                    key_type: DataType::Int32,
+                    value_type: DataType::Utf8,
+                    value_type_nullable: true,
+                    keys: Some(vec![]),
+                    values: Some(vec![]),
+                },
+                "CAST(MAP() AS MAP<INT, STRING>)",
+            ),
+            (
+                Literal::Struct {
+                    data_type: DataType::Struct {
+                        fields: spec::Fields::from(vec![
+                            spec::Field {
+                                name: "x".to_string(),
+                                data_type: DataType::Int32,
+                                nullable: true,
+                                metadata: vec![],
+                            },
+                            spec::Field {
+                                name: "y".to_string(),
+                                data_type: DataType::Utf8,
+                                nullable: true,
+                                metadata: vec![],
+                            },
+                        ]),
+                    },
+                    values: Some(vec![
+                        Literal::Int32 { value: Some(1) },
+                        Literal::Utf8 {
+                            value: Some("z".to_string()),
+                        },
+                    ]),
+                },
+                "NAMED_STRUCT('x', 1, 'y', 'z')",
+            ),
+        ];
+        for (literal, expected) in cases {
+            let rendered = render_literal(&literal)?;
+            assert_eq!(rendered, expected, "{literal:?}");
+            parse_expression(&rendered)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_render_literal_rejects_unwritable_values() {
+        use spec::{DataType, Literal};
+
+        let cases = vec![
+            Literal::UInt8 { value: Some(1) },
+            Literal::IntervalMonthDayNano {
+                value: Some(spec::IntervalMonthDayNano {
+                    months: 0,
+                    days: 0,
+                    nanoseconds: 1,
+                }),
+            },
+            Literal::Map {
+                key_type: DataType::Int32,
+                value_type: DataType::Int32,
+                value_type_nullable: true,
+                keys: Some(vec![Literal::Int32 { value: Some(1) }]),
+                values: Some(vec![]),
+            },
+            Literal::Struct {
+                data_type: DataType::Int32,
+                values: Some(vec![]),
+            },
+            Literal::Struct {
+                data_type: DataType::Struct {
+                    fields: spec::Fields::from(Vec::<spec::Field>::new()),
+                },
+                values: Some(vec![Literal::Int32 { value: Some(1) }]),
+            },
+            Literal::List {
+                data_type: DataType::UInt32,
+                nullable: true,
+                values: Some(vec![]),
+            },
+        ];
+        for literal in cases {
+            assert!(render_literal(&literal).is_err(), "{literal:?}");
+        }
+    }
 }
