@@ -1,4 +1,5 @@
 import json
+import re
 
 import pyarrow as pa
 import pytest
@@ -465,5 +466,37 @@ def test_metadata_table_preserves_full_catalog_qualifier(spark, tmp_path, entry)
             result = spark.table(relation).select(f"{relation}.snapshot_id")
 
         assert [row.snapshot_id for row in result.collect()] == [metadata["current-snapshot-id"]]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# A written qualifier names a SUFFIX of the relation it refers to, so the test above pins what is
+# accepted and this one pins what is not: a prefix, a part that does not belong, a name that skips
+# a level, and one longer than the relation. Without these, a qualifier comparison that matched
+# everything would keep the cases above green. (the qualifier written before the column, the class)
+_REFUSED_QUALIFIERS = [
+    ("sail.default.qualified_metadata_table", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
+    ("nope.default.qualified_metadata_table.snapshots", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
+    ("sail.snapshots", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
+    ("x.sail.default.qualified_metadata_table.snapshots", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
+]
+
+
+@pytest.mark.parametrize(("qualifier", "condition"), _REFUSED_QUALIFIERS)
+@pytest.mark.parametrize("wildcard", [False, True])
+def test_metadata_table_refuses_a_qualifier_that_is_not_a_suffix(spark, tmp_path, qualifier, condition, wildcard):
+    table = "sail.default.qualified_metadata_table"
+    location = tmp_path / "qualified_metadata_table"
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(location.as_uri())}'"
+    )
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1)")  # noqa: S608
+        relation = f"{table}.snapshots"
+        selected = f"{qualifier}.*" if wildcard else f"{qualifier}.snapshot_id"
+        expected = "CANNOT_RESOLVE_STAR_EXPAND" if wildcard else condition
+
+        with pytest.raises(Exception, match=re.escape(f"[{expected}]")):
+            spark.sql(f"SELECT {selected} FROM {relation}").collect()  # noqa: S608
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

@@ -594,7 +594,11 @@ impl PlanResolver<'_> {
                         return false;
                     };
                     !info.is_hidden()
-                        && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier, state)
+                        && self.match_attribute_qualifier(
+                            qualifier_name.as_ref(),
+                            *qualifier,
+                            state,
+                        )
                         && self.match_field(info, field_name.as_ref(), plan_id)
                         && self.matches_plan_attribute(
                             field.name(),
