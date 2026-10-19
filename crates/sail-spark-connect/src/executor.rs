@@ -217,19 +217,6 @@ enum ExecutorTaskResult {
 }
 
 impl Executor {
-    pub(crate) fn completed(metadata: ExecutorMetadata, outputs: Vec<ExecutorOutput>) -> Self {
-        let mut buffer = ExecutorBuffer::new(outputs.len());
-        for output in outputs {
-            buffer.add(output);
-        }
-        Self {
-            metadata,
-            state: Mutex::new(ExecutorState::Completed {
-                buffer: Arc::new(Mutex::new(buffer)),
-            }),
-        }
-    }
-
     pub(crate) fn new(
         metadata: ExecutorMetadata,
         stream: SendableRecordBatchStream,
@@ -258,6 +245,19 @@ impl Executor {
                     buffer: Arc::new(Mutex::new(buffer)),
                 },
                 span: Span::enter_with_local_parent("Executor::new"),
+            }),
+        }
+    }
+
+    pub(crate) fn completed(metadata: ExecutorMetadata, outputs: Vec<ExecutorOutput>) -> Self {
+        let mut buffer = ExecutorBuffer::new(outputs.len());
+        for output in outputs {
+            buffer.add(output);
+        }
+        Self {
+            metadata,
+            state: Mutex::new(ExecutorState::Completed {
+                buffer: Arc::new(Mutex::new(buffer)),
             }),
         }
     }
