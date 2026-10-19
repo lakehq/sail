@@ -45,7 +45,8 @@ pip install "pyspark[connect]==3.5.9"
 
 - Since Sail 0.2, the `sail` command-line interface (CLI) became the new way to interact with Sail.
 - Since Sail 0.3, you can no longer run `pip install pysail[spark]` to install PySail along with PySpark (the `spark` "extra"). You must explicitly install PySpark and choose the version you want to use.
-  :::
+
+:::
 
 ## Using the Sail PySpark Shell
 

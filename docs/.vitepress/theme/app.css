@@ -16,7 +16,7 @@ a.footnote-backref {
   @apply font-mono;
 }
 
-kbd {
+.vp-doc kbd {
   @apply inline-block rounded border px-2 py-1 align-middle font-mono text-sm;
   @apply bg-zinc-200 dark:bg-zinc-700;
   @apply text-zinc-800 dark:text-zinc-100;

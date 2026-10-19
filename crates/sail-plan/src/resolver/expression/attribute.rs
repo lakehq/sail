@@ -594,7 +594,7 @@ impl PlanResolver<'_> {
                         return false;
                     };
                     !info.is_hidden()
-                        && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier)
+                        && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier, state)
                         && self.match_field(info, field_name.as_ref(), plan_id)
                         && self.matches_plan_attribute(
                             field.name(),
@@ -958,13 +958,13 @@ impl PlanResolver<'_> {
         // has merged them into one column.
         let (written, identifier) = match name.parts() {
             [identifier] => (None, identifier),
-            [qualifier, identifier] => (Some(TableReference::bare(qualifier.as_ref())), identifier),
+            [qualifier, identifier] => (Some(vec![qualifier.as_ref().to_string()]), identifier),
             _ => return Ok(None),
         };
         let mut candidates = schema
             .iter()
             .filter_map(|(qualifier, field)| {
-                if !self.match_attribute_qualifier(written.as_ref(), qualifier) {
+                if !self.match_attribute_qualifier(written.as_ref(), qualifier, state) {
                     return None;
                 }
                 let Ok(info) = state.get_field_info(field.name()) else {
@@ -1015,7 +1015,7 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        self.match_attribute_qualifier(q.as_ref(), qualifier)
+                        self.match_attribute_qualifier(q.as_ref(), qualifier, state)
                             && self.match_field(info, name.as_ref(), None)
                     })
                     .map(|(_, name)| {
@@ -1098,43 +1098,38 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &T)> {
-        match name {
-            [n1] => vec![(None, n1)],
-            [n1, n2] => vec![(Some(TableReference::bare(n1.as_ref())), n2)],
-            [n1, n2, n3] => vec![(Some(TableReference::partial(n1.as_ref(), n2.as_ref())), n3)],
-            [n1, n2, n3, n4] => vec![(
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                n4,
+    ) -> Vec<(Option<Vec<String>>, &T)> {
+        match name.split_last() {
+            Some((field, qualifier)) => vec![(
+                (!qualifier.is_empty()).then(|| {
+                    qualifier
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect()
+                }),
+                field,
             )],
-            _ => vec![],
+            None => vec![],
         }
     }
 
+    /// The interpretations of a dotted name, shortest qualifier first: Spark tries the most
+    /// qualified one and stops at the first that matches, so the caller walks this in reverse. The
+    /// qualifier is kept as its parts rather than as a `TableReference`, since a lake relation can
+    /// register a namespace of more parts than the three a `TableReference` holds.
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &T, &[T])> {
-        let mut out = vec![];
-        if let [n1, x @ ..] = name {
-            out.push((None, n1, x));
-        }
-        if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::bare(n1.as_ref())), n2, x));
-        }
-        if let [n1, n2, n3, x @ ..] = name {
-            out.push((
-                Some(TableReference::partial(n1.as_ref(), n2.as_ref())),
-                n3,
-                x,
-            ));
-        }
-        if let [n1, n2, n3, n4, x @ ..] = name {
-            out.push((
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                n4,
-                x,
-            ));
-        }
-        out
+    ) -> Vec<(Option<Vec<String>>, &T, &[T])> {
+        (0..name.len())
+            .map(|index| {
+                let qualifier = (index > 0).then(|| {
+                    name[..index]
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect()
+                });
+                (qualifier, &name[index], &name[index + 1..])
+            })
+            .collect()
     }
 }

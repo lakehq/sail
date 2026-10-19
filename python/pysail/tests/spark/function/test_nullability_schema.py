@@ -78,6 +78,22 @@ def test_a_struct_literal_builds_non_nullable_fields(spark):
     assert [(field.name, field.nullable) for field in fields] == [("a", False), ("b", False)]
 
 
+@pytest.mark.parametrize("nullable", [False, True])
+def test_nullifzero_preserves_null_type_with_nullable_output(spark, nullable):
+    # Arrange
+    schema = T.StructType([T.StructField("x", T.NullType(), nullable=nullable)])
+    # A non-nullable NullType field requires an empty input.
+    df = spark.createDataFrame([], schema)
+    expected = T.StructType([T.StructField("result", T.NullType(), nullable=True)])
+
+    # Act
+    result = df.selectExpr("nullifzero(x) AS result")
+
+    # Assert
+    assert df.schema == schema
+    assert result.schema == expected
+
+
 # --- functions that correctly propagate nullability (pass on Sail and JVM) ---
 
 

@@ -59,7 +59,7 @@ pub(crate) async fn alter_table_with_lock(
     provider: &HmsCatalogProvider,
     db_name: &str,
     table_name: &str,
-    options: AlterTableOptions,
+    options: Vec<AlterTableOptions>,
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
     let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
@@ -73,7 +73,9 @@ pub(crate) async fn alter_table_with_lock(
             "Failed to fetch HMS table for locked alter",
         )
         .await?;
-        apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        for options in options {
+            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        }
         HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
     }
     .await;

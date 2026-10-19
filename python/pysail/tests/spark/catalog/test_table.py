@@ -4,10 +4,14 @@ PySpark maps tableName from the server to name in the client Table namedtuple.
 The camelCase fields (tableType, isTemporary) are passed through directly.
 """
 
+import uuid
 from pathlib import Path
 
 import pytest
+from pyspark.errors.exceptions.connect import IllegalArgumentException
+from pyspark.sql.types import LongType, StructField, StructType
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -123,3 +127,40 @@ def test_persistent_table_with_location_is_external(spark, tmp_path):
         assert type_row.data_type == "EXTERNAL"
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.fixture(params=[False, True], ids=["managed", "external"])
+def created_table(spark, tmp_path, request):
+    name = f"create_table_{uuid.uuid4().hex}"
+    schema = StructType([StructField("id", LongType())])
+    external = request.param
+    options = {"path": str(tmp_path / "data")} if external else {}
+    try:
+        result = spark.catalog.createTable(name, schema=schema, source="parquet", **options)
+        yield name, schema, external, result
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+    assert not spark.catalog.tableExists(name)
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/catalog.py, Catalog.createTable doctest.
+# Uses unique managed/external table names and deterministic cleanup.
+def test_catalog_create_table(spark, created_table):
+    name, schema, external, _ = created_table
+    assert spark.table(name).schema == schema
+    assert spark.table(name).collect() == []
+    assert spark.catalog.getTable(name).tableType == ("EXTERNAL" if external else "MANAGED")
+
+
+# Regression extending Spark 3 (3.5.9): pyspark/sql/catalog.py, Catalog.createTable doctest.
+# Also verify that the returned DataFrame reads the created table.
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Catalog.createTable returns an unqueryable catalog command relation instead of the created table",
+    raises=IllegalArgumentException,
+    strict=True,
+)
+def test_create_table_returns_readable_dataframe(created_table):
+    _, schema, _, result = created_table
+    assert result.schema == schema
+    assert result.collect() == []

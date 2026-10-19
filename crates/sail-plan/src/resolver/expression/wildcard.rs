@@ -38,8 +38,19 @@ impl PlanResolver<'_> {
                 let qualifier = target
                     .map(|x| {
                         let written = self.resolve_table_reference(&x)?;
+                        // The parts are read off the reference verbatim rather than through
+                        // `qualifier_parts`, which drops a placeholder name to no parts at all:
+                        // an empty qualifier names every relation, while a placeholder must name
+                        // none.
+                        let parts = written
+                            .catalog()
+                            .into_iter()
+                            .chain(written.schema())
+                            .chain(std::iter::once(written.table()))
+                            .map(str::to_string)
+                            .collect::<Vec<_>>();
                         let matched = schema.iter().find_map(|(qualifier, _)| {
-                            self.match_wildcard_qualifier(Some(&written), qualifier)
+                            self.match_wildcard_qualifier(Some(&parts), qualifier, state)
                                 .then(|| qualifier.cloned())
                         });
                         Ok::<_, PlanError>(matched.flatten().unwrap_or(written))
@@ -75,7 +86,7 @@ impl PlanResolver<'_> {
                 let mut names = vec![];
                 let mut columns = vec![];
                 for (qualifier, field) in schema.iter() {
-                    if !self.match_wildcard_qualifier(q.as_ref(), qualifier) {
+                    if !self.match_wildcard_qualifier(q.as_ref(), qualifier, state) {
                         continue;
                     }
                     if !qualifiers.iter().any(|x| x.as_ref() == qualifier) {
@@ -98,7 +109,7 @@ impl PlanResolver<'_> {
                 // an outer query and of the options.
                 let matched = |s: &DFSchemaRef| {
                     s.iter().find_map(|(qualifier, _)| {
-                        self.match_wildcard_qualifier(q.as_ref(), qualifier)
+                        self.match_wildcard_qualifier(q.as_ref(), qualifier, state)
                             .then(|| qualifier.cloned())
                     })
                 };
@@ -338,20 +349,17 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_wildcard_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &[T])> {
-        let mut out = vec![(None, name)];
-        if let [n1, x @ ..] = name {
-            out.push((Some(TableReference::bare(n1.as_ref())), x));
-        }
-        if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::partial(n1.as_ref(), n2.as_ref())), x));
-        }
-        if let [n1, n2, n3, x @ ..] = name {
-            out.push((
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                x,
-            ));
-        }
-        out
+    ) -> Vec<(Option<Vec<String>>, &[T])> {
+        (0..=name.len())
+            .map(|index| {
+                let qualifier = (index > 0).then(|| {
+                    name[..index]
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect()
+                });
+                (qualifier, &name[index..])
+            })
+            .collect()
     }
 }

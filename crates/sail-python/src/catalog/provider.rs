@@ -421,10 +421,7 @@ fn parse_partition_transform(value: &str) -> PyResult<PartitionTransform> {
         "day" => Ok(PartitionTransform::Day),
         "hour" => Ok(PartitionTransform::Hour),
         _ => {
-            if let Some(argument) = value
-                .strip_prefix("bucket(")
-                .and_then(|value| value.strip_suffix(')'))
-            {
+            if let Some(argument) = value.strip_circumfix("bucket(", ')') {
                 return argument
                     .parse()
                     .map(PartitionTransform::Bucket)
@@ -434,10 +431,7 @@ fn parse_partition_transform(value: &str) -> PyResult<PartitionTransform> {
                         ))
                     });
             }
-            if let Some(argument) = value
-                .strip_prefix("truncate(")
-                .and_then(|value| value.strip_suffix(')'))
-            {
+            if let Some(argument) = value.strip_circumfix("truncate(", ')') {
                 return argument
                     .parse()
                     .map(PartitionTransform::Truncate)

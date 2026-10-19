@@ -95,11 +95,6 @@ fn is_known_to_jdk_17(c: char) -> bool {
     c.is_ascii() || UNICODE_13_OR_EARLIER.is_match(c.encode_utf8(&mut [0; 4]))
 }
 
-thread_local! {
-    // `CaseMapper` is not `Sync`, so it cannot be shared across threads in a static.
-    static CASE_MAPPER: CaseMapper = const { CaseMapper::new() };
-}
-
 /// Compares two strings the way `String.equalsIgnoreCase` does, so that identifiers are folded
 /// beyond ASCII. Note that this is not the same as comparing the lowercased strings, since the
 /// case mappings of a character are not always symmetric, and that the mappings are the simple
@@ -135,12 +130,13 @@ fn char_equals_ignore_case(left: char, right: char) -> bool {
     if !(is_known_to_jdk_17(left) && is_known_to_jdk_17(right)) {
         return false;
     }
-    CASE_MAPPER.with(|case_mapper| {
-        let left_upper = case_mapper.simple_uppercase(left);
-        let right_upper = case_mapper.simple_uppercase(right);
-        left_upper == right_upper
-            || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
-    })
+    // `CaseMapper::new` is a `const fn` that hands out a `Copy` view over the baked data, so
+    // there is nothing to cache and nothing to share across threads.
+    let case_mapper = CaseMapper::new();
+    let left_upper = case_mapper.simple_uppercase(left);
+    let right_upper = case_mapper.simple_uppercase(right);
+    left_upper == right_upper
+        || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
 }
 
 /// Lowercases a string the way `String.toLowerCase` does. Unlike [`equals_ignore_case`] this

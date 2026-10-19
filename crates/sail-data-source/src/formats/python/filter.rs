@@ -234,8 +234,9 @@ pub fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
             let column = expr_to_column(&like.expr)?;
             if let Expr::Literal(ScalarValue::Utf8(Some(pattern)), _) = like.pattern.as_ref() {
                 // Convert LIKE patterns to appropriate filter
-                if pattern.starts_with('%') && pattern.ends_with('%') && pattern.len() > 2 {
-                    let inner = &pattern[1..pattern.len() - 1];
+                if let Some(inner) = pattern.strip_circumfix('%', '%')
+                    && !inner.is_empty()
+                {
                     if !inner.contains('%') && !inner.contains('_') {
                         return Some(PythonFilter::StringContains {
                             column,

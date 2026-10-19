@@ -25,9 +25,10 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    GenericDataSourceFormat, alter_spark_column_default, build_database, build_generic_table,
-    build_view, database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
-    reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
+    GenericDataSourceFormat, alter_spark_column_default, alter_spark_column_type, build_database,
+    build_generic_table, build_view, database_to_status, inject_spark_metadata, is_view_table,
+    reject_spark_properties, reject_spark_property_keys, table_to_status, validate_namespace,
+    view_to_status,
 };
 use crate::data_type::arrow_to_hive_type;
 use crate::managed_table;
@@ -99,6 +100,37 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
+        // Iceberg partition specs live in format metadata; HMS partition keys stay empty.
+        AlterTableOptions::AlterIdentifierFields { .. }
+        | AlterTableOptions::AlterPartitionSpec { .. }
+        | AlterTableOptions::SetPartitioning { .. } => {}
+        AlterTableOptions::SetWriteOrder { distribution, .. } => {
+            if let Some(value) = distribution {
+                hms_table
+                    .parameters
+                    .get_or_insert_with(AHashMap::new)
+                    .insert("write.distribution-mode".into(), value.into());
+            }
+        }
+        AlterTableOptions::SetLocation { location } => {
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::InvalidArgument("Missing HMS storage descriptor".into())
+            })?;
+            storage.location = Some(location.clone().into());
+            if let Some(serde) = storage.serde_info.as_mut() {
+                let parameters = serde.parameters.get_or_insert_with(AHashMap::new);
+                if parameters.contains_key("path") {
+                    parameters.insert("path".into(), location.into());
+                }
+            }
+        }
+        AlterTableOptions::ReplaceColumns { fields, .. } => {
+            crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
+        }
+        AlterTableOptions::AlterColumns {
+            changes,
+            case_sensitive,
+        } => crate::convert::alter_columns(hms_table, &changes, case_sensitive)?,
         AlterTableOptions::SetTableProperties { properties } => {
             reject_spark_properties(&properties)?;
             managed_table::validate_metadata_location_precondition(
@@ -125,7 +157,9 @@ pub(crate) fn apply_alter_table_options(
                 }
             }
         }
-        AlterTableOptions::AlterColumnType { name, data_type } => {
+        AlterTableOptions::AlterColumnType {
+            name, data_type, ..
+        } => {
             let [column_name] = name.as_slice() else {
                 return Err(CatalogError::NotSupported(
                     "Hive Metastore catalog does not support altering nested column types"
@@ -145,18 +179,34 @@ pub(crate) fn apply_alter_table_options(
             })?;
             let Some(column) = columns
                 .iter_mut()
-                .find(|column| column.name.as_deref() == Some(column_name.as_str()))
+                .chain(hms_table.partition_keys.iter_mut().flatten())
+                .find(|column| {
+                    column
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
+                })
             else {
+                if crate::convert::extract_property(
+                    hms_table.parameters.as_ref(),
+                    crate::convert::SPARK_DATASOURCE_PROVIDER_KEY,
+                )
+                .is_some_and(|provider| provider.eq_ignore_ascii_case("delta"))
+                {
+                    return alter_spark_column_type(hms_table, &name, &data_type);
+                }
                 return Err(CatalogError::InvalidArgument(format!(
                     "Column '{column_name}' does not exist on '{db_name}.{table_name}'"
                 )));
             };
             column.r#type = Some(FastStr::from(hive_type));
+            alter_spark_column_type(hms_table, &name, &data_type)?;
         }
         AlterTableOptions::AlterColumnDefault { name, default } => {
             alter_spark_column_default(hms_table, &name, default)?;
         }
-        AlterTableOptions::AddCheckConstraint { .. } => {
+        AlterTableOptions::AddCheckConstraint { .. }
+        | AlterTableOptions::DropCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(
                 "CHECK constraints are handled by lake sources".to_string(),
             ));
@@ -847,9 +897,11 @@ fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<
             "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
         ));
     }
-    if options.partition_by.iter().any(|field| {
-        field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
-    }) {
+    if !options.format.eq_ignore_ascii_case("iceberg")
+        && options.partition_by.iter().any(|field| {
+            field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
+        })
+    {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog only supports identity partition columns".to_string(),
         ));
@@ -1038,6 +1090,7 @@ impl CatalogProvider for HmsCatalogProvider {
         let partition_columns: Vec<String> = options
             .partition_by
             .iter()
+            .filter(|_| format.logical_format != "iceberg")
             .map(|field| field.column.clone())
             .collect();
         let columns_for_metadata = options.columns.clone();
@@ -1055,12 +1108,14 @@ impl CatalogProvider for HmsCatalogProvider {
             options.comment,
             options.properties,
         )?;
-        inject_spark_metadata(
-            &mut hms_table,
-            &columns_for_metadata,
-            &partition_columns,
-            &format_for_metadata,
-        )?;
+        if format.logical_format != "iceberg" {
+            inject_spark_metadata(
+                &mut hms_table,
+                &columns_for_metadata,
+                &partition_columns,
+                &format_for_metadata,
+            )?;
+        }
 
         self.create_hms_table(database, table, hms_table, if_not_exists)
             .await
@@ -1127,6 +1182,65 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        match options {
+            AlterTableOptions::SetTableProperties { properties } => {
+                reject_spark_properties(properties)
+            }
+            AlterTableOptions::UnsetTableProperties { keys, .. } => {
+                reject_spark_property_keys(keys)
+            }
+            AlterTableOptions::AlterColumnType {
+                name, data_type, ..
+            } => {
+                if name.len() != 1 {
+                    return Err(CatalogError::NotSupported(
+                        "Hive Metastore catalog does not support altering nested column types"
+                            .to_string(),
+                    ));
+                }
+                arrow_to_hive_type(data_type).map(|_| ())
+            }
+            AlterTableOptions::AlterColumnDefault { name, .. } if name.len() != 1 => {
+                Err(CatalogError::NotSupported(
+                    "Hive Metastore catalog does not support altering nested column defaults"
+                        .to_string(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let target_db = validate_namespace(destination_database)?;
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let target_db = target_db.clone();
+            let table = table.to_string();
+            let target_table = destination_table.to_string();
+            async move {
+                let mut metadata = Self::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table,
+                    "Failed to fetch HMS table for rename",
+                )
+                .await?;
+                metadata.db_name = Some(target_db.into());
+                metadata.table_name = Some(target_table.into());
+                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+            }
+        })
+        .await
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -1137,8 +1251,13 @@ impl CatalogProvider for HmsCatalogProvider {
         let table_name = table.to_string();
 
         if managed_table::is_metadata_location_update(&options) {
-            return managed_table::alter_table_with_lock(self, &db_name, &table_name, options)
-                .await;
+            return managed_table::alter_table_with_lock(
+                self,
+                &db_name,
+                &table_name,
+                vec![options],
+            )
+            .await;
         }
 
         self.with_failover(|client| {
@@ -1161,6 +1280,16 @@ impl CatalogProvider for HmsCatalogProvider {
             }
         })
         .await
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        managed_table::alter_table_with_lock(self, &db_name, table, options).await
     }
 
     async fn create_view(

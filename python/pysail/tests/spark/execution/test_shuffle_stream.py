@@ -8,15 +8,31 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
-@pytest.fixture(scope="module", params=[None, "none", "lz4", "zstd"], ids=["default", "none", "lz4", "zstd"])
+@pytest.fixture(
+    scope="module",
+    params=[
+        (None, None, None, None),
+        ("none", 1, 65535, None),
+        ("lz4", 3, None, 1048576),
+        ("zstd", 4, 4194304, 16777216),
+    ],
+    ids=["default", "none-one-connection", "lz4-three-connections", "zstd-four-connections"],
+)
 def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
-    if request.param is not None:
-        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = request.param
+    compression, connection_count, stream_window_size, connection_window_size = request.param
+    if compression is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = compression
+    if connection_count is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(connection_count)
+    if stream_window_size is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE"] = str(stream_window_size)
+    if connection_window_size is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE"] = str(connection_window_size)
     with spark_connect_server(envs=envs) as server:
         yield server.remote
 
@@ -34,6 +50,14 @@ def test_shuffle_finishes_when_join_leaves_probe_partitions_unread(spark, partit
     rows = build.join(probe, "id", join_type).collect()
 
     assert rows == ([Row(id=0)] if join_type == "left_semi" else [])
+
+
+@pytest.mark.timeout(15)
+def test_hash_join_preserves_global_build_limit(spark):
+    build = spark.range(16, numPartitions=4).limit(3)
+    probe = spark.range(16, numPartitions=4)
+
+    assert len(build.join(probe, "id", "left").collect()) == 3  # noqa: PLR2004
 
 
 @pytest.mark.timeout(30)

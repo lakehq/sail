@@ -47,6 +47,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -257,7 +260,7 @@ data:
             FilterExec: value@0 > 100, schema=[value:Int32]
               ProjectionExec: expr=[value@0 as value], schema=[value:Int32]
                 DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true), schema=[value:Int32]
-                  DataSourceExec: partitions=1, partition_sizes=[1], schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
+                  DataSourceExec: partitions=1, partition_sizes=[1], schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)), 5: ("cdc": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "dataChange": non-null Boolean, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))))]
 
 
     physical_plan after OutputRequirements:
@@ -288,6 +291,12 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -361,6 +370,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -526,8 +538,7 @@ data:
     ProjectionExec: expr=[#3@0 as name]
       ProjectionExec: expr=[name@0 as #3]
         FilterExec: value@1 >= 200, projection=[name@0]
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/dv_explain/part-<id>.snappy.parquet]]}, projection=[name, value], file_type=parquet, predicate=value@2 >= 200 AND value@2 >= 200, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 200 AND value_null_count@1 != row_count@2 AND value_max@0 >= 200, required_guarantees=[]
+          DataSourceExec: file_groups={1 group: [[<tmp>/dv_explain/part-<id>.snappy.parquet]]}, projection=[name, value], file_type=parquet, predicate=value@2 >= 200 AND value@2 >= 200, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 200 AND value_null_count@1 != row_count@2 AND value_max@0 >= 200, required_guarantees=[]
 ---
 name: "test_explain_extended_delete_on_dv_table_shows_mergeonread_mode"
 data:

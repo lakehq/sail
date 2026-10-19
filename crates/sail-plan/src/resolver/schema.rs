@@ -135,65 +135,60 @@ impl PlanResolver<'_> {
     /// name.
     pub(super) fn match_attribute_qualifier(
         &self,
-        qualifier: Option<&TableReference>,
+        qualifier: Option<&Vec<String>>,
         target: Option<&TableReference>,
+        state: &PlanResolverState,
     ) -> bool {
-        self.match_qualifier(qualifier, target, |a, b| self.match_attribute(a, b))
+        self.match_qualifier(qualifier, target, state, |a, b| self.match_attribute(a, b))
     }
 
     /// Matches a qualifier against the qualifier of a field when expanding a wildcard. Spark
     /// matches the target of a wildcard with the resolver alone, unlike an attribute reference.
     pub(super) fn match_wildcard_qualifier(
         &self,
-        qualifier: Option<&TableReference>,
+        qualifier: Option<&Vec<String>>,
         target: Option<&TableReference>,
+        state: &PlanResolverState,
     ) -> bool {
-        self.match_qualifier(qualifier, target, |a, b| self.match_identifier(a, b))
+        self.match_qualifier(qualifier, target, state, |a, b| self.match_identifier(a, b))
     }
 
-    /// Returns whether the qualifier matches the target qualifier.
-    /// Note that the match is not symmetric, so please ensure the arguments are in the correct
-    /// order: the qualifier may name fewer parts than the target.
+    /// Returns whether the qualifier matches the qualifier of a field. A written qualifier names a
+    /// SUFFIX of the relation it refers to, so it may name fewer parts than the relation does, and
+    /// the match is therefore not symmetric. The relation's parts are read through the state
+    /// rather than off the `TableReference`, since a lake relation can register a namespace of
+    /// more parts than the three a `TableReference` holds.
     fn match_qualifier(
         &self,
-        qualifier: Option<&TableReference>,
+        qualifier: Option<&Vec<String>>,
         target: Option<&TableReference>,
+        state: &PlanResolverState,
         matches: impl Fn(&str, &str) -> bool,
     ) -> bool {
+        let Some(qualifier) = qualifier else {
+            return true;
+        };
         // DataFusion's placeholder for an unnamed relation is not a qualifier a user can spell:
         // the matching attribute in Spark has no qualifier at all, so a reference to the
         // placeholder's literal text must stay unresolved rather than accidentally match the
         // field it happens to render as. Sail's own placeholder for an unaliased derived table is
         // different: Spark gives such a subquery a real, referenceable synthetic qualifier, so
         // that one is not excluded here.
-        if matches!(qualifier, Some(TableReference::Bare { table }) if table.as_ref() == UNNAMED_TABLE)
+        if let [table] = qualifier.as_slice()
+            && table == UNNAMED_TABLE
         {
             return false;
         }
-        let table_matches =
-            |table: &str| target.map(|x| x.table()).is_some_and(|x| matches(x, table));
-        let schema_matches = |schema: &str| {
-            target
-                .and_then(|x| x.schema())
-                .is_some_and(|x| matches(x, schema))
+        let Some(target) = target else {
+            return false;
         };
-        let catalog_matches = |catalog: &str| {
-            target
-                .and_then(|x| x.catalog())
-                .is_some_and(|x| matches(x, catalog))
-        };
-        match qualifier {
-            Some(TableReference::Bare { table }) => table_matches(table),
-            Some(TableReference::Partial { schema, table }) => {
-                schema_matches(schema) && table_matches(table)
-            }
-            Some(TableReference::Full {
-                catalog,
-                schema,
-                table,
-            }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
-            None => true,
-        }
+        let target = state.relation_name(target);
+        qualifier.len() <= target.len()
+            && qualifier
+                .iter()
+                .rev()
+                .zip(target.iter().rev())
+                .all(|(left, right)| matches(left, right))
     }
 
     /// Finds the struct field with the given name; more than one match is an error, but no

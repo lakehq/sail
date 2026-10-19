@@ -208,8 +208,7 @@ impl PlanResolver<'_> {
         // Spark expands a quoted regex over the current output without the
         // originating DataFrame's plan ID (SparkConnectPlanner.transformUnresolvedRegex).
         let quoted_pattern = col_name
-            .strip_prefix('`')
-            .and_then(|name| name.strip_suffix('`'))
+            .strip_circumfix('`', '`')
             .filter(|name| !name.is_empty());
         let pattern_str = quoted_pattern.unwrap_or_else(|| col_name.trim_matches('`'));
         let plan_id = if quoted_pattern.is_some() {

@@ -15,7 +15,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
-use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
@@ -171,7 +170,7 @@ async fn build_overwrite_if_plan(
     let condition_expr = condition.expr.clone();
     let physical_condition = ctx
         .session()
-        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
+        .create_physical_expr(condition_expr.clone().is_not_true(), &table_df_schema)?;
     let predicate_source = source.or(condition.source);
 
     let old_data_plan = build_old_data_plan(
@@ -214,6 +213,31 @@ async fn build_overwrite_if_plan(
         &union_plan.schema(),
         operation_override,
     )?;
+    let change_data_writer = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+        let deleted = build_old_data_plan(
+            ctx,
+            condition_expr.clone(),
+            ctx.session()
+                .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
+            &snapshot_state,
+            table_schema.clone(),
+        )
+        .await?;
+        let deleted = super::change_data::tag_change_rows(deleted, &table_schema, "delete")?;
+        let inserted = datafusion::physical_plan::execution_plan::reset_plan_states(input.clone())?;
+        let inserted = super::change_data::tag_change_rows(inserted, &input_schema, "insert")?;
+        let (inserted, deleted) = align_schemas_for_union(inserted, deleted)?;
+        let changes = UnionExec::try_new(vec![inserted, deleted])?;
+        Some(super::change_data::build_change_data_writer(
+            ctx,
+            changes,
+            writer_options.clone(),
+            &write_context,
+            &partition_columns,
+        )?)
+    } else {
+        None
+    };
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
@@ -259,7 +283,9 @@ async fn build_overwrite_if_plan(
         Some(snapshot_state.physical_partition_columns()),
     )?);
 
-    let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
+    let mut actions: Vec<Arc<dyn ExecutionPlan>> = vec![writer, remove_plan];
+    actions.extend(change_data_writer);
+    let union_actions = UnionExec::try_new(actions)?;
 
     Ok(Arc::new(DeltaCommitExec::new(
         Arc::new(CoalescePartitionsExec::new(union_actions)),
@@ -323,7 +349,7 @@ async fn build_old_data_plan(
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema,
+        table_schema.clone(),
         crate::datasource::DeltaScanConfig::default(),
         None,
         None,
@@ -332,8 +358,12 @@ async fn build_old_data_plan(
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
 
-    let negated_condition = Arc::new(NotExpr::new(condition));
-    let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+    let condition =
+        sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory {}
+            .create(table_schema, scan_exec.schema())?
+            .rewrite(condition)?;
+    let filter_exec = Arc::new(FilterExec::try_new(condition, scan_exec)?);
 
     Ok(filter_exec)
 }
