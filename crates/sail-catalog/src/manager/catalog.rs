@@ -125,7 +125,11 @@ mod tests {
             unsupported()
         }
 
-        async fn get_table(&self, _database: &Namespace, _table: &str) -> CatalogResult<TableStatus> {
+        async fn get_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+        ) -> CatalogResult<TableStatus> {
             unsupported()
         }
 
