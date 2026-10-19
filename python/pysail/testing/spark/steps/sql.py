@@ -319,7 +319,7 @@ def interval_result(datatable, query, spark):
     if expected_stored != "-":
         # The number behind the interval: microseconds for a day-time one, months for a year-month
         # one. Read off Arrow, so no renderer stands between the assertion and the data.
-        array = df.toArrow().column(0)
+        array = _arrow_table(df).column(0)
         stored = _stored_numbers(array)
         if stored is None:
             message = f"the value stores no number: {array.type} {array.to_pylist()}"
@@ -333,6 +333,19 @@ def interval_result(datatable, query, spark):
     if expected_cast != "-":
         rendered = df.selectExpr(f"CAST(`{column}` AS STRING)").collect()[0][0]
         assert _format_collected_value(rendered) == expected_cast
+
+
+def _arrow_table(df):
+    """The Arrow table behind a DataFrame, on every PySpark the suite runs against.
+
+    `DataFrame.toArrow` arrived in PySpark 4.0; on 3.5 the same table is one call deeper, where
+    `collect` reads it.
+    """
+    if hasattr(df, "toArrow"):
+        return df.toArrow()
+    client = df._session.client  # noqa: SLF001
+    table, _ = client.to_table(df._plan.to_proto(client))  # noqa: SLF001
+    return table
 
 
 def _format_collected_value(value) -> str:

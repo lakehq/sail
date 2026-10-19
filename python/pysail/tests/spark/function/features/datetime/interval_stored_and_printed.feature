@@ -158,6 +158,8 @@ Feature: a interval stores and prints what Spark does
         | stored | type | shown | cast |
         | - | interval year to month | INTERVAL '1-2' YEAR TO MONTH | INTERVAL '1-2' YEAR TO MONTH |
 
+    # The PySpark 3.5 client cannot read a calendar interval off the wire.
+    @spark-4
     Scenario: a calendar interval from make_interval
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.timeType.enabled = true
@@ -169,6 +171,8 @@ Feature: a interval stores and prints what Spark does
         | stored | type | shown | cast |
         | - | interval | 1 years 2 months 25 days 5 hours 6 minutes 7 seconds | 1 years 2 months 25 days 5 hours 6 minutes 7 seconds |
 
+    # The PySpark 3.5 client cannot read a calendar interval off the wire.
+    @spark-4
     Scenario: a calendar interval of days and time
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.timeType.enabled = true
