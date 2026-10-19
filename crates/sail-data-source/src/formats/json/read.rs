@@ -97,6 +97,7 @@ impl ReadFormat for JsonReadFormat {
         // policy is stated so that the day it can, it matches Spark rather than
         // inheriting Parquet's.
         let schema = try_merge_normalized(schemas, NanosecondTimestamps::WidenToMicrosecond)?;
+        let schema = sort_inferred_fields(schema);
         let schema = if self.options.drop_field_if_all_null {
             drop_all_null_fields(schema)
         } else {
@@ -134,6 +135,33 @@ impl ReadFormat for JsonReadFormat {
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
+}
+
+/// Sorts the inferred fields by name at every level, as Spark's JSON schema inference does.
+fn sort_inferred_fields(schema: Schema) -> Schema {
+    let mut fields = schema
+        .fields()
+        .iter()
+        .map(|field| sort_inferred_field(field))
+        .collect::<Vec<_>>();
+    fields.sort_by(|left, right| left.name().cmp(right.name()));
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+fn sort_inferred_field(field: &Field) -> Field {
+    let data_type = match field.data_type() {
+        DataType::List(element) => DataType::List(Arc::new(sort_inferred_field(element))),
+        DataType::Struct(fields) => {
+            let mut fields = fields
+                .iter()
+                .map(|field| sort_inferred_field(field))
+                .collect::<Vec<_>>();
+            fields.sort_by(|left, right| left.name().cmp(right.name()));
+            DataType::Struct(fields.into())
+        }
+        data_type => data_type.clone(),
+    };
+    Field::new(field.name(), data_type, field.is_nullable()).with_metadata(field.metadata().clone())
 }
 
 /// Removes fields whose inferred JSON type contains no concrete value.
