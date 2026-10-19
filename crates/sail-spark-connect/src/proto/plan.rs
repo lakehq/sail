@@ -1540,7 +1540,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::DropTemporaryView {
                     view: view_name.into(),
                     is_global: false,
-                    if_exists: false,
+                    if_exists: true,
                 })
             }
             CatType::DropGlobalTempView(x) => {

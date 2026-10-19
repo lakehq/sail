@@ -64,11 +64,19 @@ def test_local_temp_view_is_private_to_session(spark, observer):
 
 # Regression extending Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_basic.py,
 # SparkConnectBasicTests.test_create_global_temp_view; verify the missing-view drop result.
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="dropGlobalTempView currently reports True even when the view does not exist",
-    raises=AssertionError,
-    strict=True,
-)
 def test_drop_missing_global_temp_view_returns_false(spark):
     assert not spark.catalog.dropGlobalTempView(f"missing_global_view_{uuid.uuid4().hex}")
+
+
+# Regression extending Spark 3 (3.5.9): pyspark/sql/tests/test_dataframe.py,
+# DataFrameTestsMixin.test_cache_table; `tempView` drops views that may not exist.
+def test_drop_missing_temp_view_returns_false(spark):
+    assert not spark.catalog.dropTempView(f"missing_view_{uuid.uuid4().hex}")
+
+
+def test_drop_temp_view_returns_true_once(spark):
+    name = f"local_view_{uuid.uuid4().hex}"
+    spark.sql("SELECT 1 AS value").createTempView(name)
+    assert spark.catalog.dropTempView(name)
+    assert not spark.catalog.tableExists(name)
+    assert not spark.catalog.dropTempView(name)

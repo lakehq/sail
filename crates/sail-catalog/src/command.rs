@@ -676,12 +676,12 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
-                if is_global {
-                    manager.drop_global_temporary_view(&view, options).await?;
+                let dropped = if is_global {
+                    manager.drop_global_temporary_view(&view, options).await?
                 } else {
-                    manager.drop_temporary_view(&view, options).await?;
-                }
-                display.bools().to_record_batch(vec![true])?
+                    manager.drop_temporary_view(&view, options).await?
+                };
+                display.bools().to_record_batch(vec![dropped])?
             }
             CatalogCommand::DropView { view, options } => {
                 manager.drop_maybe_temporary_view(&view, options).await?;
