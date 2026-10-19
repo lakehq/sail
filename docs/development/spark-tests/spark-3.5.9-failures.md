@@ -8,8 +8,9 @@ rank: 40
 This page analyzes the failures in the Spark 3.5.9 test report for the `test-connect` suite (75 failures) and the doctest suites (21 failures).
 The failures were the same before and after the catalog changes in [#2801](https://github.com/lakehq/sail/pull/2801), so none of them are regressions from that pull request.
 
-The catalog, statistics, artifact, and plan analysis groups were reproduced locally and their root causes are confirmed in the code.
-The other groups are triaged from the CI test logs, and their root causes still need to be confirmed by reproducing each test.
+Every failure was reproduced locally.
+Where the root cause was not clear from the error, the behavior was compared with Spark 3.5.9, using both a classic session and a Spark Connect server running in a local JVM.
+Two differences, affecting four tests, are not explained yet, and they are marked as such.
 
 ## Reproducing the Failures
 
@@ -179,9 +180,9 @@ These tests compare the sampled rows with Spark, so they can only pass if Sail r
 
 ## Artifacts
 
-| Test                                                             | Error                                              |
-| :--------------------------------------------------------------- | :------------------------------------------------- |
-| `ArtifactTests` (5 tests), `LocalClusterArtifactTests` (4 tests) | `handle add artifacts`, `handle artifact statuses` |
+| Test                                                                                                                                                                                                                                                        | Error                                              |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------- |
+| `ArtifactTests` (`test_add_pyfile`, `test_add_zipped_package`, `test_basic_requests`, `test_cache_artifact`, `test_copy_from_local_to_fs`), `LocalClusterArtifactTests` (`test_add_archive`, `test_add_file`, `test_add_pyfile`, `test_add_zipped_package`) | `handle add artifacts`, `handle artifact statuses` |
 
 **Root cause.** The `AddArtifacts` and `ArtifactStatus` RPCs return `SparkError::todo` (`crates/sail-spark-connect/src/service/artifact_manager.rs`),
 and `QueryNode::CachedLocalRelation` is not resolved either.
@@ -214,22 +215,187 @@ The cached local relation is the most useful part, since it is needed for any la
 The resolver generates unique internal field names, so two resolutions of `SELECT 1` are not equal as they are.
 Replacing those names with their position in the plan, and then comparing (or hashing) the plans, would match Spark's canonicalized plan comparison for these tests.
 
-## Other Groups (Triage)
+## Functions
 
-The groups below are triaged from the CI test logs and not yet reproduced locally.
+### Percentiles and Approximate Distinct Counts
 
-| Group                  | Tests                                                                                                                                                                                                                                        | Error                                                                                            | Likely cause and direction                                                                                                |
-| :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
-| Percentile functions   | `test_aggregation_functions`, doctests `approx_percentile`, `percentile_approx`                                                                                                                                                              | `approx_percentile_cont` expects 2 arguments, `approx_distinct` on `Float64`                     | The accuracy argument is not mapped, and `approx_distinct` lacks a `Float64` implementation.                              |
-| Higher-order functions | doctests `zip_with`, `map_zip_with`, `test_lambda_functions`                                                                                                                                                                                 | `function: zip_with`, `function: map_zip_with`, unsupported cast from `Map` to `Null`            | These functions are not implemented.                                                                                      |
-| Windows and streaming  | `test_time_window_functions`, doctest `session_window`, `test_deduplicate_within_watermark_in_batch`, `test_streaming_local_relation`                                                                                                        | `function: session_window`, `deduplicate within watermark`                                       | Session windows and watermark deduplication are not implemented.                                                          |
-| Input files            | `test_input_files`, `test_udf_with_input_file_name` (3 tests), doctest `input_file_name`                                                                                                                                                     | wrong file count, empty file name                                                                | `input_file_name()` and `inputFiles()` do not report the files that were read.                                            |
-| Hints                  | `test_join_hint`, `test_generic_hints`, `test_functions_broadcast`, doctest `hint`                                                                                                                                                           | hint not in the plan string                                                                      | Hints are accepted but do not appear in `explain()` output.                                                               |
-| Duplicate field names  | `test_createDataFrame_duplicate_field_names`, `test_toPandas_duplicate_field_names`, `test_duplicate_field_names`, `test_assert_equal_nested_...`                                                                                            | `Converting to Python dictionary is not supported when duplicate field names are present`        | Struct values with duplicate field names are converted through Python dictionaries.                                       |
-| User-defined types     | `test_simple_udt_from_read`, `test_parquet_with_udt`, `test_udf_with_udt`, `test_udt_with_none`, `test_complex_nested_udt_in_df`                                                                                                             | UDT read back as its SQL type, `user defined data type should only exist in a field`             | The UDT metadata is not preserved through reads and Python UDFs.                                                          |
-| Data sources           | `test_orc`, `test_read_multiple_orc_file`, `test_jdbc`, `test_jdbc_format`, `test_bucketed_write`                                                                                                                                            | `No data source found for: orc`, JDBC error message, `bucketing for writing listing data source` | ORC and bucketed writes are not supported. The JDBC tests expect a different error message.                               |
-| JSON and CSV           | `test_json`, `test_encoding_json`, `test_linesep_json`, `test_multiline_json`, `test_multi_paths`, `test_checking_csv_header`, `test_write_operations`                                                                                       | JSON parse errors, `_corrupt_record` missing, CSV header not validated                           | Options such as `encoding`, `lineSep`, `multiLine`, `enforceSchema`, and corrupt record handling differ from Spark.       |
-| Expression results     | `test_normal_functions`, `test_string_functions_multi_args`, `test_window_functions`, `test_collection_functions`, `test_generator_functions`, `test_column_arithmetic_ops`, `test_decimal`, `test_math_functions`, `test_date_ts_functions` | DataFrames differ, `factorial` on decimals, date cast from `1997/02/28 10:30:00`                 | Individual function differences. Each test needs to be split by the expression that differs.                              |
-| Schema and types       | `test_schema`, `test_to`, `test_to_pandas`                                                                                                                                                                                                   | nullability differs, `field not found in input schema: col1`, `datetime64[us]` instead of `[ns]` | Nullability inference, `DataFrame.to` column matching, and pandas timestamp resolution.                                   |
-| Python UDFs            | `test_udf`, `test_udtf`, `test_scalar_iter_udf_init`                                                                                                                                                                                         | assertion errors, `'NoneType' object has no attribute 'partitionId'`                             | `TaskContext` is not available in Python UDF workers, plus UDF and UDTF behavior differences.                             |
-| Other                  | `test_observe`, `test_distributed_sequence_id`, `test_random_split`, doctests `colRegex`, `randomSplit`                                                                                                                                      | `collect metrics`, `distributed_sequence_id`, random split results                               | `observe` and `distributed_sequence_id` are not implemented. `randomSplit` results depend on the random number generator. |
+| Test                                                   | Error                                                                                      |
+| :----------------------------------------------------- | :----------------------------------------------------------------------------------------- |
+| doctests `approx_percentile`, `percentile_approx`      | `approx_percentile_cont(Float64, List(non-null Float64), Int32)` has no matching signature |
+| `SparkConnectFunctionTests.test_aggregation_functions` | `Support for 'approx_distinct' for data type Float64 is not implemented`                   |
+
+**Root cause.** `percentile_approx` and `approx_percentile` are mapped directly to DataFusion's `approx_percentile_cont`, which only accepts a single percentile.
+The doctests pass an array of percentiles, which Spark accepts and answers with an array.
+The accuracy argument is not the problem, since `approx_percentile_cont` takes a third argument.
+`approx_count_distinct` is mapped to DataFusion's `approx_distinct`, which has no implementation for floating-point input.
+
+**Proposed fix.** Resolve an array of percentiles into one `approx_percentile_cont` call per percentile (or a multi-percentile accumulator, as `percentile_disc` already has) and return the results as an array.
+Spark returns the input type for `percentile_approx`, so the results also need a cast back to it.
+For `approx_count_distinct` on `float` and `double`, the values can be hashed by their bit pattern, after normalizing `-0.0` and NaN as Spark does.
+
+### Higher-Order Functions
+
+| Test                                              | Error                                          |
+| :------------------------------------------------ | :--------------------------------------------- |
+| doctests `zip_with`, `map_zip_with`               | `function: zip_with`, `function: map_zip_with` |
+| `SparkConnectFunctionTests.test_lambda_functions` | `Unsupported CAST from Map(...) to Null`       |
+
+**Root cause.** `zip_with` and `map_zip_with` are registered as unknown functions (`crates/sail-plan/src/function/scalar/lambda.rs`).
+
+`test_lambda_functions` fails before any lambda runs.
+Its `VALUES` clause has a column whose first row is `NULL` and whose other rows are maps.
+Sail takes the column type from the first row (`Null`) and then cannot cast the maps to it, while Spark uses the common type of all the rows (`map<int,int>`).
+The same `VALUES` clause works in Sail when a map comes first.
+
+**Proposed fix.** Implement `zip_with` and `map_zip_with` with the existing higher-order function support, which already covers `transform`, `filter`, and `map_filter`.
+For `VALUES`, find the common type of each column over all the rows before casting, so that a `NULL` in the first row does not decide the type.
+
+### Other Expression Differences
+
+| Test                                                                                                                  | Difference                                                                               |
+| :-------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
+| `SparkConnectFunctionTests.test_normal_functions`                                                                     | `coalesce(decimal, string, double)` is `decimal(30,15)` in Sail and `string` in Spark    |
+| `SparkConnectColumnTests.test_column_arithmetic_ops`                                                                  | decimal division gives `decimal(18,9)` in Sail and `decimal(23,14)` in Spark             |
+| `SparkConnectFunctionTests.test_math_functions`                                                                       | `factorial` of a decimal fails to coerce in Sail; Spark casts it to `int`                |
+| `SparkConnectFunctionTests.test_date_ts_functions`                                                                    | `last_day('1997/02/28 10:30:00')` fails with a cast error in Sail and is `NULL` in Spark |
+| `SparkConnectFunctionTests.test_window_functions`                                                                     | the column is named `row_number()`; Spark includes the window in the name                |
+| `SparkConnectColumnTests.test_decimal`                                                                                | the column is named `(b < 2.5)`; the classic Spark session names it `(b < 3)`            |
+| `SparkConnectFunctionTests.test_string_functions_multi_args`, `test_collection_functions`, `test_generator_functions` | array columns print the same but compare as different (not explained yet)                |
+
+**Root causes.**
+
+- Type coercion: Spark coerces a decimal and a double to `double`, and a decimal and a string to `string`. Sail keeps the decimal in both cases.
+- Decimal division: Spark's result type has `scale = max(6, s1 + p2 + 1)` and `precision = p1 - s1 + s2 + scale`, reduced to at most 38 digits.
+  For `decimal(10,1) / decimal(10,0) / 3`, this gives `decimal(23,14)` and `0.38888888888900`. Sail gives `decimal(18,9)` and `0.388886666`, so precision is lost in the intermediate result.
+- `factorial` only has an `Int64` signature, and decimals are not implicitly cast to it.
+- An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raises an error instead.
+- Window expressions are named without their window specification.
+- The array columns in the last row print identically, and Sail returns the same Python types as a Spark Connect server (NumPy arrays of objects).
+  The difference must be in the nested values, and these tests need to be split further to find which values differ.
+
+**Proposed fix.** Use Spark's rules for decimal coercion and for the result type of decimal division, allow implicit numeric casts for `factorial`, use null-on-error casts for implicit string-to-date conversions of function arguments outside ANSI mode, and include the window specification in the generated name of a window expression.
+
+### Windows and Streaming
+
+| Test                                                                             | Error                          |
+| :------------------------------------------------------------------------------- | :----------------------------- |
+| `SparkConnectFunctionTests.test_time_window_functions`, doctest `session_window` | `function: session_window`     |
+| `SparkConnectBasicTests.test_deduplicate_within_watermark_in_batch`              | `deduplicate within watermark` |
+
+**Root cause.** `session_window` is registered as an unknown function (`crates/sail-plan/src/function/scalar/datetime.rs`).
+`test_deduplicate_within_watermark_in_batch` only expects an `AnalysisException` saying that `dropDuplicatesWithinWatermark` is not supported for batch DataFrames, but Sail reports an unsupported operation for every input.
+
+**Proposed fix.** For batch input, raise an `AnalysisException` with Spark's message. `session_window` needs its own aggregation and is a larger feature.
+
+## Input Files and Hints
+
+### Input File Names
+
+| Test                                                                                                                                           | Difference                                   |
+| :--------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------- |
+| `UDFParityTests.test_udf_with_input_file_name` (2 tests), `ArrowPythonUDFParityTests.test_udf_with_input_file_name`, doctest `input_file_name` | `input_file_name()` is an empty string       |
+| `DataFrameParityTests.test_input_files`                                                                                                        | `inputFiles()` returns 4 files instead of 10 |
+
+**Root cause.** `input_file_name()` works with `collect()` but returns an empty string with `first()`, for Parquet, JSON, and text alike, and with or without a Python UDF.
+The physical optimizer rule in `crates/sail-physical-optimizer/src/input_file_name.rs` pushes the function down to the file scan through projections, filters, unnests, unions, and repartitions, but not through a limit, so the fallback replaces it with an empty string.
+All four tests use `first()`.
+
+`inputFiles()` itself is correct. `spark.range(1, 100, 1, 10).write.parquet(path)` writes 4 files in Sail (the default parallelism) and 10 in Spark (one per partition), so there are only 4 files to list.
+
+**Proposed fix.** Let the rule pass through limits. For the file count, keep the number of partitions given to `range` when writing, as Spark does.
+
+### Join Hints
+
+| Test                                                                                                                                                          | Difference                         |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------ | :--------------------------------- |
+| `SparkConnectBasicTests.test_join_hint`, `DataFrameParityTests.test_generic_hints`, `FunctionsParityTests.test_functions_broadcast`, doctest `DataFrame.hint` | no `BroadcastHashJoin` in the plan |
+
+**Root cause.** The tests look for Spark's operator names in the `explain()` output.
+Sail plans the hinted join as DataFusion's `HashJoinExec: mode=CollectLeft`, which is the equivalent operator, but the text does not match.
+
+**Proposed fix.** These are probably best kept as known differences, since matching them would mean printing Spark's operator names in `explain()`.
+
+## Data Sources
+
+| Test                                                                                    | Difference                                                             |
+| :-------------------------------------------------------------------------------------- | :--------------------------------------------------------------------- |
+| `SparkConnectBasicTests.test_orc`, `DataSourcesParityTests.test_read_multiple_orc_file` | `No data source found for: orc`                                        |
+| `ReadwriterParityTests.test_bucketed_write`                                             | `bucketing for writing listing data source`                            |
+| `SparkConnectBasicTests.test_json`                                                      | the `primitivesAsString` option is ignored                             |
+| `SparkConnectBasicTests.test_multi_paths`                                               | inferred JSON fields are in file order; Spark sorts them by name       |
+| `DataSourcesParityTests.test_multiline_json`                                            | `multiLine` is not supported for JSON arrays                           |
+| `DataSourcesParityTests.test_linesep_json`                                              | the `lineSep` option and `_corrupt_record` are not supported for JSON  |
+| `DataSourcesParityTests.test_encoding_json`                                             | the `encoding` option is not supported (`UTF-16LE`)                    |
+| `SparkConnectBasicTests.test_write_operations`                                          | the `lineSep` option is ignored when reading CSV                       |
+| `DataSourcesParityTests.test_checking_csv_header`                                       | `enforceSchema=False` does not check the CSV header against the schema |
+| `DataSourcesParityTests.test_jdbc`, `test_jdbc_format`                                  | the tests use an embedded Derby database through the JVM               |
+
+**Root cause.** Each row is a missing data source or option.
+`test_multi_paths` looks like a row-order problem in the report, but the rows are the same. Spark sorts the fields of an inferred JSON schema by name (`age`, `name`), and Sail keeps them in the order they appear (`name`, `age`).
+The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Python JDBC data source and are best skipped.
+
+**Proposed fix.** Sort inferred JSON fields by name, then add the JSON and CSV options one at a time, since each is small and can be tested on its own. ORC and bucketed writes are larger features.
+
+## Types and Schemas
+
+### Duplicate Field Names
+
+| Test                                                                                                                                                                                                                                        | Error                                                                                     |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------------------------------------- |
+| `ArrowParityTests.test_createDataFrame_duplicate_field_names`, `ArrowParityTests.test_toPandas_duplicate_field_names`, `DataFrameParityTests.test_duplicate_field_names`, `ConnectUtilsTests.test_assert_equal_nested_struct_str_duplicate` | `Converting to Python dictionary is not supported when duplicate field names are present` |
+
+**Root cause.** The Spark Connect client converts a struct value by looking up each field under a deduplicated name (`x_0`, `x_1`) from `_dedup_names` (`pyspark/sql/connect/conversion.py`), and takes the original names from the schema.
+So the client expects the struct fields in the Arrow data to have deduplicated names.
+Sail sends the original duplicate names, which PyArrow cannot convert to a dictionary.
+
+**Proposed fix.** Rename duplicate struct field names in the Arrow batches sent to the client with the same rule as `_dedup_names` (`<name>_<index>` for names that appear more than once), at every nesting level.
+
+### User-Defined Types
+
+| Test                                                                                         | Difference                                                      |
+| :------------------------------------------------------------------------------------------- | :-------------------------------------------------------------- |
+| `SparkConnectBasicTests.test_simple_udt_from_read`, `TypesParityTests.test_parquet_with_udt` | a UDT column read from Parquet comes back as its SQL type       |
+| `TypesParityTests.test_udf_with_udt`, `TypesParityTests.test_complex_nested_udt_in_df`       | the Python UDF receives the SQL value instead of the UDT object |
+| `TypesParityTests.test_udt_with_none`                                                        | `user defined data type should only exist in a field`           |
+
+**Root cause.** Spark stores the UDT in the Spark schema that it writes to the Parquet metadata, and restores it on read. Sail does not keep the UDT when writing or reading Parquet.
+Python UDFs get the value in its SQL form because the input type passed to the worker is not the UDT, so the worker does not deserialize it.
+A Python UDF whose return type is a UDT is rejected, because a UDT is only accepted as a field type.
+
+**Proposed fix.** Write and read the Spark schema in the Parquet metadata, pass UDT input types to Python UDF workers, and allow a UDT as the return type of a Python UDF.
+
+### Other Schema Differences
+
+| Test                                  | Difference                                                                                       |
+| :------------------------------------ | :----------------------------------------------------------------------------------------------- |
+| `SparkConnectBasicTests.test_to`      | `to()` with a field that is not in the DataFrame fails; Spark fills a nullable field with `NULL` |
+| `DataFrameParityTests.test_to`        | `to()` does not reject a nullable column for a non-nullable field (`NULLABLE_COLUMN_OR_FIELD`)   |
+| `DataFrameParityTests.test_to_pandas` | timestamps are `datetime64[us]` instead of `datetime64[ns]`                                      |
+| `SparkConnectBasicTests.test_schema`  | nested nullability differs from the classic session (not explained yet)                          |
+
+**Root cause.** `DataFrame.to()` resolves every field by name and fails if one is missing, where Spark adds a missing nullable field as `NULL`. It also does not check nullability.
+Microsecond timestamps are intentional in Sail, as noted in `normalize_datetime_dtypes` in the test utilities.
+For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server for the failing query, so the difference is with the classic session that the test compares against, and it needs more investigation.
+
+**Proposed fix.** Fill missing nullable fields with `NULL` in `to()`, and raise `NULLABLE_COLUMN_OR_FIELD` when a nullable column is assigned to a non-nullable field.
+
+## Other Failures
+
+| Test                                                                        | Difference                                               |
+| :-------------------------------------------------------------------------- | :------------------------------------------------------- |
+| `SparkConnectBasicTests.test_observe`                                       | `collect metrics` (`observe`) is not implemented         |
+| `SparkConnectColumnTests.test_distributed_sequence_id`                      | `distributed_sequence_id` is not implemented             |
+| `SparkConnectBasicTests.test_random_split`, doctest `randomSplit`           | the split rows differ from Spark                         |
+| doctest `DataFrame.colRegex`                                                | `` `(Col1)?+.+` `` matches both columns                  |
+| `PandasUDFScalarParityTests.test_scalar_iter_udf_init`                      | `TaskContext.get()` is `None` in the Python worker       |
+| `SparkConnectFunctionTests.test_udf`, `SparkConnectFunctionTests.test_udtf` | `AssertionError` from the classic Spark session          |
+| `SparkConnectBasicTests.test_streaming_local_relation`                      | `handle artifact statuses` (see [Artifacts](#artifacts)) |
+
+**Root causes.**
+
+- `randomSplit` uses a different random number generator from Spark, as with `sampleBy`.
+- `` `(Col1)?+.+` `` uses a possessive quantifier from Java regular expressions. In Java, `(Col1)?+` does not give back `Col1`, so the pattern does not match the column `Col1`. Sail treats it as a greedy quantifier, which can backtrack, so it matches.
+- The Python worker does not set up a `TaskContext`, so `partitionId()` is not available.
+- In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail.
+
+**Proposed fix.** Implement `observe` and `distributed_sequence_id`, reject or translate possessive quantifiers in `colRegex`, and pass a `TaskContext` with the partition ID to the Python worker.
