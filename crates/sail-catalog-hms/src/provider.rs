@@ -124,7 +124,7 @@ pub(crate) fn apply_alter_table_options(
                 }
             }
         }
-        AlterTableOptions::ReplaceColumns { fields } => {
+        AlterTableOptions::ReplaceColumns { fields, .. } => {
             crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
         }
         AlterTableOptions::AlterColumns {
@@ -157,7 +157,9 @@ pub(crate) fn apply_alter_table_options(
                 }
             }
         }
-        AlterTableOptions::AlterColumnType { name, data_type } => {
+        AlterTableOptions::AlterColumnType {
+            name, data_type, ..
+        } => {
             let [column_name] = name.as_slice() else {
                 return Err(CatalogError::NotSupported(
                     "Hive Metastore catalog does not support altering nested column types"
@@ -1188,7 +1190,9 @@ impl CatalogProvider for HmsCatalogProvider {
             AlterTableOptions::UnsetTableProperties { keys, .. } => {
                 reject_spark_property_keys(keys)
             }
-            AlterTableOptions::AlterColumnType { name, data_type } => {
+            AlterTableOptions::AlterColumnType {
+                name, data_type, ..
+            } => {
                 if name.len() != 1 {
                     return Err(CatalogError::NotSupported(
                         "Hive Metastore catalog does not support altering nested column types"

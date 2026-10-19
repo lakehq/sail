@@ -106,3 +106,56 @@ def test_v1_partition_tombstone_name_collision_is_atomic(spark, tmp_path):
         assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(1, 10, 20), (2, 11, 21)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_empty_partition_alias_is_rejected_atomically(spark, tmp_path):
+    table = "empty_partition_alias"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        before = _find_latest_metadata(tmp_path)
+        with pytest.raises(Exception, match=r"(?i)empty|name|identifier"):
+            spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD bucket(2, id) AS ``")
+        assert _find_latest_metadata(tmp_path) == before
+        spark.sql(f"INSERT INTO {table} VALUES (2)")
+        assert [row.id for row in spark.table(table).orderBy("id").collect()] == [1, 2]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("operation", ["RENAME COLUMN value TO p", "ADD COLUMN p INT"])
+def test_column_change_rejects_partition_alias_conflict(spark, tmp_path, historical, operation):
+    table = "partition_alias_conflict"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD bucket(2, id) AS p")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 2)")
+        if historical:
+            spark.sql(f"ALTER TABLE {table} DROP PARTITION FIELD p")
+        before = _find_latest_metadata(tmp_path)
+        with pytest.raises(Exception, match=r"(?i)partition|conflict"):
+            spark.sql(f"ALTER TABLE {table} {operation}")
+        assert _find_latest_metadata(tmp_path) == before
+        assert [tuple(row) for row in spark.table(table).collect()] == [(1, 2)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_column_rename_to_own_partition_alias_preserves_identity(spark, tmp_path):
+    table = "partition_alias_source_rename"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD bucket(2, id) AS p")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 2)")
+        before = _find_latest_metadata(tmp_path)
+        spark.sql(f"ALTER TABLE {table} RENAME COLUMN id TO p")
+        after = _find_latest_metadata(tmp_path)
+        assert after["partition-specs"] == before["partition-specs"]
+        spark.sql(f"INSERT INTO {table} VALUES (3, 4)")
+        assert [row.asDict() for row in spark.table(table).orderBy("p").collect()] == [
+            {"p": 1, "value": 2},
+            {"p": 3, "value": 4},
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

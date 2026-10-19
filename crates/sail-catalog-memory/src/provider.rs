@@ -148,6 +148,7 @@ impl MemoryCatalogProvider {
                     }
                     AlterTableOptions::ReplaceColumns {
                         fields: replacement,
+                        ..
                     } => {
                         if schema.is_none() {
                             sail_common_datafusion::catalog::replace_columns(
@@ -216,14 +217,14 @@ impl MemoryCatalogProvider {
                         }
                         Ok(())
                     }
-                    AlterTableOptions::AlterColumnType { name, data_type } => {
-                        alter_column_type(columns, &name, data_type).map_err(|e| {
-                            CatalogError::InvalidArgument(format!(
-                                "failed to alter column type for '{}': {e}",
-                                name.join(".")
-                            ))
-                        })
-                    }
+                    AlterTableOptions::AlterColumnType {
+                        name, data_type, ..
+                    } => alter_column_type(columns, &name, data_type).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column type for '{}': {e}",
+                            name.join(".")
+                        ))
+                    }),
                     AlterTableOptions::AlterColumnDefault { name, default } => {
                         alter_column_default(columns, &name, default).map_err(|e| {
                             CatalogError::InvalidArgument(format!(

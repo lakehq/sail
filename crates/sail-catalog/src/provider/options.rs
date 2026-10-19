@@ -159,6 +159,8 @@ pub enum AlterTableOptions {
     },
     ReplaceColumns {
         fields: datafusion::arrow::datatypes::Fields,
+        #[serde(default)]
+        case_sensitive: bool,
     },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
@@ -175,6 +177,8 @@ pub enum AlterTableOptions {
     AlterColumnType {
         name: Vec<String>,
         data_type: DataType,
+        #[serde(default)]
+        case_sensitive: bool,
     },
     AlterColumnDefault {
         name: Vec<String>,
@@ -227,13 +231,15 @@ impl From<&AlterTableOptions>
                     location: location.clone(),
                 }
             }
-            AlterTableOptions::ReplaceColumns { fields } => {
-                LakeSourceAlterTableOperation::ReplaceColumns {
-                    schema: std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(
-                        fields.clone(),
-                    )),
-                }
-            }
+            AlterTableOptions::ReplaceColumns {
+                fields,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::ReplaceColumns {
+                schema: std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(
+                    fields.clone(),
+                )),
+                case_sensitive: *case_sensitive,
+            },
             AlterTableOptions::AlterColumns {
                 changes,
                 case_sensitive,
@@ -256,12 +262,15 @@ impl From<&AlterTableOptions>
                     if_exists: *if_exists,
                 }
             }
-            AlterTableOptions::AlterColumnType { name, data_type } => {
-                LakeSourceAlterTableOperation::AlterColumnType {
-                    column_path: name.clone(),
-                    data_type: data_type.clone(),
-                }
-            }
+            AlterTableOptions::AlterColumnType {
+                name,
+                data_type,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::AlterColumnType {
+                column_path: name.clone(),
+                data_type: data_type.clone(),
+                case_sensitive: *case_sensitive,
+            },
             AlterTableOptions::AlterColumnDefault { name, default } => {
                 LakeSourceAlterTableOperation::AlterColumnDefault {
                     column_path: name.clone(),

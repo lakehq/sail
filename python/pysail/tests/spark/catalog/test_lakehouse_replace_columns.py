@@ -186,3 +186,48 @@ def test_delta_replace_columns_validates_generated_expression_type(spark, tmp_pa
         assert tuple(spark.table(table).orderBy("id").first()) == (1, 2)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("case_sensitive", [True, False])
+@pytest.mark.parametrize(
+    ("definition", "replacement", "value"),
+    [
+        ("Value INT", "value INT", "1"),
+        ("payload STRUCT<Value: INT>", "payload STRUCT<value: INT>", "named_struct('Value', 1)"),
+        ("payload ARRAY<STRUCT<Value: INT>>", "payload ARRAY<STRUCT<value: INT>>", "array(named_struct('Value', 1))"),
+        (
+            "payload MAP<STRING, STRUCT<Value: INT>>",
+            "payload MAP<STRING, STRUCT<value: INT>>",
+            "map('key', named_struct('Value', 1))",
+        ),
+    ],
+    ids=["top-level", "struct", "array", "map-value"],
+)
+def test_delta_replace_columns_respects_case_sensitive_resolution(
+    spark, tmp_path, definition, replacement, value, case_sensitive
+):
+    table = "replace_case_sensitive_columns"
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.sql(f"CREATE TABLE {table} ({definition}) USING delta LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"INSERT INTO {table} SELECT {value}")
+        before = {log.name: log.read_bytes() for log in (tmp_path / "_delta_log").glob("*.json")}
+        rows = spark.table(table).collect()
+        schema = spark.table(table).schema
+        spark.conf.set(key, str(case_sensitive).lower())
+
+        if case_sensitive:
+            with pytest.raises(Exception, match=r"(?i)ambiguous|cannot.*drop|not.*supported"):
+                spark.sql(f"ALTER TABLE {table} REPLACE COLUMNS ({replacement})")
+            assert {log.name: log.read_bytes() for log in (tmp_path / "_delta_log").glob("*.json")} == before
+        else:
+            spark.sql(f"ALTER TABLE {table} REPLACE COLUMNS ({replacement})")
+
+        assert spark.table(table).schema == schema
+        assert spark.table(table).collect() == rows
+        spark.sql(f"INSERT INTO {table} SELECT {value}")
+        assert spark.table(table).collect() == rows * 2
+    finally:
+        spark.conf.set(key, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

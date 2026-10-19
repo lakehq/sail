@@ -108,6 +108,7 @@ pub enum LakeSourceAlterTableOperation {
     },
     ReplaceColumns {
         schema: datafusion::arrow::datatypes::SchemaRef,
+        case_sensitive: bool,
     },
     AlterColumns {
         changes: Vec<sail_common::spec::ColumnChange<DataType>>,
@@ -128,6 +129,7 @@ pub enum LakeSourceAlterTableOperation {
     AlterColumnType {
         column_path: Vec<String>,
         data_type: DataType,
+        case_sensitive: bool,
     },
     /// Alters the default expression of a table column.
     AlterColumnDefault {
@@ -240,6 +242,7 @@ pub trait LakeSource: DataSource {
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
+                ..
             } => {
                 self.alter_table_column_type(runtime_env, path, column_path, data_type)
                     .await

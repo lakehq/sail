@@ -107,6 +107,7 @@ pub(crate) async fn replace_columns(
     path: &str,
     lakehouse: Option<&LakehouseExecutionContext>,
     requested: &datafusion::arrow::datatypes::Schema,
+    case_sensitive: bool,
 ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
     use datafusion::arrow::datatypes::{DataType, Schema};
     use sail_common::spec::ColumnChange;
@@ -145,6 +146,7 @@ pub(crate) async fn replace_columns(
         &DataType::Struct(requested.fields().clone()),
         &[],
         snapshot.effective_column_mapping_mode() != ColumnMappingMode::None,
+        case_sensitive,
         &mut drops,
     )?
     else {
@@ -220,7 +222,7 @@ pub(crate) async fn replace_columns(
         })
         .collect::<Vec<_>>();
     if let Some(value) = metadata.configuration().get(STATS)
-        && let Some(value) = update_statistics_columns(value, &changes, false)?
+        && let Some(value) = update_statistics_columns(value, &changes, case_sensitive)?
     {
         metadata = metadata.add_config_key(STATS.into(), value.clone());
         properties.push((STATS.into(), value));
@@ -278,6 +280,7 @@ fn replace_delta_type(
     target: &datafusion::arrow::datatypes::DataType,
     path: &[String],
     mapping: bool,
+    case_sensitive: bool,
     drops: &mut Vec<Vec<String>>,
 ) -> Result<datafusion::arrow::datatypes::DataType> {
     use datafusion::arrow::datatypes::{DataType, FieldRef};
@@ -286,13 +289,21 @@ fn replace_delta_type(
         new: &FieldRef,
         path: &[String],
         mapping: bool,
+        case_sensitive: bool,
         drops: &mut Vec<Vec<String>>,
         collection: bool,
     ) -> Result<FieldRef> {
         if old.is_nullable() && !new.is_nullable() {
             return plan_err!("Cannot tighten nullability of '{}'", path.join("."));
         }
-        let ty = replace_delta_type(old.data_type(), new.data_type(), path, mapping, drops)?;
+        let ty = replace_delta_type(
+            old.data_type(),
+            new.data_type(),
+            path,
+            mapping,
+            case_sensitive,
+            drops,
+        )?;
         let mut updated = old.as_ref().clone().with_data_type(ty);
         if !collection {
             updated = updated.with_nullable(new.is_nullable());
@@ -306,13 +317,16 @@ fn replace_delta_type(
     }
     match (current, target) {
         (DataType::Struct(old), DataType::Struct(new)) => {
+            let matches = |left: &str, right: &str| {
+                left == right || (!case_sensitive && left.eq_ignore_ascii_case(right))
+            };
             let removed = old
                 .iter()
-                .filter(|f| !new.iter().any(|n| n.name().eq_ignore_ascii_case(f.name())))
+                .filter(|f| !new.iter().any(|n| matches(n.name(), f.name())))
                 .collect::<Vec<_>>();
             let added = new
                 .iter()
-                .any(|f| !old.iter().any(|o| o.name().eq_ignore_ascii_case(f.name())));
+                .any(|f| !old.iter().any(|o| matches(o.name(), f.name())));
             if !removed.is_empty() {
                 if added {
                     return plan_err!(
@@ -333,11 +347,8 @@ fn replace_delta_type(
                 .map(|new| {
                     let mut nested = path.to_vec();
                     nested.push(new.name().clone());
-                    if let Some(old) = old
-                        .iter()
-                        .find(|old| old.name().eq_ignore_ascii_case(new.name()))
-                    {
-                        field(old, new, &nested, mapping, drops, false)
+                    if let Some(old) = old.iter().find(|old| matches(old.name(), new.name())) {
+                        field(old, new, &nested, mapping, case_sensitive, drops, false)
                     } else {
                         if !new.is_nullable() {
                             return plan_err!(
@@ -355,7 +366,13 @@ fn replace_delta_type(
             let mut nested = path.to_vec();
             nested.push("element".into());
             Ok(DataType::List(field(
-                old, new, &nested, mapping, drops, true,
+                old,
+                new,
+                &nested,
+                mapping,
+                case_sensitive,
+                drops,
+                true,
             )?))
         }
         (DataType::Map(old, sorted), DataType::Map(new, _)) => {
@@ -370,7 +387,7 @@ fn replace_delta_type(
                 .map(|(old, new)| {
                     let mut nested = path.to_vec();
                     nested.push(if old.name() == "keys" { "key" } else { "value" }.into());
-                    field(old, new, &nested, mapping, drops, true)
+                    field(old, new, &nested, mapping, case_sensitive, drops, true)
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(DataType::Map(

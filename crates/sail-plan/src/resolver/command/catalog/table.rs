@@ -243,24 +243,18 @@ impl PlanResolver<'_> {
             .get_database_by_qualifier(qualifier)
             .await?
             .location;
-        let (base, suffix) = match &location {
-            Some(loc) => (
-                loc.trim_end_matches(object_store::path::DELIMITER),
-                String::new(),
-            ),
-            None => (
-                self.config
-                    .default_warehouse_directory
-                    .trim_end_matches(object_store::path::DELIMITER),
-                format!("-{}", uuid::Uuid::new_v4()),
-            ),
-        };
+        let base = location
+            .as_deref()
+            .unwrap_or(&self.config.default_warehouse_directory)
+            .trim_end_matches(object_store::path::DELIMITER);
+        // A renamed table retains its location, so reusing its old name must
+        // allocate a different directory even when the database has a location.
         Ok(format!(
-            "{}{}{}{}",
+            "{}{}{}-{}",
             base,
             object_store::path::DELIMITER,
             name,
-            suffix,
+            uuid::Uuid::new_v4(),
         ))
     }
 
@@ -531,6 +525,7 @@ impl PlanResolver<'_> {
                     .await?;
                 AlterTableOptions::ReplaceColumns {
                     fields: schema.fields().clone(),
+                    case_sensitive: self.config.case_sensitive,
                 }
             }
             spec::AlterTableOperation::AlterColumns { changes } => {
@@ -552,6 +547,7 @@ impl PlanResolver<'_> {
                 AlterTableOptions::AlterColumnType {
                     name: name.into(),
                     data_type: self.resolve_data_type(&data_type, state)?,
+                    case_sensitive: self.config.case_sensitive,
                 }
             }
             spec::AlterTableOperation::AlterColumnDefault { name, default } => {

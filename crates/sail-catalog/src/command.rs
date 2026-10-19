@@ -497,6 +497,28 @@ impl CatalogCommand {
                         "RENAME COLUMN requires a format that preserves column identities".into(),
                     ));
                 }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| format.eq_ignore_ascii_case("csv"))
+                    && match &options {
+                        AlterTableOptions::ReplaceColumns { .. } => true,
+                        AlterTableOptions::AlterColumns { changes, .. } => {
+                            changes.iter().any(|change| {
+                                matches!(
+                                    change,
+                                    sail_common::spec::ColumnChange::Add { .. }
+                                        | sail_common::spec::ColumnChange::Drop { .. }
+                                        | sail_common::spec::ColumnChange::Position { .. }
+                                )
+                            })
+                        }
+                        _ => false,
+                    }
+                {
+                    return Err(CatalogError::NotSupported(
+                        "CSV column additions, drops, reordering and replacement require rewriting existing files".into(),
+                    ));
+                }
 
                 // Lake sources commit authoritative format metadata, including catalog
                 // metadata when the provider supports an atomic update.
@@ -561,10 +583,10 @@ impl CatalogCommand {
                     if !result.catalog_updated {
                         let mut catalog_options = catalog_sync_alter_options(&format, &options)?;
                         if let Some(schema) = result.schema {
-                            if matches!(catalog_options, AlterTableOptions::ReplaceColumns { .. }) {
-                                catalog_options = AlterTableOptions::ReplaceColumns {
-                                    fields: schema.fields().clone(),
-                                };
+                            if let AlterTableOptions::ReplaceColumns { fields, .. } =
+                                &mut catalog_options
+                            {
+                                *fields = schema.fields().clone();
                             }
                             manager
                                 .alter_table_with_schema(&table, catalog_options, schema)

@@ -36,7 +36,7 @@ pub(crate) fn apply_alter_table_input(
         }
         return Ok(());
     }
-    if let AlterTableOptions::ReplaceColumns { fields } = &options {
+    if let AlterTableOptions::ReplaceColumns { fields, .. } = &options {
         return replace_columns(input, &arrow::datatypes::Schema::new(fields.clone()));
     }
     if let AlterTableOptions::AlterColumns {

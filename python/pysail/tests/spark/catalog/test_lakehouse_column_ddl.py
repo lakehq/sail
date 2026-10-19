@@ -200,6 +200,25 @@ def test_table_rename_preserves_storage_and_schema(spark, lake_table):
         spark.sql(f"DROP TABLE IF EXISTS {renamed}")
 
 
+@pytest.mark.parametrize("fmt", ["delta", "parquet", "iceberg"])
+def test_managed_table_rename_keeps_recreated_name_isolated(spark, tmp_path, fmt):
+    database = f"rename_location_{fmt}"
+    original = f"{database}.original"
+    renamed = f"{database}.renamed"
+    try:
+        spark.sql(f"CREATE DATABASE {database} LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"CREATE TABLE {original} (id INT) USING {fmt}")
+        spark.sql(f"INSERT INTO {original} VALUES (1)")
+        spark.sql(f"ALTER TABLE {original} RENAME TO {renamed}")
+        spark.sql(f"CREATE TABLE {original} (id INT) USING {fmt}")
+        assert spark.table(original).collect() == []
+        spark.sql(f"INSERT INTO {original} VALUES (2)")
+        assert [row.id for row in spark.table(renamed).collect()] == [1]
+        assert [row.id for row in spark.table(original).collect()] == [2]
+    finally:
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
 def test_delta_statistics_columns_follow_renames_and_drops(spark, tmp_path):
     table = "delta_stats_evolution"
     try:
@@ -290,6 +309,26 @@ def test_column_name_uniqueness_uses_format_rules(spark, tmp_path, fmt, case_sen
                 spark.sql(f"ALTER TABLE {table} {operation}")
             assert metadata_schema(tmp_path, fmt) == before
             assert spark.table(table).collect() == rows
+    finally:
+        spark.conf.set(key, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_nested_type_change_resolves_exact_case(spark, tmp_path):
+    table = "nested_type_case"
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        spark.sql(f"CREATE TABLE {table} (s STRUCT<Val: INT, val: INT>) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"INSERT INTO {table} SELECT named_struct('Val', 1, 'val', 2)")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN s.val TYPE BIGINT")
+        assert spark.table(table).schema["s"].dataType.simpleString() == "struct<Val:int,val:bigint>"
+        spark.sql(f"INSERT INTO {table} SELECT named_struct('Val', 3, 'val', 2147483648L)")
+        assert [tuple(row.s) for row in spark.table(table).orderBy("s.Val").collect()] == [
+            (1, 2),
+            (3, 2147483648),
+        ]
     finally:
         spark.conf.set(key, previous)
         spark.sql(f"DROP TABLE IF EXISTS {table}")

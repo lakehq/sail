@@ -128,9 +128,13 @@ fn catalog_alter_options(
                 location: location.clone(),
             }]
         }
-        LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
+        LakeSourceAlterTableOperation::ReplaceColumns {
+            schema,
+            case_sensitive,
+        } => {
             vec![AlterTableOptions::ReplaceColumns {
                 fields: schema.fields().clone(),
+                case_sensitive: *case_sensitive,
             }]
         }
         LakeSourceAlterTableOperation::AlterColumns {
@@ -163,10 +167,12 @@ fn catalog_alter_options(
         LakeSourceAlterTableOperation::AlterColumnType {
             column_path,
             data_type,
+            case_sensitive,
         } => {
             vec![AlterTableOptions::AlterColumnType {
                 name: column_path.clone(),
                 data_type: data_type.clone(),
+                case_sensitive: *case_sensitive,
             }]
         }
         LakeSourceAlterTableOperation::AlterColumnDefault {
@@ -218,7 +224,7 @@ pub(crate) fn apply_operation(
             metadata.location = location.trim_end_matches('/').to_string();
             Ok(())
         }
-        LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
+        LakeSourceAlterTableOperation::ReplaceColumns { schema, .. } => {
             if schema.fields().iter().any(|field| !field.is_nullable()) {
                 return plan_err!("Cannot add a required column to an existing Iceberg table");
             }
@@ -246,9 +252,10 @@ pub(crate) fn apply_operation(
         LakeSourceAlterTableOperation::AlterColumnType {
             column_path,
             data_type,
+            case_sensitive,
         } => {
             let target = arrow_type_to_iceberg(data_type)?;
-            update_column(metadata, column_path, |field| {
+            update_column(metadata, column_path, *case_sensitive, |field| {
                 let allowed = *field.field_type == target
                     || matches!(
                         (field.field_type.as_ref(), &target),
@@ -299,7 +306,7 @@ pub(crate) fn apply_operation(
             if metadata.format_version < FormatVersion::V3 {
                 return plan_err!("Iceberg column defaults require format-version=3");
             }
-            update_column(metadata, column_path, |field| {
+            update_column(metadata, column_path, false, |field| {
                 field.write_default = default
                     .as_deref()
                     .map(|default| parse_default(default, field))
@@ -446,13 +453,14 @@ pub fn catalog_alter_updates(
 fn update_column(
     metadata: &mut TableMetadata,
     path: &[String],
+    case_sensitive: bool,
     update: impl FnOnce(&mut NestedField) -> Result<()>,
 ) -> Result<()> {
     let current = metadata
         .current_schema()
         .ok_or_else(|| DataFusionError::Plan("Missing Iceberg schema".to_string()))?;
     let mut fields = current.fields().to_vec();
-    update_nested_field(&mut fields, path, update)?;
+    update_nested_field(&mut fields, path, case_sensitive, update)?;
     let schema_id = metadata
         .schemas
         .iter()
@@ -553,6 +561,9 @@ fn alter_partition_spec(
             .result_type(&source.field_type)
             .map_err(DataFusionError::Plan)?;
         let name = name.clone().unwrap_or_else(|| partition_field_name(add));
+        if name.is_empty() {
+            return plan_err!("Partition field name cannot be empty");
+        }
         if fields.iter().any(|field| {
             field.name == name || (field.source_id == source.id && field.transform == transform)
         }) {
@@ -778,13 +789,24 @@ fn commit_schema(
         .build()
         .map_err(DataFusionError::Plan)?;
     for spec in &metadata.partition_specs {
-        if spec.spec_id() == metadata.default_spec_id {
-            for field in spec.fields() {
-                if field.transform != crate::spec::Transform::Void
-                    && schema.field_by_id(field.source_id).is_none()
-                {
-                    return plan_err!("Cannot drop a column used by the current partition spec");
-                }
+        for field in spec.fields() {
+            let source = schema.field_by_id(field.source_id);
+            if spec.spec_id() == metadata.default_spec_id
+                && field.transform != crate::spec::Transform::Void
+                && source.is_none()
+            {
+                return plan_err!("Cannot drop a column used by the current partition spec");
+            }
+            // Readers bind historical specs against the current schema too.
+            // A spec whose source was dropped may retain its old name.
+            if source.is_some()
+                && let Some(named) = schema.field_by_name(&field.name)
+                && named.id != field.source_id
+            {
+                return plan_err!(
+                    "Partition field name '{}' conflicts with a different schema field",
+                    field.name
+                );
             }
         }
     }
@@ -932,6 +954,7 @@ fn assign_new_ids(field: &mut NestedField, last_id: &mut i32, current: &Schema) 
 fn update_nested_field(
     fields: &mut [Arc<NestedField>],
     path: &[String],
+    case_sensitive: bool,
     update: impl FnOnce(&mut NestedField) -> Result<()>,
 ) -> Result<()> {
     let Some((name, rest)) = path.split_first() else {
@@ -939,7 +962,9 @@ fn update_nested_field(
     };
     let field = fields
         .iter_mut()
-        .find(|field| field.name.eq_ignore_ascii_case(name))
+        .find(|field| {
+            field.name == *name || (!case_sensitive && field.name.eq_ignore_ascii_case(name))
+        })
         .ok_or_else(|| DataFusionError::Plan(format!("Column '{name}' does not exist")))?;
     let field = Arc::make_mut(field);
     if rest.is_empty() {
@@ -948,19 +973,28 @@ fn update_nested_field(
     match field.field_type.as_mut() {
         Type::Struct(value) => {
             let mut fields = value.fields().to_vec();
-            update_nested_field(&mut fields, rest, update)?;
+            update_nested_field(&mut fields, rest, case_sensitive, update)?;
             *value = crate::spec::StructType::new(fields);
             Ok(())
         }
-        Type::List(value) if rest[0].eq_ignore_ascii_case("element") => {
-            update_nested_field(std::slice::from_mut(&mut value.element_field), rest, update)
-        }
-        Type::Map(value) if rest[0].eq_ignore_ascii_case("key") => {
-            update_nested_field(std::slice::from_mut(&mut value.key_field), rest, update)
-        }
-        Type::Map(value) if rest[0].eq_ignore_ascii_case("value") => {
-            update_nested_field(std::slice::from_mut(&mut value.value_field), rest, update)
-        }
+        Type::List(value) if rest[0].eq_ignore_ascii_case("element") => update_nested_field(
+            std::slice::from_mut(&mut value.element_field),
+            rest,
+            case_sensitive,
+            update,
+        ),
+        Type::Map(value) if rest[0].eq_ignore_ascii_case("key") => update_nested_field(
+            std::slice::from_mut(&mut value.key_field),
+            rest,
+            case_sensitive,
+            update,
+        ),
+        Type::Map(value) if rest[0].eq_ignore_ascii_case("value") => update_nested_field(
+            std::slice::from_mut(&mut value.value_field),
+            rest,
+            case_sensitive,
+            update,
+        ),
         _ => plan_err!("Column '{}' is not a nested field", path.join(".")),
     }
 }

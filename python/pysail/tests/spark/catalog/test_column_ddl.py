@@ -18,6 +18,28 @@ def test_file_column_rename_rejects_without_losing_values(spark, tmp_path, fmt):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "ADD COLUMN c INT FIRST",
+        "ALTER COLUMN b FIRST",
+        "DROP COLUMN a",
+        "REPLACE COLUMNS (b INT, a INT)",
+    ],
+)
+def test_csv_column_changes_reject_without_reinterpreting_existing_data(spark, tmp_path, operation):
+    table = "csv_column_change"
+    try:
+        spark.sql(f"CREATE TABLE {table} (a INT, b INT) USING csv LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 100)")
+        with pytest.raises(Exception, match=r"(?i)not support"):
+            spark.sql(f"ALTER TABLE {table} {operation}")
+        assert spark.table(table).columns == ["a", "b"]
+        assert spark.table(table).first().asDict() == {"a": 1, "b": 100}
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Requires Iceberg extension")
 @pytest.mark.parametrize(
     ("operation", "expected_names"),

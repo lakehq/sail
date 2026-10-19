@@ -497,9 +497,18 @@ impl LakeSource for DeltaLakeSource {
                 return crate::ddl::set_location(ctx, path, lakehouse_table.as_ref(), &location)
                     .await;
             }
-            LakeSourceAlterTableOperation::ReplaceColumns { schema } => {
-                return crate::ddl::replace_columns(ctx, path, lakehouse_table.as_ref(), &schema)
-                    .await;
+            LakeSourceAlterTableOperation::ReplaceColumns {
+                schema,
+                case_sensitive,
+            } => {
+                return crate::ddl::replace_columns(
+                    ctx,
+                    path,
+                    lakehouse_table.as_ref(),
+                    &schema,
+                    case_sensitive,
+                )
+                .await;
             }
             LakeSourceAlterTableOperation::AlterColumns {
                 changes,
@@ -521,6 +530,7 @@ impl LakeSource for DeltaLakeSource {
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
+                ..
             } => {
                 self.alter_table_column_type(
                     ctx,
