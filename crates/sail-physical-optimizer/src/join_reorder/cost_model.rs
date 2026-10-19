@@ -1,5 +1,5 @@
-use crate::join_reorder::dp_plan::DPPlan;
 use crate::join_reorder::JoinReorderOptions;
+use crate::join_reorder::dp_plan::DPPlan;
 
 /// Cost model for evaluating the quality of a join plan.
 ///

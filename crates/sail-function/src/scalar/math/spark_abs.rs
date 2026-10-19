@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Int16Array, Int32Array, Int64Array, Int8Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray,
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    DurationSecondType, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
-use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -54,6 +54,10 @@ impl ScalarUDFImpl for SparkAbs {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -108,19 +112,15 @@ impl ScalarUDFImpl for SparkAbs {
         ) {
             return datafusion::functions::math::abs::AbsFunc::new().invoke_with_args(args);
         }
-        let return_dtype = args.return_field.data_type().clone();
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
             return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
         };
         // Skip the kernel pass when every input row is NULL.
-        if let ColumnarValue::Array(array) = arg {
-            if array.null_count() == array.len() {
-                return Ok(ColumnarValue::Array(new_null_array(
-                    &return_dtype,
-                    array.len(),
-                )));
-            }
+        if let ColumnarValue::Array(array) = arg
+            && array.null_count() == array.len()
+        {
+            return Ok(ColumnarValue::Array(Arc::clone(array)));
         }
         match arg {
             // Signed integer abs: ANSI=true errors on MIN; ANSI=false wraps
@@ -441,14 +441,12 @@ impl ScalarUDFImpl for SparkAbs {
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         // Idempotence: abs(abs(x)) = abs(x).
-        if args.len() == 1 {
-            if let Expr::ScalarFunction(inner) = &args[0] {
-                if let Some(inner_abs) = inner.func.inner().downcast_ref::<Self>() {
-                    if inner_abs.ansi_mode == self.ansi_mode {
-                        return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
-                    }
-                }
-            }
+        if args.len() == 1
+            && let Expr::ScalarFunction(inner) = &args[0]
+            && let Some(inner_abs) = inner.func.inner().downcast_ref::<Self>()
+            && inner_abs.ansi_mode == self.ansi_mode
+        {
+            return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
         }
 
         let dt = info.get_data_type(&args[0])?;

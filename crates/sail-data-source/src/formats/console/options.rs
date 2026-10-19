@@ -2,7 +2,7 @@ use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
-use crate::options::gen::{ConsoleWriteOptions, ConsoleWritePartialOptions};
+use crate::options::r#gen::{ConsoleWriteOptions, ConsoleWritePartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 
 impl ResolveOptions for ConsoleWriteOptions {

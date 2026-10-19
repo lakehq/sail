@@ -1,15 +1,15 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{lit, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
+use crate::PlanResult;
 use crate::error::PlanError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::PlanResult;
 
 fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
@@ -38,7 +38,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
         wrong_value => {
             return Err(PlanError::invalid(format!(
                 "stack expects first argument to be between (0, INT32::MAX], got {wrong_value}"
-            )))
+            )));
         }
     };
 

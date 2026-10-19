@@ -23,7 +23,9 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
             ScalarValue::Struct(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
                 if variant_array.is_empty() {
-                    return exec_err!("Cannot convert empty VariantArray to JSON: the array must contain at least one element");
+                    return exec_err!(
+                        "Cannot convert empty VariantArray to JSON: the array must contain at least one element"
+                    );
                 }
                 if variant_array.is_null(0) {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))

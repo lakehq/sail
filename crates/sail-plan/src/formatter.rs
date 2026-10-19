@@ -1,11 +1,12 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
+use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
 use sail_common_datafusion::formatter::{
     Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
     DurationNanosecondFormatter, DurationSecondFormatter, IntervalDayTimeFormatter,
@@ -185,25 +186,15 @@ impl PlanFormatter for SparkPlanFormatter {
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float16(value) => match value {
-                Some(value) => {
-                    let value = f16::to_f32(*value);
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(value).to_string())
-                }
+                Some(value) => Ok(spark_f32_to_string(f16::to_f32(*value))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float32(value) => match value {
-                Some(value) => {
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(*value).to_string())
-                }
+                Some(value) => Ok(spark_f32_to_string(*value)),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float64(value) => match value {
-                Some(value) => {
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(*value).to_string())
-                }
+                Some(value) => Ok(spark_f64_to_string(*value)),
                 None => Ok("NULL".to_string()),
             },
             // For timestamp values with no time zone, we use UTC as the time zone for formatting.
@@ -502,9 +493,26 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = argv.join(", ");
                 Ok(format!("{name}({args})"))
             }
-            "dateadd" => {
+            "hll_sketch_agg" | "theta_sketch_agg" | "theta_union_agg" => Ok(
+                format_function_with_default_argument(name, arguments, 1, "12"),
+            ),
+            "hll_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "false",
+            )),
+            "hll_union_agg" => Ok(format_function_with_default_argument(
+                name, arguments, 1, "false",
+            )),
+            "theta_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "12",
+            )),
+            "date_add" | "dateadd" => {
+                let name = match arguments.len() {
+                    2 => "date_add",
+                    3 => "timestampadd",
+                    _ => name,
+                };
                 let arguments = arguments.join(", ");
-                Ok(format!("date_add({arguments})"))
+                Ok(format!("{name}({arguments})"))
             }
             "sum" => {
                 let mut args = arguments.join(", ");
@@ -584,8 +592,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }
@@ -598,8 +606,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }
@@ -720,6 +728,19 @@ fn append_start_pos_if_arglen_eq(
     format!("{name}({args}{start_pos_str})")
 }
 
+fn format_function_with_default_argument(
+    name: &str,
+    mut arguments: Vec<&str>,
+    default_argument_count: usize,
+    default_argument: &'static str,
+) -> String {
+    if arguments.len() == default_argument_count {
+        arguments.push(default_argument);
+    }
+    let arguments = arguments.join(", ");
+    format!("{name}({arguments})")
+}
+
 fn format_decimal(value: &str, scale: i8) -> String {
     let mut result = String::new();
     let start = if value.starts_with('-') {
@@ -750,7 +771,7 @@ mod tests {
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{
-        i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
+        DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano, i256,
     };
     use datafusion_common::arrow::array::ArrayRef;
     use sail_common::spec::SAIL_MAP_FIELD_NAME;
@@ -775,6 +796,8 @@ mod tests {
         assert_eq!(to_string(ScalarValue::Int64(Some(-40)))?, "-40");
         assert_eq!(to_string(ScalarValue::Float32(Some(1.0)))?, "1.0");
         assert_eq!(to_string(ScalarValue::Float64(Some(-0.1)))?, "-0.1");
+        assert_eq!(to_string(ScalarValue::Float64(Some(1e18)))?, "1.0E18");
+        assert_eq!(to_string(ScalarValue::Float64(Some(1e-7)))?, "1.0E-7");
         assert_eq!(to_string(ScalarValue::Decimal128(Some(123), 3, 0))?, "123",);
         assert_eq!(
             to_string(ScalarValue::Decimal128(Some(-123), 3, 0))?,

@@ -2,20 +2,31 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use log::debug;
-use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
-use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
-use crate::kernel::CatalogManagedCommitSet;
-use crate::spec::{
-    checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
-    Transaction, VersionChecksum,
+use super::{
+    CheckpointFileSet, complete_checkpoint_file_sets, list_delta_log_entries_from,
+    parse_checkpoint_version_from_location, parse_checksum_version_from_location,
+    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
+    read_last_checkpoint_hint_from_store, read_last_checkpoint_version_from_store,
+    v2_checkpoint_path_from_hint,
 };
-use crate::storage::LogStore;
+use crate::delta_log::LogStore;
+use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_path};
+use crate::spec::{
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
+    checksum_path,
+};
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
+
+pub(crate) type ListedLogFiles = (
+    Vec<(i64, ObjectMeta)>,
+    Option<CheckpointFileSet>,
+    Vec<(i64, ObjectMeta)>,
+    Vec<((i64, i64), ObjectMeta)>,
+);
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayedTableHeader {
@@ -34,13 +45,13 @@ pub(crate) enum ResolvedLogSegment {
     },
     Incremental {
         base: ReplayedTableHeader,
-        checkpoint: Option<ObjectMeta>,
+        checkpoint: Option<CheckpointFileSet>,
         commit_files: Vec<(i64, ObjectMeta)>,
         compaction_files: Vec<((i64, i64), ObjectMeta)>,
         target_version: i64,
     },
     FullReplay {
-        checkpoint: Option<ObjectMeta>,
+        checkpoint: Option<CheckpointFileSet>,
         commit_files: Vec<(i64, ObjectMeta)>,
         compaction_files: Vec<((i64, i64), ObjectMeta)>,
         target_version: i64,
@@ -114,11 +125,11 @@ impl<'a> LogSegmentResolver<'a> {
         let version = self.target_version;
 
         let store = self.log_store.object_store(None);
-        if !self.has_catalog_managed_commits_in_range(0, version) {
-            if let Some(header) = try_read_checksum_header(store.clone(), version).await {
-                debug!("crc-header: exact checksum hit target_version={version}");
-                return Ok(ResolvedLogSegment::ExactChecksum { header });
-            }
+        if !self.has_catalog_managed_commits_in_range(0, version)
+            && let Some(header) = try_read_checksum_header(store.clone(), version).await
+        {
+            debug!("crc-header: exact checksum hit target_version={version}");
+            return Ok(ResolvedLogSegment::ExactChecksum { header });
         }
 
         let lower_bound = {
@@ -198,7 +209,7 @@ impl<'a> LogSegmentResolver<'a> {
             None => {
                 debug!("crc-header: no usable checksum or replay hint target_version={version}");
                 let start_version = match &checkpoint_candidate {
-                    Some(cp_meta) => cp_meta_version(cp_meta)?.saturating_add(1),
+                    Some(checkpoint) => checkpoint.version().saturating_add(1),
                     None => 0,
                 };
                 let commit_files: Vec<(i64, ObjectMeta)> = all_commits
@@ -227,21 +238,24 @@ impl<'a> LogSegmentResolver<'a> {
 
         let use_checkpoint = checkpoint_candidate
             .as_ref()
-            .map(cp_meta_version)
-            .transpose()?
+            .map(CheckpointFileSet::version)
             .map(|v| v > base.version)
             .unwrap_or(false);
 
         let (checkpoint, commit_files, start_version) = if use_checkpoint {
-            let cp_meta = checkpoint_candidate.ok_or_else(|| {
+            let checkpoint_files = checkpoint_candidate.ok_or_else(|| {
                 DeltaError::generic("checkpoint_candidate was None after use_checkpoint check")
             })?;
-            let cp_version = cp_meta_version(&cp_meta)?;
+            let checkpoint_version = checkpoint_files.version();
             let commits: Vec<(i64, ObjectMeta)> = all_commits
                 .into_iter()
-                .filter(|(v, _)| *v > cp_version && *v <= version)
+                .filter(|(v, _)| *v > checkpoint_version && *v <= version)
                 .collect();
-            (Some(cp_meta), commits, cp_version.saturating_add(1))
+            (
+                Some(checkpoint_files),
+                commits,
+                checkpoint_version.saturating_add(1),
+            )
         } else {
             let start = base.version.saturating_add(1);
             let commits: Vec<(i64, ObjectMeta)> = all_commits
@@ -290,7 +304,7 @@ impl<'a> LogSegmentResolver<'a> {
             list_log_files(store.clone(), last_cp_hint_version, version).await?;
 
         let start_version = match &checkpoint {
-            Some(cp_meta) => cp_meta_version(cp_meta)?.saturating_add(1),
+            Some(checkpoint) => checkpoint.version().saturating_add(1),
             None => 0,
         };
         let commit_files: Vec<(i64, ObjectMeta)> = all_commits
@@ -320,20 +334,6 @@ impl<'a> LogSegmentResolver<'a> {
             target_version: version,
         })
     }
-}
-
-fn cp_meta_version(meta: &ObjectMeta) -> DeltaResult<i64> {
-    meta.location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checkpoint_version)
-        .ok_or_else(|| {
-            DeltaError::generic(format!(
-                "checkpoint path does not contain a parseable version: {}",
-                meta.location
-            ))
-        })
 }
 
 async fn try_read_checksum_header(
@@ -400,43 +400,52 @@ pub(crate) async fn list_log_files(
     store: Arc<dyn ObjectStore>,
     list_offset_version: i64,
     max_version: i64,
-) -> DeltaResult<(
-    Vec<(i64, ObjectMeta)>,
-    Option<ObjectMeta>,
-    Vec<(i64, ObjectMeta)>,
-    Vec<((i64, i64), ObjectMeta)>,
-)> {
-    let entries = list_delta_log_entries_from(store, list_offset_version).await?;
+) -> DeltaResult<ListedLogFiles> {
+    let last_checkpoint_hint = read_last_checkpoint_hint_from_store(store.clone()).await;
+    let entries = list_delta_log_entries_from(store.clone(), list_offset_version).await?;
+    let files = classify_log_files(entries, max_version, last_checkpoint_hint.as_ref())?;
+    if files.1.is_none()
+        && list_offset_version > 0
+        && last_checkpoint_hint
+            .as_ref()
+            .is_some_and(|hint| hint.version <= max_version)
+    {
+        let entries = list_delta_log_entries_from(store, 0).await?;
+        return classify_log_files(entries, max_version, last_checkpoint_hint.as_ref());
+    }
+    Ok(files)
+}
 
-    let mut checkpoint_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
+fn classify_log_files(
+    entries: Vec<ObjectMeta>,
+    max_version: i64,
+    last_checkpoint_hint: Option<&crate::spec::LastCheckpointHint>,
+) -> DeltaResult<ListedLogFiles> {
+    let mut checkpoint_candidates: Vec<ObjectMeta> = Vec::new();
     let mut commit_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
     let mut checksum_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
     let mut compaction_candidates: Vec<((i64, i64), ObjectMeta)> = Vec::new();
 
     for meta in entries {
-        let filename = match meta.location.as_ref().rsplit('/').next() {
-            Some(f) => f,
-            None => continue,
-        };
-        if let Some(v) = parse_checkpoint_version(filename) {
-            if v <= max_version {
-                checkpoint_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checkpoint_version_from_location(&meta.location)
+            && v <= max_version
+        {
+            checkpoint_candidates.push(meta);
             continue;
         }
-        if let Some(v) = parse_commit_version(filename) {
-            if v <= max_version {
-                commit_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_commit_version_from_location(&meta.location)
+            && v <= max_version
+        {
+            commit_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_checksum_version(filename) {
-            if v <= max_version {
-                checksum_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checksum_version_from_location(&meta.location)
+            && v <= max_version
+        {
+            checksum_candidates.push((v, meta));
             continue;
         }
-        if let Some(versions) = parse_compacted_json_versions(filename) {
+        if let Some(versions) = parse_compacted_json_versions_from_location(&meta.location) {
             // Only include compactions whose end_version is within our range.
             if versions.1 <= max_version {
                 compaction_candidates.push((versions, meta));
@@ -444,18 +453,7 @@ pub(crate) async fn list_log_files(
         }
     }
 
-    // TODO(v2-checkpoints): This groups checkpoint candidates by version only. It does not yet
-    // distinguish classic vs. V2 checkpoint layouts, nor does it validate multipart completeness;
-    // readers rely on later replay-time handling of checkpointMetadata/sidecar fields instead.
-    let latest_checkpoint_version = checkpoint_candidates.iter().map(|(v, _)| *v).max();
-    let checkpoint = latest_checkpoint_version.map(|latest_v| {
-        let mut files: Vec<ObjectMeta> = checkpoint_candidates
-            .into_iter()
-            .filter_map(|(v, m)| (v == latest_v).then_some(m))
-            .collect();
-        files.sort_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
-        files.remove(0)
-    });
+    let checkpoint = select_checkpoint_candidate(checkpoint_candidates, last_checkpoint_hint)?;
 
     commit_candidates.sort_by_key(|(av, _)| *av);
     checksum_candidates.sort_by(|(av, _), (bv, _)| bv.cmp(av));
@@ -468,6 +466,30 @@ pub(crate) async fn list_log_files(
         commit_candidates,
         compaction_candidates,
     ))
+}
+
+fn select_checkpoint_candidate(
+    candidates: Vec<ObjectMeta>,
+    last_checkpoint_hint: Option<&crate::spec::LastCheckpointHint>,
+) -> DeltaResult<Option<CheckpointFileSet>> {
+    let mut complete_checkpoints = complete_checkpoint_file_sets(candidates);
+    let Some(latest_version) = complete_checkpoints.last().map(CheckpointFileSet::version) else {
+        return Ok(None);
+    };
+
+    if let Some(hint) = last_checkpoint_hint
+        && hint.version == latest_version
+        && let Some(hinted_path) = v2_checkpoint_path_from_hint(hint)?
+    {
+        if let Some(checkpoint) = complete_checkpoints.iter().find(|checkpoint| {
+            checkpoint.version() == hint.version && checkpoint.contains_location(&hinted_path)
+        }) {
+            return Ok(Some(checkpoint.clone()));
+        }
+        complete_checkpoints.retain(|checkpoint| checkpoint.version() != hint.version);
+    }
+
+    Ok(complete_checkpoints.pop())
 }
 
 fn validate_commit_contiguity(
@@ -510,21 +532,6 @@ fn filter_compactions_for_range(
         .filter(|((s, e), _)| *s >= start_version && *e <= end_version)
         .cloned()
         .collect()
-}
-
-fn catalog_managed_commit_path(file_name: &str) -> Path {
-    let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
-        Path::from(&file_name[index..])
-    } else if let Some(index) = file_name.find("_staged_commits/") {
-        Path::from(format!("_delta_log/{}", &file_name[index..]))
-    } else if file_name.starts_with("_delta_log/") {
-        Path::from(file_name)
-    } else if file_name.starts_with("_staged_commits/") {
-        Path::from(format!("_delta_log/{file_name}"))
-    } else {
-        Path::from(format!("_delta_log/_staged_commits/{file_name}"))
-    }
 }
 
 fn merge_catalog_managed_commits(
@@ -575,10 +582,10 @@ fn resolve_compactions(
 
     for ((start, end), meta) in compaction_files {
         // Skip if this compaction overlaps with an already-selected one.
-        if let Some(boundary) = covered_up_to {
-            if end >= boundary {
-                continue;
-            }
+        if let Some(boundary) = covered_up_to
+            && end >= boundary
+        {
+            continue;
         }
         selected_compactions.push(((start, end), meta));
         covered_up_to = Some(start);
@@ -648,8 +655,13 @@ fn validate_commit_contiguity_with_compactions(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+
     use super::*;
-    use crate::spec::StructType;
+    use crate::spec::{
+        LastCheckpointHint, LastCheckpointV2, StructType, commit_path, last_checkpoint_path,
+    };
 
     fn make_test_checksum(
         num_metadata: i64,
@@ -778,6 +790,148 @@ mod tests {
             e_tag: None,
             version: None,
         }
+    }
+
+    fn checkpoint_meta_path(path: &str) -> ObjectMeta {
+        ObjectMeta {
+            size: 1,
+            ..dummy_meta_path(path)
+        }
+    }
+
+    #[test]
+    fn checkpoint_selection_returns_every_multi_part_file_in_order() {
+        let selected = select_checkpoint_candidate(
+            vec![
+                checkpoint_meta_path(
+                    "_delta_log/00000000000000000010.checkpoint.0000000003.0000000003.parquet",
+                ),
+                checkpoint_meta_path(
+                    "_delta_log/00000000000000000010.checkpoint.0000000001.0000000003.parquet",
+                ),
+                checkpoint_meta_path(
+                    "_delta_log/00000000000000000010.checkpoint.0000000002.0000000003.parquet",
+                ),
+            ],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(selected.version(), 10);
+        assert_eq!(
+            selected
+                .files()
+                .iter()
+                .map(|file| file.location.filename().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "00000000000000000010.checkpoint.0000000001.0000000003.parquet",
+                "00000000000000000010.checkpoint.0000000002.0000000003.parquet",
+                "00000000000000000010.checkpoint.0000000003.0000000003.parquet",
+            ]
+        );
+    }
+
+    #[test]
+    fn checkpoint_selection_ignores_incomplete_multi_part_checkpoint() {
+        let classic = checkpoint_meta_path("_delta_log/00000000000000000009.checkpoint.parquet");
+        let selected = select_checkpoint_candidate(
+            vec![
+                classic.clone(),
+                checkpoint_meta_path(
+                    "_delta_log/00000000000000000010.checkpoint.0000000001.0000000003.parquet",
+                ),
+                checkpoint_meta_path(
+                    "_delta_log/00000000000000000010.checkpoint.0000000003.0000000003.parquet",
+                ),
+            ],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(selected.version(), 9);
+        assert_eq!(selected.files()[0].location, classic.location);
+    }
+
+    #[test]
+    fn checkpoint_selection_prefers_more_parts_at_the_same_version() {
+        let mut candidates = vec![checkpoint_meta_path(
+            "_delta_log/00000000000000000010.checkpoint.parquet",
+        )];
+        for (part, parts) in [(1, 2), (2, 2), (1, 3), (2, 3), (3, 3)] {
+            candidates.push(checkpoint_meta_path(&format!(
+                "_delta_log/00000000000000000010.checkpoint.{part:010}.{parts:010}.parquet"
+            )));
+        }
+
+        let selected = select_checkpoint_candidate(candidates, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.files().len(), 3);
+        assert!(
+            selected
+                .files()
+                .iter()
+                .all(|file| file.location.as_ref().contains(".0000000003.parquet"))
+        );
+    }
+
+    #[tokio::test]
+    async fn log_listing_falls_back_to_an_older_complete_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let hint = LastCheckpointHint {
+            version: 20,
+            parts: Some(3),
+            ..Default::default()
+        };
+        store
+            .put(
+                &last_checkpoint_path(),
+                serde_json::to_vec(&hint).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                &Path::from("_delta_log/00000000000000000010.checkpoint.parquet"),
+                b"checkpoint".to_vec().into(),
+            )
+            .await
+            .unwrap();
+        for version in 11..=20 {
+            store
+                .put(
+                    &commit_path(version),
+                    format!("{{\"commitInfo\":{{\"version\":{version}}}}}\n")
+                        .into_bytes()
+                        .into(),
+                )
+                .await
+                .unwrap();
+        }
+        for part in [1, 3] {
+            store
+                .put(
+                    &Path::from(format!(
+                        "_delta_log/00000000000000000020.checkpoint.{part:010}.0000000003.parquet"
+                    )),
+                    format!("part {part}").into_bytes().into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let (_, checkpoint, commits, _) = list_log_files(store, 19, 20).await.unwrap();
+        assert_eq!(checkpoint.unwrap().version(), 10);
+        assert_eq!(
+            commits
+                .iter()
+                .map(|(version, _)| *version)
+                .collect::<Vec<_>>(),
+            (11..=20).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -999,5 +1153,42 @@ mod tests {
         let (_, _, commits, _) = list_log_files(store, 0, 0).await.unwrap();
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].0, 0);
+    }
+
+    #[tokio::test]
+    async fn list_log_files_selects_the_v2_checkpoint_named_by_the_hint() {
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let first = Path::from(
+            "_delta_log/00000000000000000002.checkpoint.00000000-0000-0000-0000-000000000001.parquet",
+        );
+        let selected = Path::from(
+            "_delta_log/00000000000000000002.checkpoint.00000000-0000-0000-0000-000000000002.parquet",
+        );
+        store.put(&first, b"first".to_vec().into()).await.unwrap();
+        store
+            .put(&selected, b"selected".to_vec().into())
+            .await
+            .unwrap();
+        let hint = LastCheckpointHint {
+            version: 2,
+            v2_checkpoint: Some(LastCheckpointV2 {
+                path: selected.filename().unwrap().to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        store
+            .put(
+                &Path::from("_delta_log/_last_checkpoint"),
+                serde_json::to_vec(&hint).unwrap().into(),
+            )
+            .await
+            .unwrap();
+
+        let (_, checkpoint, _, _) = list_log_files(store, 0, 2).await.unwrap();
+        assert_eq!(checkpoint.unwrap().files()[0].location, selected);
     }
 }

@@ -26,6 +26,7 @@ The list covers the most common use cases of the DataFrame API and is not meant 
 | NA functions (`DataFrame.na`)                                                                            | :white_check_mark: |
 | Statistics functions (`DataFrame.stat`)                                                                  | :construction:     |
 | View management (e.g. `DataFrame.createOrReplaceTempView()`)                                             | :white_check_mark: |
+| Checkpoints (`DataFrame.checkpoint()`)                                                                   | :white_check_mark: |
 | RDD Access (`DataFrame.rdd`)                                                                             | :x:                |
 | PySpark UDFs                                                                                             | :white_check_mark: |
 | PySpark UDTFs                                                                                            | :white_check_mark: |

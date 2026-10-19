@@ -7,13 +7,13 @@ use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
 use crate::theta_sketch::{
-    compact_update_sketch_bytes, empty_compact_sketch_bytes, intersect_sketch_bytes,
-    new_update_sketch, normalize_sketch_bytes, union_sketches, update_sketch_from_array,
-    validate_lg_nom_entries, DEFAULT_LG_NOM_ENTRIES,
+    DEFAULT_LG_NOM_ENTRIES, compact_update_sketch_bytes, empty_compact_sketch_bytes,
+    intersect_sketch_bytes, new_update_sketch, normalize_sketch_bytes, union_sketches,
+    update_sketch_from_array, validate_lg_nom_entries,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -54,16 +54,18 @@ impl AggregateUDFImpl for ThetaSketchAggFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let lg_nom_entries = resolve_lg_nom_entries(&acc_args, 1, "theta_sketch_agg")?;
-        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)))
+        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "theta_sketch"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "theta_sketch"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -109,12 +111,14 @@ impl AggregateUDFImpl for ThetaUnionAggFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "theta_union"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "theta_union"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -156,12 +160,14 @@ impl AggregateUDFImpl for ThetaIntersectionAggFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "theta_intersection"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "theta_intersection"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -173,12 +179,12 @@ struct ThetaSketchAggAccumulator {
 }
 
 impl ThetaSketchAggAccumulator {
-    fn new(lg_nom_entries: u8) -> Self {
-        Self {
-            sketch: new_update_sketch(lg_nom_entries),
+    fn new(lg_nom_entries: u8) -> Result<Self> {
+        Ok(Self {
+            sketch: new_update_sketch(lg_nom_entries)?,
             merged: None,
             lg_nom_entries,
-        }
+        })
     }
 
     fn evaluate_bytes(&self) -> Result<Vec<u8>> {
@@ -414,7 +420,7 @@ fn resolve_lg_nom_entries(args: &AccumulatorArgs, index: usize, function_name: &
             return exec_err!(
                 "{function_name} requires lgNomEntries to be a non-null integer literal, got {}",
                 value.data_type()
-            )
+            );
         }
     };
     validate_lg_nom_entries(value, function_name)

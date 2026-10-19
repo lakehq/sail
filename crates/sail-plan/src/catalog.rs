@@ -3,12 +3,14 @@ use std::fmt::Formatter;
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_datafusion_err, DFSchema};
+use datafusion_common::{DFSchema, internal_datafusion_err};
 use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
+use sail_common_datafusion::catalog::{
+    DatabaseStatus, FunctionStatus, TableColumnStatus, TableStatus,
+};
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -177,14 +179,15 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
         }
     }
 
-    fn function(name: String) -> Self::Function {
+    fn function(status: FunctionStatus) -> Self::Function {
+        let description = status.list_description();
         Self::Function {
-            name,
-            catalog: None,
-            namespace: None,
-            description: None,
-            class_name: "".to_string(),
-            is_temporary: false,
+            name: status.name,
+            catalog: status.catalog,
+            namespace: status.namespace,
+            description,
+            class_name: status.class_name,
+            is_temporary: status.is_temporary,
         }
     }
 }

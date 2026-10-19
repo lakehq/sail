@@ -1,8 +1,8 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
-use chumsky::Parser;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::operator::{Asterisk, Period};

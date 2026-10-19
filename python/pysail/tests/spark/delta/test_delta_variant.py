@@ -8,16 +8,13 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import pyspark_version
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-pytestmark = [
-    pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta VariantShredding physical scan path"),
-    pytest.mark.skipif(pyspark_version() < (4,), reason="Variant SQL functions require PySpark 4+"),
-]
+pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="Variant SQL functions require PySpark 4+")
 
 
 def _write_shredded_variant_delta_table(table_location: Path) -> None:
@@ -132,13 +129,14 @@ def _data_parquet_files(table_location: Path) -> list[Path]:
 
 
 def _first_add_stats(table_location: Path) -> dict:
-    log_file = table_location / "_delta_log" / "00000000000000000000.json"
-    with log_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            action = json.loads(line)
-            if "add" in action:
-                return json.loads(action["add"]["stats"])
-    msg = f"add action not found in {log_file}"
+    log_files = sorted((table_location / "_delta_log").glob("*.json"))
+    for log_file in log_files:
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if "add" in action:
+                    return json.loads(action["add"]["stats"])
+    msg = f"add action not found in {table_location / '_delta_log'}"
     raise AssertionError(msg)
 
 

@@ -8,21 +8,22 @@ use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
 
+use crate::PhysicalOptimizerRule;
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::{
     JoinReorderFallbackReason, JoinReorderStatus, PlanEnumerator,
 };
 use crate::join_reorder::graph::StableColumn;
 use crate::join_reorder::reconstructor::PlanReconstructor;
-use crate::PhysicalOptimizerRule;
 
 mod builder;
 mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
+mod early_filter;
 mod enumerator;
 mod graph;
 mod join_set;
@@ -133,13 +134,18 @@ impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
             "JoinReorder: Input plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
+
+        // Copy selective dimension keys below aggregates and semi joins whose filter side is
+        // more than a scan, which join enumeration never reorders across. This runs first so
+        // that enumeration sees the statistics of the reduced inputs.
+        let plan = early_filter::propagate(plan, config, &self.options)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
@@ -174,7 +180,7 @@ impl JoinReorder {
         let plan = if optimized_children.is_empty() {
             plan
         } else {
-            plan.with_new_children(optimized_children)?
+            replace_children_if_necessary(plan, optimized_children)?
         };
 
         // Attempt to optimize a reorderable region rooted at this node.
@@ -227,8 +233,7 @@ impl JoinReorder {
             Some(plan) => {
                 trace!(
                     "JoinReorder: DP optimization completed successfully (status={:?}, emits={})",
-                    solve_result.status,
-                    emit_count
+                    solve_result.status, emit_count
                 );
                 self.record_outcome(RegionOutcome {
                     relation_count,
@@ -335,9 +340,7 @@ impl JoinReorder {
 
                     trace!(
                         "build_final_projection: Looking for stable column R{}.C{} (output_idx={})",
-                        relation_id,
-                        column_index,
-                        output_idx
+                        relation_id, column_index, output_idx
                     );
 
                     // Find this stable column's position in the final join tree output
@@ -495,9 +498,9 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::NullEquality;
     use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::utils::collect_columns;
-    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
@@ -1060,8 +1063,8 @@ mod tests {
     // `JoinReorder::take_recorded_outcomes()` so that we catch silent regressions where the
     // rule shape is unchanged but the optimizer fell back to greedy (or vice versa).
 
-    use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
+    use datafusion::common::stats::Precision;
     use datafusion::physical_plan::test::exec::StatisticsExec;
 
     /// Build a `StatisticsExec` leaf with a fixed (id, val) schema, a known total row count,

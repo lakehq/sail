@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_large_list_array, as_list_array, Array, ArrayRef, BooleanArray, GenericListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, as_large_list_array,
+    as_list_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -84,6 +84,7 @@ fn array_compact_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Result<ArrayRef> {
     let values = list.values();
+    let values_nulls = values.logical_nulls();
     let offsets = list.offsets();
 
     // Build a boolean filter mask for the flattened values array.
@@ -106,7 +107,7 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
         } else {
             // Non-null row: keep only non-null values.
             for j in start..end {
-                let keep_value = values.is_valid(j);
+                let keep_value = values_nulls.as_ref().is_none_or(|nulls| nulls.is_valid(j));
                 keep.push(keep_value);
                 if keep_value {
                     total_kept += 1;

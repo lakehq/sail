@@ -76,14 +76,14 @@ pub trait SchemaVisitor {
 
     /// Called after struct's fields visited.
     fn r#struct(&mut self, r#struct: &StructType, results: Vec<Self::T>)
-        -> Result<Self::T, String>;
+    -> Result<Self::T, String>;
 
     /// Called after list fields visited.
     fn list(&mut self, list: &ListType, value: Self::T) -> Result<Self::T, String>;
 
     /// Called after map's key and value fields visited.
     fn map(&mut self, map: &MapType, key_value: Self::T, value: Self::T)
-        -> Result<Self::T, String>;
+    -> Result<Self::T, String>;
 
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T, String>;

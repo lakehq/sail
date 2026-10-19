@@ -56,6 +56,16 @@ pub fn parse_i64(key: &str, value: &str) -> DataSourceResult<i64> {
         })
 }
 
+pub fn parse_i32(key: &str, value: &str) -> DataSourceResult<i32> {
+    value
+        .parse::<i32>()
+        .map_err(|_| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+            cause: None,
+        })
+}
+
 pub fn parse_optional_i64(key: &str, value: &str) -> DataSourceResult<Option<i64>> {
     if value.is_empty() {
         return Ok(None);

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
@@ -7,18 +8,25 @@ use sail_common::spec;
 
 use crate::catalog::CatalogCommandNode;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
+use crate::function::list_built_in_function_statuses;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 mod catalog;
+mod checkpoint;
 mod delete;
 mod delta;
 mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
+mod row_level;
 mod show;
+mod table_properties;
+mod update;
 mod variable;
+mod with_relations;
 mod write;
 mod write_stream;
 mod write_v1;
@@ -26,6 +34,7 @@ mod write_v2;
 
 impl PlanResolver<'_> {
     /// Resolves a command plan into a logical plan.
+    #[async_recursion]
     pub(super) async fn resolve_command_plan(
         &self,
         plan: spec::CommandPlan,
@@ -36,6 +45,18 @@ impl PlanResolver<'_> {
         match plan.node {
             CommandNode::ShowString(show) => self.resolve_command_show_string(show, state).await,
             CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,
+            CommandNode::WithRelations { root, references } => {
+                self.resolve_command_with_relations(*root, references, state)
+                    .await
+            }
+            CommandNode::CallProcedure {
+                procedure,
+                arguments,
+                named_arguments,
+            } => {
+                self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
+                    .await
+            }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
@@ -50,6 +71,9 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
+            CommandNode::ShowTableProperties { table, property } => {
+                self.resolve_show_table_properties(table, property).await
+            }
             CommandNode::ShowTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ShowTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),
@@ -62,6 +86,18 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
+            CommandNode::ShowFunctions {
+                database,
+                pattern,
+                show_user_functions,
+                show_system_functions,
+            } => self.resolve_catalog_command(CatalogCommand::ShowFunctions {
+                database: database.map(|x| x.into()).unwrap_or_default(),
+                pattern,
+                system_functions: list_built_in_function_statuses(),
+                show_user_functions,
+                show_system_functions,
+            }),
             CommandNode::ListTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),
@@ -78,6 +114,7 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_command(CatalogCommand::ListFunctions {
                     database: database.map(|x| x.into()).unwrap_or_default(),
                     pattern,
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::ListColumns { table } => {
@@ -113,6 +150,7 @@ impl PlanResolver<'_> {
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
                     function: function.into(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
@@ -209,6 +247,10 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_create_temporary_view(view, is_global, definition, state)
                     .await
             }
+            CommandNode::RemoteCheckpoint { relation_id, input } => {
+                self.resolve_command_remote_checkpoint(relation_id, *input, state)
+                    .await
+            }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
             CommandNode::WriteTo(write_to) => self.resolve_command_write_to(write_to, state).await,
             CommandNode::WriteStream(write_stream) => {
@@ -257,7 +299,21 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::ResetVariable {
+                variable: Some(variable),
+            } => Ok(self.resolve_command_reset_variable(variable)),
+            CommandNode::ResetVariable { variable: None } => {
+                Err(PlanError::unsupported("RESET requires a Spark session"))
+            }
+            CommandNode::Update {
+                table,
+                table_alias,
+                assignments,
+                condition,
+            } => {
+                self.resolve_command_update(table, table_alias, assignments, condition, state)
+                    .await
+            }
             CommandNode::Delete {
                 table,
                 table_alias,
@@ -283,8 +339,12 @@ impl PlanResolver<'_> {
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
             CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
             CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
-            CommandNode::DescribeFunction { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeFunction"))
+            CommandNode::DescribeFunction { function, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeFunction {
+                    function: function.into(),
+                    extended,
+                    system_functions: list_built_in_function_statuses(),
+                })
             }
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))

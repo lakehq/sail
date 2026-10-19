@@ -1,0 +1,1414 @@
+# serializer version: 1
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[1]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 1
+  last-column-id: 2
+  last-partition-id: 999
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  partition-spec: []
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schema:
+    fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    schema-id: 0
+    type: struct
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '1'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      deleted-data-files: '0'
+      deleted-records: '0'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[1].1"
+data:
+  manifests:
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions: []
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions: []
+    sequence-number: 0
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[1].2"
+data:
+  added-data-files: '1'
+  added-records: '1'
+  deleted-data-files: '0'
+  deleted-records: '0'
+  operation: append
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '2'
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[2]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 2
+  last-partition-id: 999
+  last-sequence-number: 2
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '1'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      deleted-data-files: '0'
+      deleted-records: '0'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
+  table-uuid: <uuid>
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[2].1"
+data:
+  manifests:
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 1
+    partition-spec-id: 0
+    partitions: []
+    sequence-number: 1
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions: []
+    sequence-number: 2
+---
+name: "test_a_mixed_merge_with_only_runtime_inserts_creates_an_append_snapshot[2].2"
+data:
+  added-data-files: '1'
+  added-records: '1'
+  deleted-data-files: '0'
+  deleted-records: '0'
+  operation: append
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '2'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 1
+  last-column-id: 3
+  last-partition-id: 1000
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-spec:
+  - field-id: 1000
+    name: part
+    source-id: 3
+    transform: identity
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schema:
+    fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '3'
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90].2"
+data:
+  added-data-files: '1'
+  added-records: '1'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '3'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 1
+  last-column-id: 3
+  last-partition-id: 1000
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-spec:
+  - field-id: 1000
+    name: part
+    source-id: 3
+    transform: identity
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schema:
+    fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190].2"
+data:
+  added-data-files: '1'
+  added-records: '2'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '4'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 1
+  last-column-id: 3
+  last-partition-id: 1000
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-spec:
+  - field-id: 1000
+    name: part
+    source-id: 3
+    transform: identity
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schema:
+    fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 0
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 0
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 0
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[1-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190].2"
+data:
+  added-data-files: '1'
+  added-records: '2'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '4'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 3
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 3
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '1'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '3'
+    timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 2
+  - added-files-count: 1
+    added-rows-count: 1
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-DELETE FROM iceberg_cow_metadata WHERE id = 1-3-9-90].2"
+data:
+  added-data-files: '1'
+  added-records: '1'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '3'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 3
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 3
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 2
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-MERGE INTO iceberg_cow_metadata t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET value = 100-4-10-190].2"
+data:
+  added-data-files: '1'
+  added-records: '2'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '4'
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190]"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 3
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_cow_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: part
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: int
+    - id: 3
+      name: part
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 3
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '2'
+      deleted-data-files: '1'
+      deleted-records: '2'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
+    timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
+  table-uuid: <uuid>
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190].1"
+data:
+  manifests:
+  - added-files-count: 0
+    added-rows-count: 0
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 1
+    deleted-rows-count: 2
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
+    sequence-number: 2
+  - added-files-count: 1
+    added-rows-count: 2
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 3
+    partition-spec-id: 0
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
+    sequence-number: 3
+---
+name: "test_cow_rewrites_preserve_versioned_metadata_and_manifests[2-UPDATE iceberg_cow_metadata SET value = 100 WHERE id = 1-4-10-190].2"
+data:
+  added-data-files: '1'
+  added-records: '2'
+  deleted-data-files: '1'
+  deleted-records: '2'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '4'

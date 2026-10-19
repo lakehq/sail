@@ -2,6 +2,7 @@
 name = "sail-python-udf"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -11,11 +12,11 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 thiserror = { workspace = true }
+arrow-pyarrow = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 educe = { workspace = true }
-arrow-pyarrow = { workspace = true }
 pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }

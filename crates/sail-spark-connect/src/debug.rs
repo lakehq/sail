@@ -1,9 +1,9 @@
 use std::fmt::{Debug, Formatter};
 
-use sail_common::debug::DebugBinary;
+use sail_common::utils::debug::DebugBinary;
 
-use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::LocalRelation;
+use crate::spark::connect::execute_plan_response::ArrowBatch;
 
 impl Debug for ArrowBatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

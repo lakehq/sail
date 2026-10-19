@@ -83,13 +83,43 @@ impl UserDefinedLogicalNodeCore for MapPartitionsNode {
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
         let input = Arc::new(inputs.one()?);
+        let columns = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|column| self.input.schema().index_of_column(column))
+            .collect::<Result<Vec<_>>>()?;
+        if columns != (0..self.input.schema().fields().len()).collect::<Vec<_>>()
+            && let Some(projection) = self.udf.project_input(&columns)?
+        {
+            return Ok(Self {
+                input,
+                udf: projection.udf,
+                schema: Arc::new(DFSchema::new_with_metadata(
+                    projection
+                        .output_columns
+                        .iter()
+                        .map(|&i| {
+                            let (qualifier, field) = self.schema.qualified_field(i);
+                            (qualifier.cloned(), Arc::clone(field))
+                        })
+                        .collect(),
+                    self.schema.metadata().clone(),
+                )?),
+            });
+        }
         Ok(Self {
             input,
             ..self.clone()
         })
     }
 
-    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        Some(vec![(0..self.input.schema().fields().len()).collect()])
+    fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        let input_columns = self.input.schema().fields().len();
+        Some(vec![
+            self.udf
+                .required_input_columns(output_columns, input_columns)
+                .unwrap_or_else(|| (0..input_columns).collect()),
+        ])
     }
 }

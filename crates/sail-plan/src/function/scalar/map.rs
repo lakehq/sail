@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, ExprSchemable};
-use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
-use datafusion_spark::function::map::map_from_entries::MapFromEntries;
+use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
+use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -23,23 +26,97 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let schema = input.function_context.schema;
-    let (keys, values): (Vec<_>, Vec<_>) = input
-        .arguments
-        .chunks(2)
-        .map(|key_value| (key_value[0].clone(), key_value[1].clone()))
+    let (pairs, remainder) = input.arguments.as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    let (keys, values): (Vec<_>, Vec<_>) = pairs
+        .iter()
+        .map(|[key, value]| (key.clone(), value.clone()))
         .unzip();
+    let (keys, values) = if input.function_context.plan_config.ansi_mode {
+        (
+            coerce_ansi_map_strings(keys, schema)?,
+            coerce_ansi_map_strings(values, schema)?,
+        )
+    } else {
+        (keys, values)
+    };
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    let array = ScalarUDF::from(SparkArray::new());
+    let keys = array.call(keys);
+    let values = array.call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
-    let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
     cast_map_value_nullability(expr, schema, value_contains_null)
+}
+
+fn coerce_ansi_map_strings(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let types = arguments
+        .iter()
+        .map(|argument| argument.get_type(schema.as_ref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !types.iter().any(DataType::is_string) {
+        return Ok(arguments);
+    }
+    let target = types
+        .iter()
+        .try_fold(DataType::Null, |previous, data_type| {
+            ansi_map_common_type(&previous, data_type)
+        })
+        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
+    arguments
+        .into_iter()
+        .zip(types)
+        .map(|(argument, source)| {
+            if source == target {
+                return Ok(argument);
+            }
+            let converted = cast(argument, target.clone());
+            if source.is_string() && !target.is_binary() {
+                // Spark retains nullable metadata for string-to-atomic casts in ANSI mode.
+                Ok(when(lit(true), converted).end()?)
+            } else {
+                Ok(converted)
+            }
+        })
+        .collect()
+}
+
+fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -52,7 +129,9 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         _ => true,
     };
     let values = cast_list_value_nullability(values, schema, true)?;
-    let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -66,7 +145,9 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let entries = input.arguments.one()?;
     let value_contains_null = map_entries_value_contains_null(&entries.get_type(schema.as_ref())?);
     let entries = cast_map_entries_value_nullability(entries, schema, true)?;
-    let expr = F::udf(MapFromEntries::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromEntries::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![entries],
         function_context: input.function_context,
     })?;
@@ -74,12 +155,8 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
     let map = input.arguments.one()?;
-    let value_contains_null = map_value_contains_null(&map.get_type(schema.as_ref())?);
-    let map = cast_map_value_nullability(map, schema, true)?;
-    let expr = expr_fn::map_entries(map);
-    cast_map_entries_value_nullability(expr, schema, value_contains_null)
+    Ok(ScalarUDF::from(SparkMapEntries::new()).call(vec![map]))
 }
 
 fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -241,7 +318,9 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let keys = expr_fn::array_concat(keys);
     let values = expr_fn::array_concat(values);
-    let result = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let result = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -249,20 +328,21 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // Wrap the result with CASE to handle NULLs:
     // CASE WHEN arg1 IS NULL OR arg2 IS NULL OR ... THEN NULL ELSE result END
     // We already checked that arguments is not empty, so reduce will always return Some
-    if let Some(null_check) = input
+    match input
         .arguments
         .iter()
         .map(|arg| arg.clone().is_null())
         .reduce(|a, b| a.or(b))
     {
-        Ok(Expr::Case(expr::Case {
+        Some(null_check) => Ok(Expr::Case(expr::Case {
             expr: None,
             when_then_expr: vec![(Box::new(null_check), Box::new(lit(ScalarValue::Null)))],
             else_expr: Some(Box::new(result)),
-        }))
-    } else {
-        // This should never happen because we checked arguments is not empty
-        Ok(result)
+        })),
+        _ => {
+            // This should never happen because we checked arguments is not empty
+            Ok(result)
+        }
     }
 }
 
@@ -278,7 +358,9 @@ fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let pair_delims = delims.first().cloned().unwrap_or(lit(","));
     let key_value_delims = delims.get(1).cloned().unwrap_or(lit(":"));
 
-    F::udf(StrToMap::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    F::udf(StrToMap::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![strs, pair_delims, key_value_delims],
         function_context: input.function_context,
     })

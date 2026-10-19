@@ -6,30 +6,27 @@
 # TODO: Spark global: https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#configuration
 # TODO: DataFusion `column_specific_options` and `key_value_metadata`
 
-- key: extension
+- key: path_glob_filter
   description: |
-    (Reading) The file extension used to filter files when listing a
-    directory of Parquet files. Defaults to `.parquet`. Setting this to
-    an empty string disables extension filtering entirely, which allows
-    reading Parquet files written under non-standard suffixes (e.g. `.hive`).
+    A glob pattern to only include files with file names matching the pattern.
   default:
-    value: ".parquet"
-    parser: crate::options::parsers::parse_string
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
   supported: true
-  rust_type: String
+  rust_type: "Option<String>"
   scopes:
     - read
   origins:
     - type: option
       keys:
-        - extension
-        - fileExtension
-      parser: crate::options::parsers::parse_string
+        - path_glob_filter
+        - pathGlobFilter
+      parser: crate::options::parsers::parse_optional_string
     - type: table_property
       keys:
-        - option.extension
-        - option.fileExtension
-      parser: crate::options::parsers::parse_string
+        - option.path_glob_filter
+        - option.pathGlobFilter
+      parser: crate::options::parsers::parse_optional_string
 
 - key: enable_page_index
   description: |
@@ -754,3 +751,88 @@
         - option.maximum_buffered_record_batches_per_stream
         - option.maximumBufferedRecordBatchesPerStream
       parser: crate::options::parsers::parse_usize
+
+- key: content_defined_chunking_enabled
+  description: |
+    (Writing) Whether to enable content-defined chunking (CDC) when writing Parquet files.
+    When enabled, data page boundaries are determined by a rolling hash of column values.
+    Defaults to the Sail configuration option `parquet.content_defined_chunking.enabled`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - content_defined_chunking_enabled
+        - contentDefinedChunkingEnabled
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.content_defined_chunking_enabled
+        - option.contentDefinedChunkingEnabled
+      parser: crate::options::parsers::parse_bool
+
+- key: content_defined_chunking_min_chunk_size
+  description: |
+    (Writing) The minimum chunk size in bytes for Parquet content-defined chunking.
+    The rolling hash will not trigger a split until this many bytes have been accumulated.
+    Defaults to the Sail configuration option `parquet.content_defined_chunking.min_chunk_size`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - content_defined_chunking_min_chunk_size
+        - contentDefinedChunkingMinChunkSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.content_defined_chunking_min_chunk_size
+        - option.contentDefinedChunkingMinChunkSize
+      parser: crate::options::parsers::parse_usize
+
+- key: content_defined_chunking_max_chunk_size
+  description: |
+    (Writing) The maximum chunk size in bytes for Parquet content-defined chunking.
+    A split is forced when the accumulated size exceeds this value.
+    Defaults to the Sail configuration option `parquet.content_defined_chunking.max_chunk_size`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - content_defined_chunking_max_chunk_size
+        - contentDefinedChunkingMaxChunkSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.content_defined_chunking_max_chunk_size
+        - option.contentDefinedChunkingMaxChunkSize
+      parser: crate::options::parsers::parse_usize
+
+- key: content_defined_chunking_norm_level
+  description: |
+    (Writing) The normalization level for Parquet content-defined chunking.
+    Increasing this improves deduplication ratio but increases fragmentation.
+    The recommended range is `-3` to `3`.
+    Defaults to the Sail configuration option `parquet.content_defined_chunking.norm_level`.
+  supported: true
+  rust_type: i32
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - content_defined_chunking_norm_level
+        - contentDefinedChunkingNormLevel
+      parser: crate::options::parsers::parse_i32
+    - type: table_property
+      keys:
+        - option.content_defined_chunking_norm_level
+        - option.contentDefinedChunkingNormLevel
+      parser: crate::options::parsers::parse_i32

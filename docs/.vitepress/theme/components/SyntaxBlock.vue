@@ -1,6 +1,6 @@
 <template>
   <div class="language-text">
-    <pre class="vp-code" tabindex="0"><code><slot></slot></code></pre>
+    <pre class="shiki" tabindex="0"><code><slot></slot></code></pre>
   </div>
 </template>
 

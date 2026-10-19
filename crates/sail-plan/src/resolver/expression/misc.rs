@@ -1,27 +1,29 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
-use datafusion_expr_common::operator::Operator;
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::{array_element, map_extract};
+use datafusion_functions::expr_fn as datafusion_fn;
+use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::expression::NamedExpr;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::find_struct_field;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_alias(
@@ -62,9 +64,21 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_placeholder(
         &self,
         placeholder: String,
+        state: &PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
-        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
+        let field = placeholder.get(1..).and_then(|key| {
+            state
+                .get_param_value(key)
+                .or_else(|| {
+                    key.parse::<usize>()
+                        .ok()
+                        .and_then(|index| index.checked_sub(1))
+                        .and_then(|index| state.get_positional_param_value(index))
+                })
+                .map(|value| Arc::new(Field::new("", value.data_type(), true)))
+        });
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, field));
         Ok(NamedExpr::new(vec![name], expr))
     }
 
@@ -117,15 +131,11 @@ impl PlanResolver<'_> {
                         return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
                     }
                     // Try positional parameter (key is a 1-based integer index).
-                    if let Ok(index) = key.parse::<usize>() {
-                        if index > 0 {
-                            if let Some(scalar) = state.get_positional_param_value(index - 1) {
-                                return Ok(Transformed::yes(expr::Expr::Literal(
-                                    scalar.clone(),
-                                    None,
-                                )));
-                            }
-                        }
+                    if let Ok(index) = key.parse::<usize>()
+                        && index > 0
+                        && let Some(scalar) = state.get_positional_param_value(index - 1)
+                    {
+                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
                     }
                 }
                 Ok(Transformed::no(e))
@@ -194,8 +204,19 @@ impl PlanResolver<'_> {
         use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
-        // Remove backticks from the pattern if present
-        let pattern_str = col_name.trim_matches('`');
+        let schema = &Self::local_schema(schema, state);
+
+        // Spark expands a quoted regex over the current output without the
+        // originating DataFrame's plan ID (SparkConnectPlanner.transformUnresolvedRegex).
+        let quoted_pattern = col_name
+            .strip_circumfix('`', '`')
+            .filter(|name| !name.is_empty());
+        let pattern_str = quoted_pattern.unwrap_or_else(|| col_name.trim_matches('`'));
+        let plan_id = if quoted_pattern.is_some() {
+            None
+        } else {
+            plan_id
+        };
 
         // Add anchors to match the entire column name (like Spark does)
         let anchored_pattern = format!("^{}$", pattern_str);
@@ -210,11 +231,6 @@ impl PlanResolver<'_> {
         let mut matching_names = Vec::new();
 
         for (qualifier, field) in schema.iter() {
-            // Skip qualified columns if no qualifier is expected
-            if qualifier.is_some() {
-                continue;
-            }
-
             // Get field info
             let Ok(info) = state.get_field_info(field.name()) else {
                 continue;
@@ -228,7 +244,10 @@ impl PlanResolver<'_> {
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
             if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
-                matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
+                matching_columns.push(expr::Expr::Column(Column::new(
+                    qualifier.cloned(),
+                    field.name(),
+                )));
                 matching_names.push(field_name.to_string());
             }
         }
@@ -256,6 +275,54 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        fn is_attribute_path(expr: &spec::Expr) -> bool {
+            match expr {
+                spec::Expr::UnresolvedAttribute { .. } => true,
+                spec::Expr::UnresolvedExtractValue { child, .. } => is_attribute_path(child),
+                spec::Expr::Alias { expr, .. } => is_attribute_path(expr),
+                _ => false,
+            }
+        }
+
+        fn discard_failed_missing_input(
+            expr: &expr::Expr,
+            child_is_attribute_path: bool,
+            schema: &DFSchemaRef,
+            state: &mut PlanResolverState,
+        ) {
+            let Some(input) = state.missing_input_mut(schema) else {
+                return;
+            };
+            let Some(index) = expr
+                .column_refs()
+                .into_iter()
+                .filter_map(|column| {
+                    input
+                        .schemas()
+                        .iter()
+                        .position(|schema| schema.has_column(column))
+                })
+                .max()
+            else {
+                return;
+            };
+            if child_is_attribute_path {
+                // Spark discards tentative descendant bindings when extracting a
+                // struct field fails, then retries deeper outputs and outer references.
+                input.discard(index);
+            } else {
+                // Spark binds the arguments of a function before resolving the function, so it
+                // keeps those bindings and fails. Retry only earlier outputs and outer references,
+                // which cannot bind a deeper column in place of the failed one.
+                // TODO: Keep the bindings as Spark does once name resolution is staged. Spark
+                //   discards the bindings of SQL `CASE`, which Sail cannot tell from `when`.
+                // TODO: Preserve analyzer staging for native `UpdateFields`: unlike an
+                //   unresolved function, it can fail and discard bindings in this pass.
+                input.discard_from(index);
+            }
+        }
+
+        let child_is_attribute_path = is_attribute_path(&child);
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -277,17 +344,37 @@ impl PlanResolver<'_> {
         }
 
         // For other types (List, Struct), extraction must be a literal.
-        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
-        // literal field name so that the spec can keep the attribute unresolved.
+        // SQL dot selectors are represented as literals; an attribute selector
+        // is a column expression and cannot select a struct field.
         let extraction = match extraction {
             spec::Expr::Literal(lit) => lit,
             spec::Expr::UnresolvedAttribute { name, .. } => {
+                if matches!(data_type, DataType::Struct(_)) {
+                    // A column cannot select a struct field, even if it is named like one.
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                    return Err(PlanError::AnalysisError(
+                        "extraction must be a literal".to_string(),
+                    ));
+                }
                 let name: Vec<String> = name.into();
                 spec::Literal::Utf8 {
                     value: Some(name.one()?),
                 }
             }
-            _ => return Err(PlanError::invalid("extraction must be a literal")),
+            _ => {
+                // Array-index validation preserves the resolved array binding in Spark.
+                if !matches!(
+                    data_type,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                ) {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                }
+                return Err(PlanError::invalid("extraction must be a literal"));
+            }
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
@@ -303,41 +390,67 @@ impl PlanResolver<'_> {
             }
         };
         let expr = match data_type {
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_) => array_element(
-                expr,
-                expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction, None)),
-                    Operator::Plus,
-                    Box::new(lit(1i64)),
-                )),
-            ),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field) => {
+                let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "invalid extraction value for array: {extraction}"
+                    )));
+                };
+                let index_expr = lit(ScalarValue::Int64(index));
+                let element = array_element(
+                    expr.clone(),
+                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
+                );
+                if self.config.ansi_mode {
+                    let length = cast(array_length(expr.clone()), DataType::Int64);
+                    let message = datafusion_fn::concat(vec![
+                        lit("[INVALID_ARRAY_INDEX] The index "),
+                        cast(index_expr, DataType::Utf8),
+                        lit(" is out of bounds. The array has "),
+                        cast(length.clone(), DataType::Utf8),
+                        lit(
+                            " elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.",
+                        ),
+                    ]);
+                    let error = cast(
+                        ScalarUDF::from(RaiseError::new()).call(vec![message]),
+                        field.data_type().clone(),
+                    );
+                    let out_of_bounds = match index {
+                        Some(index) if index < 0 => expr.is_not_null(),
+                        Some(index) => expr.is_not_null().and(length.lt_eq(lit(index))),
+                        None => lit(false),
+                    };
+                    when(out_of_bounds, error).otherwise(element)?
+                } else {
+                    element
+                }
+            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
-                let Ok(name) = fields
-                    .iter()
-                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
-                    .map(|x| x.name().to_string())
-                    .collect::<Vec<_>>()
-                    .one()
+                let Ok(Some(field)) = find_struct_field(&fields, &name, self.config.case_sensitive)
                 else {
+                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "missing or ambiguous field: {name}"
                     )));
                 };
-                expr.field(name)
+                expr.field(field.name().to_string())
             }
             _ => {
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
-                )))
+                )));
             }
         };
         Ok(NamedExpr::new(vec![name], expr))
@@ -364,15 +477,35 @@ impl PlanResolver<'_> {
             )));
         };
 
-        let new_expr = if let Some(value_expression) = value_expression {
-            let value_expr = self
-                .resolve_expression(value_expression, schema, state)
+        // Spark names the column after the `UpdateFields` expression tree, where
+        // each operation is rendered as `WithField(<value name>)` (the value
+        // expression's display name, not the target field name) or `dropfield()`.
+        let (op, new_expr) = if let Some(value_expression) = value_expression {
+            let NamedExpr {
+                name: value_name,
+                expr: value_expr,
+                ..
+            } = self
+                .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
+            (
+                format!("WithField({})", value_name.one()?),
+                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+            )
         } else {
-            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
+            (
+                "dropfield()".to_string(),
+                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+            )
         };
-        Ok(NamedExpr::new(vec![name], new_expr))
+        // Spark collapses chained `withField`/`dropFields` into a single
+        // `update_fields(x, op1, op2, ...)`, so splice the new operation into an
+        // existing `update_fields(...)` name rather than nesting.
+        let result_name = match name.strip_suffix(')') {
+            Some(prefix) if prefix.starts_with("update_fields(") => format!("{prefix}, {op})"),
+            _ => format!("update_fields({name}, {op})"),
+        };
+        Ok(NamedExpr::new(vec![result_name], new_expr))
     }
 
     /// Rewrites the resolved expression to refer to columns in an external schema.

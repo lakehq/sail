@@ -1,11 +1,10 @@
-use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes as adt;
-use parquet_variant_compute::VariantType;
 use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
 use sail_common::spec;
+use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
-use crate::spark::connect::{data_type as sdt, DataType};
+use crate::spark::connect::{DataType, data_type as sdt};
 
 /// Spark geometry and geography type metadata.
 #[derive(Debug, Clone)]
@@ -106,13 +105,16 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     })),
                 },
             }
-        } else if extension_type_name == Some(VariantType::NAME) {
-            field.try_extension_type::<VariantType>()?;
+        } else if is_variant_storage_field(&field) {
             DataType {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
                     type_variation_reference: 0,
                 })),
             }
+        } else if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        {
+            let metadata = spec::SparkIntervalMetadata::from_json(metadata)?;
+            spark_interval_data_type(field.data_type(), metadata)?
         } else {
             field.data_type().clone().try_into()?
         };
@@ -123,6 +125,42 @@ impl TryFrom<adt::Field> for sdt::StructField {
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
+}
+
+fn spark_interval_data_type(
+    arrow_type: &adt::DataType,
+    metadata: spec::SparkIntervalMetadata,
+) -> SparkResult<DataType> {
+    let interval_unit = metadata.interval_unit();
+    let kind = match metadata {
+        spec::SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
+            sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
+                type_variation_reference: 0,
+            })
+        }
+        spec::SparkIntervalMetadata::DayTime {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
+            sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
+                type_variation_reference: 0,
+            })
+        }
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "Spark interval metadata {:?} does not match Arrow type {arrow_type}",
+                interval_unit
+            )));
+        }
+    };
+    Ok(DataType { kind: Some(kind) })
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
@@ -173,7 +211,7 @@ impl TryFrom<adt::DataType> for DataType {
             adt::DataType::Timestamp(adt::TimeUnit::Second, _)
             | adt::DataType::Timestamp(adt::TimeUnit::Millisecond, _)
             | adt::DataType::Timestamp(adt::TimeUnit::Nanosecond, _) => {
-                return Err(error(&data_type))
+                return Err(error(&data_type));
             }
             adt::DataType::Time32(adt::TimeUnit::Second) => Kind::Time(sdt::Time {
                 precision: Some(0),
@@ -341,10 +379,12 @@ mod tests {
         assert!(SparkGeoMetadata::from_json(r#"{"crs":{"type":"GeographicCRS"}}"#).is_err());
 
         // Test error on PROJJSON with unsupported authority:code
-        assert!(SparkGeoMetadata::from_json(
-            r#"{"crs":{"type":"GeographicCRS","id":{"authority":"EPSG","code":32632}}}"#
-        )
-        .is_err());
+        assert!(
+            SparkGeoMetadata::from_json(
+                r#"{"crs":{"type":"GeographicCRS","id":{"authority":"EPSG","code":32632}}}"#
+            )
+            .is_err()
+        );
 
         Ok(())
     }
@@ -509,5 +549,35 @@ mod tests {
         // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
+    }
+
+    #[test]
+    fn test_qualified_interval_field_to_proto() -> SparkResult<()> {
+        let interval = spec::SparkIntervalMetadata::DayTime {
+            start_field: spec::DayTimeIntervalField::Hour,
+            end_field: spec::DayTimeIntervalField::Second,
+        };
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Duration(adt::TimeUnit::Microsecond),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+            interval.to_json()?,
+        )]));
+
+        let proto: sdt::StructField = field.try_into()?;
+        assert_eq!(
+            proto.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field: Some(1),
+                    end_field: Some(3),
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        Ok(())
     }
 }

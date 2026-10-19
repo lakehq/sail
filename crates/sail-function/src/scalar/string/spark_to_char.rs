@@ -4,9 +4,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int64Array,
     StringArray, UInt64Array,
 };
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
-use datafusion::arrow::datatypes::{i256, DataType};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion::arrow::compute::{CastOptions, cast_with_options};
+use datafusion::arrow::datatypes::{DataType, i256};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -412,7 +412,7 @@ struct NumberFormat {
 }
 
 macro_rules! invalid_format_err {
-    ($sub_class:expr, $format:expr, $($message:tt)*) => {
+    ($sub_class:expr_2021, $format:expr_2021, $($message:tt)*) => {
         exec_err!(
             "[INVALID_FORMAT.{}] The format is invalid: '{}'. {}",
             $sub_class,
@@ -531,10 +531,10 @@ impl NumberFormat {
                 FormatToken::DecimalPoint => {
                     // If the last character so far is a space, change it to a zero:
                     // the value has no integer part.
-                    if let Some(last) = result.last_mut() {
-                        if *last == b' ' {
-                            *last = b'0';
-                        }
+                    if let Some(last) = result.last_mut()
+                        && *last == b' '
+                    {
+                        *last = b'0';
                     }
                     result.push(b'.');
                     reached_decimal_point = true;
@@ -859,9 +859,9 @@ fn add_space_checking_trailing_characters(result: &mut Vec<u8>) {
 /// If the result contains a decimal point with nothing after it, replace the decimal
 /// point with a space.
 fn strip_trailing_lone_decimal_point(result: &mut [u8]) {
-    if let Some(i) = result.iter().position(|c| *c == b'.') {
-        if i == result.len() - 1 || result[i + 1] == b' ' {
-            result[i] = b' ';
-        }
+    if let Some(i) = result.iter().position(|c| *c == b'.')
+        && (i == result.len() - 1 || result[i + 1] == b' ')
+    {
+        result[i] = b' ';
     }
 }

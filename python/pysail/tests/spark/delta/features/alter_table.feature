@@ -1,6 +1,5 @@
 Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to the Delta log
 
     Scenario: ALTER TABLE SET TBLPROPERTIES writes a new metadata action to the Delta log
@@ -61,7 +60,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | path                                                        | value |
         | metaData.configuration['delta.checkpointInterval']          | "10"  |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES can enable in-commit timestamps on an existing Delta table
 
     Background:
@@ -98,7 +96,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
       Then delta log latest effective protocol and metadata contains
         | path                                                                       | value  |
         | protocol.minWriterVersion                                                  | 7      |
-        | protocol.writerFeatures                                                    | ["inCommitTimestamp"] |
+        | protocol.writerFeatures                                                    | ["appendOnly", "invariants", "inCommitTimestamp"] |
         | metaData.configuration['delta.enableInCommitTimestamps']                   | "true" |
 
     Scenario: Time travel ignores pre-enablement in-commit timestamps after ALTER TABLE enables ICT
@@ -123,7 +121,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | 1  | v0    |
         | 2  | v1    |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES can enable type widening on an existing Delta table
 
     Scenario: Delta log protocol is upgraded when ALTER TABLE enables type widening
@@ -154,8 +151,49 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                           | 3      |
         | protocol.minWriterVersion                           | 7      |
         | protocol.readerFeatures                             | ["typeWidening"] |
-        | protocol.writerFeatures                             | ["typeWidening"] |
+        | protocol.writerFeatures                             | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.configuration['delta.enableTypeWidening']  | "true" |
+
+    Scenario: Reader upgrade preserves the legacy column mapping feature
+      Given variable location for temporary directory delta_alter_mapping_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_mapping_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_mapping_type_widening_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_mapping_type_widening_test VALUES (1, 'before')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_mapping_type_widening_test
+        SET TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                | value |
+        | protocol.minReaderVersion                           | 3 |
+        | protocol.minWriterVersion                           | 7 |
+        | protocol.readerFeatures                             | ["columnMapping", "typeWidening"] |
+        | protocol.writerFeatures                             | ["columnMapping", "appendOnly", "invariants", "typeWidening"] |
+        | metaData.configuration['delta.columnMapping.mode']  | "name" |
+        | metaData.configuration['delta.enableTypeWidening']  | "true" |
+      When query
+        """
+        SELECT id, value FROM delta_alter_mapping_type_widening_test
+        """
+      Then query result ordered
+        | id | value  |
+        | 1  | before |
 
     Scenario: ALTER COLUMN TYPE applies Delta type widening and records metadata
       Given variable location for temporary directory delta_alter_column_type_widening
@@ -238,7 +276,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                                       | 3         |
         | protocol.minWriterVersion                                       | 7         |
         | protocol.readerFeatures                                         | ["typeWidening"] |
-        | protocol.writerFeatures                                         | ["typeWidening"] |
+        | protocol.writerFeatures                                         | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.schemaString.fields[0].type                            | "long"    |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].fromType | "integer" |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].toType   | "long"    |
@@ -372,7 +410,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         ALTER COLUMN id TYPE BIGINT
         """
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES records a dedicated Delta log operation
 
     Scenario: Delta log commit info records UNSET TBLPROPERTIES operation on ALTER TABLE UNSET
@@ -404,7 +441,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | operation                                | "UNSET TBLPROPERTIES" |
         | operationParameters.properties           | ["my.tag"]    |
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES validates property existence unless IF EXISTS is specified
 
     Scenario: ALTER TABLE UNSET TBLPROPERTIES on a missing property fails without IF EXISTS

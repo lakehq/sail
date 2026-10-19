@@ -8,7 +8,7 @@ pub fn is_delta_table_properties<'a, I>(properties: I) -> bool
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
-    managed::is_table_format_properties(properties, DELTA_TABLE_TYPE_VALUE)
+    managed::is_lake_source_properties(properties, DELTA_TABLE_TYPE_VALUE)
 }
 
 pub fn unity_table_id_value<'a, I>(properties: I) -> Option<&'a str>

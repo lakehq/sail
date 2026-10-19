@@ -123,7 +123,6 @@ Feature: Delta Lake Default Columns
         DROP TABLE IF EXISTS delta_default_col_meta
         """
 
-    @sail-only
     Scenario: Default columns enable allowColumnDefaults and CURRENT_DEFAULT metadata
       Given statement template
         """
@@ -142,7 +141,7 @@ Feature: Delta Lake Default Columns
       Then delta log first commit protocol and metadata contains
         | path                                                 | value                   |
         | protocol.minWriterVersion                            | 7                       |
-        | protocol.writerFeatures                              | ["allowColumnDefaults"] |
+        | protocol.writerFeatures                              | ["allowColumnDefaults", "appendOnly", "invariants"] |
         | metaData.schemaString.fields[1].metadata.CURRENT_DEFAULT | "10"                    |
 
   Rule: DEFAULT is restricted to standalone INSERT values
@@ -154,7 +153,6 @@ Feature: Delta Lake Default Columns
         DROP TABLE IF EXISTS delta_default_col_errors
         """
 
-    @sail-only
     Scenario: DEFAULT cannot be used inside an expression
       Given statement template
         """

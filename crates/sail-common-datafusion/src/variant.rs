@@ -9,7 +9,8 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit,
 };
 use parquet_variant::Variant;
-use parquet_variant_compute::{shred_variant, unshred_variant, VariantArray, VariantType};
+use parquet_variant_compute::{VariantArray, VariantType, shred_variant, unshred_variant};
+use serde::{Deserialize, Serialize};
 
 const MIN_FIELD_FREQUENCY: f64 = 0.10;
 const MAX_SHREDDED_FIELDS: usize = 300;
@@ -22,7 +23,7 @@ pub const VARIANT_TYPED_VALUE_FIELD_NAME: &str = "typed_value";
 pub const VARIANT_METADATA_MARKER_KEY: &str = "variant";
 pub const VARIANT_METADATA_MARKER_VALUE: &str = "true";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantShreddingConfig {
     pub enabled: bool,
     pub inference_buffer_size: usize,
@@ -149,6 +150,16 @@ pub fn is_variant_arrow_field(field: &Field) -> bool {
     field.extension_type_name() == Some(VariantType::NAME)
 }
 
+pub fn with_variant_extension_if_marked_storage(field: Field) -> Field {
+    if is_marked_variant_storage_type(field.data_type())
+        && field.extension_type_name() != Some(VariantType::NAME)
+    {
+        field.with_extension_type(VariantType)
+    } else {
+        field
+    }
+}
+
 pub fn is_variant_storage_field(field: &Field) -> bool {
     let has_variant_extension = field.extension_type_name() == Some(VariantType::NAME)
         && field.try_extension_type::<VariantType>().is_ok();
@@ -199,6 +210,10 @@ pub fn is_variant_storage_type(data_type: &DataType) -> bool {
         .iter()
         .any(|field| field.name() == VARIANT_TYPED_VALUE_FIELD_NAME);
     has_metadata && (has_value || has_typed_value)
+}
+
+pub fn variant_storage_types_equivalent(left: &DataType, right: &DataType) -> bool {
+    is_variant_storage_type(left) && is_variant_storage_type(right)
 }
 
 pub fn is_shredded_variant_storage_type(data_type: &DataType) -> bool {
@@ -772,9 +787,11 @@ mod tests {
         let DataType::Struct(payload_fields) = payload_field.data_type() else {
             panic!("expected variant struct");
         };
-        assert!(payload_fields
-            .iter()
-            .any(|field| field.name() == "typed_value"));
+        assert!(
+            payload_fields
+                .iter()
+                .any(|field| field.name() == "typed_value")
+        );
         let typed_value = payload_fields
             .iter()
             .find(|field| field.name() == "typed_value")
@@ -788,8 +805,9 @@ mod tests {
 
         let shredded_variant = VariantArray::try_new(shredded.column(0).as_ref())?;
         let unshredded = unshred_variant(&shredded_variant)?;
-        assert!(unshredded.value_field().is_some());
-        assert!(unshredded.typed_value_field().is_none());
+        let value_column = unshredded.value_column();
+        assert_eq!(value_column.null_count(), 0);
+        assert!(unshredded.typed_value_column().is_none());
 
         Ok(())
     }

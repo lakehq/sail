@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -15,23 +15,18 @@ use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use crate::scalar::map::utils::{
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
-use crate::scalar::string::spark_split::{parse_regex, split_to_array, SparkSplit};
+use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array};
 
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrToMap {
     signature: Signature,
-}
-
-impl Default for StrToMap {
-    fn default() -> Self {
-        Self::new()
-    }
+    last_value_wins: bool,
 }
 
 impl StrToMap {
-    pub fn new() -> Self {
+    pub fn new(last_value_wins: bool) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![
@@ -41,7 +36,12 @@ impl StrToMap {
                 ],
                 Volatility::Immutable,
             ),
+            last_value_wins,
         }
+    }
+
+    pub fn last_value_wins(&self) -> bool {
+        self.last_value_wins
     }
 }
 
@@ -87,14 +87,15 @@ impl ScalarUDFImpl for StrToMap {
             config_options: args.config_options,
         })?;
 
-        make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[
-            split_result,
-            key_value_delims,
-        ])
+        let last_value_wins = self.last_value_wins;
+        make_scalar_function(
+            move |args| str_to_map_inner(args, last_value_wins),
+            vec![Hint::Pad, Hint::AcceptsSingular],
+        )(&[split_result, key_value_delims])
     }
 }
 
-fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     let [pair_strs, key_value_delims] = take_function_args("str_to_map", args)?;
     let pair_lists = pair_strs.as_list::<i32>();
     match (
@@ -148,6 +149,7 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 values.offsets(),
                 keys.nulls(),
                 values.nulls(),
+                last_value_wins,
             )
         }
         _ => internal_err!("str_to_map: failed to downcast arguments to StringArrays"),

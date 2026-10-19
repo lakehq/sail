@@ -23,6 +23,9 @@ use crate::expression::{
     from_ast_order_by, from_ast_window,
 };
 
+/// The table alias that Spark generates for an unaliased derived table.
+pub const AUTO_GENERATED_SUBQUERY_NAME: &str = "__auto_generated_subquery_name";
+
 #[derive(Default)]
 struct QueryModifiers {
     sort_by: Option<Vec<OrderByExpr>>,
@@ -240,6 +243,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         select:
             SelectClause {
                 select: _,
+                hints,
                 quantifier,
                 projection,
             },
@@ -331,7 +335,28 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         }
     };
 
-    Ok(plan)
+    let hints = hints
+        .into_iter()
+        .flat_map(|hint| hint.items.into_items())
+        .collect::<Vec<_>>();
+    hints.into_iter().rev().try_fold(plan, |input, hint| {
+        let parameters = hint
+            .parameters
+            .map(|parameters| parameters.items)
+            .map(|items| {
+                items
+                    .into_items()
+                    .map(from_ast_expression)
+                    .collect::<SqlResult<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(spec::QueryPlan::new(spec::QueryNode::Hint {
+            input: Box::new(input),
+            name: hint.name.value,
+            parameters,
+        }))
+    })
 }
 
 fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
@@ -493,6 +518,17 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                 spec::QueryPlan::new(spec::QueryNode::TableSample {
                     input: Box::new(plan),
                     sample,
+                })
+            } else {
+                plan
+            };
+            // Like Spark, alias an unaliased derived table so that enclosing
+            // operators cannot resolve columns hidden inside the subquery.
+            let plan = if alias.is_none() {
+                spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                    input: Box::new(plan),
+                    name: spec::Identifier::from(AUTO_GENERATED_SUBQUERY_NAME),
+                    columns: vec![],
                 })
             } else {
                 plan
@@ -679,17 +715,14 @@ fn query_plan_with_table_modifier(
                             .collect::<SqlResult<Vec<_>>>()?,
                         _ => vec![from_ast_expression(expr)?],
                     };
-                    let values = expr
-                        .into_iter()
-                        .map(|x| match x {
-                            spec::Expr::Literal(literal) => Ok(literal),
-                            _ => Err(SqlError::invalid("non-literal value in PIVOT")),
-                        })
-                        .collect::<SqlResult<Vec<_>>>()?;
+                    // Pivot values are foldable expressions (literals, typed literals such as
+                    // `DATE'...'`, or casts); the resolver evaluates each to a scalar. Passing the
+                    // expressions through here lets all of those forms work, matching Spark.
+                    let values = expr;
                     let alias = match alias {
                         Some((_, Either::Left(x))) => Some(x.value.into()),
                         Some((_, Either::Right(IdentList { .. }))) => {
-                            return Err(SqlError::invalid("multiple alias for pivot value"))
+                            return Err(SqlError::invalid("multiple alias for pivot value"));
                         }
                         None => None,
                     };
@@ -698,7 +731,7 @@ fn query_plan_with_table_modifier(
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
                 input: Box::new(plan),
-                grouping: vec![],
+                grouping: None,
                 aggregate,
                 columns,
                 values,

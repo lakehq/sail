@@ -4,12 +4,20 @@ mod options;
 mod runtime;
 
 pub use cache::*;
+use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
+};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -21,6 +29,14 @@ pub trait CatalogProvider: Send + Sync {
     /// Note that the same catalog can be registered under different names
     /// in different sessions.
     fn get_name(&self) -> &str;
+
+    /// The namespace used for unqualified objects when this is not the current catalog.
+    fn default_namespace(&self) -> Namespace {
+        Namespace {
+            head: "default".into(),
+            tail: vec![],
+        }
+    }
 
     /// Creates a new database in the catalog.
     async fn create_database(
@@ -55,6 +71,104 @@ pub trait CatalogProvider: Send + Sync {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus>;
 
+    /// Whether catalog `CREATE TABLE` needs the lake source to create storage metadata before
+    /// registering the catalog object. Providers that can reject create options should do so here
+    /// before storage metadata is materialized.
+    // TODO: Remove this compatibility hook after LakehouseCreatePlan owns all
+    // create/register paths.
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        let _ = options;
+        Ok(CreateTableMetadataRequirement::None)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        Vec::new()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let status = self.get_table(database, table).await?;
+        Ok(resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        ))
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let _ = (database, table);
+        let requirement = self.create_table_metadata_requirement(&request.options)?;
+        Ok(plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            requirement,
+            &self.lakehouse_capabilities(),
+        ))
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "table access sessions".to_string(),
+        ))
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse scan planning".to_string(),
+        ))
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse table commits".to_string(),
+        ))
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "Delta ratified commits".to_string(),
+        ))
+    }
+
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
 
@@ -69,6 +183,24 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    async fn rename_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _destination_database: &Namespace,
+        _destination_table: &str,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(format!(
+            "RENAME TABLE for catalog {}",
+            self.get_name()
+        )))
+    }
+
+    /// Validates catalog restrictions before lakehouse storage metadata is changed.
+    fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
+        Ok(())
+    }
+
     /// Alters a table in the catalog.
     async fn alter_table(
         &self,
@@ -77,32 +209,28 @@ pub trait CatalogProvider: Send + Sync {
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
 
-    /// Commits table-format metadata through the catalog control plane.
-    async fn commit_table(
+    /// Synchronizes a lakehouse alteration with its committed storage schema.
+    /// Catalogs that cache columns should reconcile them before applying the options.
+    async fn alter_table_with_schema(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let _ = (database, table);
-        Err(CatalogError::NotSupported(format!(
-            "catalog commit for {} tables",
-            options.format
-        )))
+        options: AlterTableOptions,
+        _schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.alter_table(database, table, options).await
     }
 
-    /// Gets table-format commits tracked by the catalog control plane.
-    async fn get_table_commits(
+    /// Applies all changes in one catalog mutation, including metadata-pointer preconditions.
+    async fn alter_table_atomically(
         &self,
-        database: &Namespace,
-        table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        let _ = (database, table);
-        Err(crate::error::CatalogError::NotSupported(format!(
-            "catalog commit discovery for {} tables",
-            options.format
-        )))
+        _database: &Namespace,
+        _table: &str,
+        _options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "Atomic table alterations are not supported by this catalog".to_string(),
+        ))
     }
 
     /// Creates a view in the catalog.

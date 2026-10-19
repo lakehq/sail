@@ -1,8 +1,8 @@
 use std::any::TypeId;
 
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::Input;
-use chumsky::Parser;
 use paste::paste;
 
 use crate::options::ParserOptions;

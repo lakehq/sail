@@ -1,6 +1,5 @@
 Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
 
-  @sail-only
   Rule: CREATE TABLE TBLPROPERTIES are materialized into Iceberg metadata
 
     Scenario: CREATE TABLE TBLPROPERTIES writes metadata properties on first commit
@@ -33,8 +32,49 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
           📄 *.parquet
         📂 metadata
           📄 *.metadata.json
+          📄 *.metadata.json
           📄 snap-*.avro
         """
+
+    Scenario: Absolute write data path stores files outside the table location
+      Given variable location for temporary directory iceberg_absolute_write_data_path_table
+      Given variable data_location for temporary directory iceberg_absolute_write_data_path_data
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_absolute_write_data_path_test
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_absolute_write_data_path_test (
+          id INT,
+          value STRING
+        )
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES ('write.data.path' = '{{ data_location.file_uri }}')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_absolute_write_data_path_test VALUES (1, 'v0')
+        """
+      Then file tree in location matches
+        """
+        📂 metadata
+          📄 *.metadata.json
+          📄 *.metadata.json
+          📄 snap-*.avro
+        """
+      Then file tree in data_location matches
+        """
+        📄 *.parquet
+        """
+      When query
+        """
+        SELECT * FROM iceberg_absolute_write_data_path_test
+        """
+      Then query result
+        | id | value |
+        | 1  | v0    |
 
     Scenario: CREATE TABLE format-version selects metadata version without persisting reserved properties
       Given variable location for temporary directory iceberg_create_table_format_version
@@ -60,7 +100,6 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         | $['format-version'] | 1                        |
         | properties         | {"custom.created":"yes"} |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to Iceberg metadata
 
     Scenario: ALTER TABLE SET TBLPROPERTIES writes a new metadata file
@@ -121,7 +160,6 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         | $['format-version'] | 2                                            |
         | properties         | {"custom.created":"yes","custom.key":"hello"} |
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES persists removals to Iceberg metadata
 
     Scenario: ALTER TABLE UNSET TBLPROPERTIES removes a property

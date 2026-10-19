@@ -3,26 +3,36 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
-use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
+use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, RngExt};
+use datafusion_expr::{
+    Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
+};
+use rand::{RngExt, rng};
+use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::TableAccessPurpose;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakerelation::{
+    LakeRelationAccess, LakeRelationResolution, LakeRelationTimeTravel,
+};
 use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::logical_plan::{
+    rename_logical_plan, rename_logical_plan_reusing_projection,
+};
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use super::sample::SAMPLE_ROUNDING_EPSILON;
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
+use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -41,11 +51,11 @@ impl PlanResolver<'_> {
         } = table;
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
-        // registered table format. In that case, treat it as a direct data source read.
+        // registered data source. In that case, treat it as a direct data source read.
         if let [format, path] = name.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if registry.get(&format).is_ok() {
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
+            if registry.get_data_source(&format).is_ok() {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
@@ -65,14 +75,20 @@ impl PlanResolver<'_> {
             }
         }
 
-        let table_reference = self.resolve_table_reference(&name)?;
-        if let Some(cte) = state.get_cte(&table_reference) {
+        let table_reference = self.resolve_table_reference(&name);
+        if let Ok(table_reference) = &table_reference
+            && let Some(cte) = state.get_cte(table_reference)
+        {
             if temporal.is_some() {
                 return Err(PlanError::unsupported(
                     "SQL time travel is not supported for CTEs",
                 ));
             }
-            let plan = cte.clone();
+            let mut plan = cte.plan.as_ref().clone();
+            if let Some(names) = cte.renew_reference(state)? {
+                plan = rename_logical_plan_reusing_projection(plan, &names)?;
+                state.register_missing_input_boundary(&plan);
+            }
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
             } else {
@@ -81,11 +97,56 @@ impl PlanResolver<'_> {
         }
 
         let reference: Vec<String> = name.clone().into();
-        let status = self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table_or_view(&reference)
-            .await?;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let (status, catalog_reference, lake_relation) =
+            match manager.get_table_or_view(&reference).await {
+                Ok(status) => (status, reference.clone(), None),
+                Err(error @ CatalogError::NotFound(_, _))
+                | Err(error @ CatalogError::NotSupported(_)) => {
+                    let Some((candidate_name, base_reference)) = reference.split_last() else {
+                        return Err(error.into());
+                    };
+                    if base_reference.is_empty() {
+                        return Err(error.into());
+                    }
+                    let base_status = match manager.get_table_or_view(base_reference).await {
+                        Ok(status) => status,
+                        Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {
+                            return Err(error.into());
+                        }
+                        Err(base_error) => return Err(base_error.into()),
+                    };
+                    let TableKind::Table { format, .. } = &base_status.kind else {
+                        return Err(error.into());
+                    };
+                    let Some(lake_source) =
+                        data_source_registry.get_lake_source_if_supported(format)?
+                    else {
+                        return Err(error.into());
+                    };
+                    let Some(relation_provider) = lake_source.relation_provider() else {
+                        return Err(error.into());
+                    };
+                    match relation_provider.resolve_relation(candidate_name) {
+                        LakeRelationResolution::Unrecognized => return Err(error.into()),
+                        LakeRelationResolution::Unsupported { reason } => {
+                            return Err(PlanError::unsupported(reason));
+                        }
+                        LakeRelationResolution::Supported(relation) => (
+                            base_status,
+                            base_reference.to_vec(),
+                            Some((relation_provider, relation)),
+                        ),
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            };
+        let table_reference = match table_reference {
+            Ok(table_reference) => table_reference,
+            Err(_) if lake_relation.is_some() => state.register_relation_name(reference.clone()),
+            Err(error) => return Err(error),
+        };
         let plan = match status.kind {
             TableKind::Table {
                 columns,
@@ -99,14 +160,41 @@ impl PlanResolver<'_> {
                 properties,
                 is_external: _,
             } => {
+                if let Some((_, relation)) = lake_relation.as_ref()
+                    && relation.time_travel() == LakeRelationTimeTravel::Unsupported
+                    && temporal.is_some()
+                {
+                    return Err(PlanError::unsupported(format!(
+                        "SQL time travel is not supported for lake relation '{}'",
+                        relation.name()
+                    )));
+                }
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
+                let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
+                    self.resolve_lakehouse_table_context_for_access(
+                        &catalog_reference,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                        lake_relation_access_purpose(relation.access()),
+                    )
+                    .await?
+                } else {
+                    self.resolve_lakehouse_table_context(
+                        &catalog_reference,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?
+                };
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    catalog_table: Some(reference.clone()),
+                    lakehouse_table: Some(lakehouse_table),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -122,11 +210,19 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
-                let table_source = registry
-                    .get(&format)?
-                    .create_source(&self.ctx.state(), info)
-                    .await?;
+                let table_source = match lake_relation {
+                    Some((relation_provider, relation)) => {
+                        relation_provider
+                            .create_relation(&self.ctx.state(), info, relation)
+                            .await?
+                    }
+                    None => {
+                        data_source_registry
+                            .get_data_source(&format)?
+                            .create_source(&self.ctx.state(), info)
+                            .await?
+                    }
+                };
                 self.resolve_table_source_with_rename(
                     table_source,
                     table_reference,
@@ -157,7 +253,11 @@ impl PlanResolver<'_> {
                     ));
                 }
                 let names = state.register_fields(plan.schema().inner().fields());
-                rename_logical_plan(plan.as_ref().clone(), &names)?
+                let plan = rename_logical_plan(plan.as_ref().clone(), &names)?;
+                // The stored plan's internal field IDs belong to another resolver
+                // state. Missing-reference recovery must see only the fresh output.
+                state.register_missing_input_boundary(&plan);
+                plan
             }
         };
 
@@ -218,7 +318,11 @@ impl PlanResolver<'_> {
             Ok(plan)
         } else {
             let names = state.register_field_names(columns.iter().map(|c| &c.name));
-            Ok(rename_logical_plan(plan, &names)?)
+            let plan = rename_logical_plan(plan, &names)?;
+            // Spark renames view columns below the view's alias, so missing-reference
+            // recovery must not see the definition's column names under this output.
+            state.register_missing_input_boundary(&plan);
+            Ok(plan)
         }
     }
 
@@ -236,7 +340,7 @@ impl PlanResolver<'_> {
             spec::TableSampleMethod::Percent { value } => {
                 let percent = self.evaluate_sample_expr_to_f64(value, state).await?;
                 let fraction = percent / 100.0;
-                if !(0.0..=1.0).contains(&fraction) {
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
                         "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
@@ -250,15 +354,13 @@ impl PlanResolver<'_> {
                 numerator,
                 denominator,
             } => {
-                if numerator == 0 || numerator > denominator {
+                let fraction = numerator as f64 / denominator as f64;
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
-                        "invalid TABLESAMPLE bucket: {numerator} out of {denominator}"
+                        "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
                 }
-                let fraction = 1.0 / denominator as f64;
-                let lower = (numerator - 1) as f64 * fraction;
-                let upper = numerator as f64 * fraction;
-                (lower, upper)
+                (0.0, fraction)
             }
         };
 
@@ -409,16 +511,17 @@ impl PlanResolver<'_> {
             } else {
                 let schema = Arc::new(DFSchema::empty());
                 let arguments = self.resolve_expressions(arguments, &schema, state).await?;
-                let table_function =
-                    if let Ok(f) = self.ctx.table_function(&canonical_function_name) {
-                        f
-                    } else if let Ok(f) = get_built_in_table_function(&canonical_function_name) {
-                        f
-                    } else {
-                        return Err(PlanError::unsupported(format!(
-                            "unknown table function: {function_name}"
-                        )));
-                    };
+                let table_function = match self.ctx.table_function(&canonical_function_name) {
+                    Ok(f) => f,
+                    _ => match get_built_in_table_function(&canonical_function_name) {
+                        Ok(f) => f,
+                        _ => {
+                            return Err(PlanError::unsupported(format!(
+                                "unknown table function: {function_name}"
+                            )));
+                        }
+                    },
+                };
                 let session_state = self.ctx.state();
                 let table_provider = table_function.create_table_provider_with_args(
                     TableFunctionArgs::new(&arguments, &session_state),
@@ -450,16 +553,14 @@ impl PlanResolver<'_> {
         if !predicates.is_empty() {
             return Err(PlanError::todo("data source predicates"));
         }
-        let Some(format) = format else {
-            return Err(PlanError::invalid("missing data source format"));
-        };
+        let format = format.unwrap_or_else(|| self.config.default_table_file_format.clone());
         let schema = match schema {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
         let info = SourceInfo {
             paths,
-            catalog_table: None,
+            lakehouse_table: None,
             schema,
             constraints: Default::default(),
             partition_by: vec![],
@@ -471,9 +572,9 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let table_source = registry
-            .get(&format)?
+            .get_data_source(&format)?
             .create_source(&self.ctx.state(), info)
             .await?;
         self.resolve_table_source_with_rename(
@@ -536,19 +637,30 @@ impl PlanResolver<'_> {
             table_source
         };
 
-        let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference,
-            table_source,
-            projection,
-            filters,
-            fetch,
-        )?);
+        let table_scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(table_reference, table_source)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_fetch(fetch)
+                .build()?,
+        );
 
         if !has_duplicates {
             let names = state.register_fields(table_scan.schema().fields());
-            Ok(rename_logical_plan(table_scan, &names)?)
+            let plan = rename_logical_plan(table_scan, &names)?;
+            // Physical column names (including names such as "#0") are not
+            // resolver field IDs. Only the renamed output is a resolution input.
+            state.register_missing_input_boundary(&plan);
+            Ok(plan)
         } else {
             Ok(table_scan)
         }
+    }
+}
+
+fn lake_relation_access_purpose(access: LakeRelationAccess) -> TableAccessPurpose {
+    match access {
+        LakeRelationAccess::MetadataRead => TableAccessPurpose::MetadataRead,
+        LakeRelationAccess::DataRead => TableAccessPurpose::DataRead,
     }
 }

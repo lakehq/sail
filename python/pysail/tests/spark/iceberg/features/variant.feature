@@ -1,4 +1,4 @@
-@sail-only @variant @spark-4
+@spark-4
 Feature: Iceberg Variant support
 
   Scenario: Write and read a Variant column
@@ -22,8 +22,8 @@ Feature: Iceberg Variant support
       SELECT 1, parse_json('{"a":2,"b":"iceberg"}')
       """
     Then iceberg metadata matches snapshot
-    Then iceberg latest metadata file is v1.metadata.json
-    Then iceberg version hint is 1
+    Then iceberg latest metadata file is v2.metadata.json
+    Then iceberg version hint is 2
     Then iceberg current manifest list matches snapshot
     When query
       """
@@ -150,6 +150,43 @@ Feature: Iceberg Variant support
       SELECT CAST(2 AS INT) AS id, parse_json('{"a":3,"b":"merge"}') AS payload
       """
     Then iceberg metadata matches snapshot
-    Then iceberg latest metadata file is v2.metadata.json
-    Then iceberg version hint is 2
+    Then iceberg latest metadata file is v3.metadata.json
+    Then iceberg version hint is 3
     Then iceberg current manifest list matches snapshot
+
+  Scenario Outline: Variant casts retain their type when scanning all-null files
+    Given variable location for temporary directory iceberg_variant_cast
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_variant_cast
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_variant_cast (id INT, payload VARIANT)
+      USING iceberg LOCATION {{ location.uri }}
+      TBLPROPERTIES ('format-version'='3', 'write.parquet.shred-variants'='<shred>')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_variant_cast
+      SELECT 1, parse_json('{"a":1}')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_variant_cast
+      SELECT 2, parse_json(CAST(NULL AS STRING))
+      """
+    When query
+      """
+      SELECT id, CAST(payload AS STRING) AS payload_json, variant_get(payload, '$.a', 'int') AS a
+      FROM iceberg_variant_cast ORDER BY id
+      """
+    Then query result ordered
+      | id | payload_json | a    |
+      | 1  | {"a":1}      | 1    |
+      | 2  | NULL         | NULL |
+
+    Examples:
+      | shred |
+      | false |
+      | true  |

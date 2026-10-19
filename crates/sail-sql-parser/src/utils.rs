@@ -1,7 +1,7 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::prelude::any;
-use chumsky::Parser;
 
 use crate::token::Token;
 

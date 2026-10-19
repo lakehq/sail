@@ -17,6 +17,8 @@ In an empty directory, create a `Dockerfile` with the following content.
 
 :::
 
+<!--@include: ../_common/python-version.md-->
+
 In the same directory, run the following command with the desired release tag or branch name to build the Docker image.
 
 ```bash-vue

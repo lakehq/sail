@@ -1,26 +1,28 @@
+use std::sync::Arc;
+
 use log::debug;
-use sail_server::actor::ActorHandle;
+use opentelemetry_proto::tonic::metrics::v1::ResourceMetrics;
+use prost::Message;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use crate::driver::actor::DriverActor;
-use crate::driver::gen::driver_service_server::DriverService;
-use crate::driver::gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
-    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+use crate::driver::r#gen::driver_service_server::DriverService;
+use crate::driver::r#gen::{
+    RegisterWorkerRequest, RegisterWorkerResponse, ReportMetricsRequest, ReportMetricsResponse,
+    ReportTaskStatusRequest, ReportTaskStatusResponse, ReportWorkerHeartbeatRequest,
+    ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{gen, DriverEvent};
+use crate::driver::{DriverMessage, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
-use crate::id::{TaskKey, WorkerId};
+use crate::id::{DriverId, TaskKey, WorkerId};
 
 pub struct DriverServer {
-    handle: ActorHandle<DriverActor>,
+    registry: Arc<dyn DriverRegistryAccessor>,
 }
 
 impl DriverServer {
-    pub fn new(handle: ActorHandle<DriverActor>) -> Self {
-        Self { handle }
+    pub fn new(registry: Arc<dyn DriverRegistryAccessor>) -> Self {
+        Self { registry }
     }
 }
 
@@ -33,6 +35,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let RegisterWorkerRequest {
+            driver_id,
             worker_id,
             host,
             port,
@@ -41,14 +44,16 @@ impl DriverService for DriverServer {
             Status::invalid_argument("port must be a valid 16-bit unsigned integer")
         })?;
         let (tx, rx) = oneshot::channel();
-        let event = DriverEvent::RegisterWorker {
+        let message = DriverMessage::RegisterWorker {
             worker_id: WorkerId::from(worker_id),
             host,
             port,
             result: tx,
         };
-        self.handle
-            .send(event)
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         rx.await.map_err(ExecutionError::from)??;
@@ -63,12 +68,17 @@ impl DriverService for DriverServer {
     ) -> Result<Response<ReportWorkerHeartbeatResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let ReportWorkerHeartbeatRequest { worker_id } = request;
-        let event = DriverEvent::WorkerHeartbeat {
+        let ReportWorkerHeartbeatRequest {
+            driver_id,
+            worker_id,
+        } = request;
+        let message = DriverMessage::WorkerHeartbeat {
             worker_id: worker_id.into(),
         };
-        self.handle
-            .send(event)
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportWorkerHeartbeatResponse {};
@@ -83,15 +93,18 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportWorkerKnownPeersRequest {
+            driver_id,
             worker_id,
             peer_worker_ids,
         } = request;
-        let event = DriverEvent::WorkerKnownPeers {
+        let message = DriverMessage::WorkerKnownPeers {
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
         };
-        self.handle
-            .send(event)
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportWorkerKnownPeersResponse {};
@@ -106,6 +119,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportTaskStatusRequest {
+            driver_id,
             job_id,
             stage,
             partition,
@@ -115,12 +129,12 @@ impl DriverService for DriverServer {
             cause,
             sequence,
         } = request;
-        let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
+        let status = r#gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
         let cause = cause
             .map(|x| serde_json::from_str(&x))
             .transpose()
             .map_err(ExecutionError::from)?;
-        let event = DriverEvent::UpdateTask {
+        let message = DriverMessage::UpdateTask {
             key: TaskKey {
                 job_id: job_id.into(),
                 stage: stage as usize,
@@ -132,12 +146,38 @@ impl DriverService for DriverServer {
             cause,
             sequence: Some(sequence),
         };
-        self.handle
-            .send(event)
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportTaskStatusResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
+    }
+
+    async fn report_metrics(
+        &self,
+        request: Request<ReportMetricsRequest>,
+    ) -> Result<Response<ReportMetricsResponse>, Status> {
+        let ReportMetricsRequest { driver_id, metrics } = request.into_inner();
+        // Validate that the destination driver still exists before accepting worker metrics.
+        self.registry.get(DriverId::from(driver_id)).await?;
+        let reporter = sail_telemetry::telemetry::global_system_metric_reporter()
+            .ok_or_else(|| Status::failed_precondition("metrics event store is not initialized"))?;
+        let metrics = metrics
+            .into_iter()
+            .map(|data| {
+                ResourceMetrics::decode(data.as_slice()).map_err(|error| {
+                    Status::invalid_argument(format!("invalid OpenTelemetry metrics data: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        reporter
+            .report(metrics)
+            .await
+            .map_err(|error| Status::internal(error.to_string()))?;
+        Ok(Response::new(ReportMetricsResponse {}))
     }
 }

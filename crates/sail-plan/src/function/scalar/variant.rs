@@ -11,6 +11,7 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
+        ("is_valid_variant", F::unknown("is_valid_variant")),
         ("is_variant_null", F::udf(SparkIsVariantNullUdf::new())),
         ("parse_json", F::udf(SparkParseJson::new(false))),
         ("schema_of_variant", F::udf(SparkSchemaOfVariantUdf::new())),

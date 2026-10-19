@@ -663,8 +663,7 @@ fn parse_atomic_delta_type(value: &str) -> DeltaResult<DataType> {
         "date" => Ok(DataType::DATE),
         "timestamp" => Ok(DataType::TIMESTAMP),
         "timestamp_ntz" | "timestampntz" => Ok(DataType::TIMESTAMP_NTZ),
-        value if value.starts_with("decimal(") && value.ends_with(')') => {
-            let inner = &value["decimal(".len()..value.len() - 1];
+        value if let Some(inner) = value.strip_circumfix("decimal(", ')') => {
             let (precision, scale) = inner.split_once(',').ok_or_else(|| {
                 DeltaTableError::schema(format!(
                     "invalid decimal type in delta.typeChanges: {value}"
@@ -700,17 +699,17 @@ fn resolve_field_path<'a>(
             (DataType::Array(_), other) => {
                 return Err(DeltaTableError::schema(format!(
                     "expected 'element' for array type change path, found '{other}'"
-                )))
+                )));
             }
             (DataType::Map(_), other) => {
                 return Err(DeltaTableError::schema(format!(
                     "expected 'key' or 'value' for map type change path, found '{other}'"
-                )))
+                )));
             }
             (other_type, other) => {
                 return Err(DeltaTableError::schema(format!(
                     "cannot resolve type change path segment '{other}' through {other_type}"
-                )))
+                )));
             }
         }
     }

@@ -13,8 +13,8 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(in super::super) async fn resolve_catalog_create_table(
@@ -35,8 +35,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
@@ -55,7 +54,7 @@ impl PlanResolver<'_> {
         } else {
             self.resolve_default_table_location(&table).await?
         };
-        let format = self.resolve_catalog_table_format(file_format)?;
+        let format = self.resolve_catalog_data_source_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         for partition in &partition_by {
@@ -86,8 +85,7 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                if_not_exists,
-                replace,
+                mode,
                 properties,
                 is_external,
                 is_write_precondition: false,
@@ -116,8 +114,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
@@ -178,21 +175,22 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
-        let format = self.resolve_catalog_table_format(file_format)?;
+        let format = self.resolve_catalog_data_source_format(file_format)?;
         let mut write_options = options;
         if let Some(location) = location {
             write_options.push(("path".to_string(), location));
         }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
-        let write_mode = if replace {
-            WriteMode::Replace {
+        let write_mode = match mode {
+            spec::CreateTableMode::Create => WriteMode::ErrorIfExists,
+            spec::CreateTableMode::CreateIfNotExists => WriteMode::IgnoreIfExists,
+            spec::CreateTableMode::CreateOrReplace => WriteMode::Replace {
                 error_if_absent: false,
-            }
-        } else if if_not_exists {
-            WriteMode::IgnoreIfExists
-        } else {
-            WriteMode::ErrorIfExists
+            },
+            spec::CreateTableMode::Replace => WriteMode::Replace {
+                error_if_absent: true,
+            },
         };
         let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()
@@ -245,6 +243,8 @@ impl PlanResolver<'_> {
             .get_database_by_qualifier(qualifier)
             .await?
             .location;
+        // FIXME: Avoid reusing a renamed table's directory when recreating its
+        // old name, while preserving the default location naming scheme.
         let (base, suffix) = match &location {
             Some(loc) => (
                 loc.trim_end_matches(object_store::path::DELIMITER),
@@ -305,7 +305,7 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves a table file format clause to the concrete format name to write.
-    fn resolve_catalog_table_format(
+    fn resolve_catalog_data_source_format(
         &self,
         file_format: Option<spec::TableFileFormat>,
     ) -> PlanResult<String> {
@@ -471,6 +471,80 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::AlterIdentifierFields { names, drop } => {
+                AlterTableOptions::AlterIdentifierFields {
+                    names: names.into_iter().map(|name| name.into()).collect(),
+                    drop,
+                }
+            }
+            spec::AlterTableOperation::AlterPartitionSpec { add, drop } => {
+                AlterTableOptions::AlterPartitionSpec {
+                    add: add
+                        .map(|(field, name)| {
+                            self.resolve_partition_by_expression(field)
+                                .map(|field| (field, name))
+                        })
+                        .transpose()?,
+                    drop: drop
+                        .map(|field| self.resolve_partition_by_expression(field))
+                        .transpose()?,
+                }
+            }
+            spec::AlterTableOperation::SetWriteOrder {
+                order,
+                distribution,
+            } => AlterTableOptions::SetWriteOrder {
+                order: order
+                    .into_iter()
+                    .map(|order| {
+                        let ascending = order.direction != spec::SortDirection::Descending;
+                        let nulls_first = match order.null_ordering {
+                            spec::NullOrdering::NullsFirst => true,
+                            spec::NullOrdering::NullsLast => false,
+                            spec::NullOrdering::Unspecified => ascending,
+                        };
+                        Ok(sail_common_datafusion::catalog::CatalogSortField {
+                            field: self.resolve_partition_by_expression(*order.child)?,
+                            ascending,
+                            nulls_first,
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?,
+                distribution,
+                case_sensitive: self.config.case_sensitive,
+            },
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
+            }
+            spec::AlterTableOperation::RenameTable { name } => {
+                return self.resolve_catalog_command(CatalogCommand::RenameTable {
+                    table: table.into(),
+                    destination: name.into(),
+                    if_exists,
+                });
+            }
+            spec::AlterTableOperation::ReplaceColumns { columns } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|column| column.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
+                self.validate_delta_replacement_generated_columns(&table, &schema, state)
+                    .await?;
+                AlterTableOptions::ReplaceColumns {
+                    fields: schema.fields().clone(),
+                    case_sensitive: self.config.case_sensitive,
+                }
+            }
+            spec::AlterTableOperation::AlterColumns { changes } => {
+                AlterTableOptions::AlterColumns {
+                    case_sensitive: self.config.case_sensitive,
+                    changes: changes
+                        .into_iter()
+                        .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                        .collect::<PlanResult<Vec<_>>>()?,
+                }
+            }
             spec::AlterTableOperation::SetTableProperties { properties } => {
                 AlterTableOptions::SetTableProperties { properties }
             }
@@ -481,12 +555,19 @@ impl PlanResolver<'_> {
                 AlterTableOptions::AlterColumnType {
                     name: name.into(),
                     data_type: self.resolve_data_type(&data_type, state)?,
+                    case_sensitive: self.config.case_sensitive,
                 }
             }
             spec::AlterTableOperation::AlterColumnDefault { name, default } => {
                 AlterTableOptions::AlterColumnDefault {
                     name: name.into(),
                     default,
+                }
+            }
+            spec::AlterTableOperation::DropCheckConstraint { name, if_exists } => {
+                AlterTableOptions::DropCheckConstraint {
+                    name: String::from(name).to_lowercase(),
+                    if_exists,
                 }
             }
             spec::AlterTableOperation::AddCheckConstraint { .. } => {

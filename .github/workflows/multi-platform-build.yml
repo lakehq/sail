@@ -34,9 +34,9 @@ jobs:
       platforms: ${{ steps.define-platforms.outputs.result }}
       package_version: ${{ steps.version.outputs.package_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -54,7 +54,7 @@ jobs:
           echo "package_version=$(hatch version)+local" >> "$GITHUB_OUTPUT"
 
       - id: define-platforms
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const platforms = [];
@@ -65,13 +65,13 @@ jobs:
               platforms.push({ runner: 'ubuntu-24.04-arm', target: 'aarch64', os: 'linux' });
             }
             if (context.payload.inputs.build_macos_x86_64 == 'true') {
-              platforms.push({ runner: 'macos-15-intel', target: 'x86_64', os: 'macos' });
+              platforms.push({ runner: 'macos-26-intel', target: 'x86_64', os: 'macos' });
             }
             if (context.payload.inputs.build_macos_aarch64 == 'true') {
-              platforms.push({ runner: 'macos-14', target: 'aarch64', os: 'macos' });
+              platforms.push({ runner: 'macos-26', target: 'aarch64', os: 'macos' });
             }
             if (context.payload.inputs.build_windows_x64 == 'true') {
-              platforms.push({ runner: 'windows-2022', target: 'x64', os: 'windows' });
+              platforms.push({ runner: 'windows-2025', target: 'x64', os: 'windows' });
             }
             return platforms;
 
@@ -85,9 +85,9 @@ jobs:
     needs:
       - setup
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -119,7 +119,7 @@ jobs:
           RUSTFLAGS: ${{ matrix.platform.os == 'windows' && '-C linker=rust-lld.exe' || '' }}
 
       - name: Upload Wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: target/wheels
@@ -136,11 +136,11 @@ jobs:
       - setup
       - build
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: target/wheels

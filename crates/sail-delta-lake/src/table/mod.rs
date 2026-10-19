@@ -18,54 +18,59 @@
 
 // [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
+use futures::TryStreamExt;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::GetTableCommitsOptions;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::TableColumnStatus;
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
+use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
 use crate::catalog_managed::{
-    catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
-    CatalogManagedDeltaTable,
+    CatalogManagedDeltaTable, catalog_managed_delta_table, metadata_with_catalog_managed,
+    protocol_with_catalog_managed,
 };
-use crate::datasource::{df_logical_schema, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, df_logical_schema};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::resolve_version_timestamp;
-pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::transaction::CommitBuilder;
-use crate::kernel::{
-    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaOperation, DeltaSnapshotConfig,
-    SaveMode,
-};
+use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::gen::DeltaReadOptions;
+use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
+    attach_column_mapping_metadata, metadata_for_create_with_struct_type, normalize_delta_schema,
+    protocol_for_create, schema_has_column_defaults, schema_has_generated_columns,
+    schema_has_identity_columns,
+};
+pub use crate::snapshot::DeltaSnapshot;
+use crate::snapshot::{
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+    catalog_managed_commit_file_name,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
-    DeltaError as DeltaTableError, DeltaResult, Protocol, StructType, TableFeature,
+    ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation,
+    DeltaResult, Protocol, SaveMode, StructType, TableFeature, contains_timestampntz_arrow,
+    contains_variant_arrow,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::transaction::CommitBuilder;
 
 /// In memory representation of a Delta Table
 ///
@@ -103,10 +108,10 @@ impl DeltaTable {
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }
@@ -271,11 +276,22 @@ pub async fn create_delta_source(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, false, catalog_table).await?;
+        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
 
+    if read_options.read_change_feed {
+        return Ok(Arc::new(
+            crate::change_data_feed::ChangeDataFeedSource::try_new(
+                snapshot,
+                log_store,
+                &read_options,
+            )
+            .await?,
+        ));
+    }
     Ok(Arc::new(DeltaTableSource::try_new(
         snapshot,
         log_store,
@@ -289,10 +305,10 @@ pub async fn infer_delta_logical_schema(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<SchemaRef> {
     let (schema, _) =
-        infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
     Ok(schema)
 }
 
@@ -302,19 +318,31 @@ pub async fn infer_delta_logical_metadata(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(SchemaRef, Vec<(String, String)>)> {
-    let (snapshot, _log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, true, catalog_table).await?;
+    let read_options = options.clone();
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
 
-    let schema = df_logical_schema(
-        snapshot.as_ref(),
-        &scan_config.file_column_name,
-        &scan_config.row_index_column_name,
-        &scan_config.commit_version_column_name,
-        &scan_config.commit_timestamp_column_name,
-        scan_config.schema,
-    )?;
+    let schema = if read_options.read_change_feed {
+        use datafusion::logical_expr::TableSource;
+        crate::change_data_feed::ChangeDataFeedSource::try_new(
+            snapshot.clone(),
+            log_store,
+            &read_options,
+        )
+        .await?
+        .schema()
+    } else {
+        df_logical_schema(
+            snapshot.as_ref(),
+            &scan_config.file_column_name,
+            &scan_config.row_index_column_name,
+            &scan_config.commit_version_column_name,
+            &scan_config.commit_timestamp_column_name,
+            scan_config.schema,
+        )?
+    };
     let properties = snapshot
         .metadata()
         .configuration()
@@ -324,11 +352,44 @@ pub async fn infer_delta_logical_metadata(
     Ok((schema, properties))
 }
 
+pub(crate) async fn delta_table_properties(
+    ctx: &dyn Session,
+    table_url: Url,
+    options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
+) -> Result<Vec<(String, String)>> {
+    let (snapshot, _, _) =
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
+    let mut properties = snapshot.metadata().configuration().clone();
+    properties.remove("path");
+    let protocol = snapshot.protocol();
+    properties.insert(
+        "delta.minReaderVersion".to_string(),
+        protocol.min_reader_version().to_string(),
+    );
+    properties.insert(
+        "delta.minWriterVersion".to_string(),
+        protocol.min_writer_version().to_string(),
+    );
+    for feature in protocol
+        .reader_features()
+        .unwrap_or_default()
+        .iter()
+        .chain(protocol.writer_features().unwrap_or_default())
+    {
+        properties.insert(
+            format!("delta.feature.{}", feature.as_str()),
+            "supported".to_string(),
+        );
+    }
+    Ok(properties.into_iter().collect())
+}
+
 fn delta_read_snapshot_config(
     metadata_only: bool,
     options: &DeltaReadOptions,
 ) -> DeltaSnapshotConfig {
-    if metadata_only || options.metadata_as_data_read {
+    if metadata_only || options.metadata_as_data_read || options.read_change_feed {
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
@@ -357,24 +418,25 @@ fn effective_catalog_commit_end_version(
     )
 }
 
+#[cfg(test)]
 fn next_catalog_commit_start_version(
-    start_version: i64,
+    current_start_version: i64,
     effective_end_version: i64,
-    commit_versions: impl IntoIterator<Item = i64>,
-) -> Result<Option<i64>> {
-    let Some(max_version) = commit_versions.into_iter().max() else {
+    versions: impl IntoIterator<Item = i64>,
+) -> DeltaResult<Option<i64>> {
+    let Some(page_max_version) = versions.into_iter().max() else {
         return Ok(None);
     };
-
-    if max_version < start_version {
-        return Err(DataFusionError::External(Box::new(
-            DeltaTableError::generic(format!(
-                "Unity Catalog Delta commit discovery returned only commit versions before requested start version {start_version}"
-            )),
+    if page_max_version < current_start_version {
+        return Err(DeltaTableError::generic(format!(
+            "Catalog-managed Delta commit page ended at version {page_max_version}, before requested start version {current_start_version}"
         )));
     }
-
-    Ok((max_version < effective_end_version).then_some(max_version + 1))
+    if page_max_version >= effective_end_version {
+        Ok(None)
+    } else {
+        Ok(Some(page_max_version + 1))
+    }
 }
 
 fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
@@ -383,6 +445,12 @@ fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
         DeltaTableError::InvalidTableLocation(message)
             if message.contains("No commit files found in _delta_log")
     )
+}
+
+pub(crate) fn catalog_managed_commit_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Option<&LakehouseExecutionContext> {
+    lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
 }
 
 async fn load_catalog_managed_delta_bootstrap_info<C>(
@@ -517,8 +585,9 @@ where
 
 async fn load_catalog_managed_commits<C>(
     ctx: &C,
-    catalog_table: &[String],
+    lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
+    log_store: LogStoreRef,
     version_as_of: Option<i64>,
 ) -> Result<CatalogManagedCommitSet>
 where
@@ -531,72 +600,124 @@ where
         });
     }
 
-    let manager = ctx.extension::<CatalogManager>()?;
-    let mut start_version = 1;
-    let mut commits = Vec::new();
+    let catalog_table = lakehouse_table.catalog_table();
+    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
+    let response = coordinator
+        .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
+        .await?;
 
-    let latest_table_version = loop {
-        let response = manager
-            .get_table_commits(
-                catalog_table,
-                GetTableCommitsOptions {
-                    format: "delta".to_string(),
-                    table_uri: table_url.to_string(),
-                    start_version,
-                    end_version: version_as_of,
+    let latest_table_version = response.latest_table_version;
+    if let Some(version) = version_as_of
+        && latest_table_version >= 0
+        && version > latest_table_version
+    {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
+            )),
+        )));
+    }
+
+    let Some(effective_end_version) =
+        effective_catalog_commit_end_version(latest_table_version, version_as_of)
+    else {
+        return Ok(CatalogManagedCommitSet {
+            latest_table_version,
+            commits: Vec::new(),
+        });
+    };
+
+    let mut by_version = response
+        .commits
+        .into_iter()
+        .filter(|commit| commit.version >= 1 && commit.version <= effective_end_version)
+        .map(|commit| {
+            (
+                commit.version,
+                CatalogManagedCommitFile {
+                    version: commit.version,
+                    file_name: commit.file_name,
                 },
             )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        })
+        .collect::<BTreeMap<_, _>>();
 
-        let latest_table_version = response.latest_table_version;
-        if let Some(version) = version_as_of {
-            if latest_table_version >= 0 && version > latest_table_version {
-                return Err(DataFusionError::External(Box::new(DeltaTableError::generic(
-                    format!(
-                        "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
-                    ),
-                ))));
-            }
+    for version in 1..=effective_end_version {
+        if by_version.contains_key(&version) {
+            continue;
         }
-
-        let effective_end_version =
-            effective_catalog_commit_end_version(latest_table_version, version_as_of);
-        let response_commits = response.commits;
-        let next_start_version = match effective_end_version {
-            Some(end_version) => next_catalog_commit_start_version(
-                start_version,
-                end_version,
-                response_commits.iter().map(|commit| commit.version),
-            )?,
-            None => None,
-        };
-
-        commits.extend(response_commits.into_iter().filter_map(|commit| {
-            if effective_end_version.is_some_and(|end_version| commit.version > end_version) {
-                return None;
-            }
-            Some(CatalogManagedCommitFile {
-                version: commit.version,
-                file_name: commit.file_name,
-            })
-        }));
-
-        match next_start_version {
-            Some(next_start_version) => start_version = next_start_version,
-            None => break latest_table_version,
+        let response = coordinator
+            .get_ratified_commits(
+                lakehouse_table,
+                table_url.to_string(),
+                version,
+                Some(version),
+            )
+            .await?;
+        if let Some(commit) = response
+            .commits
+            .into_iter()
+            .find(|commit| commit.version == version)
+        {
+            by_version.insert(
+                version,
+                CatalogManagedCommitFile {
+                    version: commit.version,
+                    file_name: commit.file_name,
+                },
+            );
+            continue;
         }
-    };
+        if let Some(file_name) = staged_catalog_managed_commit_file(&log_store, version).await? {
+            by_version.insert(version, CatalogManagedCommitFile { version, file_name });
+        } else {
+            return Err(DataFusionError::External(Box::new(
+                DeltaTableError::generic(format!(
+                    "Catalog-managed Delta commit version {version} was not returned by the catalog"
+                )),
+            )));
+        }
+    }
 
     Ok(CatalogManagedCommitSet {
         latest_table_version,
-        commits,
+        commits: by_version.into_values().collect(),
     })
+}
+
+async fn staged_catalog_managed_commit_file(
+    log_store: &LogStoreRef,
+    version: i64,
+) -> Result<Option<String>> {
+    let prefix = Path::from("_delta_log/_staged_commits");
+    let store = log_store.object_store(None);
+    let staged = store
+        .list(Some(&prefix))
+        .try_filter_map(|meta| async move {
+            let path = meta.location.as_ref();
+            let file_name = path.rsplit('/').next().unwrap_or(path);
+            Ok(
+                (file_name.starts_with(&format!("{version:020}")) && file_name.ends_with(".json"))
+                    .then(|| catalog_managed_commit_file_name(path)),
+            )
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    match staged.as_slice() {
+        [] => Ok(None),
+        [file_name] => Ok(Some(file_name.clone())),
+        _ => Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Multiple staged Delta commits found for catalog-managed version {version}"
+            )),
+        ))),
+    }
 }
 
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
     ctx: &C,
-    catalog_table: &[String],
+    lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     log_store: LogStoreRef,
     version_as_of: Option<i64>,
@@ -604,6 +725,36 @@ pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
 where
     C: SessionExtensionAccessor + ?Sized,
 {
+    let catalog_table = lakehouse_table.catalog_table();
+    if load_catalog_managed_delta_bootstrap_info(ctx, catalog_table)
+        .await?
+        .is_some()
+    {
+        match log_store.get_latest_version(-1).await {
+            Ok(_) => {}
+            Err(DeltaError::MissingVersion) => {
+                bootstrap_catalog_managed_delta_table(
+                    ctx,
+                    catalog_table,
+                    table_url,
+                    log_store.clone(),
+                )
+                .await?;
+            }
+            Err(err) => return Err(DataFusionError::from(err)),
+        }
+        return Ok(Some(
+            load_catalog_managed_commits(
+                ctx,
+                lakehouse_table,
+                table_url,
+                log_store.clone(),
+                version_as_of,
+            )
+            .await?,
+        ));
+    }
+
     let mut detector = DeltaTable::new(
         log_store.clone(),
         DeltaSnapshotConfig {
@@ -615,20 +766,37 @@ where
         Ok(()) => {
             if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, catalog_table, table_url, version_as_of)
-                        .await?,
+                    load_catalog_managed_commits(
+                        ctx,
+                        lakehouse_table,
+                        table_url,
+                        log_store.clone(),
+                        version_as_of,
+                    )
+                    .await?,
                 ))
             } else {
                 Ok(None)
             }
         }
         Err(err) if is_missing_delta_log_error(&err) => {
-            if bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
-                .await?
+            if bootstrap_catalog_managed_delta_table(
+                ctx,
+                catalog_table,
+                table_url,
+                log_store.clone(),
+            )
+            .await?
             {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, catalog_table, table_url, version_as_of)
-                        .await?,
+                    load_catalog_managed_commits(
+                        ctx,
+                        lakehouse_table,
+                        table_url,
+                        log_store.clone(),
+                        version_as_of,
+                    )
+                    .await?,
                 ))
             } else {
                 Err(DataFusionError::from(err))
@@ -644,19 +812,20 @@ async fn load_delta_read_state(
     schema: Option<Schema>,
     options: DeltaReadOptions,
     metadata_only: bool,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
+    let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
     let storage_config = StorageConfig;
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match catalog_table.as_deref() {
-        Some(catalog_table) => {
+    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
+        Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,
-                catalog_table,
+                lakehouse_table,
                 &table_url,
                 log_store.clone(),
                 options.version_as_of,
@@ -678,20 +847,132 @@ async fn load_delta_read_state(
     let scan_config = DeltaScanConfig {
         file_column_name: None,
         row_index_column_name: None,
+        hash_partition_files: false,
         wrap_partition_values: false,
         enable_parquet_pushdown: true,
         schema: match schema {
             Some(ref s) if s.fields().is_empty() => None,
+            Some(s) if reads_catalog_table => {
+                let refreshed = refresh_catalog_delta_schema(s, snapshot.schema());
+                // The catalog schema does not carry Delta column mapping metadata, but the
+                // physical scan attaches it, so the logical schema must carry it as well.
+                let refreshed =
+                    if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
+                        refreshed
+                    } else {
+                        attach_column_mapping_metadata(&refreshed, snapshot.schema())
+                    };
+                Some(Arc::new(refreshed))
+            }
             Some(s) => Some(Arc::new(s)),
             None => None,
         },
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
+        metadata_aggregate: None,
     };
 
     Ok((snapshot, log_store, scan_config))
+}
+
+fn refresh_catalog_delta_schema(catalog_schema: Schema, snapshot_schema: &Schema) -> Schema {
+    let mut fields = catalog_schema.fields().iter().cloned().collect::<Vec<_>>();
+    for snapshot_field in snapshot_schema.fields() {
+        if let Some(index) = fields
+            .iter()
+            .position(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
+        {
+            fields[index] = Arc::new(refresh_catalog_delta_field(
+                fields[index].as_ref(),
+                snapshot_field.as_ref(),
+            ));
+        } else {
+            fields.push(snapshot_field.clone());
+        }
+    }
+    Schema::new_with_metadata(fields, catalog_schema.metadata().clone())
+}
+
+fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) -> Field {
+    let data_type = match (catalog_field.data_type(), snapshot_field.data_type()) {
+        (DataType::Struct(catalog_fields), DataType::Struct(snapshot_fields)) => {
+            let mut fields = catalog_fields.iter().cloned().collect::<Vec<_>>();
+            for snapshot_child in snapshot_fields {
+                if let Some(index) = fields.iter().position(|catalog_child| {
+                    catalog_child
+                        .name()
+                        .eq_ignore_ascii_case(snapshot_child.name())
+                }) {
+                    fields[index] = Arc::new(refresh_catalog_delta_field(
+                        fields[index].as_ref(),
+                        snapshot_child.as_ref(),
+                    ));
+                } else {
+                    fields.push(snapshot_child.clone());
+                }
+            }
+            DataType::Struct(fields.into())
+        }
+        (DataType::List(catalog_child), DataType::List(snapshot_child)) => DataType::List(
+            Arc::new(refresh_catalog_delta_field(catalog_child, snapshot_child)),
+        ),
+        (DataType::LargeList(catalog_child), DataType::LargeList(snapshot_child)) => {
+            DataType::LargeList(Arc::new(refresh_catalog_delta_field(
+                catalog_child,
+                snapshot_child,
+            )))
+        }
+        (
+            DataType::FixedSizeList(catalog_child, catalog_size),
+            DataType::FixedSizeList(snapshot_child, _),
+        ) => DataType::FixedSizeList(
+            Arc::new(refresh_catalog_delta_field(catalog_child, snapshot_child)),
+            *catalog_size,
+        ),
+        (DataType::Map(catalog_entries, sorted), DataType::Map(snapshot_entries, _)) => {
+            DataType::Map(
+                Arc::new(refresh_catalog_delta_map_entries(
+                    catalog_entries,
+                    snapshot_entries,
+                )),
+                *sorted,
+            )
+        }
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => catalog_field.data_type().clone(),
+        _ => snapshot_field.data_type().clone(),
+    };
+    catalog_field
+        .clone()
+        .with_name(snapshot_field.name())
+        .with_data_type(data_type)
+}
+
+/// Refreshes map entries by position, since the catalog and the Delta log may name
+/// the entries, key, and value fields differently. The Delta log names are kept
+/// because the Parquet files are read with them.
+fn refresh_catalog_delta_map_entries(catalog_entries: &Field, snapshot_entries: &Field) -> Field {
+    match (catalog_entries.data_type(), snapshot_entries.data_type()) {
+        (DataType::Struct(catalog_fields), DataType::Struct(snapshot_fields))
+            if catalog_fields.len() == 2 && snapshot_fields.len() == 2 =>
+        {
+            let fields = catalog_fields
+                .iter()
+                .zip(snapshot_fields.iter())
+                .map(|(catalog_child, snapshot_child)| {
+                    Arc::new(
+                        refresh_catalog_delta_field(catalog_child, snapshot_child)
+                            .with_name(snapshot_child.name())
+                            .with_nullable(snapshot_child.is_nullable()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            snapshot_entries
+                .clone()
+                .with_data_type(DataType::Struct(fields.into()))
+        }
+        _ => snapshot_entries.clone(),
+    }
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
@@ -783,7 +1064,7 @@ async fn find_version_for_timestamp(
     }
 }
 
-fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
+pub(crate) fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
     let rfc3339_result = DateTime::parse_from_rfc3339(timestamp);
     if let Ok(datetime) = rfc3339_result {
         return Ok(datetime.with_timezone(&Utc));
@@ -818,7 +1099,187 @@ fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_catalog_commit_end_version, next_catalog_commit_start_version};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+
+    use super::{
+        effective_catalog_commit_end_version, next_catalog_commit_start_version,
+        refresh_catalog_delta_schema,
+    };
+    use crate::schema::attach_column_mapping_metadata;
+
+    #[test]
+    fn catalog_schema_refresh_appends_snapshot_fields_without_replacing_existing_types() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let catalog_schema = Schema::new(vec![Field::new(
+            "event_time",
+            catalog_timestamp.clone(),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![
+            Field::new("event_time", snapshot_timestamp, true),
+            Field::new("extra", DataType::Int32, true),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(refreshed.fields().len(), 2);
+        assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
+        assert_eq!(refreshed.field(1).name(), "extra");
+    }
+
+    #[test]
+    fn catalog_schema_refresh_appends_nested_snapshot_fields() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let catalog_schema = Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![Field::new("event_time", catalog_timestamp.clone(), true)].into(),
+            ),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![
+                    Field::new("event_time", snapshot_timestamp, true),
+                    Field::new("extra", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+        assert_eq!(
+            refreshed.field(0).data_type(),
+            &DataType::Struct(
+                vec![
+                    Field::new("event_time", catalog_timestamp, true),
+                    Field::new("extra", DataType::Int32, true),
+                ]
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn catalog_schema_refresh_canonicalizes_mapped_fields() {
+        let mapped = |name: &str, physical: &str, id: u32, data_type: DataType| {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([
+                ("delta.columnMapping.id".to_string(), id.to_string()),
+                (
+                    "delta.columnMapping.physicalName".to_string(),
+                    physical.to_string(),
+                ),
+            ]))
+        };
+        let snapshot_schema = Schema::new(vec![
+            mapped("EventID", "col-id", 1, DataType::Int32),
+            mapped(
+                "Payload",
+                "col-payload",
+                2,
+                DataType::Struct(vec![mapped("Amount", "col-amount", 3, DataType::Int32)].into()),
+            ),
+        ]);
+        let catalog_schema = Schema::new(vec![
+            Field::new("eventid", DataType::Int32, true),
+            Field::new(
+                "payload",
+                DataType::Struct(vec![Field::new("amount", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+        let refreshed = attach_column_mapping_metadata(&refreshed, &snapshot_schema);
+
+        assert_eq!(refreshed, snapshot_schema);
+    }
+
+    #[test]
+    fn catalog_schema_refresh_uses_snapshot_map_entry_names() {
+        let catalog_map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let snapshot_map = DataType::Map(
+            Arc::new(Field::new(
+                "key_value",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let catalog_schema = Schema::new(vec![Field::new("properties", catalog_map, true)]);
+        let snapshot_schema =
+            Schema::new(vec![Field::new("properties", snapshot_map.clone(), true)]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(refreshed.fields().len(), 1);
+        assert_eq!(refreshed.field(0).data_type(), &snapshot_map);
+    }
+
+    #[test]
+    fn catalog_schema_refresh_keeps_catalog_map_value_types() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let map_type = |entries: &str, key: &str, value: &str, value_type: DataType| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    entries,
+                    DataType::Struct(
+                        vec![
+                            Field::new(key, DataType::Utf8, false),
+                            Field::new(value, value_type, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        let catalog_schema = Schema::new(vec![Field::new(
+            "events",
+            map_type("entries", "keys", "values", catalog_timestamp.clone()),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![Field::new(
+            "events",
+            map_type("key_value", "key", "value", snapshot_timestamp),
+            true,
+        )]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(
+            refreshed.field(0).data_type(),
+            &map_type("key_value", "key", "value", catalog_timestamp)
+        );
+    }
 
     #[test]
     fn effective_catalog_commit_end_version_caps_requested_version() {

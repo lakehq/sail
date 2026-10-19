@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,
-    GenericListArray, MutableArrayData, NullArray, OffsetSizeTrait,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -194,11 +194,14 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
         DataType::Null => {
             let length = arrays.iter().map(|a| a.len()).sum();
             let array = new_null_array(&DataType::Null, length);
-            Ok(Arc::new(
-                SingleRowListArrayBuilder::new(array)
-                    .with_nullable(value_nullable)
-                    .build_list_array(),
-            ))
+            let offsets =
+                OffsetBuffer::from_lengths(std::iter::repeat_n(arrays.len(), arrays[0].len()));
+            Ok(Arc::new(GenericListArray::<i32>::try_new(
+                Arc::new(Field::new_list_field(DataType::Null, value_nullable)),
+                offsets,
+                array,
+                None,
+            )?))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
         _ => array_array::<i32>(arrays, data_type, value_nullable),
@@ -278,9 +281,9 @@ fn array_array<O: OffsetSizeTrait>(
     for row_idx in 0..num_rows {
         for (arr_idx, arg) in args.iter().enumerate() {
             if !arg.as_any().is::<NullArray>() && !arg.is_null(row_idx) && arg.is_valid(row_idx) {
-                mutable.extend(arr_idx, row_idx, row_idx + 1);
+                mutable.try_extend(arr_idx, row_idx, row_idx + 1)?;
             } else {
-                mutable.extend_nulls(1);
+                mutable.try_extend_nulls(1)?;
             }
         }
         offsets.push(O::usize_as(mutable.len()));

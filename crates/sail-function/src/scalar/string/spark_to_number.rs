@@ -6,7 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -69,12 +69,19 @@ impl ScalarUDFImpl for SparkToNumber {
         &self.signature
     }
 
-    /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // We cannot know the final DataType result without knowing the format input args
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark: `TryToNumber.nullable = true`, unconditional. `ToNumber` declares none and
+    /// inherits `BinaryExpression`'s `left.nullable || right.nullable`, so the strict spelling
+    /// is `nullable = false` over non-null arguments; the `@sail-bug` scenarios in
+    /// `to_number.feature` track that gap.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L183>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L145>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L720>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..
@@ -257,7 +264,7 @@ impl ParsedNumber {
 }
 
 macro_rules! get_opt_capture_group {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         $captures
             .name($group_name)
             .map(|m| m.as_str().trim().to_string())
@@ -265,7 +272,7 @@ macro_rules! get_opt_capture_group {
 }
 
 macro_rules! get_capture_group {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         get_opt_capture_group!($captures, $group_name).ok_or_else(|| {
             exec_datafusion_err!(
                 "Missing '{}' group in the format regex or not well formed.",
@@ -280,13 +287,13 @@ macro_rules! get_capture_group {
 // is only inspected (compared, measured), never stored — avoiding an allocation
 // per row per group.
 macro_rules! get_opt_capture_str {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         $captures.name($group_name).map(|m| m.as_str().trim())
     };
 }
 
 macro_rules! get_capture_str {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         get_opt_capture_str!($captures, $group_name).ok_or_else(|| {
             exec_datafusion_err!(
                 "Missing '{}' group in the format regex or not well formed.",
@@ -375,8 +382,8 @@ fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
             "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
         );
     }
-    for w in bytes.windows(2) {
-        if is_sep(w[0]) && is_sep(w[1]) {
+    for &[left, right] in bytes.array_windows::<2>() {
+        if is_sep(left) && is_sep(right) {
             return exec_err!(
                 "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
             );
@@ -644,7 +651,9 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     let has_comma = format_positions.iter().any(|(_, d)| *d == ',');
     let has_g = format_positions.iter().any(|(_, d)| *d == 'G');
     if has_comma && has_g {
-        return exec_err!("Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators.");
+        return exec_err!(
+            "Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators."
+        );
     }
 
     // Check if the groupings are in the correct order position

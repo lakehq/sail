@@ -8,29 +8,29 @@ use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
-use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::{LexRequirement, Partitioning};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, not_impl_err, plan_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SinkMode,
-    SourceInfo, TableFormat,
+    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
+    get_partition_columns_and_file_schema,
 };
 use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
-    infer_partitions, rewrite_utf8view_fields, sample_listing_files, validate_partitions,
+    infer_partitions, rewrite_unsupported_fields, sample_listing_files, validate_partitions,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::resolve_listing_urls;
-use crate::url::resolve_listing_writer_url;
+use crate::url::{PathGlobFilter, resolve_listing_writer_url};
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -83,6 +83,21 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+
+    /// Whether validating an explicit schema requires the physical file schema.
+    fn requires_explicit_schema_validation(&self) -> bool {
+        false
+    }
+
+    /// Validate a user-provided file schema against the physical file schema.
+    fn validate_explicit_schema(&self, _schema: &Schema, _physical: &Schema) -> Result<()> {
+        Ok(())
+    }
+
+    /// File-name glob restricting which listed files compose the dataset.
+    fn path_glob_filter(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -108,7 +123,7 @@ pub struct ListingScanInput {
     pub preserve_order: bool,
     pub output_ordering: Vec<LexOrdering>,
     pub statistics: Statistics,
-    pub partitioned_by_file_group: bool,
+    pub output_partitioning: Option<Partitioning>,
     pub schema: TableSchema,
     pub compression: CompressionTypeVariant,
 }
@@ -131,12 +146,12 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub struct ListingTableFormat<T: FormatFactory> {
+pub struct ListingDataSource<T: FormatFactory> {
     phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
+impl<T: FormatFactory> DataSource for ListingDataSource<T> {
     fn name(&self) -> &str {
         T::name()
     }
@@ -148,7 +163,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
-            catalog_table: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,
@@ -159,23 +174,38 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let read_format = T::read(ctx, options)?;
+        let path_glob_filter = read_format
+            .path_glob_filter()
+            .map(PathGlobFilter::parse)
+            .transpose()?;
         let urls = resolve_listing_urls(ctx, paths).await?;
-        let sampled_files = sample_listing_files(ctx, &urls).await?;
+        let sampled_files = sample_listing_files(ctx, &urls, path_glob_filter.as_ref()).await?;
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
+                let physical = if read_format.requires_explicit_schema_validation() {
+                    Some(
+                        read_format
+                            .infer_schema(ctx, &sampled_files, compression)
+                            .await?,
+                    )
+                } else if read_case_sensitive {
+                    None
+                } else {
+                    read_format
+                        .infer_schema(ctx, &sampled_files, compression)
+                        .await
+                        .ok()
+                };
                 // Spark matches a user-specified schema against the physical file
                 // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
                 // Reconcile the user column names to the physical names up front so that both
                 // the file stats and reader (which resolve columns by exact name) find the data.
                 let schema = if read_case_sensitive {
                     schema
-                } else if let Ok(physical) = read_format
-                    .infer_schema(ctx, &sampled_files, compression)
-                    .await
-                {
-                    reconcile_schema_names_case_insensitive(schema, &physical)?
+                } else if let Some(physical) = &physical {
+                    reconcile_schema_names_case_insensitive(schema, physical)?
                 } else {
                     // Keeps the user schema if physical schema inference is unavailable.
                     schema
@@ -200,13 +230,16 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 };
                 let (partition_fields, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
+                if let Some(physical) = physical {
+                    read_format.validate_explicit_schema(&schema, &physical)?;
+                }
                 (Arc::new(schema), partition_fields)
             }
             _ => {
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;
-                let schema = rewrite_utf8view_fields(schema);
+                let schema = rewrite_unsupported_fields(schema);
 
                 let partition_by = if partition_by.is_empty() {
                     infer_partitions(&sampled_files)?
@@ -228,12 +261,15 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: urls,
-            schema: TableSchema::new(schema, partition_fields),
+            schema: TableSchema::builder(schema)
+                .with_table_partition_cols(partition_fields)
+                .build(),
             constraints,
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),
             target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
+            path_glob_filter,
             compression,
         })?;
         Ok(Arc::new(source))
@@ -250,19 +286,20 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
-            catalog_table,
+            lakehouse_table,
         } = info;
+        let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+            return not_impl_err!("bucketing for writing listing data source");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for writing listing table format");
+            return not_impl_err!("partition transforms for writing listing data source");
         }
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
             SinkMode::ErrorIfExists => {
-                if (catalog_table.is_none() && listing_target_exists(ctx, &url).await?)
-                    || (catalog_table.is_some() && listing_target_nonempty(ctx, &url).await?)
+                if (!catalog_managed && listing_target_exists(ctx, &url).await?)
+                    || (catalog_managed && listing_target_nonempty(ctx, &url).await?)
                 {
                     return plan_err!("listing table path already exists: {path}");
                 }
@@ -295,12 +332,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 }
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
-    if url.scheme() == "file" {
-        if let Ok(path) = url.to_file_path() {
-            if path.exists() {
-                return Ok(true);
-            }
-        }
+    if url.scheme() == "file"
+        && let Ok(path) = url.to_file_path()
+        && path.exists()
+    {
+        return Ok(true);
     }
     listing_target_nonempty(ctx, url).await
 }

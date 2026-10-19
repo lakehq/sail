@@ -1,22 +1,27 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
-use datafusion::datasource::physical_plan::parquet::metadata::{
-    ordering_from_parquet_metadata, DFParquetMetadata,
-};
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::parquet::metadata::{
+    DFParquetMetadata, ordering_from_parquet_metadata,
+};
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, Int96Coercer,
+};
+use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::options::gen::ParquetReadOptions;
+use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
+use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
@@ -31,6 +36,33 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Reinterprets top-level `Timestamp(Second, _)` fields that are physically stored as `INT64`
+/// back to `Int64`. Parquet has no seconds timestamp logical type: an Arrow writer encodes an
+/// Arrow `timestamp[s]` as an unannotated physical `INT64` and preserves the Arrow type only in
+/// the `ARROW:schema` hint. Spark ignores that hint and exposes the column as a long, so we match
+/// it here rather than widening the hinted seconds to a microsecond timestamp (which would change
+/// both the reported type and the values). Genuine INT96 timestamps are unaffected because they
+/// are handled by the `coerce_int96` option and are not physically `INT64`.
+fn reinterpret_second_timestamps_as_int64(schema: Schema, physical: &Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let physical_type = physical
+                .field_with_name(field.name())
+                .ok()
+                .map(|physical_field| physical_field.data_type());
+            match (field.data_type(), physical_type) {
+                (DataType::Timestamp(TimeUnit::Second, _), Some(DataType::Int64)) => {
+                    field.as_ref().clone().with_data_type(DataType::Int64)
+                }
+                _ => field.as_ref().clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
 }
 
 #[async_trait::async_trait]
@@ -61,7 +93,8 @@ impl ReadFormat for ParquetReadFormat {
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
-        let metadata_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+        let metadata_fetch_concurrency: usize =
+            ctx.config_options().execution.meta_fetch_concurrency.into();
 
         let objects = files
             .iter()
@@ -69,12 +102,39 @@ impl ReadFormat for ParquetReadFormat {
 
         let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
             .map(|(store, object)| async {
-                let schema = DFParquetMetadata::new(store.as_ref(), object)
+                let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
-                    .with_coerce_int96(coerce_int96)
-                    .fetch_schema()
-                    .await?;
+                    .with_coerce_int96(coerce_int96);
+                // Fetch the Parquet footer once and derive both schemas from it.
+                // `fetch_schema()` would read (and parse) the footer a second time; when the
+                // file-metadata cache is disabled (`file_metadata_cache.type=none`, a supported
+                // zero-capacity mode) that second read is not cached, doubling remote footer I/O
+                // during schema inference.
+                let metadata = reader.fetch_metadata().await?;
+                let file_metadata = metadata.file_metadata();
+                // Arrow-hinted schema: mirror `DFParquetMetadata::fetch_schema` exactly, which
+                // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
+                // INT96-derived columns. Reproduced here (rather than calling `fetch_schema()`)
+                // so the inferred types stay identical to today for hinted and INT96 columns.
+                // `coerce_int96_tz` is never set on the reader, so INT96 columns coerce to a
+                // `None`-timezone timestamp, matching `fetch_schema`'s default.
+                let schema = parquet_to_arrow_schema(
+                    file_metadata.schema_descr(),
+                    file_metadata.key_value_metadata(),
+                )?;
+                let schema = coerce_int96
+                    .as_ref()
+                    .and_then(|time_unit| {
+                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit).coerce()
+                    })
+                    .unwrap_or(schema);
+                // Metadata-free physical schema: no `ARROW:schema` hint, so an Arrow-only
+                // `timestamp[s]` hint over a physical INT64 appears here as INT64. Comparing the
+                // two lets `reinterpret_second_timestamps_as_int64` read such a column as long,
+                // matching Spark.
+                let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
+                let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
@@ -86,12 +146,28 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+        // A directory can carry the same timestamp column with different producer timezone labels
+        // (e.g. `timestamp[ms, UTC]` and `timestamp[us, America/New_York]`). Spark maps every
+        // adjusted-to-UTC timestamp to a single session-zoned `TimestampType`, so retag the
+        // timezone-aware fields that participate in the millisecond widening to the session
+        // timezone; otherwise they reach `Schema::try_merge` as unequal Arrow types and fail.
+        let session_timezone = ctx
+            .config_options()
+            .execution
+            .time_zone
+            .as_deref()
+            .unwrap_or("UTC");
+        normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
+
+        // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
+        // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
+        // renders such a column in the session zone; Sail currently keeps the producer's label.
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let merged = if options.global.skip_metadata {
-            Schema::try_merge(schemas.map(clear_metadata))
+            try_merge_normalized(schemas.map(clear_metadata), NanosecondTimestamps::Report)
         } else {
-            Schema::try_merge(schemas)
+            try_merge_normalized(schemas, NanosecondTimestamps::Report)
         }?;
 
         let merged = if options.global.binary_as_string {
@@ -133,7 +209,7 @@ impl ReadFormat for ParquetReadFormat {
         })
     }
 
-    async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
+    async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
 
@@ -141,9 +217,16 @@ impl ReadFormat for ParquetReadFormat {
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let store = ctx
-            .runtime_env()
-            .object_store(input.object_store_url.clone())?;
+        let store = ctx.runtime_env().object_store(&input.object_store_url)?;
+
+        input.file_groups = load_parquet_scan_metadata(
+            input.file_groups,
+            &store,
+            &metadata_cache,
+            options.global.metadata_size_hint,
+            ctx.config_options().execution.meta_fetch_concurrency.into(),
+        )
+        .await?;
         let cached_parquet_read_factory =
             Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
@@ -161,10 +244,201 @@ impl ReadFormat for ParquetReadFormat {
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)
+    }
+
+    fn requires_explicit_schema_validation(&self) -> bool {
+        true
+    }
+
+    fn validate_explicit_schema(&self, schema: &Schema, physical: &Schema) -> Result<()> {
+        validate_parquet_schema(schema, physical)
+    }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
+    }
+}
+
+fn validate_parquet_schema(schema: &Schema, physical: &Schema) -> Result<()> {
+    for field in schema.fields() {
+        if let Ok(physical_field) = physical.field_with_name(field.name()) {
+            validate_parquet_field(field.name(), field, physical_field)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_parquet_field(path: &str, requested: &Field, physical: &Field) -> Result<()> {
+    match (physical.data_type(), requested.data_type()) {
+        (DataType::Struct(physical_fields), DataType::Struct(requested_fields)) => {
+            for requested_field in requested_fields {
+                if let Some(physical_field) = physical_fields
+                    .iter()
+                    .find(|field| field.name() == requested_field.name())
+                {
+                    validate_parquet_field(
+                        &format!("{path}.{}", requested_field.name()),
+                        requested_field,
+                        physical_field,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+        (DataType::List(physical_element), DataType::List(requested_element))
+        | (DataType::LargeList(physical_element), DataType::LargeList(requested_element)) => {
+            validate_parquet_field(&format!("{path}[]"), requested_element, physical_element)
+        }
+        (
+            DataType::FixedSizeList(physical_element, physical_length),
+            DataType::FixedSizeList(requested_element, requested_length),
+        ) if physical_length == requested_length => {
+            validate_parquet_field(&format!("{path}[]"), requested_element, physical_element)
+        }
+        (DataType::Map(physical_entries, _), DataType::Map(requested_entries, _)) => {
+            validate_parquet_field(path, requested_entries, physical_entries)
+        }
+        (physical_type, requested_type)
+            if parquet_primitive_type_compatible(physical_type, requested_type) =>
+        {
+            Ok(())
+        }
+        (physical_type, requested_type) => plan_err!(
+            "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
+             Parquet column `{path}`. Expected {requested_type}, actual Parquet type {physical_type}."
+        ),
+    }
+}
+
+fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) -> bool {
+    if physical == requested {
+        return true;
+    }
+
+    match (physical, requested) {
+        // Spark's Parquet readers support these lossless numeric widenings.
+        (DataType::Int32, DataType::Int64 | DataType::Float64)
+        | (DataType::Float32, DataType::Float64)
+        | (DataType::UInt8, DataType::Int16)
+        | (DataType::UInt16, DataType::Int32)
+        | (DataType::UInt32, DataType::Int64) => true,
+        (DataType::UInt64, DataType::Decimal128(20, 0)) => true,
+        (
+            DataType::Int8 | DataType::Int16 | DataType::Int32,
+            DataType::Decimal128(precision, scale),
+        ) => decimal_integer_digits(*precision, *scale) >= 10,
+        (DataType::Int64, DataType::Decimal128(precision, scale)) => {
+            decimal_integer_digits(*precision, *scale) >= 20
+        }
+        (
+            DataType::Decimal128(physical_precision, physical_scale),
+            DataType::Decimal128(requested_precision, requested_scale),
+        )
+        | (
+            DataType::Decimal256(physical_precision, physical_scale),
+            DataType::Decimal256(requested_precision, requested_scale),
+        ) => decimal_type_compatible(
+            *physical_precision,
+            *physical_scale,
+            *requested_precision,
+            *requested_scale,
+        ),
+        (
+            DataType::Decimal128(physical_precision, physical_scale),
+            DataType::Decimal256(requested_precision, requested_scale),
+        ) => decimal_type_compatible(
+            *physical_precision,
+            *physical_scale,
+            *requested_precision,
+            *requested_scale,
+        ),
+        // INT96 carries no timezone marker, so the explicit schema determines the
+        // timestamp family. Spark permits the same reinterpretation for Parquet.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => true,
+        (DataType::Date32, DataType::Timestamp(_, None)) => true,
+        (physical, requested) if is_string_type(physical) && is_string_type(requested) => true,
+        (physical, requested) if is_binary_type(physical) && is_binary_type(requested) => true,
+        _ => false,
+    }
+}
+
+fn decimal_integer_digits(precision: u8, scale: i8) -> i16 {
+    i16::from(precision) - i16::from(scale)
+}
+
+fn decimal_type_compatible(
+    physical_precision: u8,
+    physical_scale: i8,
+    requested_precision: u8,
+    requested_scale: i8,
+) -> bool {
+    let scale_increase = i16::from(requested_scale) - i16::from(physical_scale);
+    let precision_increase = i16::from(requested_precision) - i16::from(physical_precision);
+    scale_increase >= 0 && precision_increase >= scale_increase
+}
+
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn is_binary_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    )
+}
+
+/// Retags producer-specific Arrow timezone labels to the Spark session timezone on timestamp
+/// fields that participate in the millisecond widening, so a directory mixing e.g.
+/// `timestamp[ms, UTC]` and `timestamp[us, America/New_York]` merges instead of failing at
+/// [`Schema::try_merge`].
+///
+/// Spark maps every timezone-aware (adjusted-to-UTC) timestamp to a single session-zoned
+/// `TimestampType`, and Arrow defines relabeling one nonempty timezone to another as
+/// metadata-only (the stored instants are identical), so the retag is lossless. A `None` timezone
+/// (`TIMESTAMP_NTZ`) is preserved untouched so it stays distinct from the aware type. Only fields
+/// that appear as timezone-aware milliseconds in at least one file are retagged; a
+/// microsecond-only field keeps its producer label (that pre-existing case is deferred above).
+fn normalize_widened_timestamp_timezones(
+    schemas: &mut [(object_store::path::Path, Schema)],
+    session_timezone: &str,
+) {
+    let widened_timestamp_fields = schemas
+        .iter()
+        .flat_map(|(_, schema)| schema.fields().iter())
+        .filter_map(|field| match field.data_type() {
+            DataType::Timestamp(TimeUnit::Millisecond, Some(_)) => Some(field.name().clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for (_, schema) in schemas {
+        let metadata = schema.metadata().clone();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| match field.data_type() {
+                DataType::Timestamp(
+                    unit @ (TimeUnit::Millisecond | TimeUnit::Microsecond),
+                    Some(_),
+                ) if widened_timestamp_fields.contains(field.name()) => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Timestamp(*unit, Some(session_timezone.into()))),
+                _ => field.as_ref().clone(),
+            })
+            .collect::<Vec<_>>();
+        *schema = Schema::new_with_metadata(fields, metadata);
     }
 }
 
@@ -192,5 +466,94 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn timestamp_field(name: &str, unit: TimeUnit, tz: Option<&str>) -> Field {
+        Field::new(name, DataType::Timestamp(unit, tz.map(Into::into)), true)
+    }
+
+    fn located(name: &str, field: Field) -> (object_store::path::Path, Schema) {
+        (
+            object_store::path::Path::from(name),
+            Schema::new(vec![field]),
+        )
+    }
+
+    #[test]
+    fn retags_aware_fields_participating_in_millisecond_widening() {
+        // `ts` is aware microseconds (New York) in one file and aware milliseconds (UTC) in
+        // another; both are retagged to the session timezone so the later widening + merge agree.
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("America/New_York")),
+            ),
+            located(
+                "b",
+                timestamp_field("ts", TimeUnit::Millisecond, Some("UTC")),
+            ),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        let tz = Some("America/Los_Angeles".into());
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, tz.clone())
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, tz)
+        );
+    }
+
+    #[test]
+    fn preserves_timestamp_ntz_even_for_a_widened_field() {
+        // `ts` participates in the widening (aware ms in file a) but is TIMESTAMP_NTZ in file b;
+        // the `None` timezone must survive so it stays distinct from the aware type.
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Millisecond, Some("UTC")),
+            ),
+            located("b", timestamp_field("ts", TimeUnit::Microsecond, None)),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("America/Los_Angeles".into()))
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn leaves_microsecond_only_fields_untouched() {
+        // No file has this field as aware milliseconds, so each producer label is retained
+        // (the pre-existing microsecond-only case, deferred).
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("UTC")),
+            ),
+            located(
+                "b",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("America/New_York")),
+            ),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()))
+        );
     }
 }

@@ -2,6 +2,7 @@
 name = "sail-plan"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -17,6 +18,7 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-data-source = { path = "../sail-data-source" }
+sail-cache = { path = "../sail-cache" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -33,7 +35,6 @@ chumsky = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
-ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
@@ -47,4 +48,11 @@ serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+fancy-regex = { workspace = true }
+regex-syntax = { workspace = true }
+url = { workspace = true }
 parquet-variant-compute = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }

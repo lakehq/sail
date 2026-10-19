@@ -7,12 +7,12 @@ use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
 use crate::hll_sketch::{
-    empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes, union_hll_sketches,
-    update_hll_sketch_from_array, validate_lg_config_k, DEFAULT_LG_CONFIG_K,
+    DEFAULT_LG_CONFIG_K, empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes,
+    union_hll_sketches, update_hll_sketch_from_array, validate_lg_config_k,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -53,16 +53,18 @@ impl AggregateUDFImpl for HllSketchAggFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let lg_config_k = resolve_lg_config_k(&acc_args, 1, "hll_sketch_agg")?;
-        Ok(Box::new(HllSketchAggAccumulator::new(lg_config_k)))
+        Ok(Box::new(HllSketchAggAccumulator::new(lg_config_k)?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "hll_sketch"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "hll_sketch"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -111,12 +113,14 @@ impl AggregateUDFImpl for HllUnionAggFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "hll_union"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "hll_union"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -127,11 +131,11 @@ struct HllSketchAggAccumulator {
 }
 
 impl HllSketchAggAccumulator {
-    fn new(lg_config_k: u8) -> Self {
-        Self {
-            sketch: new_hll_sketch(lg_config_k),
+    fn new(lg_config_k: u8) -> Result<Self> {
+        Ok(Self {
+            sketch: new_hll_sketch(lg_config_k)?,
             merged: None,
-        }
+        })
     }
 
     fn update_bytes(&self) -> Vec<u8> {
@@ -223,8 +227,11 @@ impl HllUnionAggAccumulator {
         Ok(())
     }
 
-    fn evaluate_bytes(&self) -> Vec<u8> {
-        self.sketch.clone().unwrap_or_else(empty_hll_union_bytes)
+    fn evaluate_bytes(&self) -> Result<Vec<u8>> {
+        match &self.sketch {
+            Some(sketch) => Ok(sketch.clone()),
+            None => empty_hll_union_bytes(),
+        }
     }
 }
 
@@ -242,7 +249,7 @@ impl Accumulator for HllUnionAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Binary(Some(self.evaluate_bytes())))
+        Ok(ScalarValue::Binary(Some(self.evaluate_bytes()?)))
     }
 
     fn size(&self) -> usize {
@@ -291,7 +298,7 @@ fn resolve_lg_config_k(args: &AccumulatorArgs, index: usize, function_name: &str
             return exec_err!(
                 "{function_name} requires lgConfigK to be a non-null integer literal, got {}",
                 value.data_type()
-            )
+            );
         }
     };
     validate_lg_config_k(value, function_name)

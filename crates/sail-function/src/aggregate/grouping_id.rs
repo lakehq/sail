@@ -1,5 +1,5 @@
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::common::{not_impl_err, Result};
+use datafusion::common::{Result, not_impl_err};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
@@ -37,7 +37,7 @@ impl AggregateUDFImpl for GroupingIdFunction {
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("grouping_id", DataType::Int64, false).into()
+            Field::new("grouping_id", DataType::Int64, false).into(),
         ])
     }
 

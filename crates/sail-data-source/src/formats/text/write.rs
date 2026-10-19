@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, DataFusionError, GetExt, Result};
+use datafusion_common::{DataFusionError, GetExt, Result, not_impl_err};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::sink::DataSinkExec;
 
-use crate::formats::text::writer::{TextSink, TextWriterOptions};
 use crate::formats::text::DEFAULT_TEXT_EXTENSION;
+use crate::formats::text::writer::{TextSink, TextWriterOptions};
 use crate::listing::source::{ListingSinkInput, WriteFormat};
-use crate::options::gen::TextWriteOptions;
+use crate::options::r#gen::TextWriteOptions;
 
 #[derive(Debug, Clone)]
 pub struct TextWriteFormat {

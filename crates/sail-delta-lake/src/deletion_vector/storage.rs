@@ -47,56 +47,98 @@ pub async fn read_deletion_vector(
             // Use the full path from the URL so the object store can find the file.
             let path = Path::from(dv_url.path());
 
-            let data = store
-                .get(&path)
-                .await
-                .map_err(|e| DeltaError::generic(format!("failed to read DV file: {e}")))?
-                .bytes()
-                .await
-                .map_err(|e| DeltaError::generic(format!("failed to read DV bytes: {e}")))?;
-
-            read_dv_from_file_bytes(&data, dv.offset, dv.size_in_bytes)
+            let offset = u64::try_from(dv.offset.unwrap_or(1))
+                .map_err(|_| DeltaError::generic("DV offset must be non-negative"))?;
+            let size = u64::try_from(dv.size_in_bytes)
+                .map_err(|_| DeltaError::generic("DV size must be non-negative"))?;
+            let (version, entry) = if offset == 1 {
+                let bytes = read_dv_range(store, &path, offset, size, true).await?;
+                (bytes.slice(..1), bytes.slice(1..))
+            } else {
+                futures::try_join!(
+                    async { Ok::<_, DeltaError>(store.get_range(&path, 0..1).await?) },
+                    read_dv_range(store, &path, offset, size, false),
+                )?
+            };
+            validate_dv_version(&version)?;
+            read_dv_entry(&entry, dv.size_in_bytes)
         }
     }
 }
 
-/// Read a single DV entry from a DV file's raw bytes.
+async fn read_dv_range(
+    store: &dyn ObjectStore,
+    path: &Path,
+    offset: u64,
+    descriptor_size: u64,
+    include_version: bool,
+) -> DeltaResult<Bytes> {
+    let start = if include_version { 0 } else { offset };
+    let header = (offset - start) as usize;
+    let bytes = match store
+        .get_range(path, start..offset + descriptor_size + 8)
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            // An oversized descriptor can extend beyond EOF. The existing reader
+            // accepts a different size in the entry header, so retry that range.
+            let prefix = store.get_range(path, start..offset + 4).await?;
+            let actual = dv_entry_size(prefix.get(header..).unwrap_or_default())?;
+            if actual == descriptor_size {
+                return Err(error.into());
+            }
+            store.get_range(path, start..offset + actual + 8).await?
+        }
+    };
+    let actual = dv_entry_size(bytes.get(header..).unwrap_or_default())?;
+    if actual > descriptor_size {
+        Ok(store.get_range(path, start..offset + actual + 8).await?)
+    } else {
+        Ok(bytes)
+    }
+}
+
+fn dv_entry_size(entry: &[u8]) -> DeltaResult<u64> {
+    let header: [u8; 4] = entry
+        .get(..4)
+        .ok_or_else(|| DeltaError::generic("DV file too short to read data size header"))?
+        .try_into()
+        .map_err(|_| DeltaError::generic("invalid DV size header"))?;
+    Ok(u32::from_be_bytes(header) as u64)
+}
+
+fn validate_dv_version(data: &[u8]) -> DeltaResult<()> {
+    match data.first() {
+        Some(&DV_FILE_FORMAT_VERSION) => Ok(()),
+        Some(version) => Err(DeltaError::generic(format!(
+            "unsupported DV file format version: {version}"
+        ))),
+        None => Err(DeltaError::generic("DV file is empty")),
+    }
+}
+
+#[cfg(test)]
 fn read_dv_from_file_bytes(
     data: &[u8],
     offset: Option<i32>,
     size_in_bytes: i32,
 ) -> DeltaResult<DeletionVectorBitmap> {
-    if data.is_empty() {
-        return Err(DeltaError::generic("DV file is empty"));
-    }
-    // First byte is format version
-    if data[0] != DV_FILE_FORMAT_VERSION {
-        return Err(DeltaError::generic(format!(
-            "unsupported DV file format version: {}, expected {DV_FILE_FORMAT_VERSION}",
-            data[0]
-        )));
-    }
+    validate_dv_version(data)?;
+    let offset = usize::try_from(offset.unwrap_or(1))
+        .map_err(|_| DeltaError::generic("DV offset must be non-negative"))?;
+    let entry = data
+        .get(offset..)
+        .ok_or_else(|| DeltaError::generic("DV offset exceeds file length"))?;
+    read_dv_entry(entry, size_in_bytes)
+}
 
-    if size_in_bytes < 0 {
-        return Err(DeltaError::generic(format!(
-            "invalid DV descriptor: size_in_bytes must be non-negative, got {size_in_bytes}"
-        )));
-    }
-    let size = size_in_bytes as usize;
-
-    let raw_offset = offset.unwrap_or(1);
-    if raw_offset < 0 {
-        return Err(DeltaError::generic(format!(
-            "invalid DV descriptor: offset must be non-negative, got {raw_offset}"
-        )));
-    }
-    let start = raw_offset as usize;
-
-    // Each entry: [dataSize(4)] [bitmapData(dataSize)] [checksum(4)]
-    let header_end = start
-        .checked_add(4)
-        .ok_or_else(|| DeltaError::generic("DV descriptor offset overflows address space"))?;
-    if header_end > data.len() {
+fn read_dv_entry(data: &[u8], size_in_bytes: i32) -> DeltaResult<DeletionVectorBitmap> {
+    let size = usize::try_from(size_in_bytes)
+        .map_err(|_| DeltaError::generic("DV size must be non-negative"))?;
+    let start = 0;
+    let header_end = 4;
+    if data.len() < header_end {
         return Err(DeltaError::generic(
             "DV file too short to read data size header",
         ));
@@ -217,7 +259,159 @@ pub async fn write_deletion_vector(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use futures::stream::BoxStream;
+    use object_store::memory::InMemory;
+    use object_store::{
+        CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        PutMultipartOptions, PutOptions, PutResult,
+    };
+
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct RangeStore {
+        data: InMemory,
+        reads: Mutex<Vec<std::ops::Range<u64>>>,
+    }
+
+    impl fmt::Display for RangeStore {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "RangeStore")
+        }
+    }
+
+    #[async_trait]
+    #[expect(clippy::unwrap_used)]
+    impl ObjectStore for RangeStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.data.put_opts(location, payload, options).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.data.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            if let Some(GetRange::Bounded(range)) = &options.range {
+                self.reads.lock().unwrap().push(range.clone());
+            } else {
+                return Err(object_store::Error::NotSupported {
+                    source: "DV read must request a bounded range".into(),
+                });
+            }
+            self.data.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.data.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.data.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.data.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.data.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
+    async fn dv_reads_only_the_requested_segment_and_checks_crc() {
+        let store = RangeStore::default();
+        let bitmap = DeletionVectorBitmap::from_row_indices([3, 8, 4096]);
+        let payload = bitmap.serialize().unwrap();
+        let offset = 2 * 1024 * 1024;
+        let mut bytes = vec![0; offset];
+        bytes[0] = DV_FILE_FORMAT_VERSION;
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(&crc32fast::hash(&payload).to_be_bytes());
+        let entry_end = bytes.len();
+        bytes.resize(entry_end + 2 * 1024 * 1024, 0);
+        let path = Path::from("table/vectors.bin");
+        store.put(&path, bytes.clone().into()).await.unwrap();
+        let root = Url::parse("memory:///table/").unwrap();
+        let descriptor = DeletionVectorDescriptor {
+            storage_type: StorageType::AbsolutePath,
+            path_or_inline_dv: "memory:///table/vectors.bin".into(),
+            offset: Some(offset as i32),
+            size_in_bytes: payload.len() as i32,
+            cardinality: 3,
+        };
+        let result = read_deletion_vector(&store, &root, &descriptor)
+            .await
+            .unwrap();
+        assert_eq!(result.inner(), bitmap.inner());
+        let mut ranges = store.reads.lock().unwrap().clone();
+        ranges.sort_by_key(|range| range.start);
+        assert_eq!(ranges, vec![0..1, offset as u64..entry_end as u64]);
+        bytes[entry_end - 1] ^= 1;
+        store.put(&path, bytes.into()).await.unwrap();
+        assert!(
+            read_deletion_vector(&store, &root, &descriptor)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
+    async fn range_reads_preserve_header_size_tolerance() {
+        let store = Arc::new(RangeStore::default());
+        let root = Url::parse("memory:///table/").unwrap();
+        let bitmap = DeletionVectorBitmap::from_row_indices([1, 5]);
+        let writer = DeletionVectorWriter::new(store.clone(), root.clone());
+        let descriptor = writer.write(&bitmap).await.unwrap();
+        for size in [
+            descriptor.size_in_bytes - 4,
+            descriptor.size_in_bytes + 4096,
+        ] {
+            let descriptor = DeletionVectorDescriptor {
+                size_in_bytes: size,
+                ..descriptor.clone()
+            };
+            let result = read_deletion_vector(store.as_ref(), &root, &descriptor)
+                .await
+                .unwrap();
+            assert_eq!(result.inner(), bitmap.inner());
+        }
+    }
 
     #[test]
     #[expect(clippy::unwrap_used)]

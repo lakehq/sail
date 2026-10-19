@@ -4,9 +4,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArrayType, BinaryBuilder, GenericBinaryBuilder,
     GenericStringBuilder, LargeBinaryBuilder, OffsetSizeTrait, StringArrayType,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -38,18 +38,39 @@ impl ScalarUDFImpl for SparkEncode {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if matches!(arg_types[0], DataType::Null) || matches!(arg_types[1], DataType::Null) {
-            Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Encode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
+    /// `returnNullable` at its `true` default, and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `encode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Binary
         } else {
-            match &arg_types[0] {
-                DataType::Null | DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
-                DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            match value.data_type() {
+                DataType::Null | DataType::Utf8 | DataType::Utf8View => DataType::Binary,
+                DataType::LargeUtf8 => DataType::LargeBinary,
                 other => {
-                    exec_err!("Spark `encode` function: Expected a STRING type, got {other:?}")
+                    return exec_err!(
+                        "Spark `encode` function: Expected a STRING type, got {other:?}"
+                    );
                 }
             }
-        }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -114,7 +135,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string::<i32>();
                                 let mut builder = BinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
@@ -129,7 +150,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string::<i64>();
                                 let mut builder = LargeBinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
@@ -144,7 +165,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string_view();
                                 let mut builder = BinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
@@ -156,7 +177,9 @@ impl ScalarUDFImpl for SparkEncode {
                                 Ok(Arc::new(builder.finish()) as ArrayRef)
                             }
                             other => {
-                                exec_err!("Spark `encode` function: First arg must be STRING, got {other:?}")
+                                exec_err!(
+                                    "Spark `encode` function: First arg must be STRING, got {other:?}"
+                                )
                             }
                         }?;
                         Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
@@ -269,23 +292,44 @@ impl ScalarUDFImpl for SparkDecode {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if matches!(arg_types[0], DataType::Null) || matches!(arg_types[1], DataType::Null) {
-            Ok(DataType::Utf8)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `StringDecode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
+    /// `returnNullable` at its `true` default, and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `decode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Utf8
         } else {
-            match &arg_types[0] {
+            match value.data_type() {
                 DataType::Null
                 | DataType::Binary
                 | DataType::FixedSizeBinary(_)
                 | DataType::BinaryView
                 | DataType::Utf8
-                | DataType::Utf8View => Ok(DataType::Utf8),
-                DataType::LargeUtf8 | DataType::LargeBinary => Ok(DataType::LargeUtf8),
+                | DataType::Utf8View => DataType::Utf8,
+                DataType::LargeUtf8 | DataType::LargeBinary => DataType::LargeUtf8,
                 other => {
-                    exec_err!("Spark `decode` function: Expected a BINARY type, got {other:?}")
+                    return exec_err!(
+                        "Spark `decode` function: Expected a BINARY type, got {other:?}"
+                    );
                 }
             }
-        }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -333,16 +377,16 @@ impl ScalarUDFImpl for SparkDecode {
                         }
                     }
                     _ => {
-                        exec_err!("Spark `decode` function: First arg must be BINARY and second arg must be STRING type, got {args:?}")
+                        exec_err!(
+                            "Spark `decode` function: First arg must be BINARY and second arg must be STRING type, got {args:?}"
+                        )
                     }
                 }
             }
             (ColumnarValue::Array(binary_array), ColumnarValue::Scalar(char_set)) => {
                 match (binary_array.data_type(), char_set) {
                     (
-                        DataType::Binary
-                        | DataType::LargeBinary
-                        | DataType::BinaryView,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
                         ScalarValue::Utf8(Some(char_set))
                         | ScalarValue::LargeUtf8(Some(char_set))
                         | ScalarValue::Utf8View(Some(char_set)),
@@ -388,12 +432,16 @@ impl ScalarUDFImpl for SparkDecode {
                                 Ok(Arc::new(builder.finish()) as ArrayRef)
                             }
                             other => {
-                                exec_err!("Spark `decode` function: First arg must be BINARY, got {other:?}")
+                                exec_err!(
+                                    "Spark `decode` function: First arg must be BINARY, got {other:?}"
+                                )
                             }
                         }?;
                         Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                     }
-                    _ => exec_err!("Spark `decode` function: First arg must be BINARY and second arg must be STRING type, got {args:?}"),
+                    _ => exec_err!(
+                        "Spark `decode` function: First arg must be BINARY and second arg must be STRING type, got {args:?}"
+                    ),
                 }
             }
             (ColumnarValue::Array(binary_array), ColumnarValue::Array(char_set_array)) => {
@@ -488,7 +536,8 @@ fn encode(string: &str, char_set: &str) -> Result<Vec<u8>> {
         "US-ASCII" => {
             // 'US-ASCII': Seven-bit ASCII, ISO646-US.
             let bytes = if !string.is_ascii() {
-                string.chars()
+                string
+                    .chars()
                     .map(|c| if c.is_ascii() { c as u8 } else { b'?' })
                     .collect()
             } else {
@@ -498,7 +547,8 @@ fn encode(string: &str, char_set: &str) -> Result<Vec<u8>> {
         }
         "ISO-8859-1" => {
             // 'ISO-8859-1': ISO Latin Alphabet No. 1, ISO-LATIN-1.
-            Ok(string.chars()
+            Ok(string
+                .chars()
                 .map(|c| if c as u32 <= 0xFF { c as u8 } else { b'?' })
                 .collect())
         }
@@ -531,7 +581,9 @@ fn encode(string: &str, char_set: &str) -> Result<Vec<u8>> {
             }
             Ok(bytes)
         }
-        _ => exec_err!("Spark `encode` function: Unsupported charset {char_set}. Charset must be one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16'"),
+        _ => exec_err!(
+            "Spark `encode` function: Unsupported charset {char_set}. Charset must be one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16'"
+        ),
     }
 }
 
@@ -563,8 +615,11 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
             if !bytes.is_ascii() {
                 exec_err!("Spark `decode` function: Invalid US-ASCII byte sequence: {bytes:?}")
             } else {
-                String::from_utf8(bytes.to_vec())
-                    .map_err(|e| exec_datafusion_err!("Spark `decode` function: Failed to decode US-ASCII bytes: {e}"))
+                String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    exec_datafusion_err!(
+                        "Spark `decode` function: Failed to decode US-ASCII bytes: {e}"
+                    )
+                })
             }
         }
         "ISO-8859-1" => {
@@ -573,63 +628,56 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
         }
         "UTF-8" => {
             // 'UTF-8': Eight-bit UCS Transformation Format.
-            String::from_utf8(bytes.to_vec())
-                .map_err(|e| exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-8 bytes: {e}"))
+            String::from_utf8(bytes.to_vec()).map_err(|e| {
+                exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-8 bytes: {e}")
+            })
         }
         "UTF-16BE" => {
             // 'UTF-16BE': Sixteen-bit UCS Transformation Format, big-endian byte order.
-            if !bytes.len().is_multiple_of(2) {
-                exec_err!("Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}")
-            } else {
-                let u16_words: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-                    .collect();
-                String::from_utf16(&u16_words)
-                    .map_err(|e| exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-16BE bytes: {e}"))
-            }
+            bytes.len().is_multiple_of(2).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}"
+                )
+            })?;
+            String::from_utf16be(bytes).map_err(|e| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Failed to decode UTF-16BE bytes: {e}"
+                )
+            })
         }
         "UTF-16LE" => {
             // 'UTF-16LE': Sixteen-bit UCS Transformation Format, little-endian byte order.
-            if !bytes.len().is_multiple_of(2) {
-                exec_err!("Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}")
-            } else {
-                let u16_words: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                    .collect();
-                String::from_utf16(&u16_words)
-                    .map_err(|e| exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-16LE bytes: {e}"))
-            }
+            bytes.len().is_multiple_of(2).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}"
+                )
+            })?;
+            String::from_utf16le(bytes).map_err(|e| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Failed to decode UTF-16LE bytes: {e}"
+                )
+            })
         }
         "UTF-16" => {
             // 'UTF-16': Sixteen-bit UCS Transformation Format, byte order identified by an optional byte-order mark.
-            if bytes.len() < 2 {
-                exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
-            } else {
-                let (bom, content) = match &bytes[0..2] {
-                    [0xFE, 0xFF] => (true, &bytes[2..]), // BE BOM
-                    [0xFF, 0xFE] => (false, &bytes[2..]), // LE BOM
-                    _ => (true, bytes), // Default to BE if no BOM
-                };
+            (bytes.len() >= 2 && bytes.len().is_multiple_of(2)).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}"
+                )
+            })?;
+            let decoded = match &bytes[0..2] {
+                [0xFE, 0xFF] => String::from_utf16be(&bytes[2..]),
+                [0xFF, 0xFE] => String::from_utf16le(&bytes[2..]),
+                _ => String::from_utf16be(bytes), // Default to BE if no BOM
+            };
 
-                if !content.len().is_multiple_of(2) {
-                    exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
-                } else {
-                    let u16_words: Vec<u16> = content
-                        .chunks_exact(2)
-                        .map(|chunk| if bom {
-                            u16::from_be_bytes([chunk[0], chunk[1]])
-                        } else {
-                            u16::from_le_bytes([chunk[0], chunk[1]])
-                        })
-                        .collect();
-                    String::from_utf16(&u16_words)
-                        .map_err(|e| exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-16 bytes: {e}"))
-                }
-            }
+            decoded.map_err(|e| {
+                exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-16 bytes: {e}")
+            })
         }
-        _ => exec_err!("Spark `decode` function: Unsupported charset {char_set}. Charset must be one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16'"),
+        _ => exec_err!(
+            "Spark `decode` function: Unsupported charset {char_set}. Charset must be one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16'"
+        ),
     }
 }
 

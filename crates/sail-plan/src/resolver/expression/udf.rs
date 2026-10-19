@@ -4,20 +4,22 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{AggregateUDF, Expr, ExprSchemable, ScalarUDF, expr};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_udaf::{
+    PySparkAggregateMode, PySparkGroupAggKind, PySparkGroupAggregateUDF,
+};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 /// If `expr` contains (or is) an `AggregateFunction`, return its name.
 /// Used to detect illegal nesting of aggregate functions as UDAF arguments.
@@ -255,6 +257,7 @@ impl PlanResolver<'_> {
                 };
                 let udaf = PySparkGroupAggregateUDF::new(
                     PySparkGroupAggKind::Pandas, // Pandas path: Arrow → Pandas → user func → Arrow
+                    PySparkAggregateMode::Grouped,
                     get_udf_name(name, &payload),
                     payload,
                     deterministic,
@@ -336,6 +339,7 @@ impl PlanResolver<'_> {
                 };
                 let udaf = PySparkGroupAggregateUDF::new(
                     PySparkGroupAggKind::Arrow, // Arrow path: no Pandas conversion
+                    PySparkAggregateMode::Grouped,
                     get_udf_name(name, &payload),
                     payload,
                     deterministic,

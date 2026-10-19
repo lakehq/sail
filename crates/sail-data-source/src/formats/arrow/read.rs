@@ -1,7 +1,7 @@
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::ipc::convert::fb_to_schema;
 use datafusion::arrow::ipc::reader::{FileReader, StreamReader};
@@ -9,19 +9,20 @@ use datafusion::arrow::ipc::root_as_message;
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn is_object_in_arrow_ipc_file_format(
@@ -74,8 +75,8 @@ impl ReadFormat for ArrowReadFormat {
                                     Ok(reader) => reader.schema(),
                                     Err(stream_error) => {
                                         return Err(internal_datafusion_err!(
-                                    "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
-                                ));
+                                            "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
+                                        ));
                                     }
                                 }
                             }
@@ -86,7 +87,10 @@ impl ReadFormat for ArrowReadFormat {
                 schemas.push(schema.as_ref().clone());
             }
         }
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(try_merge_normalized(
+            schemas,
+            NanosecondTimestamps::Report,
+        )?))
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
@@ -118,7 +122,7 @@ impl ReadFormat for ArrowReadFormat {
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

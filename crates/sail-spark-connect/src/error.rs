@@ -7,6 +7,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
+use sail_common::actor::ActorSendError;
 use sail_common::error::CommonError;
 use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
 use sail_execution::error::ExecutionError;
@@ -46,6 +47,8 @@ pub enum SparkError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 impl SparkError {
@@ -119,6 +122,7 @@ impl From<ExecutionError> for SparkError {
             ExecutionError::JsonError(e) => SparkError::JsonError(e),
             ExecutionError::IoError(e) => SparkError::IoError(e),
             ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::FlightTransportError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::KubernetesError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::InternalError(e) => SparkError::InternalError(e),
@@ -156,6 +160,12 @@ impl<T> From<PoisonError<T>> for SparkError {
 
 impl<T> From<SendError<T>> for SparkError {
     fn from(error: SendError<T>) -> Self {
+        SparkError::SendError(error.to_string())
+    }
+}
+
+impl<T> From<ActorSendError<T>> for SparkError {
+    fn from(error: ActorSendError<T>) -> Self {
         SparkError::SendError(error.to_string())
     }
 }
@@ -217,12 +227,10 @@ pub(crate) enum SparkThrowable {
     #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
-    #[expect(dead_code)]
     NumberFormatException(String),
     IllegalArgumentException(String),
     ArithmeticException(String),
     UnsupportedOperationException(String),
-    #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
     DateTimeException(String),
     SparkRuntimeException(String),
@@ -310,15 +318,8 @@ fn truncate_grpc_message(message: &str) -> String {
     let head_take = keep / 3;
     let tail_take = keep - head_take;
 
-    let mut head_end = head_take;
-    while head_end > 0 && !message.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-
-    let mut tail_start = message.len().saturating_sub(tail_take);
-    while tail_start < message.len() && !message.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
+    let head_end = message.floor_char_boundary(head_take);
+    let tail_start = message.ceil_char_boundary(message.len().saturating_sub(tail_take));
 
     format!(
         "{}{TRUNCATED_MARKER}{}",
@@ -393,13 +394,15 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::PythonException(message)
                 }
             }
-            CommonErrorCause::ArrowCast(x)
-            | CommonErrorCause::Schema(x)
+            CommonErrorCause::ArrowCast(x) => cast_error_to_throwable(x),
+            CommonErrorCause::Schema(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {
                 if is_timestamp_parse_error(&x) {
                     SparkThrowable::DateTimeException(x)
+                } else if is_array_index_out_of_bounds_error(&x) {
+                    SparkThrowable::ArrayIndexOutOfBoundsException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -412,6 +415,29 @@ impl From<CommonErrorCause> for SparkThrowable {
 
 fn is_timestamp_parse_error(message: &str) -> bool {
     message.starts_with("Error parsing timestamp")
+}
+
+fn is_array_index_out_of_bounds_error(message: &str) -> bool {
+    message.contains("[INVALID_ARRAY_INDEX]")
+}
+
+fn cast_error_to_throwable(message: String) -> SparkThrowable {
+    // Spark ANSI cast failures map by target type:
+    //   numeric target -> NumberFormatException   (CAST('abc' AS DOUBLE/INT/...))
+    //   boolean target -> SparkRuntimeException    (CAST('abc' AS BOOLEAN))
+    // Arrow's `CastError` message ends with "to value of <Type> type".
+    if message.contains("Boolean type") {
+        SparkThrowable::SparkRuntimeException(message)
+    } else if [
+        "Int8", "Int16", "Int32", "Int64", "UInt", "Float16", "Float32", "Float64", "Decimal",
+    ]
+    .iter()
+    .any(|t| message.contains(t))
+    {
+        SparkThrowable::NumberFormatException(message)
+    } else {
+        SparkThrowable::AnalysisException(message)
+    }
 }
 
 impl From<SparkError> for Status {
@@ -434,6 +460,7 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
+            SparkError::ParseError(s) => SparkThrowable::ParseException(s).into(),
             e @ SparkError::SendError(_) => {
                 Status::cancelled(truncate_grpc_message(&e.to_string()))
             }

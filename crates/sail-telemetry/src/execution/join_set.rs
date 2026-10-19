@@ -1,8 +1,8 @@
 use std::any::Any;
 
 use datafusion::common::runtime::JoinSetTracer;
-use fastrace::future::FutureExt;
 use fastrace::Span;
+use fastrace::future::FutureExt;
 use futures::future::BoxFuture;
 
 /// A DataFusion [`JoinSetTracer`] implementation for Fastrace.

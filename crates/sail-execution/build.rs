@@ -86,11 +86,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     ProtoBuilder::new("stream", &["common.proto"]).build()?;
     ProtoBuilder::new("task", &["common.proto"]).build()?;
-    ProtoBuilder::new("driver", &["service.proto"])
+    ProtoBuilder::new("driver", &["service.proto", "celeborn.proto"])
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
-        .skip_debug(&["sail.worker.RunTaskRequest"])
+        .skip_debug(&["sail.worker.RunTaskBatchRequest"])
         .with_service()
         .build()?;
     Ok(())

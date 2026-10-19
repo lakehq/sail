@@ -10,8 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::num::NonZeroUsize;
-
 use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
 pub(crate) use sail_data_source::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -19,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{DataSourceError, DataSourceResult};
 
-pub mod gen {
+pub mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/options/delta.rs"));
 }
 
@@ -54,20 +52,9 @@ pub fn parse_delta_log_replay_strategy(
     }
 }
 
-pub fn default_delta_log_replay_hash_threshold() -> NonZeroUsize {
-    non_zero_usize(100)
-}
-
-fn non_zero_usize(value: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(value) {
-        Some(value) => value,
-        None => unreachable!("non-zero default"),
-    }
-}
-
-impl ResolveOptions for gen::DeltaReadOptions {
+impl ResolveOptions for r#gen::DeltaReadOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaReadPartialOptions::initialize();
+        let mut partial = r#gen::DeltaReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -75,9 +62,9 @@ impl ResolveOptions for gen::DeltaReadOptions {
     }
 }
 
-impl ResolveOptions for gen::DeltaWriteOptions {
+impl ResolveOptions for r#gen::DeltaWriteOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaWritePartialOptions::initialize();
+        let mut partial = r#gen::DeltaWritePartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }

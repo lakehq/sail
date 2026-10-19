@@ -9,10 +9,10 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 const MAX_SASL_FRAME_SIZE: usize = 0x00FF_FFFF;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Ready};
 use tokio::net::tcp;
+use volo::net::Address;
 use volo::net::conn::{OwnedReadHalf, OwnedWriteHalf};
 use volo::net::dial::{DefaultMakeTransport, MakeTransport};
 use volo::net::ext::AsyncExt;
-use volo::net::Address;
 
 use super::gssapi::{GssapiFrameProtector, GssapiSession, SaslQop};
 
@@ -98,7 +98,7 @@ impl MakeTransport for KerberosMakeTransport {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
                     "Kerberos HMS transport only supports TCP connections",
-                ))
+                ));
             }
         };
 
@@ -330,11 +330,11 @@ impl AsyncWrite for SaslWriteHalf {
                             return std::task::Poll::Ready(Err(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "failed to write SASL-framed HMS payload",
-                            )))
+                            )));
                         }
                         std::task::Poll::Ready(Ok(n)) => written += n,
                         std::task::Poll::Ready(Err(error)) => {
-                            return std::task::Poll::Ready(Err(error))
+                            return std::task::Poll::Ready(Err(error));
                         }
                         std::task::Poll::Pending => {
                             self.frame = Some((frame, written));
@@ -413,7 +413,7 @@ where
             other => {
                 return Err(CatalogError::External(format!(
                     "Expected Thrift SASL OK or COMPLETE from HMS, got {other:?}"
-                )))
+                )));
             }
         }
 
@@ -528,12 +528,12 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
-    use tokio::io::{duplex, AsyncRead, AsyncWrite};
-    use tokio::time::{timeout, Duration};
+    use tokio::io::{AsyncRead, AsyncWrite, duplex};
+    use tokio::time::{Duration, timeout};
 
     use super::{
-        perform_thrift_sasl_handshake, AsyncReadExt, AsyncWriteExt, CatalogError, CatalogResult,
-        NegotiationStatus, SaslClientSession,
+        AsyncReadExt, AsyncWriteExt, CatalogError, CatalogResult, NegotiationStatus,
+        SaslClientSession, perform_thrift_sasl_handshake,
     };
 
     #[derive(Debug, Clone)]

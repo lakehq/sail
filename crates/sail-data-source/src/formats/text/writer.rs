@@ -15,9 +15,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
+use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
 use object_store::ObjectStore;
 
 use crate::formats::text::TableTextOptions;
@@ -153,7 +153,7 @@ impl DisplayAs for TextSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: txt")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }

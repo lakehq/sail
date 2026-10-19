@@ -3,15 +3,15 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::datatypes::Int64Type;
 use datafusion::functions_aggregate::count::count_udaf;
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::ScalarValue;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{expr, lit, Aggregate, Expr, Limit, LogicalPlan};
+use datafusion_expr::{Aggregate, Expr, Limit, LogicalPlan, expr, lit};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_limit(

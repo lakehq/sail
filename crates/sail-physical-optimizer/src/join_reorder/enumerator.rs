@@ -5,12 +5,12 @@ use datafusion::common::stats::Precision;
 use datafusion::error::{DataFusionError, Result};
 use log::{trace, warn};
 
+use crate::join_reorder::JoinReorderOptions;
 use crate::join_reorder::cardinality_estimator::CardinalityEstimator;
 use crate::join_reorder::cost_model::CostModel;
 use crate::join_reorder::dp_plan::DPPlan;
 use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
-use crate::join_reorder::JoinReorderOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinReorderFallbackReason {
@@ -96,16 +96,15 @@ impl PlanEnumerator {
         }
 
         // Defensive fallback: always keep at least one anchor candidate.
-        if anchor_bits == 0 {
-            if let Some(relation) = query_graph
+        if anchor_bits == 0
+            && let Some(relation) = query_graph
                 .relations
                 .iter()
                 .max_by(|left, right| left.base_cardinality.total_cmp(&right.base_cardinality))
-            {
-                anchor_bits |= 1u64 << relation.relation_id;
-                anchor_total = relation.base_cardinality.max(0.0);
-                anchor_count = 1;
-            }
+        {
+            anchor_bits |= 1u64 << relation.relation_id;
+            anchor_total = relation.base_cardinality.max(0.0);
+            anchor_count = 1;
         }
 
         let anchors = JoinSet::from_bits(anchor_bits);
@@ -760,11 +759,11 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
+    use datafusion::common::stats::Precision;
     use datafusion::logical_expr::{JoinType, Operator};
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;

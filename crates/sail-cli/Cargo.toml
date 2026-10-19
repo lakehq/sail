@@ -2,6 +2,7 @@
 name = "sail-cli"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -11,7 +12,7 @@ name = "sail"
 path = "src/main.rs"
 
 [features]
-mimalloc = ["dep:mimalloc"]
+mimalloc = ["dep:sail-mimalloc"]
 default = ["mimalloc"]
 
 [dependencies]
@@ -21,8 +22,8 @@ sail-flight = { path = "../sail-flight" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-session = { path = "../sail-session" }
+sail-mimalloc = { path = "../sail-mimalloc", optional = true }
 
-mimalloc = { workspace = true, optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }

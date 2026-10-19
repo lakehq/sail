@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
-use datafusion_expr::expr;
+use datafusion_expr::expr::{self, FieldMetadata};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -12,9 +13,9 @@ use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::PlanResult;
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_literal(
@@ -22,6 +23,16 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let field_metadata = literal
+            .spark_interval_metadata()?
+            .map(|metadata| {
+                let metadata = metadata.to_json()?;
+                Ok::<_, crate::error::PlanError>(FieldMetadata::from(HashMap::from([(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])))
+            })
+            .transpose()?;
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
@@ -29,7 +40,7 @@ impl PlanResolver<'_> {
             .literal_to_string(&literal, &self.config.session_timezone)?;
         Ok(NamedExpr::new(
             vec![name],
-            expr::Expr::Literal(literal, None),
+            expr::Expr::Literal(literal, field_metadata),
         ))
     }
 
@@ -76,6 +87,10 @@ impl PlanResolver<'_> {
                 (datetime.and_utc(), spec::TimestampType::WithoutTimeZone)
             }
         };
+        // Convert to microseconds.
+        // The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
+        // but Spark stores timestamps with microsecond precision (6 digits).
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior.
         let literal = spec::Literal::TimestampMicrosecond {
             microseconds: Some(datetime.timestamp_micros()),
             timestamp_type,
@@ -93,8 +108,10 @@ impl PlanResolver<'_> {
         // Convert to NaiveTime which validates hour (0-23), minute/second (0-59)
         let naive_time: NaiveTime = time.try_into()?;
 
-        // Use chrono methods to get microseconds since midnight
-        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior
+        // Convert to microseconds since midnight.
+        // The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
+        // but Spark stores timestamps with microsecond precision (6 digits).
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior.
         let seconds_from_midnight = naive_time.num_seconds_from_midnight() as i64;
         let nanoseconds = naive_time.nanosecond() as i64;
         let microseconds = seconds_from_midnight * 1_000_000 + nanoseconds / 1_000;

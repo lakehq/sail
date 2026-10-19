@@ -8,7 +8,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
-use crate::options::gen::CsvWriteOptions;
+use crate::options::r#gen::CsvWriteOptions;
 
 #[derive(Debug, Clone)]
 pub struct CsvWriteFormat {

@@ -1,0 +1,101 @@
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::checkpoint::inspect_checkpoint_main_file;
+pub(crate) use crate::delta_log::ReplayedTableHeader;
+use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
+use crate::spec::{DeltaResult, sidecar_log_path};
+
+/// The minimal set of Delta log files needed to reconstruct table state up to a given version.
+#[derive(Debug, Clone, Default)]
+pub struct LogSegmentFiles {
+    /// Checkpoint files for the latest checkpoint at or before `max_version`.
+    /// UUID-named V2 top-level files may be JSON or Parquet.
+    pub checkpoint_files: Vec<String>,
+    /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
+    pub commit_files: Vec<String>,
+    /// V2 checkpoint sidecar files referenced by the latest checkpoint.
+    /// Paths are relative to `_delta_log/` (e.g. `_sidecars/uuid.parquet`).
+    pub sidecar_files: Vec<String>,
+    /// Compacted JSON files that aggregate multiple commit versions.
+    /// Filenames follow the pattern `{start:020}.{end:020}.compacted.json`.
+    pub compaction_files: Vec<String>,
+}
+
+/// Options controlling which commit files are included in the resolved segment.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogSegmentResolveOptions {
+    /// If set, only include commit JSON files whose version falls within `[start, end]`.
+    pub commit_version_range: Option<(i64, i64)>,
+}
+
+/// List all Delta log files up to `max_version` from the given log store.
+///
+/// Returns a [`LogSegmentFiles`] containing:
+/// - all files belonging to the **latest** checkpoint at or before `max_version`
+/// - all commit JSON files at or before `max_version`
+///
+/// Commit files are **not** filtered against the checkpoint here.
+pub async fn list_log_segment_files(
+    log_store: &crate::delta_log::LogStoreRef,
+    max_version: i64,
+) -> DeltaResult<LogSegmentFiles> {
+    let store = log_store.object_store(None);
+    let offset_version = read_last_checkpoint_version_from_store(store.clone())
+        .await
+        .map(|v| v.min(max_version).saturating_sub(1))
+        .unwrap_or(0);
+
+    let (_, checkpoint_meta, commit_metas, compaction_metas) =
+        list_log_files(store.clone(), offset_version, max_version).await?;
+
+    let mut checkpoint_files: Vec<String> = Vec::new();
+    let mut sidecar_files: Vec<String> = Vec::new();
+
+    if let Some(checkpoint) = checkpoint_meta {
+        let checkpoint_metas = checkpoint.into_files();
+        for meta in &checkpoint_metas {
+            checkpoint_files.push(meta.location.filename().unwrap_or_default().to_string());
+        }
+
+        // Multi-part checkpoints are always V1. Single-file classic or UUID-named checkpoints may
+        // follow the V2 format and refer to sidecars.
+        if let [checkpoint_meta] = checkpoint_metas.as_slice() {
+            let sidecars = inspect_checkpoint_main_file(store, checkpoint_meta.clone()).await?;
+            for sidecar in sidecars {
+                sidecar_files.push(sidecar_log_path(&sidecar.path));
+            }
+        }
+    }
+
+    checkpoint_files.sort();
+    sidecar_files.sort();
+
+    let mut commit_files: Vec<String> = commit_metas
+        .into_iter()
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
+        .collect();
+    commit_files.sort();
+
+    let mut compaction_files: Vec<String> = compaction_metas
+        .into_iter()
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
+        .collect();
+    compaction_files.sort();
+
+    Ok(LogSegmentFiles {
+        checkpoint_files,
+        commit_files,
+        sidecar_files,
+        compaction_files,
+    })
+}

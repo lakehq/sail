@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 pub fn to_struct_array(
@@ -55,7 +56,10 @@ pub struct StructFunction {
 impl StructFunction {
     pub fn new(field_names: Vec<String>) -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
             field_names,
         }
     }
@@ -76,7 +80,8 @@ impl ScalarUDFImpl for StructFunction {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion_common::internal_err!(
-            "StructFunction: return_type() is not used; return_field_from_args() is implemented"
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
         )
     }
 
@@ -104,13 +109,26 @@ impl ScalarUDFImpl for StructFunction {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
-            args, arg_fields, ..
+            args,
+            number_rows,
+            return_field,
+            ..
         } = args;
+        let arg_fields = match return_field.data_type() {
+            DataType::Struct(fields) => fields.iter().cloned().collect::<Vec<_>>(),
+            other => return exec_err!("struct: expected struct return field, got {}", other),
+        };
+        // With no child arrays, Arrow cannot infer the output batch length.
+        if args.is_empty() {
+            return Ok(ColumnarValue::Array(Arc::new(
+                StructArray::new_empty_fields(number_rows, None),
+            )));
+        }
         let arrays = ColumnarValue::values_to_arrays(&args)?;
         Ok(ColumnarValue::Array(to_struct_array(
             arrays.as_slice(),
             self.field_names.as_slice(),
-            &arg_fields,
+            arg_fields.as_slice(),
         )?))
     }
 }

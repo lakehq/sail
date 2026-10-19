@@ -12,7 +12,7 @@ use sail_common_hms::hms::{
 };
 use volo_thrift::MaybeException;
 
-use crate::provider::{apply_alter_table_options, HmsCatalogProvider};
+use crate::provider::{HmsCatalogProvider, apply_alter_table_options};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const HMS_LOCK_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -59,10 +59,12 @@ pub(crate) async fn alter_table_with_lock(
     provider: &HmsCatalogProvider,
     db_name: &str,
     table_name: &str,
-    options: AlterTableOptions,
+    options: Vec<AlterTableOptions>,
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
     let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
+    // TODO: Distinguish HMS lock/heartbeat/alter failures that make commit
+    // state unknown from ordinary conflicts or external errors.
     let result = async {
         let mut hms_table = HmsCatalogProvider::get_table_with_client(
             &client,
@@ -71,7 +73,9 @@ pub(crate) async fn alter_table_with_lock(
             "Failed to fetch HMS table for locked alter",
         )
         .await?;
-        apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        for options in options {
+            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        }
         HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
     }
     .await;

@@ -4,13 +4,13 @@ use std::sync::Arc;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
-use datafusion_common::{arrow_datafusion_err, exec_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use parquet_variant::{VariantPath, VariantPathElement};
-use parquet_variant_compute::{variant_get, GetOptions, VariantType};
-use sail_common_datafusion::variant::variant_metadata_field;
+use parquet_variant_compute::{GetOptions, VariantType, variant_get};
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_string_scalar};
@@ -52,12 +52,11 @@ fn build_get_options<'a>(path: VariantPath<'a>, as_type: &Option<FieldRef>) -> G
 /// - 2-arg form: returns a Variant struct (Binary for PySpark compat).
 fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<FieldRef> {
     // Validate path (arg 1) is a constant non-null string
-    if let Some(path_opt) = args.scalar_arguments.get(1) {
-        if let Some(sv) = path_opt.as_ref() {
-            if sv.try_as_str().flatten().is_none() {
-                return Err(generic_exec_err(name, "path must be a non-null string"));
-            }
-        }
+    if let Some(path_opt) = args.scalar_arguments.get(1)
+        && let Some(sv) = path_opt.as_ref()
+        && sv.try_as_str().flatten().is_none()
+    {
+        return Err(generic_exec_err(name, "path must be a non-null string"));
     }
 
     // 3-arg form: variant_get(variant, path, type) → typed result
@@ -75,8 +74,8 @@ fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<Fi
     // Use Binary (not BinaryView) for PySpark compatibility.
     let variant_struct = DataType::Struct(
         vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, true),
             variant_metadata_field(DataType::Binary, false),
-            Field::new("value", DataType::Binary, true),
         ]
         .into(),
     );
@@ -220,8 +219,8 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
             &result,
             &DataType::Struct(
                 vec![
+                    Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, true),
                     variant_metadata_field(DataType::Binary, false),
-                    Field::new("value", DataType::Binary, true),
                 ]
                 .into(),
             ),
@@ -278,7 +277,9 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        datafusion_common::internal_err!("return_field_from_args should be used")
+        datafusion_common::internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -304,7 +305,7 @@ impl ScalarUDFImpl for SparkVariantGet {
                     self.name(),
                     "string",
                     &arg_types[1],
-                ))
+                ));
             }
         });
         if arg_types.len() == 3 {
@@ -316,7 +317,7 @@ impl ScalarUDFImpl for SparkVariantGet {
                         self.name(),
                         "string",
                         &arg_types[2],
-                    ))
+                    ));
                 }
             });
         }
@@ -337,10 +338,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
     let trimmed = lower.trim();
 
     // Handle parameterized types: decimal(p,s)
-    if let Some(params) = trimmed
-        .strip_prefix("decimal(")
-        .and_then(|s| s.strip_suffix(')'))
-    {
+    if let Some(params) = trimmed.strip_circumfix("decimal(", ')') {
         let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
         return match parts.as_slice() {
             [p, s] => {
@@ -379,7 +377,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
         "binary" => return Ok(DataType::Binary),
         "date" => return Ok(DataType::Date32),
         "timestamp" | "timestamp_ntz" => {
-            return Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            return Ok(DataType::Timestamp(TimeUnit::Microsecond, None));
         }
         _ => {}
     }
@@ -422,8 +420,8 @@ fn quoted_field_name<'src>(
         .then_ignore(just(quote))
 }
 
-fn spark_variant_path_parser<'src>(
-) -> impl Parser<'src, &'src str, VariantPath<'static>, extra::Err<Rich<'src, char>>> {
+fn spark_variant_path_parser<'src>()
+-> impl Parser<'src, &'src str, VariantPath<'static>, extra::Err<Rich<'src, char>>> {
     let ident_field_name = text::ident().map(|s: &str| VariantPathElement::field(s.to_string()));
 
     let single_quoted_field_name = quoted_field_name('\'').map(VariantPathElement::field);

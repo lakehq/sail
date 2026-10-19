@@ -1,6 +1,7 @@
 //! Build script that generates Rust from the .proto files.
 //! and also converts json to Rust constants.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use prost_build::Config;
@@ -55,7 +56,7 @@ struct SparkConfig {
     entries: Vec<SparkConfigEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SparkConfigEntry {
     key: String,
@@ -74,28 +75,17 @@ struct SparkConfigEntry {
     // Reference: `org.apache.spark.internal.config.ConfigBuilder#withPrepended`
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SparkConfigNotice {
     version: String,
     comment: String,
 }
 
-fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=data/spark_config.json");
-
-    let word_boundary = regex::Regex::new(r"(?P<first>[a-z])(?P<second>[A-Z])")?;
-    let key_const_name = |key: &str| -> String {
-        let key = word_boundary.replace_all(key, "${first}_${second}");
-        key.replace('.', "_").to_uppercase()
-    };
-
-    let mut config =
-        serde_json::from_str::<SparkConfig>(&std::fs::read_to_string("data/spark_config.json")?)?;
-
+fn apply_spark_config_overrides(config: &mut SparkConfig) {
     // TODO: remove these overrides
     config.entries.iter_mut().for_each(|entry| {
-        // Spark 4.1 changes the local relation cache threshold from 64 MB to 1 MB
+        // Spark 4.1+ changes the local relation cache threshold from 64 MB to 1 MB
         // which causes DataFrame creation more likely to fail since we do not support
         // caching local relations as artifacts yet.
         // Here we override the default value to 2^31-1 (2147483647, Integer.MAX_VALUE)
@@ -105,49 +95,52 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         if entry.key == "spark.sql.session.localRelationCacheThreshold" {
             entry.default_value = Some("2147483647".to_string())
         }
-        // Spark 4.1 enables safe conversion to Arrow by default, but we turn it off
+        // Spark 4.1+ enables safe conversion to Arrow by default, but we turn it off
         // to avoid a few PySpark test failures caused by datetime conversions.
         // More investigation is needed here.
         if entry.key == "spark.sql.execution.pandas.convertToArrowArraySafely" {
             entry.default_value = Some("false".to_string())
         }
+        // Spark 4.1+ allows plan compression which we do not support yet, so we turn it off.
+        if entry.key == "spark.connect.session.planCompression.threshold" {
+            entry.default_value = Some("-1".to_string())
+        }
     });
+}
 
-    // The JVM Spark Connect client reads spark.connect.session.planCompression.threshold
-    // to decide whether to compress plans before sending them to the server.
-    // This key is not part of Spark's SQL config (spark_config.json) but the client
-    // expects it to exist. Without it, the client logs a NoSuchElementException warning.
-    if !config
-        .entries
-        .iter()
-        .any(|entry| entry.key == "spark.connect.session.planCompression.threshold")
-    {
-        config.entries.push(SparkConfigEntry {
-            key: "spark.connect.session.planCompression.threshold".to_string(),
-            doc: "Minimum plan size in bytes before the client attempts to compress it."
-                .to_string(),
-            default_value: Some("1048576".to_string()),
-            alternatives: Vec::new(),
-            fallback: None,
-            is_static: false,
-            deprecated: None,
-            removed: None,
-        });
+fn build_spark_config(versions: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let word_boundary = regex::Regex::new(r"(?P<first>[a-z])(?P<second>[A-Z])")?;
+    let key_const_name = |key: &str| -> String {
+        let key = word_boundary.replace_all(key, "${first}_${second}");
+        key.replace('.', "_").to_uppercase()
+    };
+
+    let mut configs = Vec::with_capacity(versions.len());
+    for &version in versions {
+        let path = format!("data/config/spark-{version}.json");
+        println!("cargo:rerun-if-changed={path}");
+        let mut config = serde_json::from_str::<SparkConfig>(&std::fs::read_to_string(&path)?)?;
+        apply_spark_config_overrides(&mut config);
+        configs.push((version, config));
     }
 
-    let keys = config
-        .entries
-        .iter()
-        .map(|entry| {
-            let key = &entry.key;
-            let doc = if !entry.doc.is_empty() {
-                &entry.doc
+    let mut entries_by_key: BTreeMap<String, Vec<(SparkConfigEntry, Vec<&str>)>> = BTreeMap::new();
+    for (version, config) in &configs {
+        for entry in &config.entries {
+            let variants = entries_by_key.entry(entry.key.clone()).or_default();
+            if let Some((_, versions)) = variants.iter_mut().find(|(x, _)| x == entry) {
+                versions.push(*version);
             } else {
-                "(Missing documentation)"
-            };
+                variants.push((entry.clone(), vec![*version]));
+            }
+        }
+    }
+
+    let keys = entries_by_key
+        .keys()
+        .map(|key| {
             let const_name = format_ident!("{}", key_const_name(key));
             quote! {
-                #[doc = #doc]
                 pub const #const_name: &str = #key;
             }
         })
@@ -167,35 +160,83 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let entries = config
-        .entries
+    let entry_to_token_stream = |entry: &SparkConfigEntry| {
+        let key_const_name = format_ident!("{}", key_const_name(&entry.key));
+        let default_value = match &entry.default_value {
+            None => quote! { None },
+            Some(x) => quote! { Some(#x) },
+        };
+        let alternatives = &entry.alternatives;
+        let fallback = match &entry.fallback {
+            None => quote! { None },
+            Some(x) => {
+                quote! { Some(#x) }
+            }
+        };
+        let is_static = entry.is_static;
+        let deprecated = notice_to_token_stream(&entry.deprecated);
+        let removed = notice_to_token_stream(&entry.removed);
+        quote! {
+            SparkConfigEntry {
+                key: SparkConfigKey::#key_const_name,
+                default_value: #default_value,
+                alternatives: &[#(#alternatives),*],
+                fallback: #fallback,
+                is_static: #is_static,
+                deprecated: #deprecated,
+                removed: #removed,
+            }
+        }
+    };
+
+    let mut entries = Vec::new();
+    for variants in entries_by_key.values_mut() {
+        variants.sort_by_key(|(_, versions)| versions[0]);
+        entries.extend(variants.iter().cloned());
+    }
+
+    let mut entry_names = BTreeMap::new();
+    let mut entry_definitions = Vec::with_capacity(entries.len());
+    for (entry, versions) in &entries {
+        let name = format_ident!(
+            "_SPARK_CONFIG_ENTRY_V{}_{}",
+            versions[0].replace('.', "_"),
+            key_const_name(&entry.key),
+        );
+        for version in versions {
+            entry_names.insert(((*version).to_string(), entry.key.clone()), name.clone());
+        }
+        let doc = if entry.doc.is_empty() {
+            "(Missing documentation)"
+        } else {
+            &entry.doc
+        };
+        let entry = entry_to_token_stream(entry);
+        entry_definitions.push(quote! {
+            #[doc = #doc]
+            static #name: SparkConfigEntry<'static> = #entry;
+        });
+    }
+
+    let config_maps = configs
         .iter()
-        .map(|entry| {
-            let key = &entry.key;
-            let default_value = match &entry.default_value {
-                None => quote! { None },
-                Some(x) => quote! { Some(#x) },
-            };
-            let alternatives = &entry.alternatives;
-            let fallback = match &entry.fallback {
-                None => quote! { None },
-                Some(x) => {
-                    quote! { Some(#x) }
-                }
-            };
-            let is_static = entry.is_static;
-            let deprecated = notice_to_token_stream(&entry.deprecated);
-            let removed = notice_to_token_stream(&entry.removed);
+        .map(|(version, config)| {
+            let name = format_ident!("SPARK_CONFIG_V{}", version.replace('.', "_"));
+            let macro_name = format_ident!("spark_config_map_v{}", version.replace('.', "_"));
+            let map_entries = config.entries.iter().map(|entry| {
+                let key = &entry.key;
+                let entry_name = &entry_names[&((*version).to_string(), key.clone())];
+                quote! { #key => &#entry_name, }
+            });
+            // We define the map in a separate macro to avoid slowing down the IDE
+            // when previewing the definitions of the versioned config maps.
             quote! {
-                #key => SparkConfigEntry {
-                    key: #key,
-                    default_value: #default_value,
-                    alternatives: &[#(#alternatives),*],
-                    fallback: #fallback,
-                    is_static: #is_static,
-                    deprecated: #deprecated,
-                    removed: #removed,
-                },
+                macro_rules! #macro_name {
+                    () => { phf::phf_map! { #(#map_entries)* } }
+                }
+
+                pub static #name: phf::Map<&'static str, &'static SparkConfigEntry<'static>> =
+                    #macro_name!();
             }
         })
         .collect::<Vec<_>>();
@@ -218,15 +259,15 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
             pub comment: &'a str,
         }
 
-        #(#keys)*
+        pub struct SparkConfigKey;
 
-        // We define the map in a separate macro to avoid slowing down the IDE
-        // when previewing the definition of `SPARK_CONFIG`.
-        macro_rules! spark_config_map {
-            () => { phf::phf_map! { #(#entries)* } }
+        impl SparkConfigKey {
+            #(#keys)*
         }
 
-        pub static SPARK_CONFIG: phf::Map<&'static str, SparkConfigEntry<'static>> = spark_config_map!();
+        #(#entry_definitions)*
+
+        #(#config_maps)*
     };
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
@@ -240,6 +281,6 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     build_proto()?;
-    build_spark_config()?;
+    build_spark_config(&["3.5", "4.0", "4.1", "4.2"])?;
     Ok(())
 }

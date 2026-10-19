@@ -1,0 +1,1902 @@
+- name: "ascii"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Ascii"
+  signatures:
+    - "ascii(str)"
+  usage: "ascii(str) - Returns the numeric value of the first character of `str`."
+  examples: |2-
+    
+        Examples:
+          > SELECT ascii('222');
+           50
+          > SELECT ascii(2);
+           50
+      
+  since: "1.5.0"
+
+- name: "base64"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Base64"
+  signatures:
+    - "base64(bin)"
+  usage: "base64(bin) - Converts the argument from a binary `bin` to a base 64 string."
+  examples: |2-
+    
+        Examples:
+          > SELECT base64('Spark SQL');
+           U3BhcmsgU1FM
+          > SELECT base64(x'537061726b2053514c');
+           U3BhcmsgU1FM
+      
+  since: "1.5.0"
+
+- name: "bit_length"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitLength"
+  signatures:
+    - "bit_length(expr)"
+  usage: "bit_length(expr) - Returns the bit length of string data or number of bits of binary data."
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_length('Spark SQL');
+           72
+          > SELECT bit_length(x'537061726b2053514c');
+           72
+      
+  since: "2.3.0"
+
+- name: "btrim"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringTrimBoth"
+  signatures:
+    - "btrim(str)"
+    - "btrim(str, trimStr)"
+  usage: |2-
+    
+        btrim(str) - Removes the leading and trailing space characters from `str`.
+    
+        btrim(str, trimStr) - Remove the leading and trailing `trimStr` characters from `str`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * trimStr - the trim string characters to trim, the default value is a single space
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT btrim('    SparkSQL   ');
+           SparkSQL
+          > SELECT btrim(encode('    SparkSQL   ', 'utf-8'));
+           SparkSQL
+          > SELECT btrim('SSparkSQLS', 'SL');
+           parkSQ
+          > SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8'));
+           parkSQ
+      
+  since: "3.2.0"
+
+- name: "char"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Chr"
+  signatures:
+    - "char(expr)"
+  usage: "char(expr) - Returns the ASCII character having the binary equivalent to `expr`. If n is larger than 256 the result is equivalent to chr(n % 256)"
+  examples: |2-
+    
+        Examples:
+          > SELECT char(65);
+           A
+      
+  since: "2.3.0"
+
+- name: "char_length"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Length"
+  signatures:
+    - "char_length(expr)"
+  usage: "char_length(expr) - Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+  examples: |2-
+    
+        Examples:
+          > SELECT char_length('Spark SQL ');
+           10
+          > SELECT char_length(x'537061726b2053514c');
+           9
+          > SELECT CHAR_LENGTH('Spark SQL ');
+           10
+          > SELECT CHARACTER_LENGTH('Spark SQL ');
+           10
+      
+  since: "2.3.0"
+
+- name: "character_length"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Length"
+  signatures:
+    - "character_length(expr)"
+  usage: "character_length(expr) - Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+  examples: |2-
+    
+        Examples:
+          > SELECT character_length('Spark SQL ');
+           10
+          > SELECT character_length(x'537061726b2053514c');
+           9
+          > SELECT CHAR_LENGTH('Spark SQL ');
+           10
+          > SELECT CHARACTER_LENGTH('Spark SQL ');
+           10
+      
+  since: "2.3.0"
+
+- name: "chr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Chr"
+  signatures:
+    - "chr(expr)"
+  usage: "chr(expr) - Returns the ASCII character having the binary equivalent to `expr`. If n is larger than 256 the result is equivalent to chr(n % 256)"
+  examples: |2-
+    
+        Examples:
+          > SELECT chr(65);
+           A
+      
+  since: "2.3.0"
+
+- name: "collate"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.CollateExpressionBuilder"
+  signatures:
+    - "collate(expr, collationName)"
+  usage: "collate(expr, collationName) - Marks a given expression with the specified collation."
+  arguments: |2-
+    
+        Arguments:
+          * expr - String expression to perform collation on.
+          * collationName - Foldable string expression that specifies the collation name.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT COLLATION('Spark SQL' collate UTF8_LCASE);
+          SYSTEM.BUILTIN.UTF8_LCASE
+      
+  since: "4.0.0"
+
+- name: "collation"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Collation"
+  signatures:
+    - "collation(expr)"
+  usage: "collation(expr) - Returns the collation name of a given expression."
+  arguments: |2-
+    
+        Arguments:
+          * expr - String expression to perform collation on.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT collation('Spark SQL');
+          SYSTEM.BUILTIN.UTF8_BINARY
+      
+  since: "4.0.0"
+
+- name: "concat_ws"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ConcatWs"
+  signatures:
+    - "concat_ws(sep[, str | array(str)]+)"
+  usage: "concat_ws(sep[, str | array(str)]+) - Returns the concatenation of the strings separated by `sep`, skipping null values."
+  examples: |2-
+    
+        Examples:
+          > SELECT concat_ws(' ', 'Spark', 'SQL');
+            Spark SQL
+          > SELECT concat_ws('s');
+    
+          > SELECT concat_ws('/', 'foo', null, 'bar');
+            foo/bar
+          > SELECT concat_ws(null, 'Spark', 'SQL');
+            NULL
+      
+  since: "1.5.0"
+
+- name: "contains"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ContainsExpressionBuilder"
+  signatures:
+    - "contains(left, right)"
+  usage: |2-
+    
+        contains(left, right) - Returns a boolean. The value is True if right is found inside left.
+        Returns NULL if either input expression is NULL. Otherwise, returns False.
+        Both left or right must be of STRING or BINARY type.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT contains('Spark SQL', 'Spark');
+           true
+          > SELECT contains('Spark SQL', 'SPARK');
+           false
+          > SELECT contains('Spark SQL', null);
+           NULL
+          > SELECT contains(x'537061726b2053514c', x'537061726b');
+           true
+      
+  since: "3.3.0"
+
+- name: "decode"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Decode"
+  signatures:
+    - "decode(bin, charset)"
+    - "decode(expr, search, result [, search, result ] ... [, default])"
+  usage: |2-
+    
+        decode(bin, charset) - Decodes the first argument using the second argument character set. If either argument is null, the result will also be null.
+    
+        decode(expr, search, result [, search, result ] ... [, default]) - Compares expr
+          to each search value in order. If expr is equal to a search value, decode returns
+          the corresponding result. If no match is found, then it returns default. If default
+          is omitted, it returns null.
+      
+  arguments: |2-
+    
+        Arguments:
+          * bin - a binary expression to decode
+          * charset - one of the charsets 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16', 'UTF-32' to decode `bin` into a STRING. It is case insensitive.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT decode(encode('abc', 'utf-8'), 'utf-8');
+           abc
+          > SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
+           San Francisco
+          > SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
+           Non domestic
+          > SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');
+           NULL
+          > SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');
+           SQL
+      
+  note: |2-
+    
+        decode(expr, search, result [, search, result ] ... [, default]) is supported since 3.2.0
+      
+  since: "1.5.0"
+
+- name: "elt"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Elt"
+  signatures:
+    - "elt(n, input1, input2, ...)"
+  usage: |2-
+    
+        elt(n, input1, input2, ...) - Returns the `n`-th input, e.g., returns `input2` when `n` is 2.
+        The function returns NULL if the index exceeds the length of the array
+        and `spark.sql.ansi.enabled` is set to false. If `spark.sql.ansi.enabled` is set to true,
+        it throws ArrayIndexOutOfBoundsException for invalid indices.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT elt(1, 'scala', 'java');
+           scala
+          > SELECT elt(2, 'a', 1);
+           1
+      
+  since: "2.0.0"
+
+- name: "encode"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Encode"
+  signatures:
+    - "encode(str, charset)"
+  usage: "encode(str, charset) - Encodes the first argument using the second argument character set. If either argument is null, the result will also be null."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * charset - one of the charsets 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16', 'UTF-32' to encode `str` into a BINARY. It is case insensitive.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT encode('abc', 'utf-8');
+           abc
+      
+  since: "1.5.0"
+
+- name: "endswith"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.EndsWithExpressionBuilder"
+  signatures:
+    - "endswith(left, right)"
+  usage: |2-
+    
+        endswith(left, right) - Returns a boolean. The value is True if left ends with right.
+        Returns NULL if either input expression is NULL. Otherwise, returns False.
+        Both left or right must be of STRING or BINARY type.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT endswith('Spark SQL', 'SQL');
+           true
+          > SELECT endswith('Spark SQL', 'Spark');
+           false
+          > SELECT endswith('Spark SQL', null);
+           NULL
+          > SELECT endswith(x'537061726b2053514c', x'537061726b');
+           false
+          > SELECT endswith(x'537061726b2053514c', x'53514c');
+           true
+      
+  since: "3.3.0"
+
+- name: "find_in_set"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.FindInSet"
+  signatures:
+    - "find_in_set(str, str_array)"
+  usage: |2-
+    
+        find_in_set(str, str_array) - Returns the index (1-based) of the given string (`str`) in the comma-delimited list (`str_array`).
+          Returns 0, if the string was not found or if the given string (`str`) contains a comma.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT find_in_set('ab','abc,b,ab,c,def');
+           3
+      
+  since: "1.5.0"
+
+- name: "format_number"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.FormatNumber"
+  signatures:
+    - "format_number(expr1, expr2)"
+  usage: |2-
+    
+        format_number(expr1, expr2) - Formats the number `expr1` like '#,###,###.##', rounded to `expr2`
+          decimal places. If `expr2` is 0, the result has no decimal point or fractional part.
+          `expr2` also accept a user specified format.
+          This is supposed to function like MySQL's FORMAT.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT format_number(12332.123456, 4);
+           12,332.1235
+          > SELECT format_number(12332.123456, '##################.###');
+           12332.123
+      
+  since: "1.5.0"
+
+- name: "format_string"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.FormatString"
+  signatures:
+    - "format_string(strfmt, obj, ...)"
+  usage: "format_string(strfmt, obj, ...) - Returns a formatted string from printf-style format strings."
+  examples: |2-
+    
+        Examples:
+          > SELECT format_string("Hello World %d %s", 100, "days");
+           Hello World 100 days
+      
+  since: "1.5.0"
+
+- name: "initcap"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.InitCap"
+  signatures:
+    - "initcap(str)"
+  usage: |2-
+    
+        initcap(str) - Returns `str` with the first letter of each word in uppercase.
+          All other letters are in lowercase. Words are delimited by white space.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT initcap('sPark sql');
+           Spark Sql
+      
+  since: "1.5.0"
+
+- name: "instr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringInstr"
+  signatures:
+    - "instr(str, substr)"
+  usage: "instr(str, substr) - Returns the (1-based) index of the first occurrence of `substr` in `str`."
+  examples: |2-
+    
+        Examples:
+          > SELECT instr('SparkSQL', 'SQL');
+           6
+      
+  since: "1.5.0"
+
+- name: "is_valid_utf8"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.IsValidUTF8"
+  signatures:
+    - "is_valid_utf8(str)"
+  usage: "is_valid_utf8(str) - Returns true if `str` is a valid UTF-8 string, otherwise returns false."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT is_valid_utf8('Spark');
+           true
+          > SELECT is_valid_utf8(x'61');
+           true
+          > SELECT is_valid_utf8(x'80');
+           false
+          > SELECT is_valid_utf8(x'61C262');
+           false
+      
+  since: "4.0.0"
+
+- name: "lcase"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Lower"
+  signatures:
+    - "lcase(str)"
+  usage: "lcase(str) - Returns `str` with all characters changed to lowercase."
+  examples: |2-
+    
+        Examples:
+          > SELECT lcase('SparkSql');
+           sparksql
+      
+  since: "1.0.1"
+
+- name: "left"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Left"
+  signatures:
+    - "left(str, len)"
+  usage: "left(str, len) - Returns the leftmost `len`(`len` can be string type) characters from the string `str`,if `len` is less or equal than 0 the result is an empty string."
+  examples: |2-
+    
+        Examples:
+          > SELECT left('Spark SQL', 3);
+           Spa
+          > SELECT left(encode('Spark SQL', 'utf-8'), 3);
+           Spa
+      
+  since: "2.3.0"
+
+- name: "len"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Length"
+  signatures:
+    - "len(expr)"
+  usage: "len(expr) - Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+  examples: |2-
+    
+        Examples:
+          > SELECT len('Spark SQL ');
+           10
+          > SELECT len(x'537061726b2053514c');
+           9
+          > SELECT CHAR_LENGTH('Spark SQL ');
+           10
+          > SELECT CHARACTER_LENGTH('Spark SQL ');
+           10
+      
+  since: "3.4.0"
+
+- name: "length"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Length"
+  signatures:
+    - "length(expr)"
+  usage: "length(expr) - Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+  examples: |2-
+    
+        Examples:
+          > SELECT length('Spark SQL ');
+           10
+          > SELECT length(x'537061726b2053514c');
+           9
+          > SELECT CHAR_LENGTH('Spark SQL ');
+           10
+          > SELECT CHARACTER_LENGTH('Spark SQL ');
+           10
+      
+  since: "1.5.0"
+
+- name: "levenshtein"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Levenshtein"
+  signatures:
+    - "levenshtein(str1, str2[, threshold])"
+  usage: |2-
+    
+        levenshtein(str1, str2[, threshold]) - Returns the Levenshtein distance between the two given strings. If threshold is set and distance more than it, return -1.
+  examples: |2-
+    
+        Examples:
+          > SELECT levenshtein('kitten', 'sitting');
+           3
+          > SELECT levenshtein('kitten', 'sitting', 2);
+           -1
+      
+  since: "1.5.0"
+
+- name: "locate"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringLocate"
+  signatures:
+    - "locate(substr, str[, pos])"
+  usage: |2-
+    
+        locate(substr, str[, pos]) - Returns the position of the first occurrence of `substr` in `str` after position `pos`.
+          The given `pos` and return value are 1-based.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT locate('bar', 'foobarbar');
+           4
+          > SELECT locate('bar', 'foobarbar', 5);
+           7
+          > SELECT POSITION('bar' IN 'foobarbar');
+           4
+      
+  since: "1.5.0"
+
+- name: "lower"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Lower"
+  signatures:
+    - "lower(str)"
+  usage: "lower(str) - Returns `str` with all characters changed to lowercase."
+  examples: |2-
+    
+        Examples:
+          > SELECT lower('SparkSql');
+           sparksql
+      
+  since: "1.0.1"
+
+- name: "lpad"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.LPadExpressionBuilder"
+  signatures:
+    - "lpad(str, len[, pad])"
+  usage: |2-
+    
+        lpad(str, len[, pad]) - Returns `str`, left-padded with `pad` to a length of `len`.
+          If `str` is longer than `len`, the return value is shortened to `len` characters or bytes.
+          If `pad` is not specified, `str` will be padded to the left with space characters if it is
+          a character string, and with zeros if it is a byte sequence.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT lpad('hi', 5, '??');
+           ???hi
+          > SELECT lpad('hi', 1, '??');
+           h
+          > SELECT lpad('hi', 5);
+              hi
+          > SELECT hex(lpad(unhex('aabb'), 5));
+           000000AABB
+          > SELECT hex(lpad(unhex('aabb'), 5, unhex('1122')));
+           112211AABB
+      
+  since: "1.5.0"
+
+- name: "ltrim"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringTrimLeft"
+  signatures:
+    - "ltrim(str)"
+  usage: |2-
+    
+        ltrim(str) - Removes the leading space characters from `str`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * trimStr - the trim string characters to trim, the default value is a single space
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT ltrim('    SparkSQL   ');
+           SparkSQL
+      
+  since: "1.5.0"
+
+- name: "luhn_check"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Luhncheck"
+  signatures:
+    - "luhn_check(str )"
+  usage: |2-
+    
+        luhn_check(str ) - Checks that a string of digits is valid according to the Luhn algorithm.
+        This checksum function is widely applied on credit card numbers and government identification
+        numbers to distinguish valid numbers from mistyped, incorrect numbers.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT luhn_check('8112189876');
+           true
+          > SELECT luhn_check('79927398713');
+           true
+          > SELECT luhn_check('79927398714');
+           false
+      
+  since: "3.5.0"
+
+- name: "make_valid_utf8"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeValidUTF8"
+  signatures:
+    - "make_valid_utf8(str)"
+  usage: "make_valid_utf8(str) - Returns the original string if `str` is a valid UTF-8 string, otherwise returns a new string whose invalid UTF8 byte sequences are replaced using the UNICODE replacement character U+FFFD."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT make_valid_utf8('Spark');
+           Spark
+          > SELECT make_valid_utf8(x'61');
+           a
+          > SELECT make_valid_utf8(x'80');
+           �
+          > SELECT make_valid_utf8(x'61C262');
+           a�b
+      
+  since: "4.0.0"
+
+- name: "mask"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.MaskExpressionBuilder"
+  signatures:
+    - "mask(input[, upperChar, lowerChar, digitChar, otherChar])"
+  usage: |2-
+    mask(input[, upperChar, lowerChar, digitChar, otherChar]) - masks the given string value.
+           The function replaces characters with 'X' or 'x', and numbers with 'n'.
+           This can be useful for creating copies of tables with sensitive information removed.
+          
+  arguments: |2-
+    
+        Arguments:
+          * input      - string value to mask. Supported types: STRING, VARCHAR, CHAR
+          * upperChar  - character to replace upper-case characters with. Specify NULL to retain original character. Default value: 'X'
+          * lowerChar  - character to replace lower-case characters with. Specify NULL to retain original character. Default value: 'x'
+          * digitChar  - character to replace digit characters with. Specify NULL to retain original character. Default value: 'n'
+          * otherChar  - character to replace all other characters with. Specify NULL to retain original character. Default value: NULL
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT mask('abcd-EFGH-8765-4321');
+            xxxx-XXXX-nnnn-nnnn
+          > SELECT mask('abcd-EFGH-8765-4321', 'Q');
+            xxxx-QQQQ-nnnn-nnnn
+          > SELECT mask('AbCD123-@$#', 'Q', 'q');
+            QqQQnnn-@$#
+          > SELECT mask('AbCD123-@$#');
+            XxXXnnn-@$#
+          > SELECT mask('AbCD123-@$#', 'Q');
+            QxQQnnn-@$#
+          > SELECT mask('AbCD123-@$#', 'Q', 'q');
+            QqQQnnn-@$#
+          > SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');
+            QqQQddd-@$#
+          > SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');
+            QqQQdddoooo
+          > SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o');
+            AqCDdddoooo
+          > SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o');
+            AbCDdddoooo
+          > SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o');
+            AbCD123oooo
+          > SELECT mask(NULL, NULL, NULL, NULL, 'o');
+            NULL
+          > SELECT mask(NULL);
+            NULL
+          > SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL);
+            AbCD123-@$#
+      
+  since: "3.4.0"
+
+- name: "octet_length"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.OctetLength"
+  signatures:
+    - "octet_length(expr)"
+  usage: "octet_length(expr) - Returns the byte length of string data or number of bytes of binary data."
+  examples: |2-
+    
+        Examples:
+          > SELECT octet_length('Spark SQL');
+           9
+          > SELECT octet_length(x'537061726b2053514c');
+           9
+      
+  since: "2.3.0"
+
+- name: "overlay"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Overlay"
+  signatures:
+    - "overlay(input, replace, pos[, len])"
+  usage: "overlay(input, replace, pos[, len]) - Replace `input` with `replace` that starts at `pos` and is of length `len`."
+  examples: |2-
+    
+        Examples:
+          > SELECT overlay('Spark SQL' PLACING '_' FROM 6);
+           Spark_SQL
+          > SELECT overlay('Spark SQL' PLACING 'CORE' FROM 7);
+           Spark CORE
+          > SELECT overlay('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0);
+           Spark ANSI SQL
+          > SELECT overlay('Spark SQL' PLACING 'tructured' FROM 2 FOR 4);
+           Structured SQL
+          > SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('_', 'utf-8') FROM 6);
+           Spark_SQL
+          > SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('CORE', 'utf-8') FROM 7);
+           Spark CORE
+          > SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('ANSI ', 'utf-8') FROM 7 FOR 0);
+           Spark ANSI SQL
+          > SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('tructured', 'utf-8') FROM 2 FOR 4);
+           Structured SQL
+      
+  since: "3.0.0"
+
+- name: "position"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringLocate"
+  signatures:
+    - "position(substr, str[, pos])"
+  usage: |2-
+    
+        position(substr, str[, pos]) - Returns the position of the first occurrence of `substr` in `str` after position `pos`.
+          The given `pos` and return value are 1-based.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT position('bar', 'foobarbar');
+           4
+          > SELECT position('bar', 'foobarbar', 5);
+           7
+          > SELECT POSITION('bar' IN 'foobarbar');
+           4
+      
+  since: "2.3.0"
+
+- name: "printf"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.FormatString"
+  signatures:
+    - "printf(strfmt, obj, ...)"
+  usage: "printf(strfmt, obj, ...) - Returns a formatted string from printf-style format strings."
+  examples: |2-
+    
+        Examples:
+          > SELECT printf("Hello World %d %s", 100, "days");
+           Hello World 100 days
+      
+  since: "1.5.0"
+
+- name: "quote"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Quote"
+  signatures:
+    - "quote(str)"
+  usage: "quote(str) - Returns `str` enclosed by single quotes and each instance of single quote in it is preceded by a backslash."
+  examples: |2-
+    
+        Examples:
+          > SELECT quote('Don\'t');
+           'Don\'t'
+      
+  since: "4.1.0"
+
+- name: "randstr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RandStr"
+  signatures:
+    - "randstr(length[, seed])"
+  usage: |2-
+    
+        randstr(length[, seed]) - Returns a string of the specified length whose characters are chosen
+          uniformly at random from the following pool of characters: 0-9, a-z, A-Z. The random seed is
+          optional. The string length must be a constant two-byte or four-byte integer (SMALLINT or INT,
+          respectively).
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT randstr(3, 0) AS result;
+           ceV
+      
+  since: "4.0.0"
+
+- name: "regexp_count"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpCount"
+  signatures:
+    - "regexp_count(str, regexp)"
+  usage: |2-
+    
+        regexp_count(str, regexp) - Returns a count of the number of times that the regular expression pattern `regexp` is matched in the string `str`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression.
+          * regexp - a string representing a regular expression. The regex string should be a
+              Java regular expression.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
+           2
+          > SELECT regexp_count('abcdefghijklmnopqrstuvwxyz', '[a-z]{3}');
+           8
+      
+  since: "3.4.0"
+
+- name: "regexp_extract"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpExtract"
+  signatures:
+    - "regexp_extract(str, regexp[, idx])"
+  usage: |2-
+    
+        regexp_extract(str, regexp[, idx]) - Extract the first string in the `str` that match the `regexp`
+        expression and corresponding to the regex group index.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression.
+          * regexp - a string representing a regular expression. The regex string should be a
+              Java regular expression.<br><br>
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".<br><br>
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+          * idx - an integer expression that representing the group index. The regex maybe contains
+              multiple groups. `idx` indicates which regex group to extract. The group index should
+              be non-negative. The minimum value of `idx` is 0, which means matching the entire
+              regular expression. If `idx` is not specified, the default group index value is 1. The
+              `idx` parameter is the Java regex Matcher group() method index.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_extract('100-200', '(\\d+)-(\\d+)', 1);
+           100
+          > SELECT regexp_extract('100-200', r'(\d+)-(\d+)', 1);
+           100
+      
+  since: "1.5.0"
+
+- name: "regexp_extract_all"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpExtractAll"
+  signatures:
+    - "regexp_extract_all(str, regexp[, idx])"
+  usage: |2-
+    
+        regexp_extract_all(str, regexp[, idx]) - Extract all strings in the `str` that match the `regexp`
+        expression and corresponding to the regex group index.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression.
+          * regexp - a string representing a regular expression. The regex string should be a
+              Java regular expression.<br><br>
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".<br><br>
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+          * idx - an integer expression that representing the group index. The regex may contains
+              multiple groups. `idx` indicates which regex group to extract. The group index should
+              be non-negative. The minimum value of `idx` is 0, which means matching the entire
+              regular expression. If `idx` is not specified, the default group index value is 1. The
+              `idx` parameter is the Java regex Matcher group() method index.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_extract_all('100-200, 300-400', '(\\d+)-(\\d+)', 1);
+           ["100","300"]
+          > SELECT regexp_extract_all('100-200, 300-400', r'(\d+)-(\d+)', 1);
+           ["100","300"]
+      
+  since: "3.1.0"
+
+- name: "regexp_instr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpInStr"
+  signatures:
+    - "regexp_instr(str, regexp)"
+  usage: |2-
+    
+        regexp_instr(str, regexp) - Searches a string for a regular expression and returns an integer that indicates the beginning position of the matched substring. Positions are 1-based, not 0-based. If no match is found, returns 0.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression.
+          * regexp - a string representing a regular expression. The regex string should be a
+              Java regular expression.<br><br>
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".<br><br>
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_instr(r"\abc", r"^\\abc$");
+           1
+          > SELECT regexp_instr('user@spark.apache.org', '@[^.]*');
+           5
+      
+  since: "3.4.0"
+
+- name: "regexp_replace"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpReplace"
+  signatures:
+    - "regexp_replace(str, regexp, rep[, position])"
+  usage: "regexp_replace(str, regexp, rep[, position]) - Replaces all substrings of `str` that match `regexp` with `rep`."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression to search for a regular expression pattern match.
+          * regexp - a string representing a regular expression. The regex string should be a
+              Java regular expression.<br><br>
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".<br><br>
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+          * rep - a string expression to replace matched substrings.
+          * position - a positive integer literal that indicates the position within `str` to begin searching.
+              The default is 1. If position is greater than the number of characters in `str`, the result is `str`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_replace('100-200', '(\\d+)', 'num');
+           num-num
+          > SELECT regexp_replace('100-200', r'(\d+)', 'num');
+           num-num
+      
+  since: "1.5.0"
+
+- name: "regexp_substr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RegExpSubStr"
+  signatures:
+    - "regexp_substr(str, regexp)"
+  usage: |2-
+    
+        regexp_substr(str, regexp) - Returns the substring that matches the regular expression `regexp` within the string `str`. If the regular expression is not found, the result is null.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression.
+          * regexp - a string representing a regular expression. The regex string should be a Java regular expression.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
+           Steven
+          > SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Jeck');
+           NULL
+      
+  since: "3.4.0"
+
+- name: "repeat"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringRepeat"
+  signatures:
+    - "repeat(str, n)"
+  usage: "repeat(str, n) - Returns the string which repeats the given string value n times."
+  examples: |2-
+    
+        Examples:
+          > SELECT repeat('123', 2);
+           123123
+      
+  since: "1.5.0"
+
+- name: "replace"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringReplace"
+  signatures:
+    - "replace(str, search[, replace])"
+  usage: "replace(str, search[, replace]) - Replaces all occurrences of `search` with `replace`."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * search - a string expression. If `search` is not found in `str`, `str` is returned unchanged.
+          * replace - a string expression. If `replace` is not specified or is an empty string, nothing replaces
+              the string that is removed from `str`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT replace('ABCabc', 'abc', 'DEF');
+           ABCDEF
+      
+  since: "2.3.0"
+
+- name: "right"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Right"
+  signatures:
+    - "right(str, len)"
+  usage: "right(str, len) - Returns the rightmost `len`(`len` can be string type) characters from the string `str`,if `len` is less or equal than 0 the result is an empty string."
+  examples: |2-
+    
+        Examples:
+          > SELECT right('Spark SQL', 3);
+           SQL
+      
+  since: "2.3.0"
+
+- name: "rpad"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RPadExpressionBuilder"
+  signatures:
+    - "rpad(str, len[, pad])"
+  usage: |2-
+    
+        rpad(str, len[, pad]) - Returns `str`, right-padded with `pad` to a length of `len`.
+          If `str` is longer than `len`, the return value is shortened to `len` characters.
+          If `pad` is not specified, `str` will be padded to the right with space characters if it is
+          a character string, and with zeros if it is a binary string.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT rpad('hi', 5, '??');
+           hi???
+          > SELECT rpad('hi', 1, '??');
+           h
+          > SELECT rpad('hi', 5);
+           hi
+          > SELECT hex(rpad(unhex('aabb'), 5));
+           AABB000000
+          > SELECT hex(rpad(unhex('aabb'), 5, unhex('1122')));
+           AABB112211
+      
+  since: "1.5.0"
+
+- name: "rtrim"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringTrimRight"
+  signatures:
+    - "rtrim(str)"
+  usage: |2-
+    
+        rtrim(str) - Removes the trailing space characters from `str`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * trimStr - the trim string characters to trim, the default value is a single space
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT rtrim('    SparkSQL   ');
+           SparkSQL
+      
+  since: "1.5.0"
+
+- name: "sentences"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Sentences"
+  signatures:
+    - "sentences(str[, lang[, country]])"
+  usage: "sentences(str[, lang[, country]]) - Splits `str` into an array of array of words."
+  arguments: |2-
+    
+        Arguments:
+          * str - A STRING expression to be parsed.
+          * lang - An optional STRING expression with a language code from ISO 639 Alpha-2 (e.g. 'DE'),
+              Alpha-3, or a language subtag of up to 8 characters.
+          * country - An optional STRING expression with a country code from ISO 3166 alpha-2 country
+              code or a UN M.49 numeric-3 area code.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sentences('Hi there! Good morning.');
+           [["Hi","there"],["Good","morning"]]
+          > SELECT sentences('Hi there! Good morning.', 'en');
+           [["Hi","there"],["Good","morning"]]
+          > SELECT sentences('Hi there! Good morning.', 'en', 'US');
+           [["Hi","there"],["Good","morning"]]
+      
+  since: "2.0.0"
+
+- name: "soundex"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.SoundEx"
+  signatures:
+    - "soundex(str)"
+  usage: "soundex(str) - Returns Soundex code of the string."
+  examples: |2-
+    
+        Examples:
+          > SELECT soundex('Miller');
+           M460
+      
+  since: "1.5.0"
+
+- name: "space"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringSpace"
+  signatures:
+    - "space(n)"
+  usage: "space(n) - Returns a string consisting of `n` spaces."
+  examples: |2-
+    
+        Examples:
+          > SELECT concat(space(2), '1');
+             1
+      
+  since: "1.5.0"
+
+- name: "split"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringSplit"
+  signatures:
+    - "split(str, regex, limit)"
+  usage: "split(str, regex, limit) - Splits `str` around occurrences that match `regex` and returns an array with a length of at most `limit`"
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression to split.
+          * regex - a string representing a regular expression. The regex string should be a
+            Java regular expression.
+          * limit - an integer expression which controls the number of times the regex is applied.
+              * limit > 0: The resulting array's length will not be more than `limit`,
+                and the resulting array's last entry will contain all input
+                beyond the last matched regex.
+              * limit <= 0: `regex` will be applied as many times as possible, and
+                the resulting array can be of any size.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT split('oneAtwoBthreeC', '[ABC]');
+           ["one","two","three",""]
+          > SELECT split('oneAtwoBthreeC', '[ABC]', -1);
+           ["one","two","three",""]
+          > SELECT split('oneAtwoBthreeC', '[ABC]', 2);
+           ["one","twoBthreeC"]
+      
+  since: "1.5.0"
+
+- name: "split_part"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.SplitPart"
+  signatures:
+    - "split_part(str, delimiter, partNum)"
+  usage: |2-
+    
+        split_part(str, delimiter, partNum) - Splits `str` by delimiter and return
+          requested part of the split (1-based). If any input is null, returns null.
+          if `partNum` is out of range of split parts, returns empty string. If `partNum` is 0,
+          throws an error. If `partNum` is negative, the parts are counted backward from the
+          end of the string. If the `delimiter` is an empty string, the `str` is not split.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT split_part('11.12.13', '.', 3);
+           13
+      
+  since: "3.3.0"
+
+- name: "startswith"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StartsWithExpressionBuilder"
+  signatures:
+    - "startswith(left, right)"
+  usage: |2-
+    
+        startswith(left, right) - Returns a boolean. The value is True if left starts with right.
+        Returns NULL if either input expression is NULL. Otherwise, returns False.
+        Both left or right must be of STRING or BINARY type.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT startswith('Spark SQL', 'Spark');
+           true
+          > SELECT startswith('Spark SQL', 'SQL');
+           false
+          > SELECT startswith('Spark SQL', null);
+           NULL
+          > SELECT startswith(x'537061726b2053514c', x'537061726b');
+           true
+          > SELECT startswith(x'537061726b2053514c', x'53514c');
+           false
+      
+  since: "3.3.0"
+
+- name: "strpos"
+  scope: "sail_extension"
+  signatures:
+    - "strpos(str, substr)"
+  usage: "strpos(str, substr) - Returns the 1-based position of substr in str, or 0 if substr is not found."
+
+- name: "substr"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Substring"
+  signatures:
+    - "substr(str, pos[, len])"
+    - "substr(str FROM pos[ FOR len]])"
+  usage: |2-
+    
+        substr(str, pos[, len]) - Returns the substring of `str` that starts at `pos` and is of length `len`, or the slice of byte array that starts at `pos` and is of length `len`.
+    
+        substr(str FROM pos[ FOR len]]) - Returns the substring of `str` that starts at `pos` and is of length `len`, or the slice of byte array that starts at `pos` and is of length `len`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substr('Spark SQL', 5);
+           k SQL
+          > SELECT substr('Spark SQL', -3);
+           SQL
+          > SELECT substr('Spark SQL', 5, 1);
+           k
+          > SELECT substr('Spark SQL' FROM 5);
+           k SQL
+          > SELECT substr('Spark SQL' FROM -3);
+           SQL
+          > SELECT substr('Spark SQL' FROM 5 FOR 1);
+           k
+          > SELECT substr(encode('Spark SQL', 'utf-8'), 5);
+           k SQL
+      
+  since: "1.5.0"
+
+- name: "substring"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Substring"
+  signatures:
+    - "substring(str, pos[, len])"
+    - "substring(str FROM pos[ FOR len]])"
+  usage: |2-
+    
+        substring(str, pos[, len]) - Returns the substring of `str` that starts at `pos` and is of length `len`, or the slice of byte array that starts at `pos` and is of length `len`.
+    
+        substring(str FROM pos[ FOR len]]) - Returns the substring of `str` that starts at `pos` and is of length `len`, or the slice of byte array that starts at `pos` and is of length `len`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substring('Spark SQL', 5);
+           k SQL
+          > SELECT substring('Spark SQL', -3);
+           SQL
+          > SELECT substring('Spark SQL', 5, 1);
+           k
+          > SELECT substring('Spark SQL' FROM 5);
+           k SQL
+          > SELECT substring('Spark SQL' FROM -3);
+           SQL
+          > SELECT substring('Spark SQL' FROM 5 FOR 1);
+           k
+          > SELECT substring(encode('Spark SQL', 'utf-8'), 5);
+           k SQL
+      
+  since: "1.5.0"
+
+- name: "substring_index"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.SubstringIndex"
+  signatures:
+    - "substring_index(str, delim, count)"
+  usage: |2-
+    
+        substring_index(str, delim, count) - Returns the substring from `str` before `count` occurrences of the delimiter `delim`.
+          If `count` is positive, everything to the left of the final delimiter (counting from the
+          left) is returned. If `count` is negative, everything to the right of the final delimiter
+          (counting from the right) is returned. The function substring_index performs a case-sensitive match
+          when searching for `delim`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substring_index('www.apache.org', '.', 2);
+           www.apache
+      
+  since: "1.5.0"
+
+- name: "to_binary"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToBinary"
+  signatures:
+    - "to_binary(str[, fmt])"
+  usage: |2-
+    
+        to_binary(str[, fmt]) - Converts the input `str` to a binary value based on the supplied `fmt`.
+          `fmt` can be a case-insensitive string literal of "hex", "utf-8", "utf8", or "base64".
+          By default, the binary format for conversion is "hex" if `fmt` is omitted.
+          The function returns NULL if at least one of the input parameters is NULL.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_binary('abc', 'utf-8');
+           abc
+      
+  since: "3.3.0"
+
+- name: "to_char"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToCharacterBuilder"
+  signatures:
+    - "to_char(expr, format)"
+  usage: |2-
+    
+        to_char(expr, format) - Convert `expr` to a string based on the `format`.
+          Throws an exception if the conversion fails. The format can consist of the following
+          characters, case insensitive:
+            '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format
+              string matches a sequence of digits in the input value, generating a result string of the
+              same length as the corresponding sequence in the format string. The result string is
+              left-padded with zeros if the 0/9 sequence comprises more digits than the matching part of
+              the decimal value, starts with 0, and is before the decimal point. Otherwise, it is
+              padded with spaces.
+            '.' or 'D': Specifies the position of the decimal point (optional, only allowed once).
+            ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be
+              a 0 or 9 to the left and right of each grouping separator.
+            '$': Specifies the location of the $ currency sign. This character may only be specified
+              once.
+            'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at
+              the beginning or end of the format string). Note that 'S' prints '+' for positive values
+              but 'MI' prints a space.
+            'PR': Only allowed at the end of the format string; specifies that the result string will be
+              wrapped by angle brackets if the input value is negative.
+              ('<1>').
+          If `expr` is a datetime, `format` shall be a valid datetime pattern, see <a href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime Patterns</a>.
+          If `expr` is a binary, it is converted to a string in one of the formats:
+            'base64': a base 64 string.
+            'hex': a string in the hexadecimal format.
+            'utf-8': the input binary is decoded to UTF-8 string.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_char(454, '999');
+           454
+          > SELECT to_char(454.00, '000D00');
+           454.00
+          > SELECT to_char(12454, '99G999');
+           12,454
+          > SELECT to_char(78.12, '$99.99');
+           $78.12
+          > SELECT to_char(-12454.8, '99G999D9S');
+           12,454.8-
+          > SELECT to_char(date'2016-04-08', 'y');
+           2016
+          > SELECT to_char(x'537061726b2053514c', 'base64');
+           U3BhcmsgU1FM
+          > SELECT to_char(x'537061726b2053514c', 'hex');
+           537061726B2053514C
+          > SELECT to_char(encode('abc', 'utf-8'), 'utf-8');
+           abc
+      
+  since: "3.4.0"
+
+- name: "to_number"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToNumber"
+  signatures:
+    - "to_number(expr, fmt)"
+  usage: |2-
+    
+         to_number(expr, fmt) - Convert string 'expr' to a number based on the string format 'fmt'.
+           Throws an exception if the conversion fails. The format can consist of the following
+           characters, case insensitive:
+             '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format
+               string matches a sequence of digits in the input string. If the 0/9 sequence starts with
+               0 and is before the decimal point, it can only match a digit sequence of the same size.
+               Otherwise, if the sequence starts with 9 or is after the decimal point, it can match a
+               digit sequence that has the same or smaller size.
+             '.' or 'D': Specifies the position of the decimal point (optional, only allowed once).
+             ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be
+               a 0 or 9 to the left and right of each grouping separator. 'expr' must match the
+               grouping separator relevant for the size of the number.
+             '$': Specifies the location of the $ currency sign. This character may only be specified
+               once.
+             'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at
+               the beginning or end of the format string). Note that 'S' allows '-' but 'MI' does not.
+             'PR': Only allowed at the end of the format string; specifies that 'expr' indicates a
+               negative number with wrapping angled brackets.
+               ('<1>').
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_number('454', '999');
+           454
+          > SELECT to_number('454.00', '000.00');
+           454.00
+          > SELECT to_number('12,454', '99,999');
+           12454
+          > SELECT to_number('$78.12', '$99.99');
+           78.12
+          > SELECT to_number('12,454.8-', '99,999.9S');
+           -12454.8
+      
+  since: "3.3.0"
+
+- name: "to_varchar"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToCharacterBuilder"
+  signatures:
+    - "to_varchar(expr, format)"
+  usage: |2-
+    
+        to_varchar(expr, format) - Convert `expr` to a string based on the `format`.
+          Throws an exception if the conversion fails. The format can consist of the following
+          characters, case insensitive:
+            '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format
+              string matches a sequence of digits in the input value, generating a result string of the
+              same length as the corresponding sequence in the format string. The result string is
+              left-padded with zeros if the 0/9 sequence comprises more digits than the matching part of
+              the decimal value, starts with 0, and is before the decimal point. Otherwise, it is
+              padded with spaces.
+            '.' or 'D': Specifies the position of the decimal point (optional, only allowed once).
+            ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be
+              a 0 or 9 to the left and right of each grouping separator.
+            '$': Specifies the location of the $ currency sign. This character may only be specified
+              once.
+            'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at
+              the beginning or end of the format string). Note that 'S' prints '+' for positive values
+              but 'MI' prints a space.
+            'PR': Only allowed at the end of the format string; specifies that the result string will be
+              wrapped by angle brackets if the input value is negative.
+              ('<1>').
+          If `expr` is a datetime, `format` shall be a valid datetime pattern, see <a href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime Patterns</a>.
+          If `expr` is a binary, it is converted to a string in one of the formats:
+            'base64': a base 64 string.
+            'hex': a string in the hexadecimal format.
+            'utf-8': the input binary is decoded to UTF-8 string.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_varchar(454, '999');
+           454
+          > SELECT to_varchar(454.00, '000D00');
+           454.00
+          > SELECT to_varchar(12454, '99G999');
+           12,454
+          > SELECT to_varchar(78.12, '$99.99');
+           $78.12
+          > SELECT to_varchar(-12454.8, '99G999D9S');
+           12,454.8-
+          > SELECT to_varchar(date'2016-04-08', 'y');
+           2016
+          > SELECT to_varchar(x'537061726b2053514c', 'base64');
+           U3BhcmsgU1FM
+          > SELECT to_varchar(x'537061726b2053514c', 'hex');
+           537061726B2053514C
+          > SELECT to_varchar(encode('abc', 'utf-8'), 'utf-8');
+           abc
+      
+  since: "3.5.0"
+
+- name: "translate"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringTranslate"
+  signatures:
+    - "translate(input, from, to)"
+  usage: "translate(input, from, to) - Translates the `input` string by replacing the characters present in the `from` string with the corresponding characters in the `to` string."
+  examples: |2-
+    
+        Examples:
+          > SELECT translate('AaBbCc', 'abc', '123');
+           A1B2C3
+      
+  since: "1.5.0"
+
+- name: "trim"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StringTrim"
+  signatures:
+    - "trim(str)"
+    - "trim(BOTH FROM str)"
+    - "trim(LEADING FROM str)"
+    - "trim(TRAILING FROM str)"
+    - "trim(trimStr FROM str)"
+    - "trim(BOTH trimStr FROM str)"
+    - "trim(LEADING trimStr FROM str)"
+    - "trim(TRAILING trimStr FROM str)"
+  usage: |2-
+    
+        trim(str) - Removes the leading and trailing space characters from `str`.
+    
+        trim(BOTH FROM str) - Removes the leading and trailing space characters from `str`.
+    
+        trim(LEADING FROM str) - Removes the leading space characters from `str`.
+    
+        trim(TRAILING FROM str) - Removes the trailing space characters from `str`.
+    
+        trim(trimStr FROM str) - Remove the leading and trailing `trimStr` characters from `str`.
+    
+        trim(BOTH trimStr FROM str) - Remove the leading and trailing `trimStr` characters from `str`.
+    
+        trim(LEADING trimStr FROM str) - Remove the leading `trimStr` characters from `str`.
+    
+        trim(TRAILING trimStr FROM str) - Remove the trailing `trimStr` characters from `str`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * trimStr - the trim string characters to trim, the default value is a single space
+          * BOTH, FROM - these are keywords to specify trimming string characters from both ends of
+              the string
+          * LEADING, FROM - these are keywords to specify trimming string characters from the left
+              end of the string
+          * TRAILING, FROM - these are keywords to specify trimming string characters from the right
+              end of the string
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT trim('    SparkSQL   ');
+           SparkSQL
+          > SELECT trim(BOTH FROM '    SparkSQL   ');
+           SparkSQL
+          > SELECT trim(LEADING FROM '    SparkSQL   ');
+           SparkSQL
+          > SELECT trim(TRAILING FROM '    SparkSQL   ');
+               SparkSQL
+          > SELECT trim('SL' FROM 'SSparkSQLS');
+           parkSQ
+          > SELECT trim(BOTH 'SL' FROM 'SSparkSQLS');
+           parkSQ
+          > SELECT trim(LEADING 'SL' FROM 'SSparkSQLS');
+           parkSQLS
+          > SELECT trim(TRAILING 'SL' FROM 'SSparkSQLS');
+           SSparkSQ
+      
+  since: "1.5.0"
+
+- name: "try_to_binary"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryToBinary"
+  signatures:
+    - "try_to_binary(str[, fmt])"
+  usage: "try_to_binary(str[, fmt]) - This is a special version of `to_binary` that performs the same operation, but returns a NULL value instead of raising an error if the conversion cannot be performed."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_to_binary('abc', 'utf-8');
+           abc
+          > select try_to_binary('a!', 'base64');
+           NULL
+          > select try_to_binary('abc', 'invalidFormat');
+           NULL
+      
+  since: "3.3.0"
+
+- name: "try_to_number"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryToNumber"
+  signatures:
+    - "try_to_number(expr, fmt)"
+  usage: |2-
+    
+         try_to_number(expr, fmt) - Convert string 'expr' to a number based on the string format `fmt`.
+           Returns NULL if the string 'expr' does not match the expected format. The format follows the
+           same semantics as the to_number function.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT try_to_number('454', '999');
+           454
+          > SELECT try_to_number('454.00', '000.00');
+           454.00
+          > SELECT try_to_number('12,454', '99,999');
+           12454
+          > SELECT try_to_number('$78.12', '$99.99');
+           78.12
+          > SELECT try_to_number('12,454.8-', '99,999.9S');
+           -12454.8
+      
+  since: "3.3.0"
+
+- name: "try_validate_utf8"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryValidateUTF8"
+  signatures:
+    - "try_validate_utf8(str)"
+  usage: "try_validate_utf8(str) - Returns the original string if `str` is a valid UTF-8 string, otherwise returns NULL."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT try_validate_utf8('Spark');
+           Spark
+          > SELECT try_validate_utf8(x'61');
+           a
+          > SELECT try_validate_utf8(x'80');
+           NULL
+          > SELECT try_validate_utf8(x'61C262');
+           NULL
+      
+  since: "4.0.0"
+
+- name: "ucase"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Upper"
+  signatures:
+    - "ucase(str)"
+  usage: "ucase(str) - Returns `str` with all characters changed to uppercase."
+  examples: |2-
+    
+        Examples:
+          > SELECT ucase('SparkSql');
+           SPARKSQL
+      
+  since: "1.0.1"
+
+- name: "unbase64"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnBase64"
+  signatures:
+    - "unbase64(str)"
+  usage: "unbase64(str) - Converts the argument from a base 64 string `str` to a binary."
+  examples: |2-
+    
+        Examples:
+          > SELECT unbase64('U3BhcmsgU1FM');
+           Spark SQL
+      
+  since: "1.5.0"
+
+- name: "upper"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Upper"
+  signatures:
+    - "upper(str)"
+  usage: "upper(str) - Returns `str` with all characters changed to uppercase."
+  examples: |2-
+    
+        Examples:
+          > SELECT upper('SparkSql');
+           SPARKSQL
+      
+  since: "1.0.1"
+
+- name: "validate_utf8"
+  scope: "sql_builtin"
+  group: "string_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ValidateUTF8"
+  signatures:
+    - "validate_utf8(str)"
+  usage: "validate_utf8(str) - Returns the original string if `str` is a valid UTF-8 string, otherwise throws an exception."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT validate_utf8('Spark');
+           Spark
+          > SELECT validate_utf8(x'61');
+           a
+      
+  since: "4.0.0"
+

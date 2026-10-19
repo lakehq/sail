@@ -14,6 +14,7 @@
 name = "sail-catalog-unity"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -28,19 +29,16 @@ arrow = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
-progenitor-client = { workspace = true }
+percent-encoding = { workspace = true }
 secrecy = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-testcontainers = { workspace = true }
 wiremock = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]
-progenitor = { workspace = true }
-prettyplease = { workspace = true }
-serde_yaml = { workspace = true }
-syn = { workspace = true }
+sail-build-scripts = { path = "../sail-build-scripts" }

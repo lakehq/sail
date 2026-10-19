@@ -16,19 +16,19 @@ See the [Installation](/introduction/installation/) page for full installation i
 
 ::: code-group
 
-```bash-vue [Spark 4.1 (Client) ]
+```bash-vue [Spark 4.2 (Client) ]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark-client==4.1.1"
+pip install "pyspark-client==4.2.0"
 ```
 
-```bash-vue [Spark 4.1]
+```bash-vue [Spark 4.2]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==4.1.1"
+pip install "pyspark[connect]==4.2.0"
 ```
 
 ```bash-vue [Spark 3.5]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==3.5.7
+pip install "pyspark[connect]==3.5.9"
 ```
 
 :::
@@ -45,7 +45,8 @@ pip install "pyspark[connect]==3.5.7
 
 - Since Sail 0.2, the `sail` command-line interface (CLI) became the new way to interact with Sail.
 - Since Sail 0.3, you can no longer run `pip install pysail[spark]` to install PySail along with PySpark (the `spark` "extra"). You must explicitly install PySpark and choose the version you want to use.
-  :::
+
+:::
 
 ## Using the Sail PySpark Shell
 

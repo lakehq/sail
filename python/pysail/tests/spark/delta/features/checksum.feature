@@ -1,6 +1,5 @@
 Feature: Delta Lake Version Checksum
 
-  @sail-only
   Rule: Delta log writes version checksum files after successful commits
 
     Background:
@@ -53,10 +52,11 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
-  @sail-only
   Rule: Delta log checksum writing can be explicitly enabled by table property
 
     Background:
@@ -109,10 +109,11 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
-  @sail-only
   Rule: Delta log checksum writing can be disabled by table property
 
     Background:
@@ -163,9 +164,9 @@ Feature: Delta Lake Version Checksum
         """
         📄 00000000000000000000.json
         📄 00000000000000000001.json
+        📄 00000000000000000002.json
         """
 
-  @sail-only
   Rule: Incremental CRC correctly tracks file counts across multiple commits
 
     Background:
@@ -213,18 +214,22 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000001.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         """
       Then delta log JSON file 00000000000000000000.crc in delta_log contains
         | path     | value |
-        | numFiles | 1     |
+        | numFiles | 0     |
       Then delta log JSON file 00000000000000000001.crc in delta_log contains
         | path     | value |
-        | numFiles | 2     |
+        | numFiles | 1     |
       Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 2     |
+      Then delta log JSON file 00000000000000000003.crc in delta_log contains
         | path     | value |
         | numFiles | 3     |
 
-  @sail-only
   Rule: Incremental CRC correctly tracks file counts when files are replaced
 
     Background:
@@ -266,15 +271,19 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
       Then delta log JSON file 00000000000000000000.crc in delta_log contains
         | path     | value |
-        | numFiles | 1     |
+        | numFiles | 0     |
       Then delta log JSON file 00000000000000000001.crc in delta_log contains
         | path     | value |
         | numFiles | 1     |
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 1     |
 
-  @sail-only
   Rule: Broken CRC chain is healed via full-snapshot fallback on next commit
 
     Background:
@@ -299,7 +308,7 @@ Feature: Delta Lake Version Checksum
         """
 
     Scenario: CRC is regenerated via full-snapshot fallback when prev CRC is missing
-      Given file 00000000000000000000.crc in delta_log is deleted
+      Given file 00000000000000000001.crc in delta_log is deleted
       Given statement
         """
         INSERT INTO delta_crc_fallback_test VALUES (3, 'three')
@@ -313,10 +322,12 @@ Feature: Delta Lake Version Checksum
         | 3   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
-        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log contains
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
         | path     | value |
         | numFiles | 2     |

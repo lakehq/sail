@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::common::{plan_datafusion_err, Result};
+use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
+use sail_catalog::credentials::{
+    CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, StaticCatalogCredentials,
+};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{
@@ -10,14 +13,14 @@ use sail_catalog::provider::{
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
-use sail_catalog_iceberg::IcebergRestCatalogProvider;
+use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider};
 use sail_catalog_memory::MemoryCatalogProvider;
-use sail_catalog_onelake::OneLakeCatalogProvider;
-use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
-use sail_catalog_unity::UnityCatalogProvider;
-use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType};
+use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
+use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
+use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
+use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
 use sail_common::runtime::RuntimeHandle;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
 pub fn create_catalog_manager(
     config: &AppConfig,
@@ -50,6 +53,7 @@ pub fn create_catalog_manager(
                     namespace_separator,
                     oauth_access_token,
                     bearer_access_token,
+                    bearer_access_token_file,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -66,23 +70,21 @@ pub fn create_catalog_manager(
                             namespace_separator.to_string(),
                         );
                     }
-                    if let Some(oauth_access_token) = oauth_access_token {
-                        properties.insert(
-                            "oauth-access-token".to_string(), // Iceberg uses kebab-case
-                            oauth_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
-                        );
-                    }
-                    if let Some(bearer_access_token) = bearer_access_token {
-                        properties.insert(
-                            "bearer-access-token".to_string(), // Iceberg uses kebab-case
-                            bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
-                        );
-                    }
+                    let credentials = iceberg_rest_credentials(
+                        bearer_access_token_file.as_ref(),
+                        bearer_access_token.as_ref(),
+                        oauth_access_token.as_ref(),
+                    );
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
-                            let provider =
-                                IcebergRestCatalogProvider::new(name.to_string(), properties);
+                            let provider = IcebergRestCatalogProvider::new(
+                                name.to_string(),
+                                IcebergRestCatalogOptions {
+                                    credentials,
+                                    properties,
+                                },
+                            );
                             Ok(provider)
                         },
                         runtime.io().clone(),
@@ -103,7 +105,27 @@ pub fn create_catalog_manager(
                     cache,
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
-                        || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
+                        || {
+                            let config = UnityCatalogConfig::new(uri.clone(), token, None)?;
+                            let credentials = config
+                                .get_credential_provider()
+                                .map(|credentials| {
+                                    Arc::new(credentials) as Arc<dyn CatalogCredentials>
+                                })
+                                .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials));
+                            let default_catalog = default_catalog
+                                .clone()
+                                .unwrap_or_else(|| "unity".to_string());
+                            UnityCatalogProvider::new(
+                                name.to_string(),
+                                UnityCatalogOptions {
+                                    default_catalog,
+                                    uri: config.uri,
+                                    credentials,
+                                    quote_object_name: true,
+                                },
+                            )
+                        },
                         runtime.io().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
@@ -117,35 +139,44 @@ pub fn create_catalog_manager(
                 CatalogType::OneLake {
                     name,
                     url,
+                    api,
                     bearer_token,
                     cache,
                 } => {
-                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse", "duckrun/data.datawarehouse")
+                    // Parse URL format:
+                    //   - `workspace/item.type`: friendly names (e.g. "duckrun/data.lakehouse")
+                    //   - `workspaceId/itemId`: GUIDs (e.g. "8f.../3a...").
+                    // GUID form is required when the workspace has friendly-name support disabled,
+                    // because the data/metadata paths are then GUID-addressed at the storage layer.
                     let (workspace, item) = url.split_once('/').ok_or_else(|| {
                         plan_datafusion_err!(
-                            "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
+                            "Invalid OneLake URL format: expected 'workspace/item.type' or 'workspaceId/itemId', got '{}'",
                             url
                         )
                     })?;
 
-                    // Extract item name and type (e.g., "data.Lakehouse" -> name="data", type="Lakehouse")
-                    let (item_name, item_type) = item.split_once('.').ok_or_else(|| {
-                        plan_datafusion_err!(
-                            "Invalid OneLake item format: expected 'name.type', got '{}'",
-                            item
-                        )
-                    })?;
+                    // Friendly form: ("data.Lakehouse" -> name="data", type=Some("Lakehouse"))
+                    // GUID form: ("data" -> name="data", type=None)
+                    let (item_name, item_type) = match item.split_once('.') {
+                        Some((name, item_type)) => (name, Some(item_type.to_string())),
+                        None => (item, None),
+                    };
 
                     let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
+                    let api = match api {
+                        OneLakeApi::Delta => OneLakeApiKind::Delta,
+                        OneLakeApi::Iceberg => OneLakeApiKind::Iceberg,
+                    };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
-                            Ok(OneLakeCatalogProvider::new(
+                            OneLakeCatalogProvider::new(
                                 name.clone(),
                                 workspace.to_string(),
                                 item_name.to_string(),
-                                item_type.to_string(),
+                                item_type,
+                                api,
                                 token.clone(),
-                            ))
+                            )
                         },
                         runtime.io().clone(),
                     )?;
@@ -159,11 +190,13 @@ pub fn create_catalog_manager(
                 }
                 CatalogType::Glue {
                     name,
+                    catalog_id,
                     region,
                     endpoint_url,
                     cache,
                 } => {
                     let config = GlueCatalogConfig {
+                        catalog_id: catalog_id.clone(),
                         region: region.clone(),
                         endpoint_url: endpoint_url.clone(),
                     };
@@ -281,6 +314,28 @@ fn wrap_catalog_provider(
     Ok(Arc::new(provider))
 }
 
+/// Credentials for an Iceberg REST catalog. A token file takes precedence over
+/// a static token: its contents are re-read per request, so a rotated projected
+/// service account token is picked up without a restart.
+fn iceberg_rest_credentials(
+    bearer_access_token_file: Option<&String>,
+    bearer_access_token: Option<&SecretString>,
+    oauth_access_token: Option<&SecretString>,
+) -> Arc<dyn CatalogCredentials> {
+    if let Some(path) = bearer_access_token_file {
+        Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>
+    } else {
+        bearer_access_token
+            .or(oauth_access_token)
+            .map(|token| {
+                Arc::new(StaticCatalogCredentials::new(
+                    token.expose_secret().to_string(),
+                )) as Arc<dyn CatalogCredentials>
+            })
+            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -316,6 +371,7 @@ mod tests {
         let mut config = AppConfig::load().unwrap();
         config.catalog.list = vec![CatalogType::Glue {
             name: "glue".to_string(),
+            catalog_id: None,
             region: None,
             endpoint_url: None,
             cache: CatalogCacheConfig {
@@ -351,6 +407,7 @@ mod tests {
         let mut config = AppConfig::load().unwrap();
         config.catalog.list = vec![CatalogType::Glue {
             name: "glue".to_string(),
+            catalog_id: None,
             region: None,
             endpoint_url: None,
             cache: CatalogCacheConfig {
@@ -373,5 +430,46 @@ mod tests {
             bundle.is_none(),
             "session cache should not be stored in global manager"
         );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_prefer_the_token_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "file-token\n").unwrap();
+        let path = path.to_string_lossy().to_string();
+        let static_token = SecretString::from("static-token".to_string());
+
+        let credentials = iceberg_rest_credentials(Some(&path), Some(&static_token), None);
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("file-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_use_the_static_bearer_token() {
+        let token = SecretString::from("static-token".to_string());
+        let credentials = iceberg_rest_credentials(None, Some(&token), None);
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("static-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_fall_back_to_the_oauth_token() {
+        let token = SecretString::from("oauth-token".to_string());
+        let credentials = iceberg_rest_credentials(None, None, Some(&token));
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("oauth-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_are_empty_without_any_token() {
+        let credentials = iceberg_rest_credentials(None, None, None);
+        assert_eq!(credentials.retrieve().await.unwrap(), None);
     }
 }

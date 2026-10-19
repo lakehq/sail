@@ -1,26 +1,26 @@
 /// Iceberg table creation logic for AWS Glue Data Catalog.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
+use aws_sdk_glue::Client;
 use aws_sdk_glue::types::{
     CreateIcebergTableInput, IcebergInput, IcebergPartitionField, IcebergPartitionSpec,
     IcebergSchema, IcebergStructField, IcebergStructTypeEnum, MetadataOperation,
     OpenTableFormatInput, SerDeInfo, StorageDescriptor, TableInput,
 };
-use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveStorageFormat;
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     Namespace, PartitionTransform,
 };
-use sail_common_datafusion::catalog::iceberg::{
-    is_iceberg_table_properties, ICEBERG_CLASSIFICATION_KEY, ICEBERG_TABLE_TYPE_KEY,
-    ICEBERG_TABLE_TYPE_VALUE,
-};
 use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::iceberg::{
+    ICEBERG_CLASSIFICATION_KEY, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+    is_iceberg_table_properties,
+};
 
-use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
 use crate::GlueCatalogProvider;
+use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
 
 /// Default Iceberg table spec version for new tables (v2 is the modern standard).
 const DEFAULT_ICEBERG_FORMAT_VERSION: &str = "2";
@@ -55,6 +55,18 @@ pub(crate) async fn create_iceberg_table(
     let database_name = GlueCatalogProvider::database_name(database)?;
 
     let options = validate_iceberg_options(options)?;
+
+    if sail_common_datafusion::catalog::managed::metadata_location_value(
+        options
+            .properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .is_some()
+    {
+        return create_iceberg_table_via_table_input(provider, client, database, table, options)
+            .await;
+    }
 
     let iceberg_schema = build_iceberg_schema(&options.columns)?;
     let partition_spec = build_iceberg_partition_spec(&options.partition_by, &options.columns)?;
@@ -97,6 +109,7 @@ pub(crate) async fn create_iceberg_table(
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .name(table)
         .open_table_format_input(open_format_input)
@@ -116,9 +129,10 @@ pub(crate) async fn create_iceberg_table(
                         table.to_string(),
                     ))
                 }
-            } else if provider.has_custom_endpoint()
-                || should_fallback_to_table_input(&service_err.to_string())
-            {
+            } else if should_fallback_to_table_input(
+                provider.has_custom_endpoint(),
+                &service_err.to_string(),
+            ) {
                 create_iceberg_table_via_table_input(provider, client, database, table, options)
                     .await
             } else {
@@ -138,31 +152,22 @@ async fn create_iceberg_table_via_table_input(
     options: ValidatedIcebergOptions,
 ) -> CatalogResult<TableStatus> {
     let database_name = GlueCatalogProvider::database_name(database)?;
-    let partition_columns: Vec<String> = options
-        .partition_by
-        .iter()
-        .filter(|field| matches!(field.transform, None | Some(PartitionTransform::Identity)))
-        .map(|field| field.column.clone())
-        .collect();
-    let partition_set: HashSet<_> = partition_columns
-        .iter()
-        .map(|column| column.to_ascii_lowercase())
-        .collect();
     let mut regular_columns = Vec::new();
-    let mut glue_partition_columns = Vec::new();
     for column in options.columns {
         let glue_type = arrow_to_glue_type(&column.data_type)?;
         let glue_column = aws_sdk_glue::types::Column::builder()
             .name(&column.name)
             .r#type(glue_type)
             .set_comment(column.comment.clone())
+            .set_parameters(
+                column
+                    .default
+                    .as_ref()
+                    .map(|value| HashMap::from([("CURRENT_DEFAULT".to_string(), value.clone())])),
+            )
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build column: {e}")))?;
-        if partition_set.contains(&column.name.to_ascii_lowercase()) {
-            glue_partition_columns.push(glue_column);
-        } else {
-            regular_columns.push(glue_column);
-        }
+        regular_columns.push(glue_column);
     }
 
     let format = HiveStorageFormat::parquet();
@@ -190,13 +195,14 @@ async fn create_iceberg_table_via_table_input(
         .name(table)
         .table_type("EXTERNAL_TABLE")
         .storage_descriptor(storage_descriptor)
-        .set_partition_keys(Some(glue_partition_columns))
+        .set_partition_keys(Some(Vec::new()))
         .set_parameters(Some(parameters))
         .build()
         .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build table input: {e}")))?;
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .table_input(table_input)
         .send()
@@ -224,59 +230,75 @@ async fn create_iceberg_table_via_table_input(
     }
 }
 
-fn should_fallback_to_table_input(error: &str) -> bool {
+fn should_fallback_to_table_input(has_custom_endpoint: bool, error: &str) -> bool {
+    if !has_custom_endpoint {
+        return false;
+    }
     let error = error.to_ascii_lowercase();
     error.contains("opentableformat")
         || error.contains("open_table_format")
         || error.contains("unknown parameter")
         || error.contains("not implemented")
         || error.contains("not yet implemented")
+        || error.contains("unhandled error")
 }
 
 /// Validates CreateTableOptions for Iceberg tables.
-fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<ValidatedIcebergOptions> {
-    let CreateTableOptions {
-        columns,
-        comment,
-        constraints,
-        location,
-        format: _,
-        partition_by,
-        sort_by,
-        bucket_by,
-        if_not_exists,
-        replace,
-        properties,
-        is_external,
-        is_write_precondition: _,
-    } = options;
-
-    if replace {
+pub(crate) fn validate_iceberg_create_table_options(
+    options: &CreateTableOptions,
+) -> CatalogResult<()> {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
     }
-    if !constraints.is_empty() {
+    if !options.constraints.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support CONSTRAINT".to_string(),
         ));
     }
-    if !sort_by.is_empty() {
+    if !options.sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
         ));
     }
-    if bucket_by.is_some() {
+    if options.bucket_by.is_some() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support BUCKET BY".to_string(),
         ));
     }
 
-    if !is_external {
+    if !options.is_external {
         return Err(CatalogError::InvalidArgument(
             "Location is required for Iceberg tables".to_string(),
         ));
     }
+
+    if options.location.is_none() {
+        return Err(CatalogError::InvalidArgument(
+            "Location is required for Iceberg tables".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<ValidatedIcebergOptions> {
+    validate_iceberg_create_table_options(&options)?;
+    let CreateTableOptions {
+        columns,
+        comment,
+        constraints: _,
+        location,
+        format: _,
+        partition_by,
+        sort_by: _,
+        bucket_by: _,
+        mode,
+        properties,
+        is_external: _,
+        is_write_precondition: _,
+    } = options;
 
     let location = location.ok_or_else(|| {
         CatalogError::InvalidArgument("Location is required for Iceberg tables".to_string())
@@ -292,7 +314,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         columns,
         location,
         partition_by,
-        if_not_exists,
+        if_not_exists: mode.ignore_if_exists(),
         properties: final_properties,
     })
 }
@@ -389,5 +411,39 @@ fn partition_transform_to_string(field: &CatalogPartitionField) -> (String, Stri
         Some(PartitionTransform::Truncate(w)) => {
             (format!("truncate[{w}]"), format!("{}_trunc", field.column))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn real_glue_open_table_format_errors_do_not_fallback() {
+        assert!(
+            !should_fallback_to_table_input(false, "OpenTableFormatInput is not supported"),
+            "real AWS Glue OpenTableFormat failures must not use generic TableInput fallback"
+        );
+    }
+
+    #[test]
+    fn custom_endpoint_known_open_table_format_errors_fallback() {
+        assert!(should_fallback_to_table_input(
+            true,
+            "OpenTableFormatInput is not implemented"
+        ));
+        assert!(should_fallback_to_table_input(
+            true,
+            "unknown parameter: open_table_format_input"
+        ));
+        assert!(should_fallback_to_table_input(true, "unhandled error"));
+    }
+
+    #[test]
+    fn custom_endpoint_unrelated_errors_do_not_fallback() {
+        assert!(!should_fallback_to_table_input(
+            true,
+            "AccessDeniedException: not authorized to create table"
+        ));
     }
 }

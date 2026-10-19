@@ -40,9 +40,9 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
                 let input_partition_count = input.output_partitioning().partition_count();
                 match partitioning {
                     Partitioning::RoundRobinBatch(_) => Ok(Transformed::no(plan)),
-                    Partitioning::Hash(_, _) => Ok(Transformed::yes(Arc::new(
-                        RepartitionExec::try_new(input, partitioning)?,
-                    ))),
+                    Partitioning::Hash(_, _) | Partitioning::Range(_) => Ok(Transformed::yes(
+                        Arc::new(RepartitionExec::try_new(input, partitioning)?),
+                    )),
                     Partitioning::UnknownPartitioning(n) if n >= input_partition_count => {
                         Ok(Transformed::yes(input))
                     }
@@ -168,9 +168,11 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized
-            .downcast_ref::<ExplicitRepartitionExec>()
-            .is_some());
+        assert!(
+            optimized
+                .downcast_ref::<ExplicitRepartitionExec>()
+                .is_some()
+        );
         assert_eq!(optimized.output_partitioning().partition_count(), 4);
     }
 }

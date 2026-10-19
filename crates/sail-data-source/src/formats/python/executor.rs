@@ -10,11 +10,12 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use futures::stream::BoxStream;
+use pyo3::exceptions::PyAttributeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 
-use super::error::{import_cloudpickle, PythonDataSourceContext};
-use super::filter::{filters_to_python, PythonFilter};
+use super::error::{PythonDataSourceContext, import_cloudpickle};
+use super::filter::{PythonFilter, filters_to_python};
 
 /// Default capacity for the write channel, matching `python.data_source_write_channel_capacity` config.
 const DEFAULT_WRITE_CHANNEL_CAPACITY: usize = 8;
@@ -292,33 +293,63 @@ impl PythonExecutor for InProcessExecutor {
                     .call_method1("reader", (schema_obj,))
                     .map_err(|e| ctx.wrap_py_error(e))?;
 
-                // Push filters to reader if any were provided
+                // Push filters to reader if any were provided.
+                //
+                // `DataSourceReader.pushFilters` was added in PySpark 4.1; on 4.0
+                // the base class has no such method. Calling it unconditionally
+                // would fail every filtered scan against every Python data source
+                // on 4.0, so skip the push when the reader does not implement it
+                // and let the filters be applied above the scan instead. This is
+                // exactly what happens on 4.1 when a reader declines to push
+                // anything, so no rows are lost either way.
                 if !filters.is_empty() {
                     let filter_ctx = PythonDataSourceContext::new(&ds_name, "pushFilters");
 
-                    // Convert Rust filters to Python filter objects
-                    let py_filters = filters_to_python(py, &filters).map_err(|e| {
-                        filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
-                    })?;
+                    // A missing attribute is the PySpark 4.0 case, and a present
+                    // but non-callable one is a duck-typed reader that would fail
+                    // at the call site — both mean "cannot push", not an error.
+                    // Anything else is a genuine failure in the reader's
+                    // attribute lookup, reported against `pushFilters` so it is
+                    // not mis-attributed to `partitions`.
+                    let push_filters = match reader.getattr("pushFilters") {
+                        Ok(attr) => Ok(attr.is_callable().then_some(attr)),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => Ok(None),
+                        Err(e) => Err(filter_ctx.wrap_py_error(e)),
+                    }?;
 
-                    // Call pushFilters on the reader
-                    let rejected = reader
-                        .call_method1("pushFilters", (py_filters,))
-                        .map_err(|e| filter_ctx.wrap_py_error(e))?;
+                    if let Some(push_filters) = push_filters {
+                        // Convert Rust filters to Python filter objects
+                        let py_filters = filters_to_python(py, &filters).map_err(|e| {
+                            filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
+                        })?;
 
-                    // Count rejected filters for logging
-                    use pyo3::types::PyIterator;
-                    let rejected_list = PyIterator::from_object(&rejected).map_err(|e| {
-                        filter_ctx.wrap_error(format!("pushFilters must return an iterator: {}", e))
-                    })?;
-                    let rejected_count = rejected_list.count();
+                        // Call pushFilters on the reader
+                        let rejected = push_filters
+                            .call1((py_filters,))
+                            .map_err(|e| filter_ctx.wrap_py_error(e))?;
 
-                    log::debug!(
-                        "[{}::pushFilters] Pushed {} filters, {} rejected",
-                        ds_name,
-                        filters.len(),
-                        rejected_count
-                    );
+                        // Count rejected filters for logging
+                        use pyo3::types::PyIterator;
+                        let rejected_list = PyIterator::from_object(&rejected).map_err(|e| {
+                            filter_ctx
+                                .wrap_error(format!("pushFilters must return an iterator: {}", e))
+                        })?;
+                        let rejected_count = rejected_list.count();
+
+                        log::debug!(
+                            "[{}::pushFilters] Pushed {} filters, {} rejected",
+                            ds_name,
+                            filters.len(),
+                            rejected_count
+                        );
+                    } else {
+                        log::debug!(
+                            "[{}] Reader does not provide a callable pushFilters \
+                             (requires PySpark 4.1+); applying {} filter(s) above the scan",
+                            ds_name,
+                            filters.len()
+                        );
+                    }
                 }
 
                 // Now call partitions() on the same reader that has the filters
@@ -673,14 +704,17 @@ impl PythonExecutor for InProcessExecutor {
                 };
 
                 // Call writer.abort(messages) - log errors but don't propagate
-                if let Err(e) = writer.call_method1("abort", (messages_list,)) {
-                    log::warn!("[{}::abort] Abort call failed: {}", writer_name, e);
-                } else {
-                    log::debug!(
-                        "[{}::abort] Aborted {} partitions",
-                        writer_name,
-                        commit_messages.len()
-                    );
+                match writer.call_method1("abort", (messages_list,)) {
+                    Err(e) => {
+                        log::warn!("[{}::abort] Abort call failed: {}", writer_name, e);
+                    }
+                    _ => {
+                        log::debug!(
+                            "[{}::abort] Aborted {} partitions",
+                            writer_name,
+                            commit_messages.len()
+                        );
+                    }
                 }
 
                 Ok(())
@@ -740,49 +774,46 @@ impl RecordBatchIterator {
 
         loop {
             // If we have an active batch, try to get the next item
-            if let Some(batch) = &slf.current_batch {
-                if slf.current_row < batch.num_rows() {
-                    // Compute result and next row index without mutating slf while borrowing batch
-                    let (result, next_row) = if slf.is_arrow {
-                        // For arrow, return one batch at a time (DataSourceArrowWriter.write(iterator))
-                        let r = super::arrow_utils::rust_record_batch_to_py(py, batch).map_err(
-                            |e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()),
-                        )?;
-                        (r, batch.num_rows())
-                    } else {
-                        // For row, return one row at a time
-                        let row_idx = slf.current_row;
-                        let factory = slf
-                            .row_factory
-                            .as_ref()
-                            .ok_or_else(|| {
-                                pyo3::exceptions::PyRuntimeError::new_err(
-                                    "row_factory is None for row-based writer",
-                                )
-                            })?
-                            .bind(py);
-                        let mut row_values = Vec::with_capacity(batch.num_columns());
-                        for col_idx in 0..batch.num_columns() {
-                            let column = batch.column(col_idx);
-                            let value =
-                                super::arrow_utils::extract_python_value(py, column, row_idx)
-                                    .map_err(|e| {
-                                        pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                                    })?;
-                            row_values.push(value);
-                        }
-                        let args = pyo3::types::PyTuple::new(py, row_values).map_err(|e| {
+            if let Some(batch) = &slf.current_batch
+                && slf.current_row < batch.num_rows()
+            {
+                // Compute result and next row index without mutating slf while borrowing batch
+                let (result, next_row) = if slf.is_arrow {
+                    // For arrow, return one batch at a time (DataSourceArrowWriter.write(iterator))
+                    let r = super::arrow_utils::rust_record_batch_to_py(py, batch)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    (r, batch.num_rows())
+                } else {
+                    // For row, return one row at a time
+                    let row_idx = slf.current_row;
+                    let factory = slf
+                        .row_factory
+                        .as_ref()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyRuntimeError::new_err(
+                                "row_factory is None for row-based writer",
+                            )
+                        })?
+                        .bind(py);
+                    let mut row_values = Vec::with_capacity(batch.num_columns());
+                    for col_idx in 0..batch.num_columns() {
+                        let column = batch.column(col_idx);
+                        let value = super::arrow_utils::extract_python_value(py, column, row_idx)
+                            .map_err(|e| {
                             pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
                         })?;
-                        let r = factory
-                            .call1(args)
-                            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-                            .unbind();
-                        (r, row_idx + 1)
-                    };
-                    slf.current_row = next_row;
-                    return Ok(Some(result));
-                }
+                        row_values.push(value);
+                    }
+                    let args = pyo3::types::PyTuple::new(py, row_values)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    let r = factory
+                        .call1(args)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+                        .unbind();
+                    (r, row_idx + 1)
+                };
+                slf.current_row = next_row;
+                return Ok(Some(result));
             }
 
             // No active batch or batch exhausted, get the next one from the channel

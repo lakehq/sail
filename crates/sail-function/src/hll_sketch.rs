@@ -1,10 +1,7 @@
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, Int32Array, Int64Array, LargeStringArray, StringArray,
-    StringViewArray,
-};
-use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datasketches::hash_value::{raw_bytes, sign_extend};
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datasketches::hash::value::{raw_bytes, sign_extend};
 use datasketches::hll::{HllSketch, HllType, HllUnion};
 
 pub(crate) const MIN_LG_CONFIG_K: i32 = 4;
@@ -21,16 +18,17 @@ pub(crate) fn validate_lg_config_k(value: i32, function_name: &str) -> Result<u8
     }
 }
 
-pub(crate) fn new_hll_sketch(lg_config_k: u8) -> HllSketch {
+pub(crate) fn new_hll_sketch(lg_config_k: u8) -> Result<HllSketch> {
     HllSketch::new(lg_config_k, HllType::Hll8)
+        .map_err(|error| exec_datafusion_err!("could not create HLL sketch: {error}"))
 }
 
-pub(crate) fn empty_hll_sketch_bytes() -> Vec<u8> {
-    new_hll_sketch(DEFAULT_LG_CONFIG_K as u8).serialize()
+pub(crate) fn empty_hll_sketch_bytes() -> Result<Vec<u8>> {
+    Ok(new_hll_sketch(DEFAULT_LG_CONFIG_K as u8)?.serialize())
 }
 
-pub(crate) fn empty_hll_union_bytes() -> Vec<u8> {
-    new_hll_sketch(DEFAULT_LG_CONFIG_K as u8).serialize()
+pub(crate) fn empty_hll_union_bytes() -> Result<Vec<u8>> {
+    empty_hll_sketch_bytes()
 }
 
 pub(crate) fn estimate_hll_sketch(bytes: &[u8], function_name: &str) -> Result<i64> {
@@ -46,8 +44,51 @@ pub(crate) fn update_hll_sketch_from_array(
     sketch: &mut HllSketch,
     values: &ArrayRef,
 ) -> Result<()> {
-    for row in 0..values.len() {
-        update_hll_sketch_from_array_value(sketch, values.as_ref(), row)?;
+    // Downcast once outside the row loop (the data type and concrete array are
+    // loop-invariant); `iter().flatten()` skips nulls without a per-row branch.
+    match values.data_type() {
+        DataType::Int32 => {
+            for v in values.as_primitive::<Int32Type>().iter().flatten() {
+                sketch.update(sign_extend::from_i32(v));
+            }
+        }
+        DataType::Int64 => {
+            for v in values.as_primitive::<Int64Type>().iter().flatten() {
+                sketch.update(v);
+            }
+        }
+        DataType::Binary => {
+            for v in values.as_binary::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_slice(v));
+                }
+            }
+        }
+        DataType::Utf8 => {
+            for v in values.as_string::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::LargeUtf8 => {
+            for v in values.as_string::<i64>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::Utf8View => {
+            for v in values.as_string_view().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::Null => {}
+        data_type => {
+            return exec_err!("hll_sketch_agg does not support input type {data_type}");
+        }
     }
     Ok(())
 }
@@ -67,7 +108,10 @@ pub(crate) fn union_hll_sketch_bytes(
             right.lg_config_k()
         );
     }
-    let mut union = HllUnion::new(left.lg_config_k().min(right.lg_config_k()));
+    let mut union =
+        HllUnion::new(left.lg_config_k().min(right.lg_config_k())).map_err(|error| {
+            exec_datafusion_err!("{function_name} could not create HLL union: {error}")
+        })?;
     union.update(&left);
     union.update(&right);
     Ok(union.to_sketch(HllType::Hll8).serialize())
@@ -97,100 +141,19 @@ where
                 *expected_lg_config_k = union.lg_config_k();
             }
             None => {
-                let mut next_union = HllUnion::new(sketch.lg_config_k());
+                let mut next_union = HllUnion::new(sketch.lg_config_k()).map_err(|error| {
+                    exec_datafusion_err!("{function_name} could not create HLL union: {error}")
+                })?;
                 next_union.update(&sketch);
                 union = Some((next_union.lg_config_k(), next_union));
             }
         }
     }
 
-    Ok(union
-        .map(|(_, union)| union.to_sketch(HllType::Hll8).serialize())
-        .unwrap_or_else(empty_hll_sketch_bytes))
-}
-
-fn update_hll_sketch_from_array_value(
-    sketch: &mut HllSketch,
-    values: &dyn Array,
-    row: usize,
-) -> Result<()> {
-    if values.is_null(row) {
-        return Ok(());
+    match union {
+        Some((_, union)) => Ok(union.to_sketch(HllType::Hll8).serialize()),
+        None => empty_hll_sketch_bytes(),
     }
-
-    match values.data_type() {
-        DataType::Int32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected Int32Array".to_string())
-                })?;
-            sketch.update(sign_extend::from_i32(values.value(row)));
-        }
-        DataType::Int64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected Int64Array".to_string())
-                })?;
-            sketch.update(values.value(row));
-        }
-        DataType::Binary => {
-            let values = values
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected BinaryArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_slice(value));
-            }
-        }
-        DataType::Utf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected StringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::LargeUtf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected LargeStringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::Utf8View => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected StringViewArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::Null => {}
-        data_type => {
-            return exec_err!("hll_sketch_agg does not support input type {data_type}");
-        }
-    }
-    Ok(())
 }
 
 fn deserialize_hll_sketch(bytes: &[u8], function_name: &str) -> Result<HllSketch> {

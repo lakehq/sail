@@ -6,11 +6,11 @@ use sail_common_datafusion::catalog::{TableColumnStatus, TableKind, TemporaryVie
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::command::write::{
     TableInfo, WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget,
 };
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_insert_overwrite_directory(
@@ -175,8 +175,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let TemporaryViewSource { format, options } = source;
         let info = TableInfo {
-            catalog_table: None,
+            lakehouse_table: None,
             columns,
+            default_values: Default::default(),
             location: None,
             format: format.clone(),
             partition_by: vec![],

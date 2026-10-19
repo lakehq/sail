@@ -12,8 +12,8 @@ Once you have identified the failed test cases from the logs, or if the failed t
 Run the tests inside the Hatch environments defined in `pyproject.toml`.
 The following test environments are currently available:
 
-- `test-spark.spark-3.5.7`
-- `test-spark.spark-4.1.1`
+- `test-spark.spark-3.5.9`
+- `test-spark.spark-4.2.0`
 - `test-ibis`
 
 The `test-spark.spark-*` environments support running PySpark unit tests and doctests. The `test-ibis` environment supports running Ibis unit tests with PySpark as the backend.

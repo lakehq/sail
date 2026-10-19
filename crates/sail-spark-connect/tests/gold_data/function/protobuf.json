@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));",
+        "result": [
+          "[false]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: from_protobuf"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_protobuf"
+      }
+    }
+  ]
+}

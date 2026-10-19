@@ -6,11 +6,14 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::Stream;
 
 #[derive(Debug)]
@@ -86,6 +89,22 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -117,7 +136,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
                 self.target_row_id_col.as_str(),
                 idx,
             ));
-        vec![datafusion::physical_plan::Distribution::HashPartitioned(
+        vec![datafusion::physical_plan::Distribution::KeyPartitioned(
             vec![expr],
         )]
     }
@@ -151,8 +170,16 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         Ok(Box::pin(stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 }
 
@@ -230,12 +257,10 @@ impl Stream for MergeCardinalityCheckStream {
                     }
                     let id = row_id_values.key(i);
                     if !self.seen.insert(id.clone()) {
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            format!(
-                                "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
-                                id
-                            ),
-                        ))));
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(format!(
+                            "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
+                            id
+                        )))));
                     }
                 }
 

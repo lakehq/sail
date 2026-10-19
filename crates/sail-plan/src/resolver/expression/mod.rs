@@ -7,8 +7,8 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 mod attribute;
 mod cast;
@@ -23,6 +23,8 @@ mod subquery;
 mod udf;
 mod wildcard;
 mod window;
+
+pub(super) use predicate::spark_interval_metadata_for_expression;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {
@@ -90,12 +92,12 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
-    #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///
     /// Dispatches to type-specific resolvers based on the expression variant (e.g., Cast, Literal,
     /// Function). Returns a `NamedExpr` containing the resolved expression and display name(s)
     /// for projection/aliasing.
+    #[async_recursion]
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,
@@ -154,7 +156,7 @@ impl PlanResolver<'_> {
                 function,
                 arguments,
             } => {
-                self.resolve_expression_lambda_function(*function, arguments, schema, state)
+                self.resolve_expression_lambda_function(*function, arguments, None, schema, state)
                     .await
             }
             Expr::Window {
@@ -199,7 +201,8 @@ impl PlanResolver<'_> {
             }
             Expr::DefaultColumnValue => self.resolve_expression_default_column_value(),
             Expr::Placeholder(placeholder) => {
-                self.resolve_expression_placeholder(placeholder).await
+                self.resolve_expression_placeholder(placeholder, state)
+                    .await
             }
             Expr::Rollup(rollup) => self.resolve_expression_rollup(rollup, schema, state).await,
             Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state).await,
@@ -215,20 +218,19 @@ impl PlanResolver<'_> {
                 // Detect multi-column IN subquery: (a, b) IN (SELECT x, y FROM ...)
                 // The SQL parser produces a Tuple which the analyzer converts to
                 // UnresolvedFunction("struct", [a, b]).
-                if let Expr::UnresolvedFunction(ref f) = *expr {
-                    if f.function_name.parts() == [spec::Identifier::from("struct")]
-                        && f.arguments.len() > 1
-                    {
-                        let arguments = match *expr {
-                            Expr::UnresolvedFunction(f) => f.arguments,
-                            _ => unreachable!(),
-                        };
-                        return self
-                            .resolve_multi_column_in_subquery(
-                                arguments, *subquery, negated, schema, state,
-                            )
-                            .await;
-                    }
+                if let Expr::UnresolvedFunction(ref f) = *expr
+                    && f.function_name.parts() == [spec::Identifier::from("struct")]
+                    && f.arguments.len() > 1
+                {
+                    let arguments = match *expr {
+                        Expr::UnresolvedFunction(f) => f.arguments,
+                        _ => unreachable!(),
+                    };
+                    return self
+                        .resolve_multi_column_in_subquery(
+                            arguments, *subquery, negated, schema, state,
+                        )
+                        .await;
                 }
                 self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state)
                     .await
@@ -424,9 +426,9 @@ mod tests {
     use crate::config::PlanConfig;
     use crate::error::PlanResult;
     use crate::formatter::SparkPlanFormatter;
+    use crate::resolver::PlanResolver;
     use crate::resolver::expression::NamedExpr;
     use crate::resolver::state::PlanResolverState;
-    use crate::resolver::PlanResolver;
 
     fn create_session() -> PlanResult<SessionContext> {
         let mut state = SessionStateBuilder::new().build();

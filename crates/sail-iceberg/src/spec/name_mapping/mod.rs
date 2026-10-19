@@ -38,6 +38,34 @@ impl NameMapping {
     pub fn fields(&self) -> &[MappedField] {
         &self.0
     }
+
+    pub fn field_names(&self) -> Result<std::collections::HashMap<i32, Vec<String>>, String> {
+        fn visit<'a>(
+            fields: impl Iterator<Item = &'a MappedField>,
+            names: &mut std::collections::HashMap<i32, Vec<String>>,
+        ) -> Result<(), String> {
+            let mut siblings = std::collections::HashSet::new();
+            for field in fields {
+                for name in &field.names {
+                    if !siblings.insert(name) {
+                        return Err(format!("Ambiguous Iceberg name mapping for '{name}'"));
+                    }
+                }
+                if let Some(id) = field.field_id
+                    && (id <= 0 || names.insert(id, field.names.clone()).is_some())
+                {
+                    return Err(format!(
+                        "Invalid or duplicate Iceberg name mapping field ID {id}"
+                    ));
+                }
+                visit(field.fields.iter().map(Arc::as_ref), names)?;
+            }
+            Ok(())
+        }
+        let mut names = std::collections::HashMap::new();
+        visit(self.0.iter(), &mut names)?;
+        Ok(names)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]

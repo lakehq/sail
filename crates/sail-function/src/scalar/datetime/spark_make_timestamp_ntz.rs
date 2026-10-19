@@ -7,7 +7,7 @@ use datafusion_common::cast::{
     as_date32_array, as_float64_array, as_int32_array, as_time64_microsecond_array, as_uint32_array,
 };
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 const MICROS_PER_DAY: i64 = 86_400_000_000; // 24 * 60 * 60 * 1_000_000
@@ -113,6 +113,16 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
             let mut builder: PrimitiveBuilder<TimestampMicrosecondType> =
                 PrimitiveArray::builder(number_rows);
             for i in 0..number_rows {
+                if years.is_null(i)
+                    || months.is_null(i)
+                    || days.is_null(i)
+                    || hours.is_null(i)
+                    || minutes.is_null(i)
+                    || seconds.is_null(i)
+                {
+                    builder.append_null();
+                    continue;
+                }
                 let year = years.value(i);
                 let month = months.value(i);
                 let day = days.value(i);
@@ -127,7 +137,12 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                         } else {
                             return exec_err!(
                                 "invalid input for Spark `make_timestamp_ntz`: year={}, month={}, day={}, hour={}, minute={}, second={}",
-                                year, month, day, hour, minute, second
+                                year,
+                                month,
+                                day,
+                                hour,
+                                minute,
+                                second
                             );
                         }
                     }

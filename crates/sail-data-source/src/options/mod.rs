@@ -5,7 +5,7 @@ use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
 
-pub mod gen {
+pub mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/console.rs"));

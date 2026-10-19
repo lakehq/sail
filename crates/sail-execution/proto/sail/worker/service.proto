@@ -8,11 +8,17 @@ message WorkerLocation {
   uint32 port = 3;
 }
 
-message RunTaskRequest {
+message TaskAttempt {
+  uint64 partition = 1;
+  uint64 attempt = 2;
+}
+
+// Accepts all tasks together. Tasks share a stage and belong to one task region.
+// Completion is reported separately for each task attempt.
+message RunTaskBatchRequest {
   uint64 job_id = 1;
   uint64 stage = 2;
-  uint64 partition = 3;
-  uint64 attempt = 4;
+  repeated TaskAttempt tasks = 3;
   bytes definition = 5;
   // The locations of peer workers that may or may not be needed
   // when fetching streams for this task.
@@ -24,7 +30,7 @@ message RunTaskRequest {
   repeated WorkerLocation peers = 6;
 }
 
-message RunTaskResponse {
+message RunTaskBatchResponse {
 }
 
 message StopTaskRequest {
@@ -54,7 +60,7 @@ message StopWorkerResponse {
 }
 
 service WorkerService {
-  rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
+  rpc RunTaskBatch(RunTaskBatchRequest) returns (RunTaskBatchResponse) {}
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
   rpc CleanUpJob(CleanUpJobRequest) returns (CleanUpJobResponse) {}
   rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}

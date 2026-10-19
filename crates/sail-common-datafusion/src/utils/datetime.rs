@@ -1,5 +1,5 @@
 use chrono::{DateTime, Days, NaiveDateTime, TimeZone, Utc};
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{Result, exec_datafusion_err};
 
 /// Localize the naive datetime to the time zone.
 /// 1. If the datatime is mapped to exactly one datetime in the time zone, the local datetime

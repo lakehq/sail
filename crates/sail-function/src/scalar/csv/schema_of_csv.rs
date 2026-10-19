@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
@@ -11,7 +11,10 @@ use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::csv::options::{
+    CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
+};
+use crate::scalar::datetime::format::DateTimeFormat;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfCsv {
@@ -153,14 +156,21 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
 #[derive(Debug)]
 struct SparkSchemaOfCsvOptions {
     sep: String,
-    timestamp_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
+    timezone: Option<String>,
 }
 
 impl Default for SparkSchemaOfCsvOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             sep: ",".to_string(),
-            timestamp_format: "%Y-%m-%d %H:%M:%S".to_string(),
+            timestamp_format: DateTimeFormat::for_parsing("yyyy-MM-dd HH:mm:ss")
+                .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::for_parsing("yyyy-MM-dd")
+                .expect("default date format should be valid"),
+            timezone: None,
         }
     }
 }
@@ -168,46 +178,24 @@ impl Default for SparkSchemaOfCsvOptions {
 impl SparkSchemaOfCsvOptions {
     fn from_map(map_array: &MapArray) -> Result<Self> {
         let mut options = Self::default();
-        if map_array.is_empty() || map_array.is_null(0) {
-            return Ok(options);
+        // `schema_of_csv` takes only literal arguments, so it is always evaluated eagerly: both the
+        // structural NULL-entry check and the value validation run unconditionally here.
+        reject_null_entries(map_array, CsvFunction::SchemaOf)?;
+        validate_options(map_array, CsvFunction::SchemaOf)?;
+
+        // Read through the same case-insensitive, sep-before-delimiter path as `from_csv`/`to_csv`,
+        // so a duplicated key resolves to the last variant and `sep` wins over `delimiter`.
+        if let Some(sep) = find_option_with_alias(map_array, "sep", "delimiter") {
+            options.sep = sep.to_string();
         }
-        let entries = map_array.value(0);
-        let entries = entries
-            .as_any()
-            .downcast_ref::<datafusion::arrow::array::StructArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map entries to be a struct array".to_string())
-            })?;
-        let keys = entries
-            .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map keys to be a string array".to_string())
-            })?;
-        let values = entries
-            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map values to be a string array".to_string())
-            })?;
-        for (key, value) in keys.iter().zip(values.iter()) {
-            let (key, value) = match (key, value) {
-                (Some(key), Some(value)) => (key, value),
-                _ => {
-                    return plan_err!(
-                        "function `{}` does not support null option keys or values",
-                        SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME
-                    );
-                }
-            };
-            match key {
-                "sep" | "delimiter" => options.sep = value.to_string(),
-                "timestampFormat" => {
-                    options.timestamp_format = spark_datetime_format_to_chrono_strftime(value)?;
-                }
-                // Silently ignore unrecognised options, matching Spark's behaviour.
-                _ => {}
-            }
+        if let Some(format) = find_option(map_array, "timestampFormat") {
+            options.timestamp_format = DateTimeFormat::for_parsing(format)?;
+        }
+        if let Some(format) = find_option(map_array, "dateFormat") {
+            options.date_format = DateTimeFormat::for_parsing(format)?;
+        }
+        if let Some(timezone) = find_option(map_array, "timeZone") {
+            options.timezone = Some(timezone.to_string());
         }
         Ok(options)
     }
@@ -260,9 +248,13 @@ fn infer_csv_field_type(value: &str, options: &SparkSchemaOfCsvOptions) -> &'sta
     if value.contains(['.', 'e', 'E']) && value.parse::<f64>().is_ok() {
         return "DOUBLE";
     }
-    if NaiveDateTime::parse_from_str(value, &options.timestamp_format).is_ok() {
+    if options.timestamp_format.parse_datetime_value(value).is_ok() {
         return "TIMESTAMP";
     }
+    if options.date_format.parse_datetime_value(value).is_ok() {
+        return "DATE";
+    }
+    // Fallback to ISO date format if dateFormat doesn't match
     if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() {
         return "DATE";
     }

@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, Column, DFSchemaRef, Spans};
+use datafusion_common::{Column, DFSchemaRef, Spans, internal_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder, Projection, Subquery, SubqueryAlias,
+    Expr, LogicalPlan, LogicalPlanBuilder, Projection, Subquery, SubqueryAlias, build_join_schema,
 };
 use sail_common::spec;
 
 use crate::error::PlanResult;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_lateral_join(

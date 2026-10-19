@@ -4,22 +4,30 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
+use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
-    MergeCapableSource, MergeInfo, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, RowLevelWriteMode,
 };
-use sail_logical_plan::merge::{expand_merge, RowLevelWriteNode};
+use sail_logical_plan::merge::{
+    MergePlanRequirements, expand_merge, validate_merge_internal_columns,
+};
+use sail_logical_plan::row_level::{
+    RowLevelEffectPlans, RowLevelEffectRequirements, RowLevelWriteNode,
+};
 
 use crate::logical::table_source::DeltaTableSource;
 
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
-    let row_index_column = (merge_has_delete_actions(&info)
-        && merge_target_supports_deletion_vectors(info.target.as_ref())?)
+    validate_merge_internal_columns(&info, &[MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN])?;
+    let change_data = change_data_enabled(&info.target)?;
+    let mode = select_delta_row_level_write_mode(&info.target)?;
+    let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
+        && matches!(mode, RowLevelWriteMode::MergeOnRead))
     .then_some(MERGE_ROW_INDEX_COLUMN);
-    let mut target_plan = ensure_merge_metadata_columns(
+    let mut target_plan = ensure_row_level_metadata_columns(
         info.target.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
@@ -31,8 +39,8 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         .map(|f| f.name().clone())
         .collect();
     trace!(
-        "rewrite target_plan schema after ensure_merge_metadata_columns: {:?}",
-        &target_fields
+        "rewrite target_plan schema after ensure_row_level_metadata_columns: {:?}",
+        target_fields
     );
     if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
         || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))
@@ -44,12 +52,10 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
             exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
         }
-        if let Some(row_index_column) = row_index_column {
-            if !target_fields.iter().any(|n| n == row_index_column) {
-                exprs.push(
-                    Expr::Column(Column::from_name(row_index_column)).alias(row_index_column),
-                );
-            }
+        if let Some(row_index_column) = row_index_column
+            && !target_fields.iter().any(|n| n == row_index_column)
+        {
+            exprs.push(Expr::Column(Column::from_name(row_index_column)).alias(row_index_column));
         }
         target_plan = LogicalPlanBuilder::from(target_plan)
             .project(exprs)?
@@ -65,16 +71,33 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         );
     }
 
+    let mut options = info.options;
+    if let Some(partition_columns) = merge_target_partition_columns(&target_plan)? {
+        options.target.partition_by = partition_columns;
+    }
     let info = MergeInfo {
         target: Arc::new(target_plan),
         source: info.source,
-        options: info.options,
+        options,
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
-    let raw_source = Arc::clone(&info.source);
-    let raw_input_schema = info.input_schema.clone();
-    let expansion = expand_merge(info, MERGE_FILE_COLUMN, row_index_column)?;
+    let expansion = expand_merge(
+        info,
+        MERGE_FILE_COLUMN,
+        row_index_column,
+        &[],
+        MergePlanRequirements {
+            preserve_unmodified_target_rows: matches!(mode, RowLevelWriteMode::CopyOnWrite),
+            source_metrics: true,
+            effects: RowLevelEffectRequirements {
+                // Delta resolves both COW removals and MOR DV updates from touched paths.
+                touched_files: true,
+                row_index_deletes: matches!(mode, RowLevelWriteMode::MergeOnRead),
+                change_data,
+            },
+        },
+    )?;
     trace!(
         "MERGE expansion write_plan schema fields: {:?}",
         expansion
@@ -85,13 +108,16 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             .map(|f| f.name().clone())
             .collect::<Vec<_>>()
     );
+    let effects = RowLevelEffectPlans::new(
+        Some(Arc::new(expansion.write_plan)),
+        expansion.touched_files_plan.map(Arc::new),
+        expansion.row_index_delete_plan.map(Arc::new),
+        expansion.change_data_plan.map(Arc::new),
+    );
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
-        raw_source,
-        raw_input_schema,
-        Arc::new(expansion.write_plan),
-        Arc::new(expansion.touched_files_plan),
-        expansion.deletion_vector_plan.map(Arc::new),
+        mode,
+        effects,
         expansion.options,
         expansion.output_schema,
     );
@@ -113,23 +139,60 @@ fn merge_has_delete_actions(info: &MergeInfo) -> bool {
             .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
 }
 
-fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
+fn merge_has_update_actions(info: &MergeInfo) -> bool {
+    info.options.matched_clauses.iter().any(|clause| {
+        matches!(
+            clause.action,
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_)
+        )
+    }) || info
+        .options
+        .not_matched_by_source_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)))
+}
+
+pub(super) fn select_delta_row_level_write_mode(plan: &LogicalPlan) -> Result<RowLevelWriteMode> {
     let mut supports = false;
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node {
-            if let Some(delta_source) = scan.source.downcast_ref::<DeltaTableSource>() {
-                supports = delta_source.snapshot().verify_deletion_vectors().is_ok();
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(delta_source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            supports = delta_source.snapshot().verify_deletion_vectors().is_ok();
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    Ok(supports)
+    Ok(if supports {
+        RowLevelWriteMode::MergeOnRead
+    } else {
+        RowLevelWriteMode::CopyOnWrite
+    })
+}
+
+fn merge_target_partition_columns(plan: &LogicalPlan) -> Result<Option<Vec<String>>> {
+    let mut partition_columns = None;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(delta_source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            partition_columns = Some(
+                delta_source
+                    .snapshot()
+                    .metadata()
+                    .partition_columns()
+                    .clone(),
+            );
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(partition_columns)
 }
 
 /// Attempts to enable MERGE metadata columns on a Delta table source.
 /// Returns `Some((new_source, schema))` if reconfigured, or `None` if unsupported.
-fn try_enable_merge_metadata_columns(
+fn try_enable_row_level_metadata_columns(
     source: &Arc<dyn TableSource>,
     file_col: &str,
     row_index_col: Option<&str>,
@@ -151,11 +214,10 @@ fn try_enable_merge_metadata_columns(
     }
     if let (Some(row_index_col), Some(delta_source)) =
         (row_index_col, new_source.downcast_ref::<DeltaTableSource>())
+        && delta_source.row_index_column_name().is_none()
     {
-        if delta_source.row_index_column_name().is_none() {
-            new_source = delta_source.with_row_index_column(row_index_col)?;
-            changed = true;
-        }
+        new_source = delta_source.with_row_index_column(row_index_col)?;
+        changed = true;
     }
     if changed {
         let schema = new_source.schema();
@@ -166,7 +228,7 @@ fn try_enable_merge_metadata_columns(
 
 /// Traverses a logical plan to ensure that Delta table scans expose the file path
 /// and optional file-local row-index columns, and that parent projections keep them.
-fn ensure_merge_metadata_columns(
+pub(super) fn ensure_row_level_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
     row_index_col: Option<&str>,
@@ -178,14 +240,14 @@ fn ensure_merge_metadata_columns(
     let transformed = plan
         .transform_up(|plan| {
             // First, configure table scans to expose the file path column.
-            if let LogicalPlan::TableScan(scan) = &plan {
-                if let Some((new_source, schema)) =
-                    try_enable_merge_metadata_columns(&scan.source, file_col, row_index_col)?
+            if let LogicalPlan::TableScan(scan) = &plan
+                && let Some((new_source, schema)) =
+                    try_enable_row_level_metadata_columns(&scan.source, file_col, row_index_col)?
                 {
                     trace!(
-                        "ensure_merge_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
-                        &scan.table_name,
-                        &scan.projection
+                        "ensure_row_level_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
+                        scan.table_name,
+                        scan.projection
                     );
 
                     let mut projection: Option<Vec<usize>> = scan.projection.clone();
@@ -194,23 +256,23 @@ fn ensure_merge_metadata_columns(
                     }
                     if let Some(proj) = projection.as_mut() {
                         for col in &metadata_cols {
-                            if let Some(idx) = schema.column_with_name(col).map(|(idx, _)| idx) {
-                                if !proj.contains(&idx) {
+                            if let Some(idx) = schema.column_with_name(col).map(|(idx, _)| idx)
+                                && !proj.contains(&idx) {
                                     proj.push(idx);
                                 }
-                            }
                         }
                     }
 
-                    let new_scan = LogicalPlan::TableScan(TableScan::try_new(
-                        scan.table_name.clone(),
-                        new_source,
-                        projection,
-                        scan.filters.clone(),
-                        scan.fetch,
-                    )?);
+                    let new_scan = LogicalPlan::TableScan(
+                        TableScanBuilder::new(scan.table_name.clone(), new_source)
+                            .with_projection(projection)
+                            .with_filters(scan.filters.clone())
+                            .with_fetch(scan.fetch)
+                            .with_statistics_requests(scan.statistics_requests.clone())
+                            .build()?,
+                    );
                     trace!(
-                        "ensure_merge_metadata_columns (scan) after - schema_fields: {:?}",
+                        "ensure_row_level_metadata_columns (scan) after - schema_fields: {:?}",
                         new_scan
                             .schema()
                             .fields()
@@ -221,7 +283,6 @@ fn ensure_merge_metadata_columns(
 
                     return Ok(Transformed::yes(new_scan));
                 }
-            }
 
             // Then ensure parent projections keep metadata columns if present in input.
             if let LogicalPlan::Projection(proj) = &plan {
@@ -242,7 +303,7 @@ fn ensure_merge_metadata_columns(
                 }
                 if changed {
                     trace!(
-                        "ensure_merge_metadata_columns (proj) add - exprs: {:?}, input_schema_fields: {:?}",
+                        "ensure_row_level_metadata_columns (proj) add - exprs: {:?}, input_schema_fields: {:?}",
                         proj.expr.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
                         input_schema
                             .fields()
@@ -254,7 +315,7 @@ fn ensure_merge_metadata_columns(
                         .project(new_exprs)?
                         .build()?;
                     trace!(
-                        "ensure_merge_metadata_columns (proj) after: {:?}",
+                        "ensure_row_level_metadata_columns (proj) after: {:?}",
                         new_proj
                             .schema()
                             .fields()
@@ -290,7 +351,7 @@ fn ensure_merge_metadata_columns(
     }
 
     trace!(
-        "ensure_merge_metadata_columns (final) schema: {:?}",
+        "ensure_row_level_metadata_columns (final) schema: {:?}",
         transformed
             .schema()
             .fields()
@@ -300,4 +361,18 @@ fn ensure_merge_metadata_columns(
     );
 
     Ok(transformed)
+}
+
+pub(super) fn change_data_enabled(plan: &LogicalPlan) -> Result<bool> {
+    let mut enabled = false;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            enabled = crate::change_data_feed::enabled(source.snapshot().metadata());
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(enabled)
 }

@@ -16,17 +16,16 @@ static LAST_TIMESTAMP_MS: AtomicI64 = AtomicI64::new(0);
 
 /// Generate a monotonically increasing timestamp in milliseconds.
 pub fn monotonic_timestamp_ms() -> i64 {
-    loop {
-        let now = chrono::Utc::now().timestamp_millis();
-        let last = LAST_TIMESTAMP_MS.load(Ordering::Relaxed);
+    let mut timestamp = 0;
+    LAST_TIMESTAMP_MS.update(Ordering::SeqCst, Ordering::Relaxed, |last| {
+        timestamp = next_monotonic_timestamp(chrono::Utc::now().timestamp_millis(), last);
+        timestamp
+    });
+    timestamp
+}
 
-        let next = if now > last { now } else { last + 1 };
-
-        match LAST_TIMESTAMP_MS.compare_exchange(last, next, Ordering::SeqCst, Ordering::Relaxed) {
-            Ok(_) => return next,
-            Err(_) => continue,
-        }
-    }
+fn next_monotonic_timestamp(now: i64, last: i64) -> i64 {
+    if now > last { now } else { last + 1 }
 }
 
 #[cfg(test)]

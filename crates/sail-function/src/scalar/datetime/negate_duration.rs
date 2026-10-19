@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, TimeUnit,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -86,7 +86,7 @@ impl ScalarUDFImpl for NegateDuration {
                     other => {
                         return exec_err!(
                             "Unsupported data type {other:?} for function negate_duration"
-                        )
+                        );
                     }
                 };
                 Ok(ColumnarValue::Array(result))

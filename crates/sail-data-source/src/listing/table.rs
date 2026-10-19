@@ -12,6 +12,7 @@ use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::source::ReadFormat;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::url::PathGlobFilter;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
@@ -22,6 +23,7 @@ pub struct ListingTableSourceConfig {
     pub collect_stat: bool,
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
+    pub path_glob_filter: Option<PathGlobFilter>,
     pub compression: CompressionTypeVariant,
 }
 

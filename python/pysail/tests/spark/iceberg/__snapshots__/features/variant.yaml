@@ -8,11 +8,13 @@ data:
   default-spec-id: 0
   format-version: 2
   last-column-id: 1
-  last-partition-id: 0
+  last-partition-id: 999
   last-sequence-number: 1
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
-  metadata-log: []
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
   partition-specs:
   - fields: []
     spec-id: 0
@@ -25,7 +27,7 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
@@ -38,7 +40,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '1'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -53,12 +62,14 @@ data:
   default-spec-id: 0
   format-version: 3
   last-column-id: 2
-  last-partition-id: 0
+  last-partition-id: 999
   last-sequence-number: 2
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
   metadata-log:
   - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   next-row-id: 2
   partition-specs:
@@ -73,14 +84,14 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
@@ -99,7 +110,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '1'
     timestamp-ms: <timestamp>
   - added-rows: 2
     first-row-id: 0
@@ -109,7 +127,14 @@ data:
     sequence-number: 2
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '2'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -133,7 +158,7 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 1
   - added-files-count: 1
     added-rows-count: 1
@@ -149,7 +174,7 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 2
 ---
 name: "test_write_and_read_a_variant_column"
@@ -160,11 +185,13 @@ data:
   default-spec-id: 0
   format-version: 3
   last-column-id: 2
-  last-partition-id: 0
+  last-partition-id: 999
   last-sequence-number: 1
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant/
-  metadata-log: []
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_variant/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
   next-row-id: 1
   partition-specs:
   - fields: []
@@ -178,11 +205,11 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
-      required: true
+      required: false
       type: variant
     schema-id: 0
     type: struct
@@ -197,7 +224,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '1'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -221,5 +255,5 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 1

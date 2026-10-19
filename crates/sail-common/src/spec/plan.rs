@@ -290,6 +290,18 @@ pub enum CommandNode {
     HtmlString(HtmlString),
     // TODO: add all the "analyze" requests
     // TODO: should streaming query request be added here?
+    /// A command wrapped with referenced subquery plans (similar to QueryNode::WithRelations).
+    /// This is used when a command references DataFrames passed as named arguments
+    /// (e.g., `spark.sql("MERGE INTO t USING {df}", df=dataframe)`).
+    WithRelations {
+        root: Box<CommandPlan>,
+        references: Vec<QueryPlan>,
+    },
+    CallProcedure {
+        procedure: ObjectName,
+        arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -302,6 +314,10 @@ pub enum CommandNode {
     ListCatalogs {
         pattern: Option<String>,
     },
+    ShowTableProperties {
+        table: ObjectName,
+        property: Option<String>,
+    },
     ShowTables {
         database: Option<ObjectName>,
         pattern: Option<String>,
@@ -309,6 +325,12 @@ pub enum CommandNode {
     ShowTableExtended {
         database: Option<ObjectName>,
         pattern: String,
+    },
+    ShowFunctions {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -434,6 +456,10 @@ pub enum CommandNode {
         is_global: bool,
         if_exists: bool,
     },
+    RemoteCheckpoint {
+        relation_id: String,
+        input: Box<QueryPlan>,
+    },
     Write(Write),
     WriteTo(WriteTo),
     WriteStream(WriteStream),
@@ -462,11 +488,15 @@ pub enum CommandNode {
         variable: String,
         value: String,
     },
+    /// `RESET <variable>`, or `RESET` for all variables when `variable` is `None`.
+    ResetVariable {
+        variable: Option<String>,
+    },
     Update {
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
-        condition: Option<Expr>,
+        condition: Option<ExprWithSource>,
     },
     Delete {
         table: ObjectName,
@@ -765,9 +795,9 @@ pub struct ShowString {
 #[serde(rename_all = "camelCase")]
 pub struct Pivot {
     pub input: Box<QueryPlan>,
-    /// The group-by columns for the pivot operation (only supported in the DataFrame API).
-    /// When the list is empty (for SQL statements), all the remaining columns are included.
-    pub grouping: Vec<Expr>,
+    /// The group-by columns for the pivot operation, set for the DataFrame API (possibly
+    /// empty). When `None` (for SQL statements), all the remaining columns are included.
+    pub grouping: Option<Vec<Expr>>,
     pub aggregate: Vec<Expr>,
     pub columns: Vec<Expr>,
     pub values: Vec<PivotValue>,
@@ -776,7 +806,10 @@ pub struct Pivot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PivotValue {
-    pub values: Vec<Literal>,
+    /// The value expressions for a single pivot output column. Each is a foldable expression
+    /// (a literal, typed literal such as `DATE'...'`, or a cast) that the resolver evaluates to a
+    /// scalar. A single-element list is the common case; multiple elements form a struct pivot.
+    pub values: Vec<Expr>,
     pub alias: Option<Identifier>,
 }
 
@@ -890,10 +923,33 @@ pub struct TableDefinition {
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
-    pub if_not_exists: bool,
-    pub replace: bool,
+    pub mode: CreateTableMode,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateTableMode {
+    #[default]
+    Create,
+    CreateIfNotExists,
+    CreateOrReplace,
+    Replace,
+}
+
+impl CreateTableMode {
+    pub fn ignore_if_exists(self) -> bool {
+        matches!(self, Self::CreateIfNotExists)
+    }
+
+    pub fn is_replace(self) -> bool {
+        matches!(self, Self::CreateOrReplace | Self::Replace)
+    }
+
+    pub fn replace_requires_existing(self) -> bool {
+        matches!(self, Self::Replace)
+    }
 }
 
 /// Returns whether a non-empty path or location is specified,
@@ -1328,7 +1384,31 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterIdentifierFields {
+        names: Vec<ObjectName>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(Expr, Option<String>)>,
+        drop: Option<Expr>,
+    },
+    SetWriteOrder {
+        order: Vec<SortOrder>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
+    RenameTable {
+        name: ObjectName,
+    },
     Unknown,
+    ReplaceColumns {
+        columns: Vec<super::ColumnChange>,
+    },
+    AlterColumns {
+        changes: Vec<super::ColumnChange>,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -1343,6 +1423,10 @@ pub enum AlterTableOperation {
     AlterColumnDefault {
         name: ObjectName,
         default: Option<String>,
+    },
+    DropCheckConstraint {
+        name: Identifier,
+        if_exists: bool,
     },
     AddCheckConstraint {
         name: Identifier,

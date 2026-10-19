@@ -1,9 +1,9 @@
 use std::ffi::CString;
 use std::marker::PhantomData;
 
-use log::{error, logger, Level, MetadataBuilder, Record};
+use log::{Level, MetadataBuilder, Record, error, logger};
 use pyo3::prelude::{PyAnyMethods, PyModule, PyModuleMethods};
-use pyo3::{pyclass, pymethods, Bound, PyAny, PyResult, Python};
+use pyo3::{Bound, PyAny, PyResult, Python, pyclass, pymethods};
 
 pub struct Module<I> {
     name: &'static str,
@@ -101,7 +101,7 @@ impl NativeLogging {
         logger().log(
             &Record::builder()
                 .metadata(metadata)
-                .args(format_args!("{}", &message))
+                .args(format_args!("{}", message))
                 .line(Some(line))
                 .file(Some(&pathname))
                 .module_path(Some(&pathname))

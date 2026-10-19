@@ -106,6 +106,8 @@ pub enum TokenLabel {
     Integer,
     /// A string literal.
     String,
+    /// An unquoted configuration value.
+    ConfigValue,
     /// A statement.
     Statement,
     /// A query.
@@ -128,6 +130,7 @@ impl<'a> From<TokenLabel> for RichPattern<'a, Token<'a>> {
             TokenLabel::Number => RichPattern::Label(Cow::from("number")),
             TokenLabel::Integer => RichPattern::Label(Cow::from("integer")),
             TokenLabel::String => RichPattern::Label(Cow::from("string")),
+            TokenLabel::ConfigValue => RichPattern::Label(Cow::from("configuration value")),
             TokenLabel::Statement => RichPattern::Label(Cow::from("statement")),
             TokenLabel::Query => RichPattern::Label(Cow::from("query")),
             TokenLabel::Expression => RichPattern::Label(Cow::from("expression")),
@@ -236,7 +239,7 @@ macro_rules! punctuation_enum {
 for_all_punctuations!(punctuation_enum);
 
 macro_rules! keyword_enum {
-    ([$(($string:expr, $identifier:ident),)* $(,)?]) => {
+    ([$(($string:expr_2021, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Keyword {
@@ -471,7 +474,7 @@ impl Keyword {
 #[cfg(test)]
 mod tests {
     macro_rules! keyword_values {
-        ([$(($string:expr, $_:ident),)* $(,)?]) => {
+        ([$(($string:expr_2021, $_:ident),)* $(,)?]) => {
             static KEYWORD_VALUES: &[&str] = &[ $($string,)* ];
         };
     }

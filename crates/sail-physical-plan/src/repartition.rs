@@ -7,22 +7,28 @@ use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::Partitioning;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
+use datafusion::physical_plan::projection::{
+    ProjectionExec, all_columns, make_with_child, update_expr,
+};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    apply_expression_roots,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
-    RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
+    DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
 };
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 #[derive(Debug, Clone)]
 pub struct RowRoundRobinPartitioner {
@@ -407,15 +413,18 @@ async fn broadcast_round_robin_error(
 }
 
 impl DisplayAs for ExplicitRepartitionExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match &self.properties.partitioning {
-            Partitioning::RoundRobinBatch(partitions) => write!(
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
                 f,
-                "ExplicitRepartitionExec: partitioning=RoundRobinBatch({}), input_partitions={}",
-                partitions,
+                "{}: partitioning={}, input_partitions={}",
+                Self::static_name(),
+                self.properties.partitioning,
                 self.input.output_partitioning().partition_count(),
             ),
-            _ => write!(f, "{}", Self::static_name()),
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.properties.partitioning)
+            }
         }
     }
 }
@@ -435,6 +444,28 @@ impl ExecutionPlan for ExplicitRepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        match self.properties.output_partitioning() {
+            Partitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
+            Partitioning::Range(range) => {
+                apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
+            }
+            _ => Ok(TreeNodeRecursion::Continue),
+        }
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -471,9 +502,21 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![if partition.is_none() {
+            ChildStats::At(None)
+        } else {
+            ChildStats::Skip
+        }]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_none() {
+            Ok(Arc::clone(&input_stats[0]))
         } else {
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }
@@ -483,10 +526,43 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         CardinalityEffect::Equal
     }
 
-    // TODO: Implement the logic to push down filters or projections.
-    //   The filters and projections are safe to push down if they are
-    //   column references. For other expressions, we may not want to
-    //   push them down since the evaluation can be potentially expensive,
-    //   and the presence of explicit repartitioning indicates that the user
-    //   wants to evaluate these expressions after repartitioning.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // No benefit if projection does not narrow the schema
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        // Skip if projection expressions are not simple column references
+        if projection.benefits_from_input_partitioning()[0] || !all_columns(projection.expr()) {
+            return Ok(None);
+        }
+
+        let new_projection = make_with_child(projection, self.input())?;
+        // Handle all partitioning variants — 'ProjectionPushdown' runs before 'RewriteExplicitRepartition'
+        let new_partitioning = match &self.properties.partitioning {
+            Partitioning::Hash(partitions, size) => {
+                let mut new_partitions = vec![];
+                for partition in partitions {
+                    let Some(new_partition) = update_expr(partition, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    new_partitions.push(new_partition);
+                }
+                Partitioning::Hash(new_partitions, *size)
+            }
+            other => other.clone(),
+        };
+        Ok(Some(Arc::new(ExplicitRepartitionExec::new(
+            new_projection,
+            new_partitioning,
+        ))))
+    }
+
+    // Do not implement Filter pushdown, as its evaluation can be potentially
+    // expensive, and the presence of explicit repartitioning indicates that
+    // the user wants to evaluate the filters after repartitioning.
 }

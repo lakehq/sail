@@ -3,8 +3,9 @@ use std::ffi::CString;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
-use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
+use pyo3::{Bound, Py, PyAny, PyResult, Python, intern};
 
+use crate::buffer::PyPassthroughBuffer;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
 use crate::python::py_init_object;
@@ -38,12 +39,16 @@ impl PySpark {
         udf: Bound<'py, PyAny>,
         input_types: &[DataType],
         output_type: &DataType,
-        _config: &PySparkUdfConfig,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkBatchUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (
+                udf,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
+                output_type.try_to_py(py, config.arrow_use_large_var_types)?,
+            ),
         )
     }
 
@@ -74,12 +79,21 @@ impl PySpark {
     pub fn scalar_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
+        passthrough_columns: usize,
+        output_name: &str,
         config: &PySparkUdfConfig,
+        buffer: PyPassthroughBuffer,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasIterUdf"),
-            (udf, config.clone()),
+            (
+                udf,
+                passthrough_columns,
+                output_name,
+                config.clone(),
+                buffer,
+            ),
         )
     }
 
@@ -202,9 +216,9 @@ impl PySpark {
             intern!(py, "PySparkTableUdf"),
             (
                 udf,
-                input_types.try_to_py(py)?,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
                 passthrough_columns,
-                output_schema.try_to_py(py)?,
+                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
                 config.clone(),
             ),
         )
@@ -225,9 +239,9 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
-                input_types.try_to_py(py)?,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
                 passthrough_columns,
-                output_schema.try_to_py(py)?,
+                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
                 config.clone(),
             ),
         )

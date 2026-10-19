@@ -23,6 +23,17 @@ def test_text_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_text_path_glob_filter(spark, tmp_path):
+    path = tmp_path / "text_path_glob_filter"
+    path.mkdir()
+    (path / "keep.txt").write_text("keep\n")
+    (path / "drop.txt").write_text("drop\n")
+
+    df = spark.read.option("pathGlobFilter", "keep.*").text(str(path))
+
+    assert df.collect() == [Row(value="keep")]
+
+
 def test_text_read_write_compressed(spark, sample_df, tmp_path):
     path = str(tmp_path / "text_compressed_gzip")
     sample_df = sample_df.select("col1")
@@ -93,3 +104,25 @@ def test_text_read_projections(spark, sample_df, tmp_path):
     values = [r.value for r in projected_df.collect()]
     expected = [r["col1"] if r["col1"] is not None else "" for r in sample_df.collect()]
     assert sorted(values) == sorted(expected)
+
+
+def test_text_read_partition_columns(spark, tmp_path):
+    root = tmp_path / "text_partitioned"
+    (root / "country=us" / "city=sf").mkdir(parents=True)
+    (root / "country=us" / "city=ny").mkdir(parents=True)
+    (root / "country=ca" / "city=to").mkdir(parents=True)
+    (root / "country=us" / "city=sf" / "part-0.txt").write_text("golden\nbridge\n", encoding="utf-8")
+    (root / "country=us" / "city=ny" / "part-0.txt").write_text("hudson\n", encoding="utf-8")
+    (root / "country=ca" / "city=to" / "part-0.txt").write_text("harbour\n", encoding="utf-8")
+
+    read_df = spark.read.text(str(root)).select("value", "country", "city")
+
+    rows = {(row.value, row.country, row.city) for row in read_df.collect()}
+    assert rows == {
+        ("golden", "us", "sf"),
+        ("bridge", "us", "sf"),
+        ("hudson", "us", "ny"),
+        ("harbour", "ca", "to"),
+    }
+    expected_us_rows = 3
+    assert read_df.filter("country = 'us'").count() == expected_us_rows

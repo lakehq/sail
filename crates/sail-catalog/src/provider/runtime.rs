@@ -1,14 +1,21 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
-    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
+    Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+};
 
 pub struct RuntimeAwareCatalogProvider<P: CatalogProvider> {
     inner: Arc<P>,
@@ -96,6 +103,135 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute create_table: {e}")))?
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        self.inner.create_table_metadata_requirement(options)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        self.inner.lakehouse_capabilities()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .resolve_lakehouse_table(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute resolve_lakehouse_table: {e}"))
+            })?
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .plan_lakehouse_create(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute plan_lakehouse_create: {e}"))
+            })?
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.begin_table_access(&database, &table, request).await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute begin_table_access: {e}"))
+            })?
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.plan_lakehouse_scan(&database, &table, request).await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute plan_lakehouse_scan: {e}"))
+            })?
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .commit_lakehouse_table(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute commit_lakehouse_table: {e}"))
+            })?
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .get_delta_ratified_commits(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute get_delta_ratified_commits: {e}"))
+            })?
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let inner = self.inner.clone();
         let database = database.clone();
@@ -130,6 +266,32 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_table: {e}")))?
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        self.inner.validate_alter_table(options)
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let destination_database = destination_database.clone();
+        let destination_table = destination_table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .rename_table(&database, &table, &destination_database, &destination_table)
+                    .await
+            })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute rename_table: {e}")))?
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -145,35 +307,46 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
     }
 
-    async fn commit_table(
+    async fn alter_table_with_schema(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
         let inner = self.inner.clone();
         let database = database.clone();
         let table = table.to_string();
         self.handle
-            .spawn(async move { inner.commit_table(&database, &table, options).await })
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to execute commit_table: {e}")))?
-    }
-
-    async fn get_table_commits(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        let inner = self.inner.clone();
-        let database = database.clone();
-        let table = table.to_string();
-        self.handle
-            .spawn(async move { inner.get_table_commits(&database, &table, options).await })
+            .spawn(async move {
+                inner
+                    .alter_table_with_schema(&database, &table, options, schema)
+                    .await
+            })
             .await
             .map_err(|e| {
-                CatalogError::External(format!("Failed to execute get_table_commits: {e}"))
+                CatalogError::External(format!("Failed to execute alter_table_with_schema: {e}"))
+            })?
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .alter_table_atomically(&database, &table, options)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute alter_table_atomically: {e}"))
             })?
     }
 

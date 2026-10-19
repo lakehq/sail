@@ -4,7 +4,7 @@ use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::formats::text::TableTextOptions;
-use crate::options::gen::{
+use crate::options::r#gen::{
     TextReadOptions, TextReadPartialOptions, TextWriteOptions, TextWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -15,6 +15,7 @@ impl TextReadOptions {
         let TextReadOptions {
             whole_text,
             line_sep,
+            path_glob_filter: _,
         } = self;
         // Validate that line_sep (if set) is a valid ASCII byte character
         if let Some(c) = line_sep {
@@ -88,8 +89,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
-    use crate::options::gen::{TextReadOptions, TextWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{TextReadOptions, TextWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_text_read_options() -> datafusion_common::Result<()> {

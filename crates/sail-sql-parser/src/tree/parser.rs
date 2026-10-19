@@ -1,6 +1,6 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::Input;
-use chumsky::Parser;
 
 use crate::options::ParserOptions;
 

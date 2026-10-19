@@ -32,6 +32,6 @@ data:
     - variantShredding-preview
     writerFeatures:
     - variantType
+    - variantShredding-preview
     - appendOnly
     - invariants
-    - variantShredding-preview

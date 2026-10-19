@@ -1,40 +1,23 @@
 use std::collections::HashSet;
+use std::fmt;
+use std::fmt::Formatter;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// A Python error in text form. This could be a remote error from a worker.
+/// An error with a cause received from a remote worker.
 #[derive(Debug, Clone, Error)]
-#[error("remote Python error: {summary}")]
-pub struct RemotePythonError {
-    pub summary: String,
-    pub traceback: Option<Vec<String>>,
+#[error("remote error: {cause}")]
+pub struct RemoteError {
+    pub cause: CommonErrorCause,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonErrorCause {
     pub summary: String,
     pub traceback: Option<Vec<String>>,
-}
-
-impl From<RemotePythonError> for PythonErrorCause {
-    fn from(error: RemotePythonError) -> Self {
-        Self {
-            summary: error.summary,
-            traceback: error.traceback,
-        }
-    }
-}
-
-impl From<PythonErrorCause> for RemotePythonError {
-    fn from(cause: PythonErrorCause) -> Self {
-        Self {
-            summary: cause.summary,
-            traceback: cause.traceback,
-        }
-    }
 }
 
 /// A trait to extract Python error cause from a generic error.
@@ -78,6 +61,41 @@ pub enum CommonErrorCause {
     Configuration(String),
     Execution(String),
     DeltaTable(String),
+}
+
+impl fmt::Display for CommonErrorCause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CommonErrorCause::Unknown(x)
+            | CommonErrorCause::Internal(x)
+            | CommonErrorCause::NotImplemented(x)
+            | CommonErrorCause::InvalidArgument(x)
+            | CommonErrorCause::Io(x)
+            | CommonErrorCause::ArrowCast(x)
+            | CommonErrorCause::ArrowMemory(x)
+            | CommonErrorCause::ArrowParse(x)
+            | CommonErrorCause::ArrowCompute(x)
+            | CommonErrorCause::ArrowIpc(x)
+            | CommonErrorCause::ArrowCDataInterface(x)
+            | CommonErrorCause::ArrowDivideByZero(x)
+            | CommonErrorCause::ArrowArithmeticOverflow(x)
+            | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
+            | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x)
+            | CommonErrorCause::FormatCsv(x)
+            | CommonErrorCause::FormatJson(x)
+            | CommonErrorCause::FormatParquet(x)
+            | CommonErrorCause::FormatAvro(x)
+            | CommonErrorCause::Plan(x)
+            | CommonErrorCause::Schema(x)
+            | CommonErrorCause::Configuration(x)
+            | CommonErrorCause::Execution(x)
+            | CommonErrorCause::DeltaTable(x) => write!(f, "{x}"),
+            CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
+                write!(f, "{summary}")
+            }
+        }
+    }
 }
 
 impl CommonErrorCause {
@@ -152,8 +170,8 @@ impl CommonErrorCause {
             return Self::Python(cause);
         }
 
-        if let Some(e) = error.downcast_ref::<RemotePythonError>() {
-            return Self::Python(e.clone().into());
+        if let Some(e) = error.downcast_ref::<RemoteError>() {
+            return e.cause.clone();
         }
 
         if let Some(e) = error.source() {
