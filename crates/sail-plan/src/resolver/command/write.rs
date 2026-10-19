@@ -256,6 +256,12 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
+        let use_session_overwrite_mode = self.config.dynamic_partition_overwrite
+            && (matches!(mode, WriteMode::Truncate)
+                || matches!(
+                    (&target, &mode),
+                    (WriteTarget::DataSource, WriteMode::Replace { .. })
+                ));
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
@@ -554,6 +560,23 @@ impl PlanResolver<'_> {
         input = self
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
+        if use_session_overwrite_mode && matches!(sink_info.mode, SinkMode::Overwrite) {
+            let option = if write_format.eq_ignore_ascii_case("delta") {
+                Some("partitionOverwriteMode")
+            } else if write_format.eq_ignore_ascii_case("iceberg") {
+                Some("overwrite-mode")
+            } else {
+                None
+            };
+            if let Some(option) = option {
+                sink_info.options.insert(
+                    0,
+                    OptionLayer::OptionList {
+                        items: vec![(option.into(), "dynamic".into())],
+                    },
+                );
+            }
+        }
         sink_info.input = input;
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let plan = registry
@@ -616,7 +639,10 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
+    pub(super) async fn resolve_table_info(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<Option<TableInfo>> {
         let status = match self
             .ctx
             .extension::<CatalogManager>()?
@@ -856,13 +882,14 @@ impl PlanResolver<'_> {
         let has_default_values = Self::plan_has_default_column_value(&input)?;
         let requires_delta_not_null_metadata =
             info.format.eq_ignore_ascii_case("delta") && info.columns.iter().any(|c| !c.nullable);
-        let missing_iceberg_columns = info.format.eq_ignore_ascii_case("iceberg")
+        let missing_lakehouse_columns = (info.format.eq_ignore_ascii_case("iceberg")
+            || info.format.eq_ignore_ascii_case("delta"))
             && matches!(&column_match, WriteColumnMatch::ByColumns { .. })
             && input.schema().fields().len() < info.columns.len();
         if has_column_expressions
             || has_default_values
             || requires_delta_not_null_metadata
-            || missing_iceberg_columns
+            || missing_lakehouse_columns
         {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
@@ -1854,7 +1881,8 @@ impl TableInfo {
         column.generated_always_as.is_some()
             || self.has_column_default(column)
             || column.identity.is_some()
-            || (self.format.eq_ignore_ascii_case("iceberg")
+            || ((self.format.eq_ignore_ascii_case("iceberg")
+                || self.format.eq_ignore_ascii_case("delta"))
                 && column.nullable
                 && !matches!(column_match, WriteColumnMatch::ByPosition))
     }
