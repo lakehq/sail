@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
 };
@@ -41,13 +41,28 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            let Some(input_idx) = input_names
                 .iter()
                 .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+            else {
+                // As in Spark, a missing column is filled with nulls if the field is nullable.
+                if !target_field.is_nullable() {
+                    return Err(PlanError::analysis(format!(
+                        "[UNRESOLVED_COLUMN] A column with name `{target_name}` cannot be resolved"
+                    )));
+                }
+                projected_exprs.push(
+                    cast(lit(ScalarValue::Null), target_field.data_type().clone())
+                        .alias(state.register_field_name(target_name)),
+                );
+                continue;
+            };
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+            if input_field.is_nullable() && !target_field.is_nullable() {
+                return Err(PlanError::analysis(format!(
+                    "[NULLABLE_COLUMN_OR_FIELD] Column or field `{target_name}` is nullable while it's required to be non-nullable"
+                )));
+            }
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
                 expr
