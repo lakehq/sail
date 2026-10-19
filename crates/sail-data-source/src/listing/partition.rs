@@ -9,6 +9,7 @@ use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStore;
+use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
 pub(crate) const HIVE_DEFAULT_PARTITION: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -59,7 +60,8 @@ pub(crate) async fn pruned_partition_list<'a>(
                 )
         })
         .count();
-    let prefix = evaluate_partition_prefix(&partition_cols[..prefix_columns], filters);
+    let prefix = evaluate_partition_prefix(&partition_cols[..prefix_columns], filters)
+        .and_then(unescaped_partition_prefix);
     let objects = table_path
         .list_prefixed_files(ctx, store, prefix, file_extension)
         .await?;
@@ -111,4 +113,24 @@ pub(crate) async fn pruned_partition_list<'a>(
             futures::future::ready(result)
         })
         .boxed())
+}
+
+fn unescaped_partition_prefix(prefix: Path) -> Option<Path> {
+    // Hive, DataFusion and object_store escape different sets of characters.
+    // Only retain leading components whose spelling is the same in all three.
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
+    };
+    let parts = prefix
+        .as_ref()
+        .split('/')
+        .take_while(|part| {
+            part.split_once('=')
+                .is_some_and(|(name, value)| safe(name) && safe(value))
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| Path::from_iter(parts))
 }

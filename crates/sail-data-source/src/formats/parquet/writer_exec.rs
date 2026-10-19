@@ -1,7 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::array::RecordBatch;
+use arrow::compute::{CastOptions, cast_with_options};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::util::display::array_value_to_string;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -66,7 +68,21 @@ impl ParquetWriterExec {
         {
             return plan_err!("ParquetWriterExec requires a directory destination");
         }
-        if config.output_schema != input.schema() {
+        let input_schema = input.schema();
+        // Remote expressions may lose field metadata. Preserve the sink's
+        // metadata while requiring the same column structure and nullability.
+        if config.output_schema.fields().len() != input_schema.fields().len()
+            || config
+                .output_schema
+                .fields()
+                .iter()
+                .zip(input_schema.fields())
+                .any(|(output, input)| {
+                    output.name() != input.name()
+                        || output.data_type() != input.data_type()
+                        || output.is_nullable() != input.is_nullable()
+                })
+        {
             return plan_err!("Parquet writer schema does not match its input");
         }
         if max_rows_per_file == 0 {
@@ -75,7 +91,13 @@ impl ParquetWriterExec {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
             return plan_err!("ParquetWriterExec requires bounded input");
         }
-        let schema = input.schema();
+        let schema = &config.output_schema;
+        for (name, _) in &config.table_partition_cols {
+            let data_type = schema.field_with_name(name)?.data_type();
+            if !supports_partition_type(data_type) {
+                return plan_err!("Unsupported Parquet partition type for {name}: {data_type}");
+            }
+        }
         if schema.fields().iter().all(|field| {
             !config.keep_partition_by_columns
                 && config
@@ -267,7 +289,7 @@ impl PartitionWriter {
         context: Arc<TaskContext>,
         store: Arc<dyn ObjectStore>,
     ) -> Result<Self> {
-        let schema = exec.input.schema();
+        let schema = &exec.config.output_schema;
         let partition_columns = exec
             .config
             .table_partition_cols
@@ -326,7 +348,7 @@ impl PartitionWriter {
             file_schema,
             properties: properties.build(),
             skip_arrow_metadata: exec.options.global.skip_arrow_metadata,
-            buffer_size: execution.objectstore_writer_buffer_size,
+            buffer_size: execution.objectstore_writer_buffer_size.max(1),
             batch_size: execution.batch_size.get(),
             max_rows: exec.max_rows_per_file,
             active: None,
@@ -374,6 +396,18 @@ impl PartitionWriter {
                     let column = batch.column(*index);
                     let value = if column.is_null(range.start) {
                         String::new()
+                    } else if partition_value_type(column.data_type()).is_binary() {
+                        let options = CastOptions {
+                            safe: false,
+                            ..Default::default()
+                        };
+                        let binary = cast_with_options(
+                            &column.slice(range.start, 1),
+                            &DataType::Binary,
+                            &options,
+                        )?;
+                        let value = cast_with_options(&binary, &DataType::Utf8, &options)?;
+                        array_value_to_string(value.as_ref(), 0)?
                     } else {
                         array_value_to_string(column.as_ref(), range.start)?
                     };
@@ -390,6 +424,8 @@ impl PartitionWriter {
                 let projected = batch
                     .slice(range.start, range.len())
                     .project(&self.projection)?;
+                let projected =
+                    RecordBatch::try_new(self.file_schema.clone(), projected.columns().to_vec())?;
                 let mut offset = 0;
                 while offset < projected.num_rows() {
                     if self.active.is_none() {
@@ -400,9 +436,15 @@ impl PartitionWriter {
                         .min(self.batch_size);
                     if let Some(writer) = &mut self.active {
                         writer.write(&projected.slice(offset, len)).await?;
-                        if self.reservation.try_resize(writer.memory_size()).is_err() {
+                        if self
+                            .reservation
+                            .try_resize(writer.memory_size().saturating_add(self.buffer_size))
+                            .is_err()
+                        {
                             writer.flush().await?;
-                            self.reservation.try_resize(writer.memory_size())?;
+                            self.reservation.try_resize(
+                                writer.memory_size().saturating_add(self.buffer_size),
+                            )?;
                         }
                     }
                     self.current_rows += len;
@@ -424,6 +466,9 @@ impl PartitionWriter {
     }
 
     fn start_file(&mut self, directory: &Path) -> Result<()> {
+        // Reserve the upload buffer separately from the Parquet encoder. A
+        // row-group flush releases encoder memory but may leave buffered bytes.
+        self.reservation.try_resize(self.buffer_size)?;
         let path = directory.clone().join(format!(
             "part-{:05}-{}-c{:03}.{}",
             self.partition,
@@ -455,6 +500,44 @@ impl PartitionWriter {
         self.reservation.free();
         Ok(())
     }
+}
+
+fn partition_value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value) => partition_value_type(value),
+        value => value,
+    }
+}
+
+fn supports_partition_type(data_type: &DataType) -> bool {
+    matches!(
+        partition_value_type(data_type),
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
+    )
 }
 
 // Match Spark/Hive directory escaping, including literal '%' and '='.
@@ -517,6 +600,7 @@ mod tests {
     use datafusion_datasource::file_sink_config::FileOutputMode;
     use datafusion_datasource::memory::MemorySourceConfig;
     use object_store::memory::InMemory;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::*;
@@ -610,6 +694,71 @@ mod tests {
                 }
             );
             assert_eq!(values, (0..11).collect::<Vec<_>>());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accounts_for_upload_buffer_after_row_group_flush()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "id",
+            Arc::new(Int64Array::from_iter_values(0..9)) as arrow::array::ArrayRef,
+        )])?;
+        let (exec, context, store) = make_writer(&batch, false)?;
+        let mut options = TableParquetOptions::default();
+        options.global.max_row_group_size = 1;
+        let exec = ParquetWriterExec::try_new(
+            exec.input.clone(),
+            exec.config.clone(),
+            options,
+            None,
+            100,
+        )?;
+        let pool = context.memory_pool().clone();
+        let writer = PartitionWriter::try_new(&exec, 0, context, store)?;
+        let buffer_size = writer.buffer_size;
+        let input_pool = pool.clone();
+        let stream = RecordBatchStreamAdapter::new(
+            batch.schema(),
+            futures::stream::iter([Ok(batch)]).chain(futures::stream::once(async move {
+                assert_eq!(input_pool.reserved(), buffer_size);
+                Err(datafusion_common::exec_datafusion_err!(
+                    "injected input failure"
+                ))
+            })),
+        );
+        assert!(writer.write_all(Box::pin(stream)).await.is_err());
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_sink_metadata_when_input_metadata_is_missing()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "id",
+            Arc::new(Int64Array::from_iter_values(0..9)) as arrow::array::ArrayRef,
+        )])?;
+        let (exec, context, store) = make_writer(&batch, false)?;
+        let mut config = exec.config.clone();
+        let schema =
+            Arc::new(Schema::new_with_metadata(
+                vec![Field::new("id", DataType::Int64, false).with_metadata(
+                    [(PARQUET_FIELD_ID_META_KEY.to_string(), "7".to_string())].into(),
+                )],
+                [("source".to_string(), "sink".to_string())].into(),
+            ));
+        config.output_schema = schema.clone();
+        let plan =
+            ParquetWriterExec::try_new(exec.input.clone(), config, Default::default(), None, 3)?;
+        collect(Arc::new(plan), context).await?;
+        let files = store.list(None).try_collect::<Vec<_>>().await?;
+        assert_eq!(files.len(), 3);
+        for file in files {
+            let bytes = store.get(&file.location).await?.bytes().await?;
+            let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+            assert_eq!(reader.schema(), &schema);
         }
         Ok(())
     }

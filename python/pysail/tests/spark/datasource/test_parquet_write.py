@@ -1,7 +1,9 @@
 from urllib.parse import unquote
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 from pyspark.sql import functions as sf
 
@@ -67,7 +69,7 @@ def test_parquet_writer_partition_directories_and_file_schema(spark, tmp_path):
     assert read_back.orderBy("id").collect() == [Row(id=i, part=part, sub=sub) for i, part, sub in expected]
 
 
-@pytest.mark.parametrize("part", ["a=b", "a~b"])
+@pytest.mark.parametrize("part", ["a=b", "a:b", "a'b", "a~b", "a>b", "a<b", "a|b", "a`b", "a}b"])
 def test_parquet_writer_partition_equality_keeps_matching_rows(spark, tmp_path, part):
     path = str(tmp_path / "partitioned")
     expected = [Row(id=1, p=part)]
@@ -78,11 +80,39 @@ def test_parquet_writer_partition_equality_keeps_matching_rows(spark, tmp_path, 
     assert frame.where(sf.col("p") == sf.lit(part)).collect() == expected
 
 
+@pytest.mark.parametrize(("part", "escaped"), [("a=b", "a%3Db"), ("a~b", "a%7Eb")])
+def test_parquet_partition_filter_reads_both_directory_spellings(spark, tmp_path, part, escaped):
+    for i, name in enumerate([part, escaped]):
+        directory = tmp_path / "region=west" / f"p={name}"
+        directory.mkdir(parents=True)
+        pq.write_table(pa.table({"id": [i]}), directory / "data.parquet")
+    frame = spark.read.parquet(str(tmp_path))
+    actual = frame.where((sf.col("region") == "west") & (sf.col("p") == part)).orderBy("id").collect()
+    assert actual == [Row(id=i, region="west", p=part) for i in range(2)]
+
+
 def test_parquet_writer_binary_partition_preserves_bytes(spark, tmp_path):
     path = str(tmp_path / "binary_partition")
     frame = spark.createDataFrame([(1, b"abc")], "id BIGINT, p BINARY")
     frame.write.partitionBy("p").parquet(path)
     assert spark.read.schema(frame.schema).parquet(path).collect() == frame.collect()
+
+
+@pytest.mark.parametrize("expression", ["array(1, 2)", "map('a', 1)", "named_struct('a', 1)", "parse_json('{}')"])
+def test_parquet_writer_rejects_complex_partition_types(spark, tmp_path, expression):
+    frame = spark.sql(f"SELECT 1 AS id, {expression} AS p")
+    with pytest.raises(AnalysisException):
+        frame.write.partitionBy("p").parquet(str(tmp_path / "output"))
+    assert list(tmp_path.rglob("*.parquet")) == []
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail does not support interval partition decoding")
+@pytest.mark.parametrize("expression", ["INTERVAL '1-2' YEAR TO MONTH", "INTERVAL '1 02:03:04.123456' DAY TO SECOND"])
+def test_parquet_writer_rejects_unreadable_interval_partitions(spark, tmp_path, expression):
+    frame = spark.sql(f"SELECT 1 AS id, {expression} AS p")
+    with pytest.raises(AnalysisException, match="Unsupported Parquet partition type"):
+        frame.write.partitionBy("p").parquet(str(tmp_path / "output"))
+    assert list(tmp_path.rglob("*.parquet")) == []
 
 
 def test_parquet_writer_variant_roundtrip(spark, tmp_path):
@@ -92,6 +122,10 @@ def test_parquet_writer_variant_roundtrip(spark, tmp_path):
     expected = frame.selectExpr("id", "to_json(v) AS json").orderBy("id").collect()
     actual = spark.read.parquet(path).selectExpr("id", "to_json(v) AS json").orderBy("id").collect()
     assert actual == expected
+    if not is_jvm_spark():
+        for file in (tmp_path / "variant").glob("*.parquet"):
+            metadata = pq.ParquetFile(file).schema_arrow.field("v").metadata
+            assert metadata[b"ARROW:extension:name"] == b"arrow.parquet.variant"
 
 
 def test_parquet_writer_nullable_numeric_partitions(spark, tmp_path):

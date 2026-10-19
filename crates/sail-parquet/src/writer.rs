@@ -5,7 +5,7 @@ use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use object_store::path::Path;
-use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayloadMut};
+use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::async_writer::{AsyncArrowWriter, AsyncFileWriter};
 use parquet::errors::{ParquetError, Result};
@@ -38,6 +38,7 @@ impl<W: AsyncFileWriter> ParquetWriter<W> {
         self.writer.flush().await
     }
 
+    /// Memory held by the Parquet encoder, excluding the output's own buffers.
     pub fn memory_size(&self) -> usize {
         self.writer.memory_size()
     }
@@ -67,7 +68,7 @@ pub struct ParquetObjectWriter {
     store: Arc<dyn ObjectStore>,
     location: Path,
     capacity: usize,
-    buffer: PutPayloadMut,
+    buffer: Vec<u8>,
     upload: Option<Box<dyn MultipartUpload>>,
     completed: bool,
 }
@@ -78,7 +79,7 @@ impl ParquetObjectWriter {
             store,
             location,
             capacity: capacity.max(1),
-            buffer: PutPayloadMut::new(),
+            buffer: Vec::new(),
             upload: None,
             completed: false,
         }
@@ -104,17 +105,28 @@ impl ParquetObjectWriter {
 }
 
 impl AsyncFileWriter for ParquetObjectWriter {
-    fn write(&mut self, mut bytes: Bytes) -> BoxFuture<'_, Result<()>> {
+    fn write(&mut self, bytes: Bytes) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             if self.completed {
                 return Err(ParquetError::General("Parquet upload is closed".into()));
             }
-            while !bytes.is_empty() {
-                let len = bytes
-                    .len()
-                    .min(self.capacity - self.buffer.content_length());
-                self.buffer.push(bytes.split_to(len));
-                if self.buffer.content_length() == self.capacity {
+            let mut remaining = bytes.as_ref();
+            while !remaining.is_empty() {
+                let len = remaining.len().min(self.capacity - self.buffer.len());
+                // Own the buffered bytes: a slice of the input would retain the
+                // entire encoded row group even for a tiny unfinished part.
+                if self.buffer.len() + len > self.buffer.capacity() {
+                    let capacity = self.capacity.min(
+                        self.buffer
+                            .capacity()
+                            .saturating_mul(2)
+                            .max(self.buffer.len() + len),
+                    );
+                    self.buffer.reserve_exact(capacity - self.buffer.len());
+                }
+                self.buffer.extend_from_slice(&remaining[..len]);
+                remaining = &remaining[len..];
+                if self.buffer.len() == self.capacity {
                     self.flush_buffer().await?;
                 }
             }
@@ -229,6 +241,51 @@ mod tests {
             }
             assert_eq!(offset, batch.num_rows());
         }
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct TrackedBytes {
+        data: Vec<u8>,
+        released: Arc<AtomicBool>,
+    }
+
+    impl AsRef<[u8]> for TrackedBytes {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    impl Drop for TrackedBytes {
+        fn drop(&mut self) {
+            self.released.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_tail_does_not_retain_the_encoded_row_group()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let released = Arc::new(AtomicBool::new(false));
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("data.parquet");
+        let capacity = 64;
+        let mut output = ParquetObjectWriter::new(store.clone(), path.clone(), capacity);
+        let bytes = Bytes::from_owner(TrackedBytes {
+            data: vec![7; 4097],
+            released: released.clone(),
+        });
+        output.write(bytes).await?;
+        assert!(released.load(Ordering::SeqCst));
+        assert_eq!(output.buffer.len(), 1);
+        assert!(output.buffer.capacity() <= capacity);
+        for value in 0..63 {
+            output.write(Bytes::copy_from_slice(&[value])).await?;
+            assert!(output.buffer.capacity() <= capacity);
+        }
+        output.complete().await?;
+        let mut expected = vec![7; 4097];
+        expected.extend(0..63);
+        assert_eq!(store.get(&path).await?.bytes().await?.as_ref(), expected);
         Ok(())
     }
 
