@@ -1992,6 +1992,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
                     &input, &call,
                 )?;
+                let mut pending = vec![&input];
+                while let Some(node) = pending.pop() {
+                    if let Some(exec) =
+                        node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+                        && exec.call() != &call
+                    {
+                        return plan_err!(
+                            "Delta maintenance call does not match its procedure boundary"
+                        );
+                    }
+                    pending.extend(node.children());
+                }
                 let procedure = LakeProcedureExec::try_new(call, input, root_placement)?;
                 if procedure.schema_ref().as_ref() != schema.as_ref() {
                     return plan_err!(
@@ -1999,6 +2011,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     );
                 }
                 Ok(Arc::new(procedure))
+            }
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                call,
+                options,
+                predicate,
+                predicate_schema,
+            }) => {
+                let call = serde_json::from_str(&call).map_err(|e| {
+                    plan_datafusion_err!("failed to decode Delta maintenance call: {e}")
+                })?;
+                let predicate = match (predicate, predicate_schema) {
+                    (None, None) => None,
+                    (Some(predicate), Some(schema)) => {
+                        let schema = Arc::new(try_decode_schema(&schema)?);
+                        let expr = try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &schema,
+                        )?;
+                        Some(sail_delta_lake::physical_plan::DeltaMaintenancePredicate {
+                            schema,
+                            expr,
+                        })
+                    }
+                    _ => return plan_err!("Delta maintenance predicate is missing its schema"),
+                };
+                Ok(Arc::new(
+                    sail_delta_lake::physical_plan::DeltaMaintenanceExec::try_new(
+                        call,
+                        options.into_iter().collect(),
+                        predicate,
+                    )?,
+                ))
             }
             NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
                 call,
@@ -3244,6 +3291,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 call,
                 input,
                 root_placement,
+            })
+        } else if let Some(exec) =
+            node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+        {
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                call: serde_json::to_string(exec.call()).map_err(|e| {
+                    plan_datafusion_err!("failed to encode Delta maintenance call: {e}")
+                })?,
+                options: exec
+                    .options()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                predicate: exec
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            &predicate.expr,
+                        )
+                    })
+                    .transpose()?,
+                predicate_schema: exec
+                    .predicate()
+                    .map(|predicate| try_encode_schema(&predicate.schema))
+                    .transpose()?,
             })
         } else if let Some(procedure_exec) = node.downcast_ref::<IcebergProcedureExec>() {
             procedure_exec.validate()?;

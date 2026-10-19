@@ -1,0 +1,27 @@
+[
+  {
+    "key": "spark.databricks.delta.optimize.maxDeletedRowsRatio",
+    "doc": "OPTIMIZE rewrites files whose deleted-row ratio exceeds this threshold.",
+    "defaultValue": "0.05"
+  },
+  {
+    "key": "spark.databricks.delta.optimize.maxFileSize",
+    "doc": "Target file size in bytes for files written by OPTIMIZE.",
+    "defaultValue": "1073741824"
+  },
+  {
+    "key": "spark.databricks.delta.optimize.minFileSize",
+    "doc": "OPTIMIZE considers files smaller than this size in bytes for compaction.",
+    "defaultValue": "1073741824"
+  },
+  {
+    "key": "spark.databricks.delta.retentionDurationCheck.enabled",
+    "doc": "Rejects VACUUM retention periods shorter than the table's deleted-file retention duration.",
+    "defaultValue": "true"
+  },
+  {
+    "key": "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled",
+    "doc": "Uses the table's deleted-file retention duration instead of a nonzero VACUUM RETAIN value.",
+    "defaultValue": "true"
+  }
+]

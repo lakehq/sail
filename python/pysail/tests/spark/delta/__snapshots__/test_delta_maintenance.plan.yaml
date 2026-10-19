@@ -1,0 +1,42 @@
+# serializer version: 1
+---
+name: "test_maintenance_distributed_plan"
+data:
+  OPTIMIZE maintenance_plan: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=optimize, invocation_id=<invocation_id>
+      CooperativeExec
+        DeltaMaintenanceExec: procedure=optimize
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  VACUUM maintenance_plan DRY RUN: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=vacuum, invocation_id=<invocation_id>
+      CooperativeExec
+        DeltaMaintenanceExec: procedure=vacuum
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)

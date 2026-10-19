@@ -77,6 +77,7 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    DeltaMaintenanceExecNode delta_maintenance = 65;
   }
 }
 
@@ -1273,4 +1274,11 @@ message IcebergRewriteExecNode {
 
 message IcebergRewriteGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message DeltaMaintenanceExecNode {
+  string call = 1;
+  map<string, string> options = 2;
+  optional bytes predicate = 3;
+  optional bytes predicate_schema = 4;
 }

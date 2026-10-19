@@ -457,11 +457,10 @@ impl OperationMetrics {
             | DeltaOperation::DropColumns { .. }
             | DeltaOperation::RenameColumn { .. }
             | DeltaOperation::ReplaceColumns { .. }
-            | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
-                                                       //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
-                                                       //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
-                                                       //     numDeletedFiles, numVacuumedDirectories
+            | DeltaOperation::AlterColumn { .. }
+            | DeltaOperation::Optimize { .. }
+            | DeltaOperation::VacuumStart { .. }
+            | DeltaOperation::VacuumEnd {} => {}
         }
     }
 }

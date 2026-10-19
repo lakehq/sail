@@ -2765,6 +2765,29 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Detail)"
+                      },
+                      {
+                        "nonTerminal": "Either(StringLiteral, ObjectName)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(History)"
+                      },
+                      {
+                        "nonTerminal": "Either(StringLiteral, ObjectName)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Limit), IntegerLiteral))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Function)"
                       },
                       {
@@ -2988,6 +3011,19 @@
               }
             },
             {
+              "name": "Either(Keyword(Full), Keyword(Lite))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Full)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Lite)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Either(Keyword(Function), Keyword(Functions))",
               "node": {
                 "choice": [
@@ -3105,6 +3141,19 @@
               }
             },
             {
+              "name": "Either(StringLiteral, ObjectName)",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "StringLiteral"
+                  },
+                  {
+                    "nonTerminal": "ObjectName"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Either(Tuple(Keyword(By), Keyword(Name)), IdentList)",
               "node": {
                 "choice": [
@@ -3113,6 +3162,19 @@
                   },
                   {
                     "nonTerminal": "IdentList"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Either(Tuple(Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis)), Sequence(ObjectName, Operator(Comma)))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Tuple(Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis))"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
                   }
                 ]
               }
@@ -4936,6 +4998,14 @@
               }
             },
             {
+              "name": "Keyword(Detail)",
+              "node": {
+                "terminal": {
+                  "keyword": "DETAIL"
+                }
+              }
+            },
+            {
               "name": "Keyword(Directory)",
               "node": {
                 "terminal": {
@@ -4988,6 +5058,14 @@
               "node": {
                 "terminal": {
                   "keyword": "DROP"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Dry)",
+              "node": {
+                "terminal": {
+                  "keyword": "DRY"
                 }
               }
             },
@@ -5280,6 +5358,14 @@
               }
             },
             {
+              "name": "Keyword(History)",
+              "node": {
+                "terminal": {
+                  "keyword": "HISTORY"
+                }
+              }
+            },
+            {
               "name": "Keyword(Hour)",
               "node": {
                 "terminal": {
@@ -5560,6 +5646,14 @@
               }
             },
             {
+              "name": "Keyword(Lite)",
+              "node": {
+                "terminal": {
+                  "keyword": "LITE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Load)",
               "node": {
                 "terminal": {
@@ -5788,6 +5882,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ON"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Optimize)",
+              "node": {
+                "terminal": {
+                  "keyword": "OPTIMIZE"
                 }
               }
             },
@@ -6056,6 +6158,14 @@
               }
             },
             {
+              "name": "Keyword(Retain)",
+              "node": {
+                "terminal": {
+                  "keyword": "RETAIN"
+                }
+              }
+            },
+            {
               "name": "Keyword(Right)",
               "node": {
                 "terminal": {
@@ -6092,6 +6202,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ROWS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Run)",
+              "node": {
+                "terminal": {
+                  "keyword": "RUN"
                 }
               }
             },
@@ -6616,6 +6734,14 @@
               }
             },
             {
+              "name": "Keyword(Vacuum)",
+              "node": {
+                "terminal": {
+                  "keyword": "VACUUM"
+                }
+              }
+            },
+            {
               "name": "Keyword(Values)",
               "node": {
                 "terminal": {
@@ -6772,6 +6898,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ZONE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Zorder)",
+              "node": {
+                "terminal": {
+                  "keyword": "ZORDER"
                 }
               }
             },
@@ -7785,6 +7919,14 @@
               }
             },
             {
+              "name": "Option(Keyword(Full))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Keyword(Full)"
+                }
+              }
+            },
+            {
               "name": "Option(Keyword(Global))",
               "node": {
                 "optional": {
@@ -8217,6 +8359,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(Limit), IntegerLiteral))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Limit), IntegerLiteral)"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Keyword(Not), Keyword(Null)))",
               "node": {
                 "optional": {
@@ -8421,6 +8571,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "WithinGroupClause"
+                }
+              }
+            },
+            {
+              "name": "Option(ZOrderClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ZOrderClause"
                 }
               }
             },
@@ -9933,6 +10091,38 @@
                       },
                       {
                         "nonTerminal": "FunctionArgumentList"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Optimize)"
+                      },
+                      {
+                        "nonTerminal": "Either(StringLiteral, ObjectName)"
+                      },
+                      {
+                        "nonTerminal": "Option(Keyword(Full))"
+                      },
+                      {
+                        "nonTerminal": "Option(WhereClause)"
+                      },
+                      {
+                        "nonTerminal": "Option(ZOrderClause)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Vacuum)"
+                      },
+                      {
+                        "nonTerminal": "Either(StringLiteral, ObjectName)"
+                      },
+                      {
+                        "nonTerminal": "Vector(VacuumClause)"
                       }
                     ]
                   },
@@ -11856,6 +12046,19 @@
               }
             },
             {
+              "name": "Tuple(Keyword(Limit), IntegerLiteral)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Limit)"
+                  },
+                  {
+                    "nonTerminal": "IntegerLiteral"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(Load), Keyword(Data))",
               "node": {
                 "sequence": [
@@ -12234,6 +12437,22 @@
               }
             },
             {
+              "name": "Tuple(Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Option(Keyword(As)), Either(Identifier, IdentList))",
               "node": {
                 "sequence": [
@@ -12463,6 +12682,43 @@
               }
             },
             {
+              "name": "VacuumClause",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Retain)"
+                      },
+                      {
+                        "nonTerminal": "NumberLiteral"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Hours)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Dry)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Run)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Either(Keyword(Full), Keyword(Lite))"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "ValuesClause",
               "node": {
                 "sequence": [
@@ -12625,6 +12881,14 @@
               "node": {
                 "zeroOrMore": {
                   "nonTerminal": "TableWriteSpec"
+                }
+              }
+            },
+            {
+              "name": "Vector(VacuumClause)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "VacuumClause"
                 }
               }
             },
@@ -12941,6 +13205,22 @@
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ZOrderClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Zorder)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(By)"
+                  },
+                  {
+                    "nonTerminal": "Either(Tuple(Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis)), Sequence(ObjectName, Operator(Comma)))"
                   }
                 ]
               }

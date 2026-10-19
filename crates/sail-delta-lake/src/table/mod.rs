@@ -806,7 +806,7 @@ where
     }
 }
 
-async fn load_delta_read_state(
+pub(crate) async fn load_delta_read_state(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
