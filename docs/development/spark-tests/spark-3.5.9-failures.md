@@ -8,7 +8,7 @@ rank: 40
 This page analyzes the failures in the Spark 3.5.9 test report for the `test-connect` suite (75 failures) and the doctest suites (21 failures).
 The failures were the same before and after the catalog changes in [#2801](https://github.com/lakehq/sail/pull/2801), so none of them are regressions from that pull request.
 
-The catalog group was reproduced locally and its root causes are confirmed in the code.
+The catalog, statistics, artifact, and plan analysis groups were reproduced locally and their root causes are confirmed in the code.
 The other groups are triaged from the CI test logs, and their root causes still need to be confirmed by reproducing each test.
 
 ## Reproducing the Failures
@@ -131,15 +131,95 @@ Option 1 is the smaller change, and option 2 needs a decision on whether metadat
 **Proposed fix.** For the memory catalog, partitions are discovered from the file listing when the table is read, so the command could succeed as a no-op after checking that the table exists and is partitioned.
 For catalogs that store partitions (Hive Metastore and Glue), the command would need to list the table location and register the partitions it finds.
 
+## Statistics
+
+### Approximate Quantiles
+
+| Test                                               | Error             |
+| :------------------------------------------------- | :---------------- |
+| `SparkConnectBasicTests.test_stat_approx_quantile` | `approx quantile` |
+| `FunctionsParityTests.test_approxQuantile`         | `approx quantile` |
+
+**Root cause.** `QueryNode::StatApproxQuantile` was not implemented in the plan resolver.
+
+**Fix (in this pull request).** The relation is resolved into one `percentile_disc` aggregate per column with all the probabilities, which returns values from the column.
+The result is one row with an `approx_quantile` column of type `array<array<double>>`, which is the shape the Spark Connect client reads.
+As in Spark, null and NaN values are ignored, a column without values gives an empty array, and non-numeric columns are rejected.
+The exact quantile is returned for every relative error, since it is always within the error bound.
+Spark returns `[0.0, 24.0, 49.0, 99.0]` for the exact quantiles `[0.0, 0.25, 0.5, 1.0]` of `0` to `99`, and so does Sail.
+With a relative error of `0.1`, Spark returns `[0.0, 39.0, 99.0]` for `[0.1, 0.5, 0.9]` and Sail returns `[9.0, 49.0, 89.0]`. Both are within the error bound.
+Both tests pass with the fix.
+
+### Frequent Items
+
+| Test                                          | Error        |
+| :-------------------------------------------- | :----------- |
+| `SparkConnectBasicTests.test_stat_freq_items` | `freq items` |
+| `DataFrameParityTests.test_freqItems`         | `freq items` |
+
+**Root cause.** `QueryNode::StatFreqItems` is not implemented in the plan resolver.
+
+**Proposed fix.** Spark uses the Misra-Gries counting algorithm with `1 / support` counters (`CollectFrequentItems`).
+The result contains every item with a frequency above `support`, but it can also contain other items, and both the items and their order depend on the partitioning.
+For example, Spark 3.5.9 returns `[99]` for `freqItems(["col1"], 0.4)` on a DataFrame of `0` to `99`, and `[24]` when the same data is read from a table with 4 partitions.
+
+An aggregate function that implements the same algorithm (including null keys, which Spark counts) would make `test_freqItems` pass, since that test only checks that the frequent items are present.
+`test_stat_freq_items` compares the arrays with the output of the JVM Spark session element by element, so it can only pass if the partitioning and the hash map iteration order also match.
+That test is probably better kept as a known difference.
+
+### Sampling by Stratum
+
+| Test                                                             | Error               |
+| :--------------------------------------------------------------- | :------------------ |
+| `SparkConnectBasicTests.test_stat_sample_by`                     | sampled rows differ |
+| doctests `DataFrame.sampleBy`, `DataFrameStatFunctions.sampleBy` | sampled rows differ |
+
+**Root cause.** `sampleBy` is implemented, but the rows depend on the random number generator, which differs from Spark's `XORShiftRandom` and its per-partition seeding.
+These tests compare the sampled rows with Spark, so they can only pass if Sail reproduces Spark's generator and partitioning.
+
+## Artifacts
+
+| Test                                                             | Error                                              |
+| :--------------------------------------------------------------- | :------------------------------------------------- |
+| `ArtifactTests` (5 tests), `LocalClusterArtifactTests` (4 tests) | `handle add artifacts`, `handle artifact statuses` |
+
+**Root cause.** The `AddArtifacts` and `ArtifactStatus` RPCs return `SparkError::todo` (`crates/sail-spark-connect/src/service/artifact_manager.rs`),
+and `QueryNode::CachedLocalRelation` is not resolved either.
+
+This affects more than `addArtifacts` and `addPyFile`.
+The Spark Connect client uploads the data for `createDataFrame` as a `cache/<sha256>` artifact and refers to it with a `CachedLocalRelation`
+when the data is larger than `spark.sql.session.localRelationCacheThreshold` (64 MiB by default), so creating a large DataFrame from local data fails.
+
+**Proposed fix.** A session-scoped artifact store in the Spark Connect service:
+
+- `AddArtifacts` writes single-chunk and chunked artifacts, checks the CRC of each chunk as Spark does, and returns the summaries.
+- `ArtifactStatus` reports whether each `cache/<hash>` artifact exists.
+- `CachedLocalRelation` reads the cached `LocalRelation` for the hash and resolves it like an inline local relation.
+- Python files, archives, and files are stored under a session directory, and Python files and archives are added to the Python path of the UDF workers.
+  This last part touches the UDF execution and probably needs its own design.
+
+The cached local relation is the most useful part, since it is needed for any large `createDataFrame` call.
+
+## Plan Analysis
+
+| Test                                         | Error                           |
+| :------------------------------------------- | :------------------------------ |
+| `SparkConnectBasicTests.test_same_semantics` | `handle analyze same semantics` |
+| `SparkConnectBasicTests.test_semantic_hash`  | `handle analyze semantic hash`  |
+| doctest `DataFrame.sameSemantics`            | `handle analyze same semantics` |
+
+**Root cause.** The `SameSemantics` and `SemanticHash` analyze requests return `SparkError::todo` (`crates/sail-spark-connect/src/service/plan_analyzer.rs`).
+
+**Proposed fix.** Both can be answered from the resolved logical plans if they are first normalized.
+The resolver generates unique internal field names, so two resolutions of `SELECT 1` are not equal as they are.
+Replacing those names with their position in the plan, and then comparing (or hashing) the plans, would match Spark's canonicalized plan comparison for these tests.
+
 ## Other Groups (Triage)
 
 The groups below are triaged from the CI test logs and not yet reproduced locally.
 
 | Group                  | Tests                                                                                                                                                                                                                                        | Error                                                                                            | Likely cause and direction                                                                                                |
 | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
-| Artifacts              | `test_artifact` (9 tests)                                                                                                                                                                                                                    | `handle add artifacts`, `handle artifact statuses`                                               | The `AddArtifacts` and `ArtifactStatus` RPCs are not implemented.                                                         |
-| Plan analysis          | `test_same_semantics`, `test_semantic_hash`, doctest `sameSemantics`                                                                                                                                                                         | `handle analyze same semantics`, `handle analyze semantic hash`                                  | The analyze requests are not implemented. They could compare and hash the resolved logical plans.                         |
-| Statistics             | `test_stat_approx_quantile`, `test_approxQuantile`, `test_stat_freq_items`, `test_freqItems`, `test_stat_sample_by`, doctests `sampleBy`                                                                                                     | `approx quantile`, `freq items`, sampled rows differ                                             | `approxQuantile` and `freqItems` relations are not implemented. `sampleBy` results depend on the random number generator. |
 | Percentile functions   | `test_aggregation_functions`, doctests `approx_percentile`, `percentile_approx`                                                                                                                                                              | `approx_percentile_cont` expects 2 arguments, `approx_distinct` on `Float64`                     | The accuracy argument is not mapped, and `approx_distinct` lacks a `Float64` implementation.                              |
 | Higher-order functions | doctests `zip_with`, `map_zip_with`, `test_lambda_functions`                                                                                                                                                                                 | `function: zip_with`, `function: map_zip_with`, unsupported cast from `Map` to `Null`            | These functions are not implemented.                                                                                      |
 | Windows and streaming  | `test_time_window_functions`, doctest `session_window`, `test_deduplicate_within_watermark_in_batch`, `test_streaming_local_relation`                                                                                                        | `function: session_window`, `deduplicate within watermark`                                       | Session windows and watermark deduplication are not implemented.                                                          |
