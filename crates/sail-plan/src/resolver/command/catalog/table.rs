@@ -243,18 +243,26 @@ impl PlanResolver<'_> {
             .get_database_by_qualifier(qualifier)
             .await?
             .location;
-        let base = location
-            .as_deref()
-            .unwrap_or(&self.config.default_warehouse_directory)
-            .trim_end_matches(object_store::path::DELIMITER);
-        // A renamed table retains its location, so reusing its old name must
-        // allocate a different directory even when the database has a location.
+        // FIXME: Avoid reusing a renamed table's directory when recreating its
+        // old name, while preserving the default location naming scheme.
+        let (base, suffix) = match &location {
+            Some(loc) => (
+                loc.trim_end_matches(object_store::path::DELIMITER),
+                String::new(),
+            ),
+            None => (
+                self.config
+                    .default_warehouse_directory
+                    .trim_end_matches(object_store::path::DELIMITER),
+                format!("-{}", uuid::Uuid::new_v4()),
+            ),
+        };
         Ok(format!(
-            "{}{}{}-{}",
+            "{}{}{}{}",
             base,
             object_store::path::DELIMITER,
             name,
-            uuid::Uuid::new_v4(),
+            suffix,
         ))
     }
 
