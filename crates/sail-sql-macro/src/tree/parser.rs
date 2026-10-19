@@ -33,7 +33,7 @@ const BOXED_ENUM_MIN_VARIANTS: usize = 5;
 
 enum ParserDependency {
     None,
-    One(Type),
+    One(Box<Type>),
     Tuple(Vec<Type>),
 }
 
@@ -42,7 +42,7 @@ impl ParserDependency {
         e.map(|value| {
             let t = parse_string_value(&value, Type::parse)?;
             match t {
-                Type::Path(ref path) if path.qself.is_none() => Ok(Self::One(t)),
+                Type::Path(ref path) if path.qself.is_none() => Ok(Self::One(Box::new(t))),
                 Type::Tuple(tuple) => Ok(Self::Tuple(tuple.elems.into_iter().collect())),
                 _ => Err(syn::Error::new(
                     t.span(),

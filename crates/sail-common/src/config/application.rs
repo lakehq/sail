@@ -393,8 +393,7 @@ impl FromStr for CelebornCompressionCodec {
             "none" => Ok(Self::None),
             "lz4" => Ok(Self::Lz4),
             value => value
-                .strip_prefix("zstd(")
-                .and_then(|value| value.strip_suffix(')'))
+                .strip_circumfix("zstd(", ')')
                 .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
                 .parse::<i8>()
                 .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))

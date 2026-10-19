@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 
 use arrow_flight::flight_service_client::FlightServiceClient;
 use futures::future::BoxFuture;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder, MaybeHttpsStream};
@@ -173,6 +174,13 @@ impl Service<Request<Body>> for FlightTransport {
         let index =
             self.inner.next_connection.fetch_add(1, Ordering::Relaxed) % self.inner.senders.len();
         Box::pin(async move {
+            // This transport only sends unary DoGet tickets. Buffer the small request
+            // so Hyper marks its last DATA frame END_STREAM. Tonic's streaming body
+            // otherwise sends a non-final small frame, and concurrent tickets can
+            // exhaust h2's small-frame budget before the server consumes them.
+            let (parts, body) = request.into_parts();
+            let body = Body::new(Full::new(body.collect().await?.to_bytes()));
+            let request = Request::from_parts(parts, body);
             let mut sender = transport.sender(index).await?;
             // A close racing with dispatch is returned to the task scheduler. Never replay a
             // DoGet request: subscribing to a shuffle stream can only be done once per replica.
