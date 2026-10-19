@@ -81,6 +81,30 @@ Feature: Delta Lake Delete
       Then query result ordered
         | id | value |
         | 2  | keep  |
+      When query template
+        """
+        DELETE FROM delta.`{{ location.string }}` AS target WHERE target.id = 2
+        """
+      Then query result collected
+        | count |
+        | 0     |
+      Then delta log latest commit info contains
+        | path                            | value    |
+        | operation                       | "DELETE" |
+        | operationMetrics.numDeletedRows | 1        |
+      When query template
+        """
+        SELECT id, value FROM delta.`{{ location.string }}`
+        """
+      Then query result collected
+        | id | value |
+      When query template
+        """
+        DELETE FROM delta.`{{ location.string }}` WHERE id = 2
+        """
+      Then query result collected
+        | count |
+        | 0     |
 
     Scenario: DELETE preserves rows for which the predicate is unknown
       Given variable location for temporary directory delta_delete_unknown
