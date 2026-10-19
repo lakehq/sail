@@ -14,6 +14,11 @@ pytestmark = pytest.mark.skipif(
     reason="spark.sql() named and positional parameters require Spark 3.5+",
 )
 
+requires_column_arguments = pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="PySpark accepts a Column as a spark.sql() argument from 4.0",
+)
+
 
 @pytest.fixture
 def table(spark, tmp_path):
@@ -44,7 +49,10 @@ def table(spark, tmp_path):
         datetime.date(2024, 5, 1),
         datetime.datetime(2024, 5, 1, 12, 30, 45, 123456),  # noqa: DTZ001
         datetime.timedelta(days=1, hours=2, minutes=3, seconds=4, microseconds=5),
-        datetime.time(12, 30, 45, 123456),
+        pytest.param(
+            datetime.time(12, 30, 45, 123456),
+            marks=pytest.mark.skipif(pyspark_version() < (4, 1), reason="PySpark has the TIME type from 4.1"),
+        ),
         [1, 2, None],
         [[1], [2, 3]],
         ["a", None],
@@ -70,6 +78,7 @@ def test_decimal_has_the_type_of_its_digits(spark):
     assert actual.collect() == [(Decimal("-123.450"),)]
 
 
+@requires_column_arguments
 def test_collection_constructor_arguments(spark):
     actual = spark.sql(
         "SELECT :a AS a, :m AS m, :s AS s",
@@ -165,6 +174,7 @@ def test_mixed_parameters(spark):
         spark.sql("SELECT :a, ?", args={"a": 1}).collect()
 
 
+@requires_column_arguments
 def test_invalid_argument(spark):
     with pytest.raises(Exception, match=r"INVALID_SQL_ARG.*argument a of `sql\(\)` is invalid"):
         spark.sql("SELECT 1", args={"a": F.col("x")}).collect()
