@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::get_lambda_parameters;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::interval::{IntervalShape, interval_shape, lambda_interval_parameters};
 use crate::resolver::state::PlanResolverState;
 
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
@@ -81,6 +82,14 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let mut lambda_params = get_lambda_parameters(function_name, &fields)?.into_iter();
+        let shapes = slots
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Resolved(named) => Some(interval_shape(&named.expr, schema, state)),
+                Slot::Lambda(..) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut lambda_shapes = lambda_interval_parameters(function_name, &shapes).into_iter();
 
         let mut names: Vec<String> = Vec::with_capacity(slots.len());
         let mut exprs: Vec<expr::Expr> = Vec::with_capacity(slots.len());
@@ -96,7 +105,7 @@ impl PlanResolver<'_> {
                     self.resolve_expression_lambda_function(
                         function,
                         arguments,
-                        Some(&param_fields),
+                        Some((&param_fields, &lambda_shapes.next().unwrap_or_default())),
                         schema,
                         state,
                     )
@@ -113,7 +122,7 @@ impl PlanResolver<'_> {
         &self,
         function: spec::Expr,
         arguments: Vec<spec::UnresolvedNamedLambdaVariable>,
-        param_fields: Option<&[FieldRef]>,
+        param_fields: Option<(&[FieldRef], &[IntervalShape])>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
@@ -136,8 +145,8 @@ impl PlanResolver<'_> {
                 )));
             }
         }
-        let frame: Vec<(String, Option<FieldRef>)> = match param_fields {
-            Some(fields) => {
+        let frame: Vec<(String, Option<FieldRef>, IntervalShape)> = match param_fields {
+            Some((fields, shapes)) => {
                 if params.len() > fields.len() {
                     return Err(PlanError::AnalysisError(format!(
                         "the lambda function declares {} parameters ({}) but only {} are supported",
@@ -149,15 +158,23 @@ impl PlanResolver<'_> {
                 params
                     .iter()
                     .zip(fields)
-                    .map(|(param, field)| {
+                    .enumerate()
+                    .map(|(index, (param, field))| {
                         (
                             param.clone(),
                             Some(FieldRef::clone(field).renamed(param.as_str())),
+                            shapes
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| IntervalShape::from_field(field)),
                         )
                     })
                     .collect()
             }
-            None => params.iter().map(|param| (param.clone(), None)).collect(),
+            None => params
+                .iter()
+                .map(|param| (param.clone(), None, IntervalShape::Unknown))
+                .collect(),
         };
         let body = {
             let mut scope = state.enter_lambda_scope(frame);

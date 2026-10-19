@@ -11,9 +11,52 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
+use crate::resolver::interval::{IntervalShape, plan_interval_shapes};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn set_operation_interval_shapes(
+        left: &LogicalPlan,
+        right: &LogicalPlan,
+        state: &PlanResolverState,
+    ) -> Vec<IntervalShape> {
+        plan_interval_shapes(left, state)
+            .into_iter()
+            .zip(plan_interval_shapes(right, state))
+            .map(|(left, right)| left.merge(right))
+            .collect()
+    }
+
+    fn project_set_interval_shapes(
+        plan: LogicalPlan,
+        shapes: Vec<IntervalShape>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let mut changed = false;
+        let expressions = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(shapes)
+            .map(|(column, shape)| {
+                if shape.contains_interval() && state.interval_shape(&column.name) != Some(&shape) {
+                    let name = state.get_field_info(&column.name)?.name().to_owned();
+                    let id = state.register_field_name(name);
+                    state.register_interval_shape(&id, shape);
+                    changed = true;
+                    Ok(Expr::Column(column).alias(id))
+                } else {
+                    Ok(Expr::Column(column))
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        if changed {
+            Ok(project(plan, expressions)?)
+        } else {
+            Ok(plan)
+        }
+    }
+
     fn coerce_set_timestamp_columns(
         &self,
         left: LogicalPlan,
@@ -98,7 +141,9 @@ impl PlanResolver<'_> {
         match set_op_type {
             SetOpType::Intersect => {
                 let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
-                Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
+                let shapes = Self::set_operation_interval_shapes(&left, &right, state);
+                let plan = LogicalPlanBuilder::intersect(left, right, is_all)?;
+                Self::project_set_interval_shapes(plan, shapes, state)
             }
             SetOpType::Union => {
                 let (left, right) = if by_name {
@@ -178,13 +223,15 @@ impl PlanResolver<'_> {
                 for field in left.schema().fields() {
                     state.clear_field_plan_ids(field.name())?;
                 }
-                if is_all {
-                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
+                let shapes = Self::set_operation_interval_shapes(&left, &right, state);
+                let plan = if is_all {
+                    LogicalPlanBuilder::new(left).union(right)?.build()?
                 } else {
-                    Ok(LogicalPlanBuilder::new(left)
+                    LogicalPlanBuilder::new(left)
                         .union_distinct(right)?
-                        .build()?)
-                }
+                        .build()?
+                };
+                Self::project_set_interval_shapes(plan, shapes, state)
             }
             SetOpType::Except => {
                 let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
@@ -196,6 +243,8 @@ impl PlanResolver<'_> {
                         "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
                     )));
                 }
+
+                let shapes = Self::set_operation_interval_shapes(&left, &right, state);
 
                 let mut join_keys = left
                     .schema()
@@ -288,7 +337,7 @@ impl PlanResolver<'_> {
                         )?
                         .build()
                 }?;
-                Ok(plan)
+                Self::project_set_interval_shapes(plan, shapes, state)
             }
         }
     }

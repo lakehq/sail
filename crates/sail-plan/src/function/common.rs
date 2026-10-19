@@ -16,6 +16,7 @@ use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl,
     WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit, try_cast,
 };
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
@@ -272,13 +273,38 @@ pub(crate) fn common_temporal_type(
                         // TODO: Preserve temporal conversion when sibling fields need string coercion.
                         return None;
                     };
-                Some(Arc::new(
-                    first
-                        .as_ref()
-                        .clone()
-                        .with_data_type(target)
-                        .with_nullable(structs.iter().any(|fields| fields[index].is_nullable())),
-                ))
+                let mut field = first
+                    .as_ref()
+                    .clone()
+                    .with_data_type(target)
+                    .with_nullable(structs.iter().any(|fields| fields[index].is_nullable()));
+                if matches!(field.data_type(), DataType::Duration(TimeUnit::Microsecond)) {
+                    let key = spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+                    let mut qualifier: Option<spec::SparkIntervalMetadata> = None;
+                    let mut all_qualified = true;
+                    for fields in &structs {
+                        let input = &fields[index];
+                        if input.data_type().is_null() {
+                            continue;
+                        }
+                        let Some(value) = input.metadata().get(key) else {
+                            all_qualified = false;
+                            continue;
+                        };
+                        let current = spec::SparkIntervalMetadata::from_json(value).ok()?;
+                        qualifier = Some(match qualifier {
+                            Some(previous) => previous.wider(current)?,
+                            None => current,
+                        });
+                    }
+                    field.metadata_mut().remove(key);
+                    if let Some(qualifier) = qualifier.filter(|_| all_qualified) {
+                        field
+                            .metadata_mut()
+                            .insert(key.to_owned(), qualifier.to_json().ok()?);
+                    }
+                }
+                Some(Arc::new(field))
             })
             .collect::<Option<Fields>>()?;
         return has_temporal.then_some(DataType::Struct(fields));
