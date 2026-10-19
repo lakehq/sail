@@ -20,9 +20,9 @@ def test_approx_quantile_within_relative_error(numbers):
     relative_error = 0.1
     quantiles = numbers.stat.approxQuantile(["col1", "col3"], probabilities, relative_error)
     assert len(quantiles) == 2  # noqa: PLR2004
-    for values, scale in zip(quantiles, [1, 2]):
+    for values, scale in zip(quantiles, [1, 2], strict=True):
         assert len(values) == len(probabilities)
-        for p, q in zip(probabilities, values):
+        for p, q in zip(probabilities, values, strict=True):
             assert isinstance(q, float)
             # The rank of the result must be within `relative_error * n` of `p * n`.
             assert abs(q / scale + 1 - p * 100) <= math.ceil(relative_error * 100)
