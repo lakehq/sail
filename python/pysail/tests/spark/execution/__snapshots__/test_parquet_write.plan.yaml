@@ -1,0 +1,48 @@
+# serializer version: 1
+---
+name: "test_parquet_writer_stays_on_workers_with_partition_local_sort"
+data:
+  |-
+    == Physical Plan ==
+    BarrierExec
+      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+        CooperativeExec
+          CatalogCommandExec: CreateTable
+      ParquetWriterExec: destination=file://<tmp>/parquet_write/, partition_by=["part"], max_rows_per_file=50000000
+        SortExec: expr=[part@1 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[id@0 as id, CAST(id@0 % 8 AS Utf8) as part]
+            CooperativeExec
+              RangeExec: start=0, end=40000, step=1, num_partitions=4, projection=[0]
+
+
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    CatalogCommandExec: CreateTable
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    CooperativeExec
+      StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    BarrierExec
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+      ParquetWriterExec: destination=file://<tmp>/parquet_write/, partition_by=["part"], max_rows_per_file=50000000
+        SortExec: expr=[part@1 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[id@0 as id, CAST(id@0 % 8 AS Utf8) as part]
+            CooperativeExec
+              RangeExec: start=0, end=40000, step=1, num_partitions=4, projection=[0]

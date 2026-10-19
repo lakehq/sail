@@ -4,11 +4,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_common::{DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
 
+use crate::formats::parquet::ParquetWriterExec;
 use crate::listing::source::{ListingSinkInput, WriteFormat};
 use crate::options::r#gen::ParquetWriteOptions;
 use crate::utils::split_parquet_compression_string;
@@ -30,11 +31,21 @@ impl WriteFormat for ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        let format = ParquetFormat::default().with_options(options);
         input.sink.file_extension = self.file_extension()?;
-        format
-            .create_writer_physical_plan(input.input, ctx, input.sink, input.sort_order)
-            .await
+        let ordering = input
+            .sort_order
+            .map(Into::into)
+            .or_else(|| input.input.output_ordering().cloned());
+        Ok(Arc::new(ParquetWriterExec::try_new(
+            input.input,
+            input.sink,
+            options,
+            ordering,
+            ctx.config_options()
+                .execution
+                .soft_max_rows_per_output_file
+                .get(),
+        )?))
     }
 }
 

@@ -1,0 +1,21 @@
+[package]
+name = "sail-parquet"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
+parquet = { workspace = true, features = ["async"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
