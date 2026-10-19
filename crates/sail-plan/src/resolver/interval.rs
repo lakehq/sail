@@ -337,6 +337,7 @@ fn expression_shape(
                 f if f.is::<SparkAbs>()
                     || f.is::<math::abs::AbsFunc>()
                     || f.is::<NegateDuration>()
+                    || f.is::<core::nullif::NullIfFunc>()
                     || f.is::<SparkNegative>() =>
                 {
                     first()

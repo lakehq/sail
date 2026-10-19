@@ -141,6 +141,40 @@ Feature: Timestamp and string predicate coercion
         | ltz_after_ntz | date_promoted | array_match | nested_array_match | struct_match |
         | true          | true          | true        | true               | true         |
 
+    Scenario Outline: Temporal IN evaluates a volatile struct once with <candidate_type> and ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      # Every possible struct belongs to the list. Re-evaluating it while converting a field
+      # can combine a timestamp from one branch with the integer from the other branch.
+      When query
+        """
+        SELECT count(*) AS incorrect
+        FROM (
+          SELECT (
+            CASE WHEN rand() < 0.5
+              THEN named_struct('t', TIMESTAMP_NTZ '2000-01-01', 'n', 0)
+              ELSE named_struct('t', TIMESTAMP_NTZ '2001-01-01', 'n', 1)
+            END
+          ) IN (
+            named_struct('t', CAST('2000-01-01 00:00:00' AS <candidate_type>), 'n', 0),
+            named_struct('t', CAST('2001-01-01 00:00:00' AS <candidate_type>), 'n', 1)
+          ) AS matched
+          FROM range(10000)
+        ) q
+        WHERE matched IS NOT TRUE
+        """
+      Then query result
+        | incorrect |
+        | 0         |
+
+      Examples:
+        | candidate_type | ansi  |
+        | TIMESTAMP      | true  |
+        | TIMESTAMP      | false |
+        | STRING         | true  |
+        | STRING         | false |
+
     Scenario: Struct IN resolves fields positionally and with the configured resolver
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = true

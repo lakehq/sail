@@ -1,18 +1,16 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
-use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::spark_struct_cast::SparkStructCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
@@ -248,53 +246,46 @@ fn apply_timestamp_string_in_coercion(
                 _ => return Ok(expression),
             };
 
-            let unique_names = (0..source_fields.len())
-                .map(|index| format!("__sail_in_field_{index}"))
-                .collect::<Vec<_>>();
-            let unique_fields = source_fields
-                .iter()
-                .zip(&unique_names)
-                .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
-                .collect::<Vec<Arc<Field>>>();
-            expression = ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
-                unique_fields,
-            ))))
-            .call(vec![expression]);
-
-            for ((field, field_coercion), unique_name) in
-                source_fields.iter().zip(field_coercions).zip(&unique_names)
+            // Bind one evaluated struct so volatile inputs cannot supply mismatched fields.
+            let mut arguments = vec![expression];
+            let mut output_fields = Vec::with_capacity(source_fields.len());
+            for ((field, field_coercion), name) in
+                source_fields.iter().zip(field_coercions).zip(field_names)
             {
-                let Some(field_coercion) = field_coercion else {
-                    continue;
+                let parameter = "field".to_owned();
+                let value = expr::Expr::LambdaVariable(LambdaVariable::new(
+                    parameter.clone(),
+                    Some(Arc::clone(field)),
+                ));
+                let value = if let Some(field_coercion) = field_coercion {
+                    apply_timestamp_string_in_coercion(
+                        value,
+                        field.data_type(),
+                        field_coercion,
+                        schema,
+                        session_timezone,
+                        ansi_mode,
+                        list_depth,
+                    )?
+                } else {
+                    value
                 };
-                let value = get_field().call(vec![expression.clone(), lit(unique_name.clone())]);
-                let value = apply_timestamp_string_in_coercion(
-                    value,
-                    field.data_type(),
-                    field_coercion,
-                    schema,
-                    session_timezone,
-                    ansi_mode,
-                    list_depth,
-                )?;
-                expression = ScalarUDF::from(UpdateStructField::new(vec![unique_name.clone()]))
-                    .call(vec![expression, value]);
+                output_fields.push(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(name)
+                        .with_data_type(value.get_type(schema.as_ref())?)
+                        .with_nullable(value.nullable(schema.as_ref())?),
+                ));
+                arguments.push(expr::Expr::Lambda(Lambda::new(vec![parameter], value)));
             }
-
-            let DataType::Struct(updated_fields) = expression.get_type(schema.as_ref())? else {
-                return Ok(expression);
-            };
-            let output_fields = updated_fields
-                .iter()
-                .zip(field_names)
-                .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
-                .collect::<Vec<Arc<Field>>>();
-            Ok(
-                ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
-                    output_fields,
-                ))))
-                .call(vec![expression]),
-            )
+            Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::new(HigherOrderUDF::new_from_impl(SparkStructCast::new(
+                    output_fields.into(),
+                ))),
+                arguments,
+            )))
         }
     }
 }

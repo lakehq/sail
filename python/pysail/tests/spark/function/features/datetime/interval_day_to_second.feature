@@ -904,3 +904,32 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | ansi  |
         | true  |
         | false |
+
+    # NULLIF returns the first operand's type, even when equality uses a wider type.
+    # In Apia, losing DAY also changes the result by converting the skipped date first.
+    Scenario Outline: NULLIF preserves <case> interval qualifiers with ANSI <ansi>
+      Given config spark.sql.session.timeZone = <timezone>
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT result, typeof(result) AS result_type
+        FROM (
+          SELECT DATE '2011-12-30' + nullif(<left>, <right>) AS result
+        )
+        """
+      Then query result
+        | result   | result_type |
+        | <result> | <type>      |
+
+      Examples:
+        | case             | timezone     | left               | right              | result              | type      | ansi  |
+        | skipped-day DATE | Pacific/Apia | INTERVAL '1' DAY   | INTERVAL '2' DAY   | 2011-12-31          | date      | true  |
+        | skipped-day DATE | Pacific/Apia | INTERVAL '1' DAY   | INTERVAL '2' DAY   | 2011-12-31          | date      | false |
+        | DAY before HOUR  | UTC          | INTERVAL '1' DAY   | INTERVAL '2' HOUR  | 2011-12-31          | date      | true  |
+        | DAY before HOUR  | UTC          | INTERVAL '1' DAY   | INTERVAL '2' HOUR  | 2011-12-31          | date      | false |
+        | HOUR before DAY  | UTC          | INTERVAL '24' HOUR | INTERVAL '2' DAY   | 2011-12-31 00:00:00 | timestamp | true  |
+        | HOUR before DAY  | UTC          | INTERVAL '24' HOUR | INTERVAL '2' DAY   | 2011-12-31 00:00:00 | timestamp | false |
+        | equal DAY        | UTC          | INTERVAL '1' DAY   | INTERVAL '24' HOUR | NULL                | date      | true  |
+        | equal DAY        | UTC          | INTERVAL '1' DAY   | INTERVAL '24' HOUR | NULL                | date      | false |
+        | equal HOUR       | UTC          | INTERVAL '24' HOUR | INTERVAL '1' DAY   | NULL                | timestamp | true  |
+        | equal HOUR       | UTC          | INTERVAL '24' HOUR | INTERVAL '1' DAY   | NULL                | timestamp | false |

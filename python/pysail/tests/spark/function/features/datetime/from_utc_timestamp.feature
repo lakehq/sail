@@ -183,3 +183,37 @@ Feature: from_utc_timestamp
         root
          |-- result: timestamp (nullable = true)
         """
+
+  Rule: Time zone argument types
+
+    # Skipping timezone-string validation for NULL timestamps must not skip type validation.
+    Scenario Outline: `from_utc_timestamp` rejects ARRAY time zones with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT from_utc_timestamp(<timestamp>, array('UTC')) AS result
+        """
+      Then query error DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+
+      Examples:
+        | timestamp                       | ansi  |
+        | CAST(NULL AS TIMESTAMP)          | true  |
+        | CAST(NULL AS TIMESTAMP)          | false |
+        | TIMESTAMP '2024-01-01 00:00:00' | true  |
+        | TIMESTAMP '2024-01-01 00:00:00' | false |
+
+    Scenario Outline: `from_utc_timestamp` retains binary time zone coercion with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT from_utc_timestamp(TIMESTAMP '2024-01-01 00:00:00', CAST('UTC' AS BINARY)) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |

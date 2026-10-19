@@ -1233,6 +1233,14 @@ fn utc_ntz_timestamp_and_unit(
 fn utc_timestamp(input: ScalarFunctionInput, from_utc: bool) -> PlanResult<Expr> {
     let session_tz = Arc::clone(&input.function_context.plan_config.session_timezone);
     let (ts, zone) = input.arguments.two()?;
+    let zone_type = zone.get_type(input.function_context.schema)?;
+    // NULL-first zone parsing does not bypass static types. Spark coerces atomic values
+    // to strings here, but not containers; explicit casts to strings remain supported.
+    if zone_type.is_nested() || !can_cast_types(&zone_type, &DataType::Utf8) {
+        return Err(PlanError::invalid(format!(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] UTC conversion time zone argument must be castable to string, got {zone_type}"
+        )));
+    }
     let (ts, unit) = utc_ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
