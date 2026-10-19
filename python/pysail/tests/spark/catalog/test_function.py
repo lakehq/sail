@@ -301,3 +301,18 @@ def test_list_python_functions_in_namespaces(spark, python_function):
             spark.catalog.listFunctions(f"missing_{database}")
     finally:
         spark.sql(f"DROP DATABASE {database}")
+
+
+# Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
+# CatalogParityTests.test_list_functions; the `function` test helper drops qualified names with IF EXISTS.
+def test_drop_missing_qualified_function(spark):
+    database = f"functions_{uuid.uuid4().hex}"
+    spark.sql(f"CREATE DATABASE {database}")
+    try:
+        spark.sql(f"DROP FUNCTION IF EXISTS {database}.missing_function")
+        with pytest.raises(AnalysisException):
+            spark.sql(f"DROP FUNCTION {database}.missing_function")
+        with pytest.raises(AnalysisException):
+            spark.sql(f"DROP FUNCTION IF EXISTS missing_{database}.missing_function")
+    finally:
+        spark.sql(f"DROP DATABASE {database}")
